@@ -15,6 +15,7 @@ class AndroidLocalSttActivity:ComponentActivity() {
     private var pilot:AndroidLocalSttPilot?=null
     private var running=false
     private var seen=false
+    private var unclassified=false
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
         if(!BuildConfig.SYNTHETIC_TOOLS_ENABLED){finish();return}
@@ -28,6 +29,8 @@ class AndroidLocalSttActivity:ComponentActivity() {
         body.removeAllViews();body.addView(label("공개 음성으로 기기 요약 시험").apply{textSize=25f})
         body.addView(label("앱에 포함된 한국어·영어 합성 음성만 이 기기 안에서 처리해요. 실제 통화나 계정은 사용하지 않아요. 원문에서 뽑은 요약과 확인 필요한 할일을 별도 시험 이력에 보관해요."))
         body.addView(button(if(seen)"같은 결과 다시 확인" else "공개 음성 2개 처리",!running){run()}.apply{tag="android_local_stt_run"})
+        body.addView(button("미분류 공개 음성 분석 후 연결",!running){if(!unclassified){pilot?.close();pilot=null;seen=false;unclassified=true};run()}.apply{tag="android_unclassified_stt_run"})
+        body.addView(label("미분류 시험은 분석 뒤 공개 합성 담당·회사·시험 업무와 정해진 시험 시각을 연결해요. 음성에서 사람이나 시각을 추정하지 않아요."))
         if(running){body.addView(label("기기 안에서 음성을 읽고 있어요. 완료까지 잠시 기다려 주세요."));body.addView(button("처리 중단"){pilot?.cancel()}.apply{tag="android_local_stt_stop"})}
         if(message.isNotEmpty())body.addView(label(message))
         if(result!=null) {
@@ -44,7 +47,7 @@ class AndroidLocalSttActivity:ComponentActivity() {
     private fun run(){
         if(running)return;running=true;render()
         lifecycleScope.launch {
-            val answer=withContext(Dispatchers.IO){runCatching{val p=pilot?:AndroidLocalSttPilot(this@AndroidLocalSttActivity).also{pilot=it};p.cycle(seen)}}
+            val answer=withContext(Dispatchers.IO){runCatching{val p=pilot?:AndroidLocalSttPilot(this@AndroidLocalSttActivity,if(unclassified)"unclassified-v1" else "public-v1").also{pilot=it};if(unclassified)p.cycleUnclassified(seen) else p.cycle(seen)}}
             running=false
             answer.onSuccess{seen=true;render(it,"일반 통화 목록과 분리된 공개 음성 시험 결과예요. 오인식된 원문은 자동으로 고치지 않아요.")}.onFailure{render(message="처리 완료를 확인하지 못했어요. 이미 저장된 시험 이력은 유지해요.")}
         }

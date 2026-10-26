@@ -33,14 +33,19 @@ internal class LocalRecordingTrust(val runtimeSha:String,val modelSha:String,app
 /** Same coordinator/accept path as other providers. No SQL, user command, Google/paid HTTP,
  * v0/RO1/V2 rewrite, credential issuance, native receipt fabrication or automatic registration. */
 internal class LocalRecordingAutomationProvider(private val store:AndroidAutomationStore,
-    private val session:GoogleConnectionSession,private val runner:LocalRecordingRunner?,private val trust:LocalRecordingTrust?,private val now:()->Long=System::currentTimeMillis):AutomationProvider {
+    private val session:GoogleConnectionSession,private val runner:LocalRecordingRunner?,private val trust:LocalRecordingTrust?,private val now:()->Long=System::currentTimeMillis,
+    private val sourceReady:(JSONObject)->Boolean={true}):AutomationProvider {
     override fun gate()=when {
         runner==null||trust==null -> AutomationGate("UNCONFIGURED","LOCAL_RECORDING_RUNNER_NOT_CONFIGURED")
         DriveALocalScope.current(session)==null||!trust.current() -> AutomationGate("UNAPPROVED","LOCAL_RECORDING_AUTHORITY_NOT_CURRENT")
         else -> AutomationGate("READY","EXACT_PUBLIC_LOCAL_RECORDING_RUNNER")
     }
+    override fun gate(key:String):AutomationGate {
+        val general=gate()
+        return if(general.state=="READY" && !sourceReady(store.sourceSnapshot(key)))AutomationGate("UNAPPROVED","LOCAL_RECORDING_SOURCE_BINDING_REQUIRED") else general
+    }
     private fun checked(key:String,handoff:String):JSONObject {
-        check(gate().state=="READY"&&store.allowed(key)){"LOCAL_RECORDING_SOURCE_HELD"}
+        check(gate(key).state=="READY"&&store.allowed(key)){"LOCAL_RECORDING_SOURCE_HELD"}
         val h=JSONObject(handoff);val scope=checkNotNull(DriveALocalScope.current(session))
         DriveACandidateContract.validate(handoff,h.getString("localRequestId"),scope)
         val r=JSONObject(h.getString("frozenRequestJson"));WireV0Codec.validateRequest(h.getString("frozenRequestJson").toByteArray())

@@ -9,6 +9,8 @@ import kr.callagent.drive.StrictJson
  * No callback, share intent or Drive publication is an execution/acceptance receipt. */
 internal interface AutomationProvider {
     fun gate(): AutomationGate
+    /** Metadata-only source admission before native request preparation/publication. */
+    fun gate(key:String):AutomationGate=gate()
     fun dispatch(key:String, frozenHandoff:String): AutomationDispatch
     fun reconcile(key:String,frozenHandoff:String): AutomationDispatch
     fun receive(key:String, receipt:String, frozenHandoff:String): AutomationObservation
@@ -98,7 +100,7 @@ internal class AndroidAutomationCoordinator(private val store:AndroidAutomationS
         }
         if(!store.allowed(id))return false
         if(checkProvider) {
-            val gate=provider.gate();if(gate.state!="READY"){providerHeld(id,gate);return false}
+            val gate=provider.gate(id);if(gate.state!="READY"){providerHeld(id,gate);return false}
         }
         return true
     }
@@ -129,7 +131,7 @@ internal class AndroidAutomationCoordinator(private val store:AndroidAutomationS
     private fun process(id:String) {
         check(store.ownsClaim(id)) {"AUTOMATION_CLAIM_EXPIRED"}
         if(!permitted(id,false))return
-        val gate=provider.gate()
+        val gate=provider.gate(id)
         if(gate.state!="READY") { providerHeld(id,gate);return }
         var j=store.job(id)
         if(AutomationPendingResults.known(j) && !store.resultWindowOpen(id)){if(j.getLong("result_revision")==0L)store.hold(id,"FAILED","AUTOMATION_RESULT_WINDOW_EXPIRED_OR_INVALID");return}

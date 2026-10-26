@@ -64,22 +64,58 @@ internal class AndroidLocalSttPilot(context:Context,exercise:String="public-v1")
         override fun retry(job:String):RecordingAnalysisPort.Sent=error("PUBLIC_STT_NO_NEW_JOB_RETRY")
         override fun cancel(){};override fun close(){}
     }
-    private fun prepare() {
+    private fun prepare(classify:Boolean=true) {
         check(!stop.get()){"ANDROID_STT_STOPPED"};engine.prepare()
         settings.update{it.put("treeUri",source.rootUri)}
         GeneralLocalStore(scoped).use { s ->
             if(s.setupState()=="EMPTY")s.initializeEmpty()
             if(s.snapshot().length()==0)s.importSelected(source)
             val rows=s.snapshot()
-            for(i in 0 until rows.length()){val row=rows.getJSONObject(i);if(row.isNull("original_started_at_ms"))s.confirmTime(row.getString("file_id"),row,1790848800000L+i*60000)}
+            if(classify)for(i in 0 until rows.length()){val row=rows.getJSONObject(i);if(row.isNull("original_started_at_ms"))s.confirmTime(row.getString("file_id"),row,1790848800000L+i*60000)}
         }
-        RecordingWorkflowStore(scoped).use { s ->
+        if(classify)RecordingWorkflowStore(scoped).use { s ->
             val rows=GeneralLocalStore.catalog(scoped).listFiles();var selected:String?=null
             for(i in 0 until rows.length()){val id=rows.getJSONObject(i).getString("file_id");val row=s.snapshot(id)
                 selected=if(row.isNull("case_id"))s.confirmWork(id,row,"공개 합성 담당","공개 합성 회사","공개 음성 시험","",selected) else row.getString("case_id")
             }
         }
         for(d in source.inventory().documents)SyntheticApprovedSource.approve(settings,session,source,d,true)
+    }
+    /** User-initiated sandbox: first analyse without invented identity/time; then explicitly
+     * bind the published fixture's labels/time and reuse the same STT in the existing accept path. */
+    fun cycleUnclassified(reopenResults:Boolean=false):JSONObject {
+        prepare(false);if(reopenResults)clock+=900001
+        val before=engine.calls;val frozenScope=scope
+        fun fence():String {val s=settings.snapshot();return scope.key+":"+AndroidAutomationRuntime.policyHash(s)+":"+s.optLong("dailyReportPolicyEpoch",0)+":"+DriveRelay.sha256(StrictJson.bytes(StrictJson.parse((s.optJSONObject("nativeSyntheticApprovals")?:JSONObject()).toString().toByteArray())))}
+        val frozenAuthority=fence()
+        val current={ !stop.get() && DriveALocalScope.current(session)==frozenScope && fence()==frozenAuthority }
+        val transcriber=AndroidUnclassifiedTranscriber(engine)
+        UnclassifiedAudioStore(scoped,source,transcriber,current,{AndroidAutomationRuntime.policyHash(settings.snapshot())},frozenAuthority).use { intake ->
+            val rows=GeneralLocalStore.catalog(scoped).listFiles();val stages=JSONArray();var case:String?=null
+            for(i in 0 until rows.length()) {
+                val id=rows.getJSONObject(i).getString("file_id")
+                val existing=AndroidSqlPort(scoped,GeneralLocalStore.DATABASE,scoped.assets.open("call_core_schema.sql")).use { db ->
+                    db.query("SELECT id FROM unclassified_audio_requests WHERE state='BOUND'").map{it["id"].toString()}.singleOrNull{intake.view(it).getString("sourceId")==id}
+                }
+                val request=existing ?: RecordingWorkflowStore(scoped).use{intake.prepare(id,it.snapshot(id))}
+                if(existing==null) {
+                    val unclassified=RecordingWorkflowStore(scoped).use{it.snapshot(id)}
+                    check(listOf("person_id","task_id","case_id","original_started_at_ms").all{unclassified.isNull(it)}){"PUBLIC_UNCLASSIFIED_CONTEXT_ALREADY_BOUND"}
+                    check(intake.analyse(request){stop.get()}=="RESULT_READY"){"PUBLIC_UNCLASSIFIED_ANALYSIS_HELD"}
+                    stages.put(intake.view(request).put("contextBeforeBinding",JSONObject().put("personId",JSONObject.NULL).put("caseId",JSONObject.NULL).put("taskId",JSONObject.NULL).put("originalTime",JSONObject.NULL)))
+                    GeneralLocalStore(scoped).use{s->s.confirmTime(id,RecordingWorkflowStore(scoped).use{it.snapshot(id)},1790848800000L+i*60000)}
+                    RecordingWorkflowStore(scoped).use{s->case=s.confirmWork(id,s.snapshot(id),"공개 합성 담당","공개 합성 회사","공개 미분류 음성 시험","",case);intake.confirmBinding(request,s.snapshot(id),true)}
+                } else stages.put(intake.view(request))
+            }
+            val transport=MemoryNativeTransport()
+            GoogleNativePipeline(base,session,settings,{source},transport,postingCapability={true}).use { p ->
+                AndroidAutomationStore(scoped,scope.owner,scope.epoch,current,{AndroidAutomationRuntime.policyHash(settings.snapshot())},{s->source.inventory().documents.any{it.uri==s.getString("actual_uri")}}, {"Etc/UTC"},{clock}).use { store ->
+                    val provider=LocalRecordingAutomationProvider(store,session,intake.boundRunner(),LocalRecordingTrust(engine.runtimeSha,engine.modelSha,transcriber.publicAudio,current),sourceReady=intake::canRelease)
+                    NativeAutomationRequests(base,session){NativePort(p)}.use { requests->AndroidAutomationCoordinator(store,requests,provider){stop.get()}.cycle() }
+                    return report(store.jobs(),transport.counter,engine.calls-before).put("unclassifiedStages",stages).put("analysisBeforeBinding",true)
+                }
+            }
+        }
     }
     /** Deliberately advances only the local poll clock for replay observation, never a lease. */
     fun cycle(reopenResults:Boolean=false):JSONObject {

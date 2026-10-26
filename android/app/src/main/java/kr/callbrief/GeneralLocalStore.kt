@@ -106,7 +106,7 @@ CREATE TABLE IF NOT EXISTS local_intakes(event_id TEXT PRIMARY KEY,root_uri TEXT
             token.check();source.checkSelected()
             if(source.excluded(d)) { excluded++;continue }
             if(!source.explicitlySyntheticScope) { held++;continue }
-            if(d.size !in 1..AudioBinding.MAX_BYTES || d.mime !in setOf("audio/wav","audio/x-wav","audio/mpeg","audio/mp4","audio/aac","audio/3gpp","audio/ogg","audio/flac","application/ogg") ||
+            if(d.partial || d.virtual || d.size !in 1..AudioBinding.MAX_BYTES || d.mime !in setOf("audio/wav","audio/x-wav","audio/mpeg","audio/mp4","audio/aac","audio/3gpp","audio/ogg","audio/flac","application/ogg") ||
                 d.modified<=0 || d.modified>now()-120000) { held++;continue }
             try {
                 val hash=hash(source,d);val sig=signature(d)

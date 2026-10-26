@@ -111,12 +111,8 @@ internal class AndroidWhisperRunner(private val context:Context,private val engi
             val approved=engine.pin.getJSONObject("publicAudio");val name=approved.keys().asSequence().singleOrNull{approved.getString(it)==r.getString("audioSha")} ?: error("ANDROID_STT_PUBLIC_AUDIO_REQUIRED")
             permitted();audio=context.assets.open("local-stt/"+name).use{it.readBytes()};check(audio.size.toLong()==r.getLong("audioBytes")&&DriveRelay.sha256(audio)==r.getString("audioSha")){"ANDROID_STT_AUDIO_BINDING"}
             val output=engine.transcribe(audio){stop.get()||!current()};permitted();request(handoff)
-            val analysis=extract(output.text,business);val binding=JSONObject();listOf("jobId","ownerBinding","sourceId","sourceVersion","audioSha","baseRevision","userRevision","lockRevision","taskRevision","archiveRevision","leaseEpoch","resultFileId","requestDigest").forEach{binding.put(it,r.get(it))}
             val frozen=JSONObject(handoff).getString("frozenRequestJson");val businessSha=sha(canonical(business));val rawSha=DriveRelay.sha256(output.raw)
-            val result=JSONObject().put("schema","ieum.local-recording-producer-result.v1").put("kind","LOCAL_RECORDING_PROPOSAL").put("requestSha",sha(frozen)).put("businessContextSha",businessSha).put("binding",binding).put("revision",1)
-                .put("stt",JSONObject().put("provider","WHISPER_CPP_LOCAL").put("runtimeSha",engine.runtimeSha).put("modelSha",engine.modelSha).put("text",output.text).put("textSha",sha(output.text)).put("segments",output.segments))
-                .put("analysis",analysis).put("execution",JSONObject().put("kind","CURRENT_LOCAL_PROCESS").put("rawOutputSha",rawSha).put("exitCode",0)).put("canonicalWriteAllowed",false).put("applied",false).put("dotInvoked",false)
-            result.put("resultDigest",sha("ieum-local-recording-producer-v1\n"+canonical(result)))
+            val result=JSONObject(String(LocalRecordingPacket.create(output,handoff,business,engine.runtimeSha,engine.modelSha,LocalExecutionKind.CURRENT_LOCAL_PROCESS).payload(),Charsets.UTF_8))
             val witness=JSONObject().put("audioSha",r.getString("audioSha")).put("requestSha",sha(frozen)).put("businessSha",businessSha).put("runtimeSha",engine.runtimeSha).put("modelSha",engine.modelSha).put("rawOutput",java.util.Base64.getEncoder().encodeToString(output.raw)).put("exitCode",0)
             db.transaction{permitted();request(handoff);check(row(id)?.get("state")=="RUNNING"){"ANDROID_STT_NOT_CURRENT"};db.execute("UPDATE android_local_stt_jobs SET state='RESULT_READY',result=?,witness=? WHERE id=?",canonical(result),canonical(witness),id);null}
             return AutomationDispatch("ACCEPTED",receipt,"ANDROID_LOCAL_STT_DURABLE_RESULT")

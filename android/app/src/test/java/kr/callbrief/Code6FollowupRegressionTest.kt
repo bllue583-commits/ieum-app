@@ -81,6 +81,7 @@ class Code6FollowupRegressionTest : ProtectedTextHostTestBase() {
                 DocumentsContract.Document.COLUMN_MIME_TYPE->d.mime
                 DocumentsContract.Document.COLUMN_SIZE->d.size
                 DocumentsContract.Document.COLUMN_LAST_MODIFIED->d.modified
+                DocumentsContract.Document.COLUMN_FLAGS->(if(d.partial)8192 else 0) or (if(d.virtual)DocumentsContract.Document.FLAG_VIRTUAL_DOCUMENT else 0)
                 else->null
             } }.toTypedArray()) }
             if(child)c.setExtras(Bundle().apply {
