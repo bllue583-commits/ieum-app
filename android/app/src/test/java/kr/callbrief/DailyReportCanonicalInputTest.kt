@@ -62,6 +62,29 @@ class DailyReportCanonicalInputTest : ProtectedTextHostTestBase() {
         db.execSQL("INSERT INTO receipts VALUES(?,'ACCEPT',?,1,'SUMMARY_ACCEPTED_BY_USER',1)",arrayOf("SYN-ACCEPT-$id","SYN-CALL-$id"))
     }
     @After fun cleanup() { db.close();context.deleteDatabase(GeneralLocalStore.DATABASE) }
+    @Test fun morningAdapterUsesOriginalKstOccurrenceHalfOpenDailyAndWeeklyWindows() {
+        val day=LocalDate.parse("2026-10-11")
+        val port=CanonicalMorningSnapshotPort(CanonicalReviewedDailySource(context) { policy })
+        add("2");add("3");add("4")
+        val times=listOf("2026-10-09T15:00:00Z","2026-10-10T14:59:59.999Z","2026-10-10T15:00:00Z","2026-10-03T15:00:00Z")
+        times.forEachIndexed { i,at->db.execSQL("UPDATE recordings SET original_started_at_ms=? WHERE recording_id=?",arrayOf(Instant.parse(at).toEpochMilli(),"SYN-CALL-${i+1}")) }
+        val daily=port.snapshot(MorningReportWindow(day,MorningReportKind.DAILY)).validated()
+        val weekly=port.snapshot(MorningReportWindow(day,MorningReportKind.ROLLING_7_DAY)).validated()
+        assertEquals(setOf("SYN-CALL-1","SYN-CALL-2"),daily.input.sources.map { it.id }.toSet())
+        assertEquals(setOf("SYN-CALL-1","SYN-CALL-2","SYN-CALL-4"),weekly.input.sources.map { it.id }.toSet())
+        assertEquals(MorningCoverage.PARTIAL,weekly.coverage) // no SMS/Naver comprehensive claim
+    }
+    @Test fun morningAdapterPreservesDoneArchiveAndUnknownOccurrenceInsteadOfInventingDates() {
+        val port=CanonicalMorningSnapshotPort(CanonicalReviewedDailySource(context) { policy })
+        val w=MorningReportWindow(LocalDate.parse("2026-10-11"),MorningReportKind.ROLLING_7_DAY)
+        db.execSQL("UPDATE tasks SET status='done',task_revision=2")
+        val done=port.snapshot(w);assertTrue(done.input.preview().contains("완료"))
+        db.execSQL("UPDATE recordings SET original_started_at_ms=NULL")
+        assertEquals(1,port.snapshot(w).unknownTimeCount);assertEquals(1,port.snapshot(w).input.pendingCount)
+        db.execSQL("UPDATE local_visibility SET archived=1")
+        val hidden=port.snapshot(w);assertEquals(0,hidden.input.expectedCount);assertTrue(hidden.input.sources.isEmpty())
+        assertEquals(MorningCoverage.PARTIAL,hidden.coverage)
+    }
     @Test fun reproV2IncompleteAliasCannotDisappearFromExpectedInventory() {
         add("2");db.execSQL("DELETE FROM local_files WHERE recording_id='SYN-CALL-2'")
         val input=read()

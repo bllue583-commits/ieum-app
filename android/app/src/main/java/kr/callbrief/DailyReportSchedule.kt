@@ -45,6 +45,15 @@ internal object DailyReportSchedule {
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL,30,TimeUnit.SECONDS)
             .addTag(TAG).addTag("$TAG.target.${scope.profile}").build()
     }
+    /** KST operating targets share the existing worker/heartbeat and generation fences. */
+    fun morningRequest(now:Instant,hour:Int,scope:DailyReportRuntime.Scope,generation:Long):OneTimeWorkRequest {
+        require(hour==6 || hour==23)
+        return OneTimeWorkRequestBuilder<DailyReportWorker>()
+            .setInitialDelay(Duration.between(now,MorningReportWindow.nextTarget(now,hour)).toMillis(),TimeUnit.MILLISECONDS)
+            .setInputData(input(scope,generation,if(hour==23)"KST_23_SYNC" else "KST_06_REPORT"))
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL,30,TimeUnit.SECONDS)
+            .addTag(TAG).addTag("$TAG.target.${scope.profile}").build()
+    }
     fun ensureAsync(context:Context,trigger:String="APP_REOPEN",resetTarget:Boolean=false,done:()->Unit={}) {
         val app=context.applicationContext
         executor.execute {
@@ -70,6 +79,10 @@ internal object DailyReportSchedule {
             val fence="${scope.accountEpoch}.${config.generation}"
             work.once("$TAG.target.${scope.profile}.${target.date}.${target.zone.id}.$fence",
                 request(now,zone,scope,config.generation,trigger))
+            for(hour in listOf(6,23)) {
+                val kstTarget=MorningReportWindow.nextTarget(now,hour)
+                work.once("$TAG.target.${scope.profile}.KST.$hour.$kstTarget.$fence",morningRequest(now,hour,scope,config.generation))
+            }
             // Immediate local reconciliation catches missed days after reboot/time change/app reopening.
             val catchup=OneTimeWorkRequestBuilder<DailyReportWorker>().setInputData(input(scope,config.generation,trigger))
                 .addTag(TAG).addTag("$TAG.profile.${scope.profile}").build()
@@ -120,6 +133,9 @@ class DailyReportWorker(context:Context,params:WorkerParameters):CoroutineWorker
         try {
             DailyReportLedger(scope.context,scope.profile).use { ledger ->
                 if(!ledger.enabled(generation))return@withContext Result.success()
+                MorningReports.run(applicationContext,scope,ledger,DailyReportRuntime.environment(applicationContext,
+                    inputData.getString("trigger") ?: "KST_RECONCILE"),generation,
+                    { !isStopped && ledger.enabled(generation) && DailyReportRuntime.current(applicationContext,scope) })
                 DailyReportCoordinator(ledger,CanonicalReviewedDailySource(scope.context),KakaoDailyReportSender(scope.context),
                     { DailyReportRuntime.environment(applicationContext,inputData.getString("trigger") ?: "DAILY_06_TARGET") },
                     { !isStopped && ledger.enabled(generation) && DailyReportRuntime.current(applicationContext,scope) }).tick()
