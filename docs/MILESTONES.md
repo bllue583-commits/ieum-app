@@ -1,5 +1,7 @@
 # 큰 기능 이정표와 Git 통합 계약
 
+**최신 판정:** [runtime 왕복·독립 인수 검토와 SIWC 구현 계약](RUNTIME_ACCEPTANCE_20261026.md)을 우선 읽는다. 통합 `dc0c16b`는 공개 전사·검토 저장·PARTIAL 보고의 로컬 기반 데모다. 앱 내 ChatGPT 로그인·기존 폴더 선택 후 실제 **Whisper 전사→GPT-6 Astra xhigh 내용 분석→별도 맥락 추론→결과파일→앱 검증·보호 저장** 왕복이 최우선 OPEN이며 내부 규칙 추출을 의미 분석 완료로 세지 않는다. SIWC의 원음 직접 입력 미지원과 Private client/Android callback 검증을 명시한다. 신규 담당은 `feature/astra-audio-roundtrip` / `01a177e0-5d8a-72dc-831d-884f96b5a033`이다. 아래 base 기준 코드·초기 통합순서는 과거 출발점으로 보존하고 최신 상태/배치와 구분한다.
+
 기준은 `main`의 `67fac72ccb8ad63655b281c31dcaaae4680511f9`와 직접 읽은 [이음 기능 설계도와 검증 일지](https://chatgpt.com/space/page_257b0a73cf808191a03c02362edc2673) sequence54다. 이 문서는 해당 설계의 **M1~M6 이름·완료 게이트를 유지**하고, Mac의 독립 Git checkout에서 확인한 코드와 다음 연결을 대응한다. R01~R23·PT-REQ 번호, 과거 실패와 취소 한계는 유지한다. 진행률·완료 예정일은 산정하지 않는다.
 
 소스 확보가 막혔던 Windows 차수의 제품 변경은 0이다. Mac Git 이관·원격 clone 확인은 [MIGRATION](MIGRATION.md)의 별도 성과이며 M1~M6 제품 완료로 세지 않는다. 이 문서 작성 branch는 `docs/milestones-git`이고 제품코드 변경은 없다. 원격 설계 Page와 동결된 `plans/` 계약·fixture는 수정하지 않는다.
