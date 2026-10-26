@@ -6,6 +6,8 @@
 
 ## 증거를 읽는 기준
 
+통합 branch `integration/major-features-20261026`의 후속 구현·현재 검증은 [로컬 공개 음성 종단 통합 기록](INTEGRATION_20261026.md)에 분리했다. M1의 공개 JNI→명시 결속/검토→저장, M2의 보호 후보 port, M3의 로컬 durable checkpoint, M5의 승인 snapshot→dry-run outbox를 연결했다. 일반 개인 음성·의미 reconciliation 전체·외부 수집/실발송·S25 인수의 완료 선언은 아니다. 아래 base/source branch 기록은 당시 증거로 보존한다.
+
 | 구분 | 여기서 확인한 범위 | 완료로 확대하지 않는 범위 |
 | --- | --- | --- |
 | 코드 확인 | 아래 base SHA의 함수·호출부·시험 소스 직접 읽기 | 시험 실행 PASS, 운영 연결 |

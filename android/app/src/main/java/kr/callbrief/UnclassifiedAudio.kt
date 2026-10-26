@@ -59,6 +59,9 @@ internal class UnclassifiedAudioStore(private val context:Context,private val so
     private fun receipt(id:String)=JSONObject(request(id)["receipt_json"].toString())
     private fun result(id:String)=db.query("SELECT * FROM unclassified_audio_results WHERE id=?",id).singleOrNull()
     fun status(id:String)=request(id)["state"].toString()
+    /** Metadata-only eligibility for derived-cache invalidation. Deliberately no transaction
+     * wrapper: an ordinary denied predicate must not poison its caller's protected transaction. */
+    fun available(id:String)=runCatching{permitted(receipt(id),false);true}.getOrDefault(false)
     private fun event(id:String,kind:String) {db.execute("INSERT INTO unclassified_audio_events VALUES(?,?,?,?)",UUID.randomUUID().toString(),id,kind,now())}
     private fun state(id:String,state:String,reason:String=state) {
         val old=request(id)

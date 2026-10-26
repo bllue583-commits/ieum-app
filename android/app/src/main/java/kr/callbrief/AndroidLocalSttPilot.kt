@@ -144,6 +144,73 @@ internal class AndroidLocalSttPilot(context:Context,exercise:String="public-v1")
             .put("runtimeSha",engine.runtimeSha).put("modelSha",engine.modelSha).put("modelBytes",32152673).put("historyCount",reports.size).put("taskCount",rows("workflow_items").size).put("history",JSONArray(reports)).put("results",JSONArray(result)).put("jobs",JSONArray(jobs)).put("bindings",bindings).put("newFakeNativeIDs",nativeIds)
             .put("realGMS",false).put("realDrive",false).put("privateAudio",false).put("microphone",false).put("paidAPI",false).put("fixtureTranscript",false).put("semanticHighReview",false)
     }
+    private fun <T> integrated(block:(UnclassifiedAudioStore,IntegratedContextStore,()->Boolean)->T):T {
+        prepare(false);val frozenScope=scope
+        fun authority():String {val s=settings.snapshot();return scope.key+":"+AndroidAutomationRuntime.policyHash(s)+":"+s.optLong("dailyReportPolicyEpoch",0)+":"+DriveRelay.sha256(StrictJson.bytes(StrictJson.parse((s.optJSONObject("nativeSyntheticApprovals")?:JSONObject()).toString().toByteArray())))}
+        val frozen=authority();val current={ !stop.get() && DriveALocalScope.current(session)==frozenScope && authority()==frozen }
+        return UnclassifiedAudioStore(scoped,source,AndroidUnclassifiedTranscriber(engine),current,{AndroidAutomationRuntime.policyHash(settings.snapshot())},frozen).use{intake->
+            IntegratedContextStore(scoped,intake,owner,current,settings::snapshot).use{context->block(intake,context,current)}
+        }
+    }
+    private fun integrationRequests(intake:UnclassifiedAudioStore):List<String> =AndroidSqlPort(scoped,GeneralLocalStore.DATABASE,scoped.assets.open("call_core_schema.sql")).use{db->
+        val rows=GeneralLocalStore.catalog(scoped).listFiles()
+        (0 until rows.length()).map{i->val id=rows.getJSONObject(i).getString("file_id")
+            db.query("SELECT u.id FROM unclassified_audio_requests u JOIN workflow_analysis_requests w ON w.id=u.id WHERE w.recording_id=? ORDER BY w.created_ms DESC",id).firstOrNull()?.get("id")?.toString()
+                ?: RecordingWorkflowStore(scoped).use{intake.prepare(id,it.snapshot(id))}
+        }
+    }
+    fun integratedAnalyse():JSONObject=integrated{intake,context,_->
+        val before=engine.calls;val stages=JSONArray()
+        for(r in integrationRequests(intake)){check(intake.analyse(r){stop.get()} in setOf("RESULT_READY","BOUND")){"INTEGRATION_ANALYSIS_HELD"};context.normalize(r);stages.put(intake.view(r))}
+        JSONObject().put("phase","CANDIDATE_ONLY").put("actualAndroidSTTCalls",engine.calls-before).put("stages",stages).put("candidate",context.candidate()).put("userReviewCount",context.reviewCount())
+    }
+    fun integratedBind(confirmed:Boolean):JSONObject=integrated{intake,context,current->
+        check(confirmed){"INTEGRATION_USER_RELATION_REVIEW_REQUIRED"};val requests=integrationRequests(intake);var selected:String?=null
+        for((i,r) in requests.withIndex()) {
+            val v=intake.view(r);val id=v.getString("sourceId")
+            RecordingWorkflowStore(scoped).use{w->val old=w.snapshot(id)
+                if(intake.status(r)!="BOUND") {
+                    check(intake.status(r)=="RESULT_READY"){"INTEGRATION_ANALYSIS_REQUIRED"}
+                    GeneralLocalStore(scoped).use{s->s.confirmTime(id,old,1790848800000L+i*60000)}
+                    selected=w.confirmWork(id,w.snapshot(id),"공개 합성 담당","공개 합성 회사","공개 통합 시험 업무","",selected)
+                    intake.confirmBinding(r,w.snapshot(id),true)
+                } else selected=old.getString("case_id")
+                val text=v.getString("transcript");val quote=v.getJSONObject("analysis").getString("summary");val start=text.codePointCount(0,text.indexOf(quote))
+                context.confirmRelation(r,w.snapshot(id),start,start+quote.codePointCount(0,quote.length),true)
+            };context.normalize(r)
+        }
+        val transport=MemoryNativeTransport()
+        GoogleNativePipeline(base,session,settings,{source},transport,postingCapability={true}).use{p->AndroidAutomationStore(scoped,scope.owner,scope.epoch,current,{AndroidAutomationRuntime.policyHash(settings.snapshot())},{s->source.inventory().documents.any{it.uri==s.getString("actual_uri")}}, {"Etc/UTC"}).use{store->
+            val runner=intake.boundRunner();val trust=LocalRecordingTrust(engine.runtimeSha,engine.modelSha,AndroidUnclassifiedTranscriber(engine).publicAudio,current)
+            NativeAutomationRequests(base,session){NativePort(p)}.use{req->AndroidAutomationCoordinator(store,req,LocalRecordingAutomationProvider(store,session,runner,trust,sourceReady=intake::canRelease)).cycle()}
+        }}
+        JSONObject().put("phase","BOUND_PROPOSAL_NOT_USER_APPROVED").put("candidate",context.candidate()).put("userReviewCount",context.reviewCount())
+    }
+    suspend fun integratedReviewAndReport(candidateSha:String,confirmed:Boolean):JSONObject {
+        var sourcePort:ReviewedDailySource?=null;var currentScope:(()->Boolean)?=null
+        val approved=integrated{intake,context,current->
+            check(confirmed){"INTEGRATION_USER_CONTENT_REVIEW_REQUIRED"};val requests=integrationRequests(intake)
+            if(context.reviewCount()==0)context.approveSelection(requests.associateWith{r->val v=intake.view(r);RecordingWorkflowStore(scoped).use{it.snapshot(v.getString("sourceId"))} to v.getJSONObject("analysis").getString("summary")},candidateSha,true)
+            else check(context.reviewCount()==requests.size){"INTEGRATION_PARTIAL_USER_REVIEW"}
+            // The only filename-policy exception is this exact bundled-public sandbox; source
+            // exclusion and canonical USER_REVIEW_SUMMARY receipt checks still run normally.
+            val approved=requests.map{r->val v=intake.view(r);Triple(v.getString("sourceId"),v.getJSONObject("receipt").getJSONObject("source").getLong("source_version"),v.getString("audioSha"))}.toSet()
+            sourcePort=CanonicalReviewedDailySource(scoped,{id,version,sha->current() && Triple(id,version,sha) in approved && sha in AndroidUnclassifiedTranscriber(engine).publicAudio},settings::snapshot)
+            currentScope=current
+            JSONObject().put("phase","EXPLICIT_USER_REVIEW_COMMITTED").put("reviewCount",context.reviewCount()).put("candidate",context.candidate()).put("androidProcessId",android.os.Process.myPid())
+        }
+        val current=checkNotNull(currentScope);val source=checkNotNull(sourcePort)
+        val env=ReportEnvironment(java.time.Instant.parse("2026-10-01T21:00:00Z"),java.time.ZoneId.of("Asia/Seoul"),elapsed=1000,boot=1)
+        DailyReportLedger(scoped,owner).use{ledger->if(!ledger.config().enabled)ledger.setEnabled(true,env.now,env.zone)
+            MorningReportCoordinator(ledger.morning(current),CanonicalMorningSnapshotPort(source),LocalReviewedMorningSync(scoped,owner,current,source),MorningDryRun,{env},current).tick(ledger.config().generation)
+            val repo=ledger.morning(current);val reports=repo.reports()
+            approved.put("reports",JSONArray(reports.map{r->JSONObject().put("kind",r.window.kind.name).put("revision",r.revision).put("state",r.state).put("body",repo.body(r.key,r.revision))}))
+                .put("outbox",JSONArray(repo.outbox().map{JSONObject().put("id",it.id).put("revision",it.revision).put("state",it.state.name)}))
+                .put("syncState",repo.syncStatus()).put("durableCursor",repo.ingestCursor()).put("syncScope","LOCAL_REVIEWED_STORE_ONLY_NO_EXTERNAL_COLLECTION")
+                .put("simulatedReportNow",env.now.toString()).put("actualAndroidSTTCalls",engine.calls).put("externalSends",0)
+        }
+        return approved
+    }
     fun cancel(){stop.set(true);activeRunner?.cancel();engine.cancel()}
     override fun close(){activeRunner=null}
 }

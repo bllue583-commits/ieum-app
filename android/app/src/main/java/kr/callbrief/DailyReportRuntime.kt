@@ -29,6 +29,7 @@ internal interface DailyReportSender {
 
 /** Reads canonical app rows and explicit ACCEPT receipts; never worker proposal text or audio. */
 internal class CanonicalReviewedDailySource(private val context:Context,
+    private val approvedPublicSource:(String,Long,String)->Boolean={_,_,_->false},
     private val policy:()->JSONObject={ SecureSettings(context).snapshot() }) : ReviewedDailySource {
     override fun snapshot(window:ReportWindow):DailyReportInput {
         val state=policy()
@@ -90,7 +91,7 @@ internal class CanonicalReviewedDailySource(private val context:Context,
                     }
                     if(listOf("audio_sha256","grant_active","actual_uri","processing_state","board_revision","archived").any(::missing) ||
                         s("actual_uri").isBlank() || (!missing("expected_task_id") && missing("task_revision"))) { hold("NATIVE_BINDING_MISSING",true);continue }
-                    if(at==null || LocalPrivacy.collectionDecision(ref,state)!=LocalCollectionDecision.ALLOW || s("person_id").isBlank() || s("expected_task_id").isBlank() || s("case_id").isBlank()) { hold("IDENTITY_TIME_UNCONFIRMED");continue }
+                    if(at==null || (LocalPrivacy.collectionDecision(ref,state)!=LocalCollectionDecision.ALLOW && !approvedPublicSource(s("recording_id"),n("source_version"),s("audio_sha256"))) || s("person_id").isBlank() || s("expected_task_id").isBlank() || s("case_id").isBlank()) { hold("IDENTITY_TIME_UNCONFIRMED");continue }
                     val id=s("recording_id");val source=n("source_version");val audio=s("audio_sha256")
                     val latestRequest=CurrentAnalysisResult.latestRequest(db,id,source,audio)
                     val latestDigest=latestRequest?.let { request->db.rawQuery("SELECT result_digest FROM workflow_analysis_result_cursor WHERE request_id=?",arrayOf(request.getString("id"))).use { x->if(x.moveToFirst())x.getString(0) else "" } }.orEmpty()
@@ -128,8 +129,10 @@ internal class CanonicalReviewedDailySource(private val context:Context,
                         if(runCatching { ownReview.validate() }.isSuccess)sources+=ownReview else hold("RESULT_REVIEW_PENDING")
                         val reviewedDigest=db.rawQuery("SELECT proposal_digest FROM workflow_reviewed_summaries WHERE recording_id=? AND revision=?",arrayOf(id,ownReview.summaryVersion.toString())).use { x->if(x.moveToFirst())x.getString(0).orEmpty() else "" }
                         if(s("processing_state")=="FAILED")hold("ANALYSIS_FAILED",true)
-                        holdAcceptedResult(reviewedDigest)
-                        when(latestRequest?.optString("state")) {
+                        val exactLocalReview=IntegratedReviewReceipt.matches(db,id,ownReview.reviewReceipt,latestRequest?.optString("id"),state) &&
+                            (received==null || received.optString("state") in setOf("PENDING","BINDING_REVIEW"))
+                        if(!exactLocalReview)holdAcceptedResult(reviewedDigest)
+                        if(!exactLocalReview)when(latestRequest?.optString("state")) {
                             "ERROR"->hold("CURRENT_REQUEST_FAILED",true,latestRequest.getString("id"),latestDigest)
                             "UNKNOWN"->hold("CURRENT_REQUEST_UNKNOWN",true,latestRequest.getString("id"),latestDigest)
                             "REVIEW"->if(latestDigest.isBlank() || latestDigest!=reviewedDigest)hold("RESULT_REVIEW_PENDING",false,latestRequest.getString("id"),latestDigest)

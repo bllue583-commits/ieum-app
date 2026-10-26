@@ -10,7 +10,7 @@ internal class CanonicalMorningSnapshotPort(private val source:ReviewedDailySour
     override fun snapshot(window:MorningReportWindow):MorningSnapshot {
         val input=source.snapshot(ReportWindow(window.reportDay.minusDays(1),MorningReportWindow.KST,window.from,window.until))
         return MorningSnapshot(input,if(input.readiness==ReportReadiness.SOURCE_FAILURE)MorningCoverage.UNKNOWN else MorningCoverage.PARTIAL,
-            "로컬 통화 검토 자료만 조회 · SMS/네이버 전체 수집·동기화 범위 미확인",
+            "로컬 통화 검토 저장·체크포인트만 조회 · 외부 수집 없음 · SMS/네이버 전체 범위 미확인",
             failedCount=input.unresolved.count { it.reason in setOf("ANALYSIS_FAILED","CURRENT_REQUEST_FAILED") },
             unknownTimeCount=input.unresolved.count { !it.originalTimeKnown },
             reviewRequiredCount=input.unresolved.count { it.reason in setOf("RESULT_REVIEW_PENDING","MANUAL_REVIEW_REQUIRED","IDENTITY_TIME_UNCONFIRMED") })
@@ -104,7 +104,7 @@ internal class MorningReportCoordinator(private val repository:MorningReportRepo
 /** Hard-wired local-only adapters. No account SDK, OAuth, remote sender or permission request. */
 internal object MorningReports {
     suspend fun run(context:Context,scope:DailyReportRuntime.Scope,ledger:DailyReportLedger,env:ReportEnvironment,generation:Long,current:()->Boolean) {
-        MorningReportCoordinator(ledger.morning(current),CanonicalMorningSnapshotPort(scope.context),UnavailableMorningSync,
+        MorningReportCoordinator(ledger.morning(current),CanonicalMorningSnapshotPort(scope.context),LocalReviewedMorningSync(scope.context,ledger.profile,current),
             environment={ DailyReportRuntime.environment(context,env.trigger) },current=current).tick(generation)
     }
 }

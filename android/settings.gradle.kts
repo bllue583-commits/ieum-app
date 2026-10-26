@@ -12,3 +12,4 @@ include(":naver-mail-core", ":naver-mail-android")
 include(":kakao-report-core", ":kakao-report-android")
 
 include(":recording-discovery-android")
+include(":context-reconciliation")

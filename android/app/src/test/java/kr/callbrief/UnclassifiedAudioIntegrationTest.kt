@@ -16,6 +16,10 @@ import java.io.File
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import javax.crypto.spec.SecretKeySpec
+import kr.callbrief.context.ContextRepositoryAdapter
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 
 /** Real sealed Android SQL/workflow/provider/consumer/accept. Fake GMS/Drive and test keys.
  * Only the explicitly named host-Whisper test executes a model; fixture cases cannot attest it. */
@@ -159,6 +163,67 @@ class UnclassifiedAudioIntegrationTest:ProtectedTextHostTestBase() {
         stage(t).use{s->reject("AUTHORITY_OR_LEASE"){s.view(r)};reject("AUTHORITY_OR_LEASE"){bind(s,r,id)}}
         assertEquals(1,t.calls);assertEquals(0,count("automation_results"))
     }
+    private fun contextStore(s:UnclassifiedAudioStore,fault:()->Unit={})=IntegratedContextStore(scoped,s,scope.owner,{active},settings::snapshot,{clock},fault)
+    private fun bindContext(s:UnclassifiedAudioStore,c:IntegratedContextStore,r:String,id:String) {
+        bind(s,r,id);val v=s.view(r);val text=v.getString("transcript");val quote=v.getJSONObject("analysis").getString("summary");val start=text.codePointCount(0,text.indexOf(quote))
+        c.confirmRelation(r,snapshot(id),start,start+quote.codePointCount(0,quote.length),true);c.normalize(r)
+    }
+    private fun reviewedSource(id:String)=CanonicalReviewedDailySource(scoped,{recording,version,sha->recording==id && version==snapshot(id).getLong("source_version") && sha==snapshot(id).getString("audio_sha256")},settings::snapshot)
+    private val reportWindow get()=MorningReportWindow(LocalDate.parse("2026-10-13"),MorningReportKind.DAILY)
+    private fun approve(c:IntegratedContextStore,s:UnclassifiedAudioStore,r:String,id:String):String {
+        val p=c.candidate();return c.approveSelection(mapOf(r to (snapshot(id) to s.view(r).getJSONObject("analysis").getString("summary"))),IntegratedContextStore.candidateDigest(p),true).single()
+    }
+    @Test fun integrationCandidateAndSafeResultDoNotAuthorizeReport()=runBlocking(Dispatchers.IO){val id=prepare().single();val t=FixtureTranscriber();stage(t).use{s->contextStore(s).use{c->
+        val r=s.prepare(id,snapshot(id));s.analyse(r);val before=c.normalize(r);assertFalse(before.getBoolean("canonicalWriteAllowed"));assertTrue(before.getJSONArray("holds").length()>0)
+        bindContext(s,c,r,id);cycle(s,t);val candidate=c.candidate();assertEquals(1,candidate.getJSONArray("items").length());assertEquals(0,count("workflow_reviewed_summaries"))
+        val input=CanonicalMorningSnapshotPort(reviewedSource(id)).snapshot(reportWindow);assertEquals(0,input.input.sources.size)
+        reject("USER_CONTENT_REVIEW"){c.approveSelection(mapOf(r to (snapshot(id) to "PUBLIC_SUMMARY")),IntegratedContextStore.candidateDigest(candidate),false)};assertEquals(0,c.reviewCount())
+    }}}
+    @Test fun integrationExplicitReviewCommitsCanonicalSnapshotAndDryRunOutbox()=runBlocking(Dispatchers.IO){val id=prepare().single();val t=FixtureTranscriber();stage(t).use{s->contextStore(s).use{c->
+        val r=s.prepare(id,snapshot(id));s.analyse(r);c.normalize(r);bindContext(s,c,r,id);cycle(s,t);val receipt=approve(c,s,r,id)
+        val source=reviewedSource(id);val input=CanonicalMorningSnapshotPort(source).snapshot(reportWindow);assertEquals(input.toString(),1,input.input.sources.size);assertEquals(receipt,input.input.sources.single().reviewReceipt);assertTrue(input.input.unresolved.toString(),input.input.fullyReviewed)
+        val cipher=object:ReportPayloadCipher {override fun seal(text:String,aad:String,hasExistingPayload:Boolean)=text.toByteArray();override fun open(bytes:ByteArray,aad:String)=String(bytes)}
+        val env=ReportEnvironment(Instant.parse("2026-10-12T21:00:00Z"),ZoneId.of("Asia/Seoul"),elapsed=1000,boot=1)
+        DailyReportLedger(scoped,scope.owner,cipher).use{ledger->val generation=ledger.setEnabled(true,env.now,env.zone).generation
+            MorningReportCoordinator(ledger.morning(),CanonicalMorningSnapshotPort(source),LocalReviewedMorningSync(scoped,scope.owner,{active},source),environment={env},current={active}).tick(generation)
+            assertEquals("COMPLETE",ledger.morning().syncStatus());assertTrue(ledger.morning().ingestCursor().startsWith("local-reviewed-v1:"));assertEquals(2,ledger.morning().reports().size);assertTrue(ledger.morning().outbox().all{it.state==MorningDeliveryState.DRY_RUN_RECORDED})
+        }
+        assertEquals(1,count("workflow_items"));assertEquals(1,c.reviewCount())
+        val state=c.candidate().toString();contextStore(s).use{reopened->assertEquals(state,reopened.candidate().toString())}
+    }}}
+    @Test fun integrationApprovalFailureRollsBackItemsSummaryReceiptAndCandidate()=runBlocking(Dispatchers.IO){val id=prepare().single();val t=FixtureTranscriber();var fail=false;stage(t).use{s->contextStore(s){if(fail)error("PUBLIC_INTEGRATION_FAILURE")}.use{c->
+        val r=s.prepare(id,snapshot(id));s.analyse(r);c.normalize(r);bindContext(s,c,r,id);cycle(s,t);c.candidate();fail=true
+        reject("PUBLIC_INTEGRATION_FAILURE"){approve(c,s,r,id)};fail=false
+        assertEquals(0,c.reviewCount());assertEquals(0,count("workflow_reviewed_summaries"));assertEquals(0,count("workflow_items"));assertEquals(0,count("integrated_applied_items"))
+    }}}
+    @Test fun integrationCandidateCASAndManualDoneRemainProtected()=runBlocking(Dispatchers.IO){val id=prepare().single();val t=FixtureTranscriber();stage(t).use{s->contextStore(s).use{c->
+        val r=s.prepare(id,snapshot(id));s.analyse(r);c.normalize(r);bindContext(s,c,r,id);cycle(s,t);val candidate=c.candidate();val adapter=ContextRepositoryAdapter(c.port);val prepared=adapter.prepareRefresh()
+        GeneralLocalStoreTest.host(scoped,keys).use{it.edit(id,snapshot(id),"PUBLIC_MANUAL_DONE","done")}
+        assertFalse(adapter.commit(prepared).committed);reject("MANUAL_STATE_PROTECTED"){c.approve(r,snapshot(id),IntegratedContextStore.candidateDigest(c.candidate()),"PUBLIC_SUMMARY",true)}
+        assertEquals(0,c.reviewCount());assertEquals("done",snapshot(id).getString("manual_status"));assertEquals("PUBLIC_MANUAL_DONE",snapshot(id).getString("manual_text"));assertFalse(candidate.getBoolean("canonicalWriteAllowed"))
+    }}}
+    @Test fun integrationSourceRevocationBetweenPrepareAndCommitDoesNotWrite()=runBlocking(Dispatchers.IO){val id=prepare().single();val t=FixtureTranscriber();stage(t).use{s->contextStore(s).use{c->
+        val r=s.prepare(id,snapshot(id));s.analyse(r);c.normalize(r);val adapter=ContextRepositoryAdapter(c.port);val prepared=adapter.prepareRefresh();val opens=source.opens;source.excludedIds.add("public-0")
+        assertFalse(adapter.commit(prepared).committed);val refreshed=c.candidate();assertEquals(0,refreshed.getJSONArray("items").length());assertEquals(0,refreshed.getJSONArray("activeSources").length());assertEquals(0,c.reviewCount());assertEquals(0,count("workflow_reviewed_summaries"));assertEquals(opens,source.opens)
+    }}}
+    @Test fun integrationExpiredAnalysisInvalidatesCandidatesAndNewNormalizationKeepsIndependentVersion()=runBlocking(Dispatchers.IO){val id=prepare().single();val t=FixtureTranscriber();stage(t).use{s->contextStore(s).use{c->
+        val first=s.prepare(id,snapshot(id));s.analyse(first);c.normalize(first);clock+=1800000;assertEquals(0,c.candidate().getJSONArray("activeSources").length())
+        RecordingWorkflowStore(scoped).use{it.createItem(id,it.snapshot(id),"TODO","PUBLIC_DIRECT_ITEM","","")}
+        val next=s.prepare(id,snapshot(id));assertNotEquals(first,next);s.analyse(next);val p=c.normalize(next);assertEquals(1,p.getJSONArray("activeSources").length());assertEquals(3L,p.getJSONArray("activeSources").getJSONObject(0).getLong("sourceVersion"));assertEquals(1L,s.view(next).getJSONObject("receipt").getJSONObject("source").getLong("source_version"))
+    }}}
+    @Test fun integrationOwnerMustMatchProtectedContextBeforeOpeningPort()=runBlocking(Dispatchers.IO){prepare();val t=FixtureTranscriber();stage(t).use{s->
+        reject("OWNER_CONTEXT_REQUIRED"){IntegratedContextStore(scoped,s,"PUBLIC_OTHER_OWNER",{true},settings::snapshot).close()};assertEquals(0,count("integrated_context_state"))
+    }}
+    @Test fun integrationSourceRevokedAtFinalReviewCommitRollsBackEverything()=runBlocking(Dispatchers.IO){val id=prepare().single();val t=FixtureTranscriber();var revoke=false;stage(t).use{s->contextStore(s){if(revoke)source.granted=false}.use{c->
+        val r=s.prepare(id,snapshot(id));s.analyse(r);c.normalize(r);bindContext(s,c,r,id);cycle(s,t);c.candidate();revoke=true
+        reject("SCOPE_OR_SOURCE_CHANGED"){approve(c,s,r,id)};source.granted=true;assertEquals(0,c.reviewCount());assertEquals(0,count("workflow_reviewed_summaries"));assertEquals(0,count("workflow_items"))
+    }}}
+    @Test fun integrationLocalSyncReturnsDurabilityOnlyAfterSourceCheckpointCommit()=runBlocking(Dispatchers.IO){val id=prepare().single();val t=FixtureTranscriber();stage(t).use{s->contextStore(s).use{c->
+        val r=s.prepare(id,snapshot(id));s.analyse(r);c.normalize(r);bindContext(s,c,r,id);cycle(s,t);approve(c,s,r,id)
+        val source=reviewedSource(id);val req=MorningSyncRequest("PUBLIC_LOCAL_CHECKPOINT",reportWindow.from,reportWindow.until,"","PUBLIC_LOCAL_REVIEW",1)
+        var failed=false;try{LocalReviewedMorningSync(scoped,scope.owner,{active},source){error("PUBLIC_CHECKPOINT_FAILURE")}.sync(req)}catch(_:IllegalStateException){failed=true};assertTrue(failed);assertEquals(0,count("integrated_sync_checkpoints"))
+        val port=LocalReviewedMorningSync(scoped,scope.owner,{active},source);val first=port.sync(req);assertEquals(MorningSyncState.COMPLETE,first.state);assertTrue(first.durable);assertEquals(first,port.sync(req));assertEquals(1,count("integrated_sync_checkpoints"))
+    }}}
     @Test fun realPublicHostWhisperBeforeBindingThenExistingStorageAndRestart()=runBlocking(Dispatchers.IO){
         val pinFile=System.getenv("IEUM_LOCAL_STT_PIN_FILE")?.let(::File);Assume.assumeTrue(pinFile?.isFile==true)
         val ids=prepare(2);val pin=JSONObject(pinFile!!.readText());val dir=File(root,"android/app/build/reports/unclassified-audio/${UUID.randomUUID()}").apply{mkdirs()}

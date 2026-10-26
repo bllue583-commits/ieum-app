@@ -1,5 +1,7 @@
 # KST morning report runtime — implementation handoff
 
+Integration update: `integration/major-features-20261026` now connects the protected local reviewed-source checkpoint and explicit review/snapshot bridge. See [the integration record](INTEGRATION_20261026.md). COMPLETE in that adapter is scoped to durable local reviewed storage; external collection remains unconnected, coverage remains PARTIAL and delivery remains dry-run. The source-branch observations below are preserved as their original execution record.
+
 Base: `67fac72ccb8ad63655b281c31dcaaae4680511f9`. Branch: `feature/morning-report-runtime`.
 Read alongside the source-audited contracts in the design branch's `docs/MILESTONES.md`
 (commit `8943536defc15fd0c68f9ef293a4b6b9bd0f3176`). This branch does not merge that branch

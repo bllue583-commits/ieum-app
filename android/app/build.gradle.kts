@@ -50,6 +50,7 @@ dependencies {
     implementation("com.google.android.gms:play-services-auth:22.0.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation(project(":core"))
+    implementation(project(":context-reconciliation"))
     implementation(project(":recording-discovery-android"))
     implementation(project(":call-core-android"))
     implementation(project(":audio-vault-android"))
