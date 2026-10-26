@@ -44,12 +44,12 @@ Windows 예약명·금지 문자·대소문자 충돌 검사는 발견0입니다
 
 ## 원격 업로드 상태
 
-GitHub 연결 계정은 `bllue583-commits`(user ID344692378)입니다. 소유 저장소 조회에는 private `workspace`만 있었고 이음 대상임을 확인할 근거가 없어 사용하지 않았습니다. 전용 `ieum-app` 조회는 404였습니다.
+GitHub 연결 계정은 `bllue583-commits`(user ID344692378)입니다. 초기 소유 저장소 조회에는 private `workspace`만 있었고 이음 대상임을 확인할 근거가 없어 사용하지 않았습니다. 이후 본인 계정에 전용 [ieum-app](https://github.com/bllue583-commits/ieum-app)을 새로 생성했습니다.
 
-현재 도구에는 저장소 생성 기능이 없고, Mac Git credential helper에 기존 GitHub 인증이 없으며 브라우저는 GitHub 로그아웃 상태입니다. 전용 빈 비공개 저장소 생성/브라우저 직접 로그인 요청이 사용자 응답 대기입니다. 비밀번호·토큰을 채팅으로 요청하지 않았습니다. 새 OAuth/지속 접근/보안설정 변경은 실행하지 않았습니다.
+초기에는 브라우저 로그인과 Git 인증이 없었습니다. 사용자 직접 로그인 후 정상 GitHub UI에서 Private로 생성했고, 별도 사용자 승인에 따라 공식 GitHub CLI device OAuth를 연결했습니다. 승인된 범위는 repo/read:org/gist입니다. GitHub CLI 상태에서 macOS Keychain 저장을 확인했으며 토큰·비밀번호를 채팅/로그/소스에 넣지 않았습니다. GitHub 호스트의 Git credential helper를 설정했고 다른 서비스 권한이나 보안 보호는 변경하지 않았습니다.
 
-따라서 **저장소 생성·remote 설정·push는 미실행**이며 공개범위·원격 commit 일치·원격 clean clone 검증은 대기입니다. 임시 local clone 검증은 원격 인증/접근 검증과 구별합니다. 이 상태에서 후속 worker가 원격 개발을 시작할 수 있다고 선언하지 않습니다.
+GitHub API에서 owner=bllue583-commits, private=true, visibility=private, push=true를 확인했습니다. origin은 `https://github.com/bllue583-commits/ieum-app.git`입니다. 준비 commit `15faaf60a6d2f1976992d7916c4b624fce7bd5e7`을 main에 일반 push했고 이 문서 보완도 후속 commit으로 올립니다. 기존 commit을 재작성하거나 force push하지 않았습니다. 최종 개발 기준은 원격 main HEAD이며 `git rev-parse HEAD`와 `git ls-remote origin refs/heads/main`으로 확인합니다.
 
 ## 로컬 전달 검증
 
-검토된 export 377파일은 `EXPORT_FILES.txt`에 나열합니다. main의 commit을 만들고 별도 임시 로컬 clone에서 HEAD/tree·파일 수·핵심 버전/설정·binary fixture SHA·민감정보 패턴·설계 validator를 확인합니다. 원격 URL/공개범위/원격 commit/원격 clone은 인증 완료 뒤 별도로 확인해야 합니다. `git log -1 --format=%H`로 이 사본의 기준 SHA를 읽을 수 있습니다.
+검토된 export 377파일은 `EXPORT_FILES.txt`에 나열합니다. 초기 임시 로컬 clone에서 HEAD/tree·파일 수·핵심 버전/설정·binary fixture SHA·민감정보 패턴·설계 validator를 확인했습니다. 이는 원격 인증 검증과 구별합니다. 최종 push 뒤 별도 새 원격 clone에서 같은 검사를 수행하고 최종 응답에 commit 및 결과를 기록합니다. `git log -1 --format=%H`로 이 사본의 기준 SHA를 읽을 수 있습니다.

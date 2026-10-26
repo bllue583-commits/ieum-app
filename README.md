@@ -29,12 +29,12 @@ Android JNI 자산 생성: NDK r28c `28.2.13676358`, CMake 3.22 이상, make, �
 
 ## 최초 준비와 빌드
 
-먼저 본인 GitHub 계정으로 비공개 저장소 접근을 설정하고 저장소 URL로 clone합니다. 암호·토큰·키는 파일/채팅/커밋에 넣지 않습니다.
+먼저 본인 GitHub 계정으로 비공개 저장소 접근을 설정합니다. 저장소는 https://github.com/bllue583-commits/ieum-app 이며 접근 권한이 있는 계정으로 clone합니다. 암호·토큰·키는 파일/채팅/커밋에 넣지 않습니다. 각 컴퓨터에서 별도로 인증하며 Mac 자격증명을 Windows로 복사하지 않습니다. 공식 GitHub CLI를 사용하는 경우 `gh auth login --hostname github.com --git-protocol https --web`의 권한을 확인하고 직접 승인합니다. [공식 인증 안내](https://cli.github.com/manual/gh_auth_login)를 참고합니다.
 
 macOS (각 경로를 로컬 설치 위치로 바꾸기):
 
 ```sh
-git clone <private-repository-url> ieum-app
+git clone https://github.com/bllue583-commits/ieum-app.git ieum-app
 cd ieum-app
 export JAVA_HOME="/path/to/jdk17"
 export ANDROID_SDK_ROOT="/path/to/android-sdk"
@@ -49,7 +49,7 @@ python3 run_gradle.py --log first-build.log :core:test :app:testDebugUnitTest :a
 Windows PowerShell:
 
 ```powershell
-git clone <private-repository-url> ieum-app
+git clone https://github.com/bllue583-commits/ieum-app.git ieum-app
 cd ieum-app
 $env:JAVA_HOME = 'C:\Tools\jdk-17'
 $env:ANDROID_SDK_ROOT = "$env:LOCALAPPDATA\Android\Sdk"
@@ -88,6 +88,8 @@ PowerShell에서도 Node 명령은 같습니다. Python은 `py -3`로 바꿀 수
 ## Git 작업 흐름
 
 이전 Mac 원본은 보존용입니다. 앞으로 개발은 **이 저장소의 clone/checkout**에서 진행합니다. 시작할 때 `git status`를 확인하고, 작업 중인 변경을 다른 사람 코드로 덮지 않습니다.
+
+새 clone에서는 커밋 작성자도 한 번 설정합니다: `git config user.name "<your-name>"`, `git config user.email "<verified-email-or-GitHub-noreply>"`. 기존 설정이 있으면 먼저 확인하고 임의로 바꾸지 않습니다.
 
 ```sh
 git switch main
