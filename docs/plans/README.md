@@ -4,6 +4,8 @@
 
 확인한 현재 설계: [이음 기능 설계도와 검증 일지](https://chatgpt.com/space/page_257b0a73cf808191a03c02362edc2673), sequence54 (2026-10-26). snapshot 참조 `libfile_84ed0a527b1481918b60b675b63a19c1`. 현재 Page를 직접 읽었으며 snapshot ZIP은 이번 이관에서 내려받지 않았습니다.
 
+Git 기준 코드와 sequence54의 M1~M6를 대조한 현황·담당 인터페이스·종단 완료정의는 [큰 기능 이정표와 Git 통합 계약](../MILESTONES.md)에 이어 기록합니다. 아래 동결 인계의 당시 소스 미확보 표시와 합성 기대값은 그대로 보존하며, 새 branch의 구현/시험 결과로 자동 승격하지 않습니다.
+
 ## 포함한 인계와 검증된 바이트
 
 | 폴더 | Library 원본 | ZIP bytes / SHA256 |
