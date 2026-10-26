@@ -211,6 +211,45 @@ internal class AndroidLocalSttPilot(context:Context,exercise:String="public-v1")
         }
         return approved
     }
+    /** Public-only fixture roundtrip. Real JNI source packs; zero OAuth/HTTP/model calls. */
+    fun siwcPublicCandidates():JSONObject=integrated{intake,_,current->
+        val results=JSONArray();var fixtureCalls=0
+        AndroidAutomationStore(scoped,scope.owner,scope.epoch,current,{AndroidAutomationRuntime.policyHash(settings.snapshot())},{s->source.inventory().documents.any{it.uri==s.getString("actual_uri")}}, {"Etc/UTC"}).use{store->
+            SiwcNativeReviewStore(scoped,owner,intake,store,current,settings::snapshot).use{native->
+                for(r in integrationRequests(intake)) {
+                    val old=kr.co.callsummary.core.android.AndroidSqlPort(scoped,GeneralLocalStore.DATABASE,scoped.assets.open("call_core_schema.sql")).use{db->db.query("SELECT id FROM siwc_native_candidates WHERE request_id=?",r).singleOrNull()?.get("id")?.toString()}
+                    if(old!=null){check(intake.available(r));val saved=native.candidate(old);if(saved.getBoolean("userApproved"))native.reviewedReceipt(old);results.put(saved);continue}
+                    val ticket=native.prepare(r);val accountScope="PUBLIC_SYNTHETIC_SIWC_FIXTURE:"+scope.key
+                    val port=SiwcPublicFixturePort(ticket.contract);val valid={current() && native.isCurrent(ticket)}
+                    SiwcInferenceJobs(scoped,accountScope,port,valid).use{jobs->
+                        val a=SiwcNativeRoundTrip.analysis(ticket,accountScope);val va=SiwcNativeRoundTrip.validateAnalysis(ticket)
+                        check(jobs.run(a,va).state=="COMPLETE") { "SIWC_PUBLIC_ANALYSIS_NOT_COMPLETE" }
+                        val c=SiwcNativeRoundTrip.context(ticket,jobs,a);val vc=SiwcNativeRoundTrip.validateContext(ticket,jobs,a)
+                        check(jobs.run(c,vc).state=="COMPLETE") { "SIWC_PUBLIC_CONTEXT_NOT_COMPLETE" }
+                        SiwcResultFiles(scoped,accountScope,jobs,valid).use{files->files.publish(kr.callagent.drive.StrictJson.bytes(ticket.contract.pack),a,c,va,vc)
+                            results.put(native.receive(ticket,files,a,c,fixture=true))}
+                    };fixtureCalls+=port.calls
+                }
+            }
+        }
+        JSONObject().put("phase","SIWC_FIXTURE_FILE_CANDIDATES_ONLY").put("candidates",results).put("fixtureCompletions",fixtureCalls)
+            .put("actualAstraCalls",0).put("actualOAuthGrants",0).put("actualAndroidSTTCalls",engine.calls)
+    }
+    fun siwcPublicReview(digests:Map<String,String>,confirmed:Boolean):JSONObject=integrated{intake,_,current->
+        check(confirmed && digests.isNotEmpty()){"SIWC_EXPLICIT_USER_REVIEW_REQUIRED"};val receipts=JSONArray()
+        AndroidAutomationStore(scoped,scope.owner,scope.epoch,current,{AndroidAutomationRuntime.policyHash(settings.snapshot())},{s->source.inventory().documents.any{it.uri==s.getString("actual_uri")}}, {"Etc/UTC"}).use{store->
+            SiwcNativeReviewStore(scoped,owner,intake,store,current,settings::snapshot).use{native->
+                val saved=digests.map{(id,digest)->check(native.candidate(id).getString("digest")==digest){"SIWC_REVIEW_CHANGED"};native.reviewedReceipt(id)}
+                if(saved.all{it!=null})return@integrated JSONObject().put("phase","EXISTING_USER_SIWC_FIXTURE_REVIEW_REOPENED").put("receipts",JSONArray(saved))
+                val selection=digests.map { (id,digest) ->
+                    val row=kr.co.callsummary.core.android.AndroidSqlPort(scoped,GeneralLocalStore.DATABASE,scoped.assets.open("call_core_schema.sql")).use{db->db.query("SELECT request_id FROM siwc_native_candidates WHERE id=?",id).single()}
+                    native.prepare(row["request_id"].toString()) to (id to digest)
+                }.toMap()
+                native.approveSelection(selection,true).forEach{receipts.put(it)}
+            }
+        }
+        JSONObject().put("phase","EXPLICIT_USER_SIWC_FIXTURE_REVIEW").put("receipts",receipts).put("actualAstraCalls",0).put("actualOAuthGrants",0)
+    }
     fun cancel(){stop.set(true);activeRunner?.cancel();engine.cancel()}
     override fun close(){activeRunner=null}
 }

@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "IEUM SIWC context review sidecar; never user consent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "analysisJobId",
+    "analysisOutputSha256",
+    "approvedSnapshotSha256",
+    "actions"
+  ],
+  "properties": {
+    "schema": {
+      "const": "ieum.siwc-context.v1"
+    },
+    "analysisJobId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "analysisOutputSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "approvedSnapshotSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "actions": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "claimId",
+          "kind",
+          "targetId",
+          "targetRevision",
+          "operation",
+          "uncertain",
+          "conflict"
+        ],
+        "properties": {
+          "claimId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,80}$"
+          },
+          "kind": {
+            "enum": [
+              "TASK",
+              "DOCUMENT",
+              "PROGRESS",
+              "APPOINTMENT"
+            ]
+          },
+          "targetId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,80}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "targetRevision": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "operation": {
+            "enum": [
+              "ASSERT",
+              "CANCEL"
+            ]
+          },
+          "uncertain": {
+            "type": "boolean"
+          },
+          "conflict": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}

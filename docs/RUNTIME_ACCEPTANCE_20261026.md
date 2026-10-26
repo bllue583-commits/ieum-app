@@ -164,3 +164,5 @@ G01 근거: [Activity](https://github.com/bllue583-commits/ieum-app/blob/dc0c16b
 ## 기존코어의 후속 G01/G02 재현·수정
 
 위 표는 `dc0c16b`에 대한 독립 검토 당시의 기록으로 보존한다. integration branch에서 실제 반례→수정→회귀한 원결과와 범위는 [G01/G02 수정 기록](G01_G02_FIX_20261026.md)에 별도로 남긴다. 이 후속 작업은 취소 대상과 확인된 로컬 빈 창의 진행성만 다루며 Astra/SIWC 왕복 완료나 G03/CP08 전체 해결을 의미하지 않는다.
+
+별도 `integration/siwc-runtime-20261026`의 앱 로그인·native 파일 검토 연결 및 실제 grant 대기는 [SIWC 통합 기록](SIWC_RUNTIME_INTEGRATION_20261026.md)에 기록한다. 기존 판정과 OPEN 게이트는 새 실제 runtime 증거 없이 완료로 올리지 않는다.

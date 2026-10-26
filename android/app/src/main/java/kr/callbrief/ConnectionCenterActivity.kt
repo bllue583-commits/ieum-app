@@ -90,6 +90,8 @@ internal open class ConnectionCenterActivity : ComponentActivity() {
         val scroll=ScrollView(this);val body=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL };scroll.addView(body)
         root.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
         val v=session.view();val google=section(body,"Google · Drive")
+        val chatgpt=section(body,"ChatGPT · 분석 연결")
+        chatgpt.addView(button("ChatGPT 연결 · 동의 대기") { startActivity(Intent(this,SiwcRuntimeActivity::class.java)) }.apply{tag="siwc_connection"})
         google.addView(label(if(v.accountLabel.isBlank()) "연결된 Google 계정이 없어요." else "현재 계정: ${v.accountLabel}",bold=true))
         google.addView(label(when(v.phase) {
             GoogleConnectionSession.Phase.ACTIVE -> "계정·Drive 접근 확인됨"
@@ -144,6 +146,7 @@ internal open class ConnectionCenterActivity : ComponentActivity() {
             val local=section(body,"기기 안 공개 음성 시험")
             local.addView(label("계정 연결 없이 앱에 포함된 합성 음성을 처리해요. 실제 통화는 사용하지 않아요."))
             local.addView(button("공개 음성으로 기기 요약 시험") { startActivity(Intent(this,AndroidLocalSttActivity::class.java)) }.apply { tag="android_local_stt_trial" })
+            local.addView(button("공개 전사·합성 결과파일 검토 시험") { startActivity(Intent(this,SiwcPublicResultActivity::class.java)) }.apply { tag="siwc_public_trial" })
         }
         val fixed=section(body,"고정 합성 텍스트 확인")
         fixed.addView(label("앱의 결과 반환 연결은 아직 확인되지 않았어요. 브라우저 작업과 기기 안 합성 검증을 구분해요."))
