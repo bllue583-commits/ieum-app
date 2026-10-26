@@ -4,6 +4,8 @@
 
 검토 범위는 고정 commit의 코드와 작성자 원증거 독립 대조다. 이번 설계 검토에서 새 Android/STT/외부 모델 실행은 하지 않았다. 제품코드·공유 SQL·동결 wire·원격 Page는 수정하지 않았고 문서는 `docs/milestones-git`에서 전달한다.
 
+**후속 등록 판정:** [Private 이음의 SIWC 등록 경로](SIWC_REGISTRATION_DECISION.md)에서 공식 Cookbook의 개인 로컬 프로젝트 지원을 확인했다. Private라는 이유만으로 공개 전환/partner 신청을 요구하지 않는다. B01은 개인 로컬 동적 등록 경로를 확보한 상태이며, 업무 운영 범위·실제 grant와 Android callback 검증을 구분한다. 후속 기능 `4b3ecff`의 단일 암호화 bundle 구현·fixture 시험과 실제 호출0도 해당 문서에 분리했다.
+
 ## 원래 목표와 현재 실행의 구분
 
 [설계 Page sequence54](https://chatgpt.com/space/page_257b0a73cf808191a03c02362edc2673)의 블록 `904c78d4-6434-47a1-973f-997e5b9522ef`와 `424f7ddf-9a1d-4479-8d6b-ae01710f7818`에는 앱이 모은 음성·시각·번호를 dot·worker가 분석하고 관련 SMS·네이버 근거와 함께 앱에 반환하는 목표, code33/34 로컬 Whisper는 보조라는 구분이 이미 있다. 목표가 없었던 것이 아니라 실제 호출·반환 연결이 미완료다. 현재 sequence54의 해당 블록을 다시 읽었다. sequence53은 [당시 계약의 baseline](plans/context/integration_contract.json)으로 대조했으며 과거 Page 전체 snapshot을 새로 확보한 것으로 보고하지 않는다.
@@ -40,7 +42,7 @@ flowchart LR
 
 | 경로 | 지원 판정과 근거 | 이음에서 남은 연결 |
 | --- | --- | --- |
-| Android→SIWC→플랜 추론 | **공식 public-client/Responses 경로 지원.** identity 로그인과 플랜 사용 scope는 별개. OSS 및 선택된 Private client 범위이며 이음 등록·Android 적합성은 미확인 | 아래 정확한 계약으로 구현. account catalog의 Astra 가용성·xhigh 실응답, loopback callback/앱 복귀, 새 grant 필요 여부 확인 |
+| Android→SIWC→플랜 추론 | **공식 public-client/Responses 경로 지원.** identity 로그인과 플랜 사용 scope는 별개. 후속 공식 근거로 OSS 외 개인 로컬 프로젝트 경로도 확인; 업무 운영/배포와 실제 Android 적합성은 별도 | 아래 정확한 계약과 [등록 판정](SIWC_REGISTRATION_DECISION.md) 적용. account catalog의 Astra 가용성·xhigh 실응답, loopback callback/앱 복귀, 새 grant 필요 여부 확인 |
 | 앱→개인 dot 원음 자동 수신 | **미확인.** [dots 문서](https://learn.chatgpt.com/docs/dots)는 ChatGPT 내 대화·통화 사용을 설명하지만 Android 앱의 임의 WAV 업로드 및 처리 영수증 계약을 제시하지 않음 | 실제 접근 가능한 수신 endpoint/권한/bytes 수신·hash 검증/실행 trigger를 각각 입증 |
 | 게시된 Workspace Agent 호출 | **텍스트 trigger 지원.** `POST https://api.chatgpt.com/v1/workspace_agents/{id}/trigger`, 문자열 `input`, 선택적 `conversation_key`, 재시도용 `Idempotency-Key`. `{id}`는 게시된 API 채널 ID이며 개인 dot ID라고 가정하지 않음 | 공개 API 채널의 실제 존재·권한, 음성 materialization, 두 단계 역할/모델 선택 검증 |
 | Workspace Agent 결과 회수 | **이 trigger API의 응답 본문 회수는 미지원.** `202`와 beta run status의 `completed`는 실행 상태이며 앱 결과파일이 아님 | 별도 허용 writer·저장소·앱 회수 계약 필요. conversation URL을 결과파일로 사용하지 않음 |
@@ -53,7 +55,7 @@ flowchart LR
 
 ### SIWC: 이음 내부 로그인부터 기기 결과파일까지의 구현 계약
 
-다음은 공식 protocol과 이음에 적용할 **구현 제안**을 구분한 계약이다. endpoint는 공식 문서에서 확인했고 제품코드에는 아직 적용하지 않았다. [SIWC quickstart](https://developers.openai.com/siwc/quickstart)는 OSS와 선택된 Private client를, [개요](https://developers.openai.com/siwc/token-sharing-open-source)는 로컬 앱 경로를 설명한다. 이 저장소를 공개하거나 partner 신청·약관 수락·새 client 등록을 실행하지 않았다. Private 이음의 실제 admission은 검증 게이트로 남긴다.
+다음은 공식 protocol과 이음에 적용할 **구현 제안**을 구분한 계약이다. endpoint는 공식 문서에서 확인했고 이 문서 branch는 제품코드를 수정하지 않았다. [SIWC quickstart](https://developers.openai.com/siwc/quickstart)는 OSS와 선택된 Private client를, [개요](https://developers.openai.com/siwc/token-sharing-open-source)는 로컬 앱 경로를 설명한다. 후속으로 확인한 개인 로컬 지원과 신규 구현은 [등록 판정](SIWC_REGISTRATION_DECISION.md)을 따른다. 이 저장소를 공개하거나 partner 신청·약관 수락·새 client 등록을 실행하지 않았고 실제 admission은 아직 관측하지 않았다.
 
 | 단계 | 정확한 protocol 또는 기존 코드 | 이음에서 구현할 행동·종료 조건 |
 | --- | --- | --- |
@@ -87,7 +89,7 @@ flowchart LR
 | T-SIWC05 조작·거절·limit | source hash/quote/스키마 불일치·failed/incomplete·429에서 승인/최종 성공0, 토큰/원문 로그0. 규칙 검증 PASS를 의미 이해 PASS로 세지 않음 | NOT_RUN; 네트워크 fake만 쓴 경우 MOCKED 표기 |
 | T-SIWC06 폴더 권한 거부/철회·범위밖 파일·목록부분 | 기존 선택 유지 또는 연결필요, 범위밖 bytes0, 목록 전체 완료로 표시0. 폴더 권한만으로 외부 전사 전송 시작0 | 기존 회귀를 재사용·신규 SIWC 접점 회귀 NOT_RUN |
 
-현재 blocker는 **B01 Private 이음 등록/기존 사용 가능 grant 확인**, **B02 Android loopback·앱 복귀**, **B03 계정별 Astra/xhigh 실제 허용·완료 응답**, **B04 실제 실행 영수증→기존 저장 adapter**다. denied 또는 이미 성공한 호출이 아니라 **미실행/미확인** 상태다. 다음 단계는 신규 담당이 인증·SSE·결과파일 contract를 구현하고 B01~B04를 순서대로 검증하는 것이다. 기존 계정테스트 허용을 활용하되 새 OAuth 동의가 필요하면 이음 이름·scope·로컬 token 보관·플랜 사용/한도·공개 합성 전사 입력을 제시해 부모가 승인 절차를 진행한다. 별도 API key 경로는 자동 fallback이 아니며 해당 credential/비용이 따로 허용될 때만 검토한다.
+현재 blocker는 **B01 실제 등록/grant와 업무 운영 범위 확인(개인 로컬 경로는 후속 조사로 확보)**, **B02 Android loopback·앱 복귀**, **B03 계정별 Astra/xhigh 실제 허용·완료 응답**, **B04 실제 실행 영수증→기존 저장 adapter**다. denied 또는 이미 성공한 호출이 아니라 **미실행/미확인** 상태다. 후속 `4b3ecff`는 SSE·두 job·결과파일의 fixture 검증을 구현했으므로 다음은 인증 adapter와 실제 gate 검증이다. 기존 계정테스트 허용을 활용하되 새 OAuth 동의가 필요하면 이음 이름·scope·로컬 token 보관·플랜 사용/한도·공개 합성 전사 입력을 제시해 부모가 승인 절차를 진행한다. 별도 API key 경로는 자동 fallback이 아니며 해당 credential/비용이 따로 허용될 때만 검토한다.
 
 원음 bytes를 외부 분석 runtime에 직접 전달하는 것이 필수라면 **SIWC 단독 경로는 그 요구를 충족하지 않는다.** 여기서 제안한 것은 앱이 음성을 실제 읽고 전사한 뒤 Astra가 내용을 해석하는 경로다. 원음 자체의 외부 수신이 필요한 dot/전사 서비스 경로는 별도 지원·권한·데이터 전달 계약을 확인하며 원음 업로드 완료로 표시하지 않는다.
 
