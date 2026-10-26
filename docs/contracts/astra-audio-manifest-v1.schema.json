@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "astra-audio-manifest-v1.schema.json",
+  "description": "IEUM proposed audio sidecar. Structural validation alone never authorizes transfer, proves model execution, or approves business changes.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "ieum.astra-audio.manifest.v1"
+    },
+    "scope": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    },
+    "model": {
+      "const": "gpt-6-astra"
+    },
+    "effort": {
+      "const": "xhigh"
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "jobId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          },
+          "sourceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          },
+          "sourceVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "audioSha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "revisionSha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "handoffSha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "byteLength": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10485760
+          },
+          "mime": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "jobId",
+          "sourceId",
+          "sourceVersion",
+          "audioSha256",
+          "revisionSha256",
+          "handoffSha256",
+          "byteLength",
+          "mime"
+        ]
+      },
+      "maxItems": 4,
+      "minItems": 1
+    }
+  },
+  "required": [
+    "schema",
+    "scope",
+    "model",
+    "effort",
+    "files"
+  ]
+}

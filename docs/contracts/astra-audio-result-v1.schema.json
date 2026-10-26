@@ -1,0 +1,278 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "astra-audio-result-v1.schema.json",
+  "description": "IEUM proposed audio sidecar. Structural validation alone never authorizes transfer, proves model execution, or approves business changes.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "ieum.astra-audio.result.v1"
+        },
+        "manifestSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "model": {
+          "const": "gpt-6-astra"
+        },
+        "effort": {
+          "const": "xhigh"
+        },
+        "status": {
+          "const": "COMPLETE"
+        },
+        "revision": {
+          "const": 1
+        },
+        "receipt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "execution": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "RUNTIME",
+                "TEST_FIXTURE"
+              ]
+            },
+            "responseId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "model": {
+              "const": "gpt-6-astra"
+            },
+            "effort": {
+              "const": "xhigh"
+            },
+            "audioSha256": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "maxItems": 4
+            }
+          },
+          "required": [
+            "kind",
+            "responseId",
+            "model",
+            "effort",
+            "audioSha256"
+          ]
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "jobId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,128}$"
+              },
+              "sourceId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,128}$"
+              },
+              "sourceVersion": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "audioSha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "revisionSha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "handoffSha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "transcript": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64000
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 3000
+              },
+              "claims": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9_-]{1,128}$"
+                    },
+                    "kind": {
+                      "enum": [
+                        "WORK",
+                        "REQUEST",
+                        "PROMISE"
+                      ]
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    },
+                    "assignee": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1000
+                        }
+                      ]
+                    },
+                    "due": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1000
+                        }
+                      ]
+                    },
+                    "requiredDocuments": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "maxItems": 10
+                    },
+                    "uncertainty": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1000
+                        }
+                      ]
+                    },
+                    "evidence": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "start": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "end": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "quote": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 3000
+                        }
+                      },
+                      "required": [
+                        "start",
+                        "end",
+                        "quote"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "text",
+                    "assignee",
+                    "due",
+                    "requiredDocuments",
+                    "uncertainty",
+                    "evidence"
+                  ]
+                },
+                "maxItems": 30
+              },
+              "uncertainties": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1000
+                },
+                "maxItems": 30
+              }
+            },
+            "required": [
+              "jobId",
+              "sourceId",
+              "sourceVersion",
+              "audioSha256",
+              "revisionSha256",
+              "handoffSha256",
+              "transcript",
+              "summary",
+              "claims",
+              "uncertainties"
+            ]
+          },
+          "maxItems": 4,
+          "minItems": 1
+        }
+      },
+      "required": [
+        "schema",
+        "manifestSha256",
+        "model",
+        "effort",
+        "status",
+        "revision",
+        "receipt",
+        "execution",
+        "results"
+      ]
+    },
+    "keyId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "contentEncoding": "base64"
+    }
+  },
+  "required": [
+    "payload",
+    "keyId",
+    "signature"
+  ]
+}
