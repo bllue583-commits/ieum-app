@@ -51,6 +51,7 @@ class DailyReportActivity:ComponentActivity() {
             body.removeAllViews();body.addView(label("매일 오전 6시 보고 · 보관과 실행 상태").apply { textSize=24f })
             body.addView(label("기기 시간대 ${ZoneId.systemDefault().id}의 오전 6시가 목표예요. Doze·절전·앱 중지로 늦어질 수 있어요. 정각 실행은 보장하지 않아요."))
             body.addView(label("검증 정책을 통과한 자동 누적 내용과 미완료 항목은 로컬 보고로 보관해요. 기존 직접 확인 보고는 유지해요. Kakao 무인 발송은 정책 미확인으로 비활성이고 사용자 직접 보내기 인터페이스만 유지해요."))
+            body.addView(button("KST 전날·최근 7일 보고 / 동기화 상태") { showMorningReports() }.apply { tag="morning_reports" })
             body.addView(button("날짜별 통화·부분 내용 보기") { choosePartialDate() }.apply { tag="daily_partial_date" })
             body.addView(label("시간대가 바뀌면 이전 보고의 UTC 종료 시각부터 다음 조회를 이어가요. 표시 날짜와 조회 구간이 다를 수 있어요."))
             body.addView(label("하루를 넘는 밀린 구간은 실제 시작·끝을 표시해 검토 대기로 보관해요. 전날 보고에 섞거나 자동으로 보내지 않아요."))
@@ -87,6 +88,53 @@ class DailyReportActivity:ComponentActivity() {
                 }
             }
             body.addView(button("상태 다시 확인") { refresh() });body.addView(button("설정으로 돌아가기") { finish() })
+        }
+    }
+    private fun showMorningReports() {
+        busy=true
+        lifecycleScope.launch {
+            val result=runCatching { withContext(Dispatchers.IO) {
+                check(DailyReportRuntime.current(this@DailyReportActivity,scope))
+                DailyReportLedger(scope.context,scope.profile).use { ledger ->
+                    val config=ledger.config()
+                    MorningReports.run(this@DailyReportActivity,scope,ledger,DailyReportRuntime.environment(this@DailyReportActivity,"MANUAL_STATUS"),config.generation,
+                        { DailyReportRuntime.current(this@DailyReportActivity,scope) })
+                    val repository=ledger.morning();val outbox=repository.outbox()
+                    Triple(config,"${repository.syncStatus()} / 마지막 저장 완료: ${repository.lastSuccessfulSync() ?: "미확인"}",repository.reports().take(60).map { row ->
+                        val visible=runCatching { CanonicalMorningSnapshotPort(scope.context).snapshot(row.window).validated().fingerprint==row.fingerprint }.getOrDefault(false)
+                        val text=if(row.revision==0)"보관된 본문 없음" else if(visible)repository.body(row.key,row.revision)
+                            else "현재 원본·권한·검토 상태가 달라 본문을 숨겼어요. 보관본은 유지해요."
+                        Triple(row,text,outbox.filter { it.reportKey==row.key }.joinToString(" / ") { "r${it.revision}: ${it.state.name}" })
+                    })
+                }
+            } }
+            busy=false
+            if(isFinishing || isDestroyed || !DailyReportRuntime.current(this@DailyReportActivity,scope))return@launch
+            val content=LinearLayout(this@DailyReportActivity).apply { orientation=LinearLayout.VERTICAL;setPadding(24,16,24,16) }
+            content.addView(label("KST 23시 동기화 · 06시 전날/최근 7일 보고\n정각 실행은 보장되지 않아요. 절전·재부팅·강제 중지 이후 OS가 허용하면 복구해요.\n카카오 실제 발송 없음 · dry-run은 수신 확인이 아니에요."))
+            result.onFailure { content.addView(label("보고 저장소를 읽지 못했어요. 기존 자료는 보존해요.")) }
+            val dialog=AlertDialog.Builder(this@DailyReportActivity).setTitle("KST 보고 실행 상태")
+                .setView(ScrollView(this@DailyReportActivity).apply { addView(content) }).setPositiveButton("닫기",null).create()
+            result.onSuccess { (config,sync,rows) ->
+                content.addView(label("동기화: $sync · SMS/네이버 전체 연동은 미완료\n예약: ${if(config.enabled)"사용" else "중단"}"))
+                if(rows.isEmpty())content.addView(label("아직 KST 보고가 없어요. 일일보고 예약을 사용하면 가장 최근 도래한 대상일부터 보관해요."))
+                rows.forEach { (row,text,delivery) ->
+                    content.addView(label("${row.window.reportDay} ${row.window.kind} · r${row.revision}\n${row.state} · ${row.note}\n목표 ${row.window.due} / 보관 ${row.observed ?: "대기"}\n$delivery\n$text"))
+                    if(config.enabled && config.generation==row.generation && row.state!="CANCELLED")content.addView(button("현재 자료로 다시 조회 / 알려진 실패 재시도") {
+                        dialog.dismiss();busy=true
+                        lifecycleScope.launch {
+                            val retried=runCatching { withContext(Dispatchers.IO) {
+                                check(DailyReportRuntime.current(this@DailyReportActivity,scope))
+                                DailyReportLedger(scope.context,scope.profile).use { it.morning { DailyReportRuntime.current(this@DailyReportActivity,scope) }.manualRetry(row.key,config.generation) }
+                            } }
+                            busy=false
+                            retried.onFailure { Toast.makeText(this@DailyReportActivity,"현재 예약·계정 상태를 확인해 주세요.",Toast.LENGTH_LONG).show() }
+                            showMorningReports()
+                        }
+                    })
+                }
+            }
+            ProtectedDialogWindow.show(dialog)
         }
     }
     private fun choosePartialDate() {

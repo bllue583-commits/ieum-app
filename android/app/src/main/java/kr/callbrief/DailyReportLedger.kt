@@ -91,6 +91,7 @@ internal class DailyReportLedger(context:Context,val profile:String,
     init {
         ProtectedDatabase.requireSealedPersistence(db)
         tx {
+            MorningReportRepository.initialize(db)
             db.execSQL("CREATE TABLE IF NOT EXISTS partial_reports(id TEXT PRIMARY KEY,report_id TEXT NOT NULL REFERENCES reports(id),basis TEXT NOT NULL,payload_hash TEXT NOT NULL,payload BLOB NOT NULL,created_ms INTEGER NOT NULL,UNIQUE(report_id,basis))")
             for(action in listOf("UPDATE","DELETE"))db.execSQL("CREATE TRIGGER IF NOT EXISTS partial_reports_immutable_${action.lowercase()} BEFORE $action ON partial_reports BEGIN SELECT RAISE(ABORT,'PARTIAL_HISTORY_IMMUTABLE'); END")
             db.execSQL("CREATE TRIGGER IF NOT EXISTS partial_reports_no_replace BEFORE INSERT ON partial_reports WHEN EXISTS(SELECT 1 FROM partial_reports WHERE id=NEW.id OR (report_id=NEW.report_id AND basis=NEW.basis)) BEGIN SELECT RAISE(ABORT,'PARTIAL_HISTORY_IMMUTABLE'); END")
@@ -102,6 +103,7 @@ internal class DailyReportLedger(context:Context,val profile:String,
     private fun <T> read(block:()->T):T=ProtectedDatabase.read(db) {
         ProtectedDatabase.requireSealedPersistence(db);block()
     }
+    fun morning(current:()->Boolean={true})=MorningReportRepository(db,profile,cipher) { enabled(it) && current() }
     fun config():DailyReportConfig=read { db.rawQuery("SELECT * FROM config WHERE id=1",null).use { c ->
         check(c.moveToFirst());DailyReportConfig(c.getInt(1)==1 && !legacyHold,c.getLong(2),c.getString(3)?.let(LocalDate::parse),c.getString(4),legacyHold)
     } }
@@ -109,6 +111,7 @@ internal class DailyReportLedger(context:Context,val profile:String,
     fun setEnabled(value:Boolean,now:Instant,zone:ZoneId):DailyReportConfig=tx {
         check(!value || !legacyHold) { "LEGACY_V1_REPORT_REVIEW_REQUIRED" }
         val current=config();val next=current.generation+1
+        morning().reset(next,now)
         db.execSQL("UPDATE config SET enabled=?,generation=?,cursor=?,zone=? WHERE id=1",
             arrayOf(if(value)1 else 0,next,now.atZone(zone).toLocalDate().minusDays(1).toString(),zone.id))
         db.execSQL("UPDATE reports SET delivery='UNKNOWN',note='작업 중단 · 원격 접수 여부 불명' WHERE delivery='SENDING'")
@@ -174,7 +177,7 @@ internal class DailyReportLedger(context:Context,val profile:String,
             storePartial(id,input,env.now,generation)
     }
     private fun aad(r:SavedDailyReport)="$profile\n${r.id}\n${r.window.date}\n${r.window.zone.id}\n${r.window.from}\n${r.window.until}"
-    private fun hasPayload()=db.rawQuery("SELECT 1 FROM reports WHERE payload IS NOT NULL UNION ALL SELECT 1 FROM partial_reports LIMIT 1",null).use { it.moveToFirst() }
+    private fun hasPayload()=db.rawQuery("SELECT 1 FROM reports WHERE payload IS NOT NULL UNION ALL SELECT 1 FROM partial_reports UNION ALL SELECT 1 FROM morning_revisions LIMIT 1",null).use { it.moveToFirst() }
     fun storePartial(id:String,input:DailyReportInput,now:Instant,generation:Long):String=tx {
         check(enabled(generation) && !input.fullyReviewed) { "PARTIAL_CURRENT_INPUT_REQUIRED" }
         val r=requireNotNull(get(id));check(r.delivery!=ReportDelivery.CANCELLED) { "REPORT_CANCELLED" }

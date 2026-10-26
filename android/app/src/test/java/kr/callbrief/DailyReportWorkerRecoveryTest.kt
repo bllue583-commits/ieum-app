@@ -22,7 +22,7 @@ import java.util.concurrent.Executor
 
 /** Actual Worker.doWork and registration code, intercepted before OS registration. Synthetic owners only. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk=[35],shadows=[ShadowTextKeys::class,ShadowTextAtomicFile::class])
+@Config(sdk=[35],shadows=[ShadowTextKeys::class,ShadowTextAtomicFile::class,ShadowMorningReportCipher::class])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class DailyReportWorkerRecoveryTest : ProtectedTextHostTestBase() {
     private lateinit var context:Context
@@ -63,6 +63,26 @@ class DailyReportWorkerRecoveryTest : ProtectedTextHostTestBase() {
                 override fun createWorker(context:Context,name:String,parameters:WorkerParameters):ListenableWorker?=null
             },ProgressUpdater { _,_,_->error("progress is unused") },ForegroundUpdater { _,_,_->error("foreground is unused") })
         return DailyReportWorker(context,params)
+    }
+    @Test fun kstTargetsAndRepeatedEnsureKeepFiveUniqueReservations() {
+        activate();val scope=enable()
+        class UniqueRegistry:DailyReportWorkRegistry {
+            val names=mutableSetOf<String>()
+            override fun cancel(tag:String) {}
+            override fun periodic(name:String,request:PeriodicWorkRequest) { names+=name }
+            override fun once(name:String,request:OneTimeWorkRequest) { names+=name }
+        }
+        val unique=UniqueRegistry();DailyReportSchedule.installRegistryForHost(unique)
+        repeat(100) { DailyReportSchedule.ensure(context,"SYNTHETIC_REPEAT") }
+        assertEquals(5,unique.names.size) // heartbeat, legacy target, KST06, KST23, catchup
+        assertEquals(1,unique.names.count { it.contains(".KST.6.") });assertEquals(1,unique.names.count { it.contains(".KST.23.") })
+        val now=Instant.parse("2026-10-25T20:00:00Z")
+        val six=DailyReportSchedule.morningRequest(now,6,scope,1)
+        val night=DailyReportSchedule.morningRequest(now,23,scope,1)
+        assertEquals(3600_000L,six.workSpec.initialDelay);assertEquals(18*3600_000L,night.workSpec.initialDelay)
+        assertEquals(NetworkType.NOT_REQUIRED,six.workSpec.constraints.requiredNetworkType)
+        assertEquals("KST_23_SYNC",night.workSpec.input.getString("trigger"))
+        assertEquals(scope.accountEpoch,night.workSpec.input.getLong("account_epoch",-1))
     }
     @Test fun reproV2OldEpochWorkerMustRestoreConfirmedSameOwnerReservation() {
         activate();val old=enable();activate()
