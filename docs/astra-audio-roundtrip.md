@@ -2,6 +2,7 @@
 
 기준 `dc0c16b506065a22a12ffaccf3b267aeeacae1fa`, 독립 branch `feature/astra-audio-roundtrip`.
 총괄 [RUNTIME_ACCEPTANCE_20261026.md@6869fbb](https://github.com/bllue583-commits/ieum-app/blob/6869fbb1f90c395dadb2c15695da2491899f5f4a/docs/RUNTIME_ACCEPTANCE_20261026.md)의 SIWC·두 단계 계약을 대조했다. 공유 Store/SQL·기존 wire는 수정하지 않았다.
+후속 [개인 로컬 등록 판정@69531e0](https://github.com/bllue583-commits/ieum-app/blob/69531e0c4d62d69f6ce0d08f0644c2c1e58eaee3/docs/SIWC_REGISTRATION_DECISION.md)을 반영해 **개인 로컬 dynamic 경로를 확인했고 인증 모듈을 추가했다**. 최신 구현·UI/native 통합 요구사항·사용자 승인안은 [siwc-auth-module.md](siwc-auth-module.md)에 있다. 실제 grant와 Android 종단 인수는 여전히 미실행이다.
 사용자 목표는 **이음 내부 로그인 진입 → 공식 ChatGPT 인증 후 이음 복귀 → 기존 Android 권한/녹음 폴더 선택 → 허용 음성 목록과 실제 bytes 분석 → 앱의 결과 파일 저장/검증/읽기 → 사용자 검토와 기존 업무 저장**이다. 개발 worker를 Astra로 설정하는 것은 이 런타임 기능의 구현이나 실행 증거가 아니다.
 
 ## 2026-10-26 실행가능성 판정
@@ -12,19 +13,19 @@
 | --- | --- |
 | 정확한 모델/effort | [Astra 모델](https://developers.openai.com/api/docs/models/gpt-6-astra)은 `gpt-6-astra`, `xhigh`를 명시한다. 직접 audio modality는 지원하지 않는다. |
 | 본인 ChatGPT 사용량으로 추론 | [SIWC Models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)는 승인된 OAuth access token으로 `GET https://api.openai.com/v1/models`, `POST https://api.openai.com/v1/responses`를 명시한다. API key만 가능하다는 주장은 맞지 않는다. 계정의 catalog와 해당 요청의 `response.completed`를 각각 확인해야 한다. |
-| 이음 안에서 시작하는 로그인 | [Quickstart](https://developers.openai.com/siwc/quickstart)는 open-source 및 **선택된 private client**의 plan usage를 명시한다. [일반 client ID 등록](https://developers.openai.com/siwc/request-client-id)은 선택된 commercial partner 대상이다. [direct 등록](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)은 `dynamic_agent_client`, 고정 host identity, loopback callback과 발급 client ID를 사용한다. 현재 private Android 이음의 적격 등록 방식·승인 client ID·Android callback 검증 증거는 없다. private 앱이 일괄 불가라고 단정하지도, 이음이 이미 허용됐다고 가정하지도 않는다. |
+| 이음 안에서 시작하는 로그인 | [Cookbook](https://developers.openai.com/cookbook/articles/sign-in-with-chatgpt)에서 **개인 로컬 프로젝트** 경로를 확인했다. [direct 등록](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)의 최초 `dynamic_agent_client`→동의 후 발급 ID로 token 교환을 독립 Kotlin으로 구현했다. 별도 등록 콘솔/저장소 공개 전환은 필요조건으로 두지 않는다. 실제 grant·계정 admission·Android callback/복귀는 미검증이며 업무 운영 적격성은 별도다. |
 | SIWC로 원음 bytes를 전송해 처리 | [Preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)는 audio/video input, Files upload API, transcription API를 지원하지 않는다고 명시한다. **직접 음성 분석의 현재 확정 blocker**다. URI나 파일명을 text로 보내도 음성 접근이 생기지 않는다. |
 | 이 계정의 dot/로컬 worker를 Android에서 호출 | [공식 app-server](https://learn.chatgpt.com/docs/app-server)는 stdio/WebSocket RPC를 문서화하지만 원격 WebSocket은 실험적이다. 앱에 승인·연결된 원격 listener/인증/권한/음성 도구가 없다. 데스크톱 `create_thread`/`cloud_threads`를 Android API로 노출할 수 있다는 증거도 없다. 새 worker/listener는 만들지 않았다. |
 | 결과 파일은 누가 쓰는가 | 검증된 응답을 이음이 `noBackupFilesDir`에 암호화 `.part → .json.enc`로 저장하고 다시 검증해 읽는다. SAF content URI의 실제 `InputStream`도 앱이 연다. 모델이 Android filesystem에 직접 접근하는 구조가 아니다. |
 | 비용/권한 | SIWC plan usage는 승인된 계정 사용량·한도에 따른다. 로그인과 사용량 승인은 별개다. 별도 API key/유료 전사·OpenAI API billing으로 자동 대체하지 않았다. 실제 개인 음성·새 grant·등록·약관 수락·결제를 실행하지 않았다. |
 
-사용자는 자신의 계정으로 공개/합성 시험을 승인했다. 그 승인을 기존 데스크톱 토큰/쿠키 추출, 다른 앱 client ID 재사용, 새 OAuth/지속권한 승인, 임의 유료 API 활성화로 확대하지 않았다. 실제 **Astra/SIWC 호출은 0**, 실제 OAuth 등록/교환/로그인도 **0**이다. 이는 자동 approval 거절이 아니라 이음의 등록정보와 인증 adapter가 준비되지 않은 상태다.
+사용자는 자신의 계정으로 공개/합성 시험을 승인했다. 그 승인을 기존 데스크톱 토큰/쿠키 추출, 다른 앱 client ID 재사용, 새 OAuth/지속권한 승인, 임의 유료 API 활성화로 확대하지 않았다. 실제 **Astra/SIWC 호출은 0**, 실제 OAuth 등록/교환/로그인도 **0**이다. 이는 자동 approval 거절이 아니라 구체적인 새 grant 동의와 앱 UI 통합/기기 인수가 남은 상태다.
 
 ## 구체적인 로그인·분석 방향과 남은 결정
 
-1. 이음의 `Continue with ChatGPT` 진입에서 공식 system-browser OAuth를 열고 앱으로 복귀한다. 비밀번호 수집 WebView와 ChatGPT 앱의 로그인/수동 공유는 사용하지 않는다. 등록이 허용된 앱 종류와 callback URI부터 확정한다.
-2. 공식 open-source flow가 이음에도 허용된다는 확인을 받는 경우에만 해당 계약을 사용한다. 현재 문서는 `https://auth.openai.com/api/accounts/authorize`, `127.0.0.1` HTTP loopback `/auth/callback`, 요청별 state/nonce/S256 PKCE, 동일 callback의 code exchange를 요구한다. 임의 `callbrief://` redirect를 지원된 것으로 넣지 않는다. 파트너 등록을 쓰면 발급된 Android/public-client 계약을 따른다. 사용자에게 승인할 앱·계정·usage scope를 제시한다.
-3. 인증 결과는 서명/issuer/audience/nonce/승인 scope를 검증한 후 계정에 결속해 Keystore 보호 저장한다. 활성 계정은 검증 전 교체하지 않는다. 거부/취소/만료/철회/계정 변경 시 큐를 보류한다. 이 단계의 제품 OAuth 구현은 아직 미연결이다.
+1. 이음의 `Continue with ChatGPT` 진입에서 공식 system-browser OAuth를 열고 앱으로 복귀하도록 인증 모듈을 구현했다. 비밀번호 수집 WebView와 ChatGPT 앱의 로그인/수동 공유는 사용하지 않는다. 기본 UI에 설치하거나 활성화하지 않았고 실제 Android 복귀는 아직 검증하지 않았다.
+2. 개인 로컬용 공식 dynamic 계약을 사용한다. `https://auth.openai.com/api/accounts/authorize`, `127.0.0.1` HTTP loopback `/auth/callback`, 요청별 state/nonce/S256 PKCE, 동일 callback의 code exchange를 구현했다. 임의 `callbrief://` redirect로 대체하지 않는다. 실제 시작 전 사용자에게 앱·계정·usage/갱신 scope를 제시해 새 동의를 받아야 한다.
+3. 서명/issuer/audience/nonce/승인 scope를 검증한 뒤 계정에 결속해 Keystore 보호 저장한다. 활성 계정은 검증 전 교체하지 않는다. 거부/취소/만료/철회/계정 변경과 갱신 결과 미확인을 구분한다. 구현된 인증 모듈의 상세와 아직 연결할 UI/runtime 접점은 [인증 인수 계약](siwc-auth-module.md)에 있다.
 4. 계정의 `/v1/models`에 정확한 Astra가 있고 effort를 지원해야 선택을 유지한다. `/v1/responses`는 `store:false`, `stream:true`, `reasoning:{effort:"xhigh"}`와 해당 모델을 사용하며, 완료 이벤트 전에는 성공으로 표시하지 않는다. 일부 delta 뒤 usage-limit/failed/incomplete는 실패/보류다. 별도 model로 자동 대체하지 않는다.
 5. **현재 SIWC는 원음 처리가 불가능하다.** 최신 총괄 계약에 따라 Android 로컬 Whisper가 실제 원음을 전사하고, 전사·타임코드·원음 SHA를 SIWC Astra xhigh 분석 입력으로 삼으며, 별도 맥락 job이 승인 snapshot을 대조하는 방향을 구현했다. 이 배치는 Astra가 원음을 직접 듣거나 개인 dot이 자동 수신하는 구조와 다르다. 개인 dot 경로는 OPEN이다. Whisper 단독 출력을 Astra 정리 완료로 기록하지 않는다. 별도 유료 전사 서비스는 도입하지 않았다.
 6. 실제 지원 adapter는 응답 ID·actual model/effort·terminal status·byte/전사 근거 hash를 관측하고 아래 결과 계약을 만들어 앱에 전달한다. 서명은 승인된 adapter/앱의 출처 확인이며 OpenAI 자체가 아래 커스텀 JSON에 RSA 서명한다고 가정하지 않는다. 검증된 원시 API 관측 없이 `RUNTIME` 문자열만으로 execution assurance를 올리지 않는다.
@@ -38,7 +39,7 @@
 ## SIWC 경로에 구현된 독립 계층
 
 - `SiwcLocalTranscript`: 기존 `UnclassifiedAudioStore`의 전사·구간·source/version/audio SHA와 관측 runtime/model/raw output SHA를 source pack으로 만든다. 로컬 실제 실행 또는 신뢰된 replay만 허용하며 fixture 전사 증거를 실제로 승격하지 않는다. 이 adapter 자체는 JNI 실행기나 목록 UI를 시작하지 않는다.
-- `SiwcAstraProtocol`/`SiwcAstraHttp`: 공식 `/models`와 `/responses`만 사용한다. `gpt-6-astra`/`xhigh`, `store:false`, `stream:true`, input 배열을 구성하고 제한 크기 UTF-8 SSE에서 `response.completed`만 인정한다. 실제 응답 ID/model, stream SHA를 관측한다. 응답에 effort가 없으면 `NOT_REPORTED`이며 요청 effort를 실제 관측값으로 복사하지 않는다. token은 앱이 검증한 scope/expiry/plan usage와 **해당 invocation key 승인**을 갖춘 grant callback에서만 받는다. cookie/redirect/자동 네트워크 재시도는 없다. 기본 grant 공급자·OAuth 화면은 설치하지 않았다.
+- `SiwcAstraProtocol`/`SiwcAstraHttp`: 공식 `/models`와 `/responses`만 사용한다. `gpt-6-astra`/`xhigh`, `store:false`, `stream:true`, input 배열을 구성하고 제한 크기 UTF-8 SSE에서 `response.completed`만 인정한다. 실제 응답 ID/model, stream SHA를 관측한다. 응답에 effort가 없으면 `NOT_REPORTED`이며 요청 effort를 실제 관측값으로 복사하지 않는다. token은 앱이 검증한 scope/expiry/plan usage와 **해당 invocation key 승인**을 갖춘 grant callback에서만 받는다. cookie/redirect/자동 네트워크 재시도는 없다. 후속 `SiwcSessionStore.inferenceGrant`가 그 callback을 제공할 수 있으며 기본 runtime/UI에는 아직 설치하지 않았다.
 - `SiwcInferenceJobs`: 별도 AEAD journal에서 분석과 맥락을 다른 key로 실행한다. key는 계정 scope·stage·source manifest·정확한 input/policy·model/effort·attempt를 결속한다. 맥락 입력은 완료된 분석 출력 hash와 승인 snapshot hash를 포함한다. 완료 stage는 재호출0, 불명확한 stream/프로세스 종료는 UNKNOWN, 한도·권한 오류는 HELD다. 자동 fallback/서버 멱등성/결과 재조회 지원을 가정하지 않는다. 명시 재시도는 이전 attempt를 남긴 새 key이며 새 key의 사용량 승인이 필요하다. 취소는 로컬 저장을 막고 원격 중단 미확인을 기록한다. 네트워크 stream 중 취소 감지는 다음 read/check에 적용되며 read timeout은 60초다.
 - `SiwcResultFiles`: 두 journal에 COMPLETE로 확정된 분석·맥락만 받아 source manifest·두 출력·native 관측 receipt를 **하나의 불변 암호화 bundle**로 저장한다. 총괄의 4개 개별 파일 제안 대신 네 멤버를 단일 AEAD 파일에 결속해 파일들 사이 partial 상태를 없앴다. scope/stage/source/snapshot/응답 hash를 유지하며 암호화 temp fsync→atomic rename→directory fsync→재읽기/AEAD·내용 대조→별도 보호 pointer commit을 수행한다. DB와 파일이 단일 transaction이라는 주장은 하지 않는다. rename 후 DB 전 orphan은 두 stage journal에 일치할 때만 재연결한다. 손상된 완료 파일은 덮어쓰지 않고, partial만으로 성공하지 않는다. 경로는 `noBackupFilesDir/siwc-results-v1/<scopeSHA>/<bundleKey>.json.enc`다.
 
@@ -76,7 +77,7 @@ val provider = AstraAudioAutomationProvider(queue, binding::input)
 // Close queue with the surrounding bounded cycle/lifecycle.
 ```
 
-복수 선택은 이미 동결된 기존 automation jobs의 `binding.input(job,handoff)`를 모아 `queue.prepare(inputs)`로 등록한다. queue 안의 하나의 job은 하나의 manifest만 가진다. 공유 `AutomationProviderRegistry`를 설치할 때 lifecycle/계정별 queue 종료를 함께 연결해야 한다. 새로운 SIWC 전용 native 요청 경로가 필요하면 기존 source lease/job/receipt 의미를 유지하는 계약을 core writer가 통합한다. private 사용자 목록 UI, SIWC OAuth, production adapter, 일반 의미 후보의 사용자 선택 저장 UI는 이번 branch에서 완료하지 않았다. `reviewOwnSummary`/`createItem`을 모델 결과의 side effect로 호출하지 않는다.
+복수 선택은 이미 동결된 기존 automation jobs의 `binding.input(job,handoff)`를 모아 `queue.prepare(inputs)`로 등록한다. queue 안의 하나의 job은 하나의 manifest만 가진다. 공유 `AutomationProviderRegistry`를 설치할 때 lifecycle/계정별 queue 종료를 함께 연결해야 한다. 새로운 SIWC 전용 native 요청 경로가 필요하면 기존 source lease/job/receipt 의미를 유지하는 계약을 core writer가 통합한다. private 사용자 목록/전송동의 UI, OAuth 실제 기기 인수, production native adapter, 일반 의미 후보의 사용자 선택 저장 UI는 이번 branch에서 완료하지 않았다. `reviewOwnSummary`/`createItem`을 모델 결과의 side effect로 호출하지 않는다.
 
 ## 검증 증거
 
@@ -108,8 +109,8 @@ git diff --check
 
 현재 정확한 blocker는 다음과 같다. 모두 미실행/미연결 상태이며 서버가 거절했다고 주장하지 않는다.
 
-1. **등록·grant:** private 이음 admission과 발급 client ID가 없다. 새 등록·OAuth grant/지속접근을 하려면 이음 앱/ChatGPT 계정, `resource.invoke`·`chatgpt.tokens.use.direct`·`offline_access`, 공개 전사 입력, 플랜 usage 범위를 제시해 구체 승인을 받아야 한다. 다른 client의 계정 credential을 추출해 대체하지 않는다.
-2. **Android 인증 구현:** system-browser/loopback/state/PKCE·OIDC·refresh rotation·revocation·계정 전환 UI/lifecycle 구현과 기기 복귀 시험이 남았다. 공식 지원 Android 전용 callback이라는 증거도 아직 없다.
+1. **새 grant:** 개인 로컬 dynamic 등록 경로는 확인했고 모듈도 구현했다. 이제 이음 앱/ChatGPT 계정, identity·plan usage·`offline_access`, 공개 전사 입력, 로컬 token 저장·수명을 제시해 구체 승인을 받아야 한다. 별도 등록 콘솔을 blocker로 반복하지 않는다. 다른 client의 credential은 재사용하지 않는다.
+2. **Android 인수:** system-browser/loopback/state/PKCE·OIDC·refresh rotation·revocation 모듈의 합성 검증은 완료했다. 기본 앱 UI/lifecycle 연결, 실제 브라우저/기기 복귀 시험은 남았다. `earliest_refresh_at` encoding이 제공될 경우 그 단위는 공식 확인 후 decoder를 넣으며 추측 refresh는 보류한다.
 3. **실제 runtime 인수:** 해당 grant의 account catalog·실제 Astra xhigh completed 응답·별도 맥락 completed 응답이 없다. HTTP 구현 존재와 fixture 성공은 계정별 모델 호출 증거가 아니다.
 4. **제품 통합:** core·맥락 담당이 6필드 분석/native provenance·context validator와 결과 candidate mapping, 허용 목록/전송동의 UI, runtime registry·수명, 기존 검토/DONE/revision 저장 gate에 연결해야 한다. 실제 공개 WAV→JNI→SIWC 2회→파일→검토 저장은 NOT_RUN이다.
 

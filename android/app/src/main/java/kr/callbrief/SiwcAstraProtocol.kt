@@ -11,7 +11,7 @@ import java.nio.charset.CodingErrorAction
 import java.util.concurrent.TimeUnit
 
 /** Official SIWC text inference only. No audio/Files/transcription endpoint or backend-api fallback.
- * Registration/OIDC/plan consent is owned by a future approved Android auth adapter. */
+ * Registration/OIDC/plan consent comes from the explicit, currently uninstalled auth adapter. */
 internal object SiwcAstraProtocol {
     const val ORIGIN="https://api.openai.com/v1"
     enum class Stage { ANALYSIS, CONTEXT }
