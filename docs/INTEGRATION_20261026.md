@@ -1,5 +1,7 @@
 # 주요 기능 통합 — 로컬 공개 음성 종단
 
+후속 독립 검토의 로컬 기반 판정과 실제 runtime OPEN 게이트는 [runtime 인수 계약](RUNTIME_ACCEPTANCE_20261026.md), 중단 대상·빈 창 진행성의 재현/수정은 [G01/G02 기록](G01_G02_FIX_20261026.md)에 보존한다. 아래는 원래 `dc0c16b` 차수의 실행 기록이다.
+
 작업 branch는 `integration/major-features-20261026`, 기준 main은 `67fac72ccb8ad63655b281c31dcaaae4680511f9`다. 아래 네 원격 SHA를 확인하고 각각 merge했다. source feature branch와 main은 변경하지 않는다.
 
 | 내용 | 수신 commit |

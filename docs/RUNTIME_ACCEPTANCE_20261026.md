@@ -160,3 +160,7 @@ G01 근거: [Activity](https://github.com/bllue583-commits/ieum-app/blob/dc0c16b
 문서 검증은 두 설계 validator, 링크/고정 Git 경로·변경 범위, export scan, whitespace 검사로 한정한다. Android/모델 실인수는 위 원증거 대조와 새로 실행한 시험을 분리해서 기록한다. 이 문서를 부모가 integration에 반영할 때 기존 `INTEGRATION_20261026.md`의 원 실행 기록을 보존하고 로컬 기반 판정과 OPEN 게이트를 함께 유지한다.
 
 이번 문서 검사: Python3.9.6에서 맥락 validator12 PASS·보고 validator18 PASS, 두 문서의 상대 링크45개와 고정 Git blob 링크7개 확인, staged379파일 export scan 발견0, whitespace 검사 통과. 새 변경은 문서2개뿐이며 `67fac72` 대비 docs 밖 제품 diff는 없다. Android/계정/SIWC/새 Astra·맥락 호출은 실행0이고 제안 T-SIWC01~06은 모두 NOT_RUN이다.
+
+## 기존코어의 후속 G01/G02 재현·수정
+
+위 표는 `dc0c16b`에 대한 독립 검토 당시의 기록으로 보존한다. integration branch에서 실제 반례→수정→회귀한 원결과와 범위는 [G01/G02 수정 기록](G01_G02_FIX_20261026.md)에 별도로 남긴다. 이 후속 작업은 취소 대상과 확인된 로컬 빈 창의 진행성만 다루며 Astra/SIWC 왕복 완료나 G03/CP08 전체 해결을 의미하지 않는다.

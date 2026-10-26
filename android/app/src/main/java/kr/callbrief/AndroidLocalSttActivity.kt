@@ -12,11 +12,12 @@ import org.json.JSONObject
 /** User-initiated public-audio exercise only; no microphone/storage/account permissions. */
 class AndroidLocalSttActivity:ComponentActivity() {
     private lateinit var body:LinearLayout
-    private var pilot:AndroidLocalSttPilot?=null
+    @Volatile private var pilot:AndroidLocalSttPilot?=null
+    private var activeOperation:PublicAudioOperation?=null
     private var running=false
     private var seen=false
     private var unclassified=false
-    private var integrationPilot:AndroidLocalSttPilot?=null
+    @Volatile private var integrationPilot:AndroidLocalSttPilot?=null
     private var integrationStep=0
     private var integrationResult:JSONObject?=null
     private var integrationStages=org.json.JSONArray()
@@ -44,7 +45,7 @@ class AndroidLocalSttActivity:ComponentActivity() {
             val items=candidate.getJSONArray("items");for(i in 0 until items.length())items.getJSONObject(i).getJSONObject("fields").optJSONObject("TITLE")?.let{body.addView(label("확인 필요한 할일 · "+it.getString("value")))}
         }
         integrationResult?.optJSONArray("reports")?.let{reports->for(i in 0 until reports.length())body.addView(label(reports.getJSONObject(i).getString("body")))}
-        if(running){body.addView(label("기기 안에서 음성을 읽고 있어요. 완료까지 잠시 기다려 주세요."));body.addView(button("처리 중단"){pilot?.cancel()}.apply{tag="android_local_stt_stop"})}
+        if(running){body.addView(label("기기 안에서 음성을 읽고 있어요. 완료까지 잠시 기다려 주세요."));body.addView(button("처리 중단"){activeOperation?.cancel()}.apply{tag="android_local_stt_stop"})}
         if(message.isNotEmpty())body.addView(label(message))
         if(result!=null) {
             body.addView(label("이번 음성 인식 ${result.getInt("actualAndroidSTTCalls")}회 · 저장 이력 ${result.getInt("historyCount")}건 · 할일 ${result.getInt("taskCount")}건").apply{tag="android_local_stt_counts"})
@@ -55,25 +56,37 @@ class AndroidLocalSttActivity:ComponentActivity() {
                 val tasks=a.getJSONArray("tasks");for(t in 0 until tasks.length())body.addView(label("확인 필요 · "+tasks.getJSONObject(t).getString("title")))
             }
         }
-        body.addView(button("닫기"){pilot?.cancel();finish()})
+        body.addView(button("닫기"){activeOperation?.cancel();finish()})
     }
     private fun run(){
-        if(running)return;running=true;render()
+        if(running)return;val operation=PublicAudioOperation();val existingPilot=pilot
+        if(existingPilot!=null)operation.attach(existingPilot::cancel)
+        activeOperation=operation;running=true;render()
         lifecycleScope.launch {
-            val answer=withContext(Dispatchers.IO){runCatching{val p=pilot?:AndroidLocalSttPilot(this@AndroidLocalSttActivity,if(unclassified)"unclassified-v1" else "public-v1").also{pilot=it};if(unclassified)p.cycleUnclassified(seen) else p.cycle(seen)}}
-            running=false
-            answer.onSuccess{seen=true;render(it,"일반 통화 목록과 분리된 공개 음성 시험 결과예요. 오인식된 원문은 자동으로 고치지 않아요.")}.onFailure{render(message="처리 완료를 확인하지 못했어요. 이미 저장된 시험 이력은 유지해요.")}
+            try {
+                val answer=withContext(Dispatchers.IO){runCatching{val p=existingPilot?:AndroidLocalSttPilot(this@AndroidLocalSttActivity,if(unclassified)"unclassified-v1" else "public-v1").also{pilot=it};if(existingPilot==null)operation.attach(p::cancel);operation.requireRunning();if(unclassified)p.cycleUnclassified(seen) else p.cycle(seen)}}
+                running=false;activeOperation=null
+                if(operation.cancelled)render(message="처리 중단을 요청했어요. 이미 저장된 시험 이력은 유지해요.")
+                else answer.onSuccess{seen=true;render(it,"일반 통화 목록과 분리된 공개 음성 시험 결과예요. 오인식된 원문은 자동으로 고치지 않아요.")}.onFailure{render(message="처리 완료를 확인하지 못했어요. 이미 저장된 시험 이력은 유지해요.")}
+            } finally {if(activeOperation===operation){activeOperation=null;running=false}}
         }
     }
     private fun runIntegration(){
-        if(running)return;running=true;render()
+        if(running)return;val operation=PublicAudioOperation();val existingPilot=integrationPilot
+        if(existingPilot!=null)operation.attach(existingPilot::cancel)
+        activeOperation=operation;running=true;render()
         lifecycleScope.launch {
+            try {
             val answer=withContext(Dispatchers.IO){runCatching{
-                val p=integrationPilot?:AndroidLocalSttPilot(this@AndroidLocalSttActivity,"integrated-v1").also{integrationPilot=it}
+                val p=existingPilot?:AndroidLocalSttPilot(this@AndroidLocalSttActivity,"integrated-v1").also{integrationPilot=it}
+                if(existingPilot==null)operation.attach(p::cancel);operation.requireRunning()
                 when(integrationStep){0->p.integratedAnalyse();1->p.integratedBind(true);else->p.integratedReviewAndReport(IntegratedContextStore.candidateDigest(checkNotNull(integrationResult).getJSONObject("candidate")),true)}
             }}
-            running=false;answer.onSuccess{integrationResult=it;if(integrationStep==0)integrationStages=it.getJSONArray("stages");integrationStep=minOf(3,integrationStep+1);render(message=if(integrationStep==3)"현재 기기 안 검토 저장소만 확인한 부분 보고예요. 외부 수집·실제 발송은 하지 않았어요." else "표시된 공개 시험 자료를 확인한 뒤 다음 단계를 선택해 주세요.")}.onFailure{render(message="통합 처리를 보류했어요. 기존 영수증과 저장 자료는 유지해요.")}
+            running=false;activeOperation=null
+            if(operation.cancelled)render(message="통합 처리 중단을 요청했어요. 기존 영수증과 이미 저장된 자료는 유지해요.")
+            else answer.onSuccess{integrationResult=it;if(integrationStep==0)integrationStages=it.getJSONArray("stages");integrationStep=minOf(3,integrationStep+1);render(message=if(integrationStep==3)"현재 기기 안 검토 저장소만 확인한 부분 보고예요. 외부 수집·실제 발송은 하지 않았어요." else "표시된 공개 시험 자료를 확인한 뒤 다음 단계를 선택해 주세요.")}.onFailure{render(message="통합 처리를 보류했어요. 기존 영수증과 저장 자료는 유지해요.")}
+            } finally {if(activeOperation===operation){activeOperation=null;running=false}}
         }
     }
-    override fun onDestroy(){pilot?.cancel();pilot?.close();integrationPilot?.cancel();integrationPilot?.close();super.onDestroy()}
+    override fun onDestroy(){activeOperation?.cancel();pilot?.cancel();pilot?.close();integrationPilot?.cancel();integrationPilot?.close();super.onDestroy()}
 }

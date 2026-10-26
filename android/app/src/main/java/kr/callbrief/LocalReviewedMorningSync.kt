@@ -23,7 +23,10 @@ internal class LocalReviewedMorningSync(private val context:Context,private val 
                     return@transaction old["cursor"].toString()
                 }
                 val input=source.snapshot(ReportWindow(request.until.atZone(MorningReportWindow.KST).toLocalDate(),MorningReportWindow.KST,request.from,request.until))
-                if(input.pendingCount>0 || input.unresolved.isNotEmpty() || !input.fullyReviewed)return@transaction null
+                // A successful read of this local store can prove zero local rows. It is not a
+                // reviewed summary or complete external inventory; coverage stays PARTIAL.
+                val knownLocalEmpty=input.readiness==ReportReadiness.NO_RECORDINGS && input.expectedCount==0 && input.sources.isEmpty()
+                if(input.pendingCount>0 || input.unresolved.isNotEmpty() || !(input.fullyReviewed || knownLocalEmpty))return@transaction null
                 input.sources.forEach{it.validate()}
                 val basis=input.basisHash
                 val committed="local-reviewed-v1:"+DriveRelay.sha256(("$owner\n${request.id}\n${request.generation}\n$basis").toByteArray())
