@@ -1,0 +1,9 @@
+{
+  "profile": "CALL_ANALYSIS_REQUEST",
+  "schemaVersion": 0,
+  "requestSchemaSha256": "e0f127ba3535cad27bb2932447cce3f70f55513bb3b6e019fc1fdc97a8ac3ffc",
+  "acceptedAccountSha256": "d1a336f2b145e2b9f754bad4b4a1cc3b7863045c2bf03b06fd1453341c1f598f",
+  "generalAccountsAccepted": false,
+  "supportedDotEntryConnected": false,
+  "profileApprovalSource": "frozen dot contract-v0, no automatic profile expansion"
+}

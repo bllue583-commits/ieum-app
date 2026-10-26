@@ -1,0 +1,58 @@
+# Toolchains, caches, generated outputs
+.gradle/
+**/build/
+.cxx/
+.externalNativeBuild/
+gradle-user/
+android-user/
+runtime/
+node_modules/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+local.properties
+# Credentials, signing material, private runtime configuration
+.env
+.env.*
+!.env.example
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.pem
+*.key
+adbkey*
+config.local.*
+installed-runtime.json
+local-engine-pin.json
+# Runtime/user data, diagnostics and archived delivery artifacts
+*.db
+*.db-*
+*.sqlite*
+*.log
+evidence/
+deliverables/
+approved-private-data/
+external-fixtures/
+private-library/
+.library*/
+*.apk
+*.aab
+*.so
+*.dylib
+*.dll
+*.bin
+*.zip
+# Explicitly version the small wrapper and pinned upstream source archive.
+!android/gradle/wrapper/gradle-wrapper.jar
+!third_party/whisper.cpp-v1.7.6.tar.gz
+# Design validator outputs (inputs are versioned)
+**/contract-validation.json
+**/fixture_integrity_result.json
+.kotlin/
+*.salive

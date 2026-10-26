@@ -1,0 +1,34 @@
+이음 code34 v2 — Android 기기 안 공개 음성 실행
+
+완료한 동작
+최종 APK 하나로 앱에 포함된 한국어·영어 공개 합성 WAV를 Android JNI CPU Whisper로 처리한다. 별도 Mac 실행이나 Google 계정 연결은 필요 없다. 기존 LocalRecordingAutomationProvider → consumer → Coordinator → Store.accept를 거쳐 별도 시험 이력과 확인 필요한 할일을 저장한다. 일반 통화 목록과 분리된 공개 자료 시험이다.
+화면: 초기 설정 열기 → Google 계정 관리 → 공개 음성으로 기기 요약 시험 → 공개 음성 2개 처리. Google 로그인이나 Drive 연결 버튼은 누르지 않는다.
+
+고정 산출물
+APK: IEUM_code34_v2_0.13.4_validation.apk, 38,417,366 bytes
+SHA256: 440629f74494459c33bc9b2b349845291add6e7ff9a9cda74cfae752ad746b1e
+versionCode 34 / 0.13.4-android-local-whisper-dev. 기존 서명, nondebug, allowBackup=false, 기존 code33과 권한 선언 동일.
+소스: handoff/code34-final-source-v2, 355파일
+evidence/CODE34_V2_FINAL_SOURCE_PIN.json SHA256: e4e69f2644e6d3a31f97ce0c4a52e1df93a2015a317292931f9d2fee2704f798
+전체 시험은 bd752ae3… 고정354에서 실행했다. 최종355는 그354파일이 전부 동일하며 APK에 포함하는 MIT 고지 자산 1개만 추가했다. 이후 package/lint와 최종 APK 실제 기기 시험을 완료했다.
+새 전체 결과의 기준은 evidence/CODE34_BUILD_VALIDATION.json이다. 이전 code30–33 기록을 이번 결과로 합산하지 않는다.
+
+실행과 검증
+작성자 JVM: 75 suites / 1,039 tests, 실패·오류·skip 0. 이전 code33의 1,035 test ID 보존 + 새 host4. lint 오류0/경고35; APK native SHA 검증 후 System.load를 쓰는 경고1개가 추가됐으며 억제하지 않았다.
+작성자 최종 validation APK: API35 AOSP arm64-v8a AVD에서 A3401/A3402 2 PASS. 실제 Android JNI STT2 → APPLIED_SAFE_DERIVED / history2 / tasks2 / 합성 native IDs8. 같은 프로세스에서 새 Pilot 재열람은 STT0·추가 이력0·추가 IDs0이며 원 request/handoff/fileIDs/lease를 보존한다.
+별도 사용자 화면: 최초 STT2/history2/tasks2. 실제 force-stop PID2344 → 재실행 PID2655 뒤 STT0/history2/tasks2. 기존 일반 합성2기록·메모·서류v2·4탭 보존. 계정·추가권한 없이 실행했다. 스크린샷 보안 설정은 유지하고 UI XML로 관찰했다.
+독립 QA의 host4와 공식 APK 기기2 결과는 별도 근거이며 작성자 수와 합산하지 않는다. QA의 재열람은 같은 PID의 새 Pilot 범위다.
+설치된 공개 base.apk의 SHA도 위 공식 APK와 일치한다. 원 AVD config/userdata/encryption 3파일과 code30–33 소스·APK는 전후 SHA가 같다. 실행은 별도 clone만 사용했고 종료했다.
+
+모델과 재빌드
+whisper.cpp v1.7.6 소스 tar를 third_party에 고정했다. 소스 SHA256 166140e9a6d8a36f787a2bd77f8f44dd64874f12dd8359ff7c1f4f9acb86202e.
+모델 ggml-tiny-q5_1.bin: 32,152,673 bytes / SHA256 818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7.
+공식 출처 https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin. APK에 포함되며 초기 실행 때 검증 후 별도 noBackup 저장소로 복사한다. 코드·모델 MIT 고지도 APK에 포함했다.
+ARM64와 x86_64 JNI를 모두 빌드했다. 공식 APK runtime-pin과 내부 .so/model SHA가 일치한다. 실제 실행은 AOSP35 arm64 AVD에서 확인했으며 물리 ARM64 휴대전화와 x86_64 실행은 NOT_RUN이다. 독립 JNI 빌드는 절대 소스 경로 문자열 때문에 작성자 바이너리와 SHA가 다르므로 byte 재현 일치를 주장하지 않는다.
+재빌드는 격리된 공식 NDK r28c(28.2.13676358), CMake, 위 모델이 필요하다. IEUM_ANDROID_NDK_ROOT / IEUM_CMAKE_BINARY / IEUM_ANDROID_WHISPER_MODEL을 지정하고 run_gradle.py를 사용한다. 생성된 모델·JNI 자산은 build 디렉터리에 있고 소스 ZIP에 모델을 중복 포함하지 않았다. 공개 다운로드와 핀은 evidence의 영수증을 따른다.
+
+보호 및 남은 범위
+원 request/result 파일ID·digest·lease·business context에 결속된 영수증과 sealed journal을 검증한 뒤 기존 accept gate를 사용한다. fixture/imported 자료를 실제 실행이나 high 분석으로 승격하지 않는다. 모델 불일치와 실행 전 취소는 STT0으로 거부한다.
+v1 종료 뒤 취소의 TEXT_STORE_CLOSED 실패를 원 로그로 보존했다. v2는 같은 lifetime monitor로 close/cancel DB 접근을 직렬화했고 최종 A3402가 이를 통과했다. 이는 과거 CP08의 최종 admission 이후 강한 AtomicBoolean 취소 미충족을 해결했다는 뜻이 아니며 그 제한은 남는다.
+작은 모델의 원 오인식(예: '켠 적설', 'Symphetic')을 그대로 보존한다. 문맥 의미·high/dot 검토 완료·담당자 확정·기한·서류 완료를 자동 판정하지 않는다. 정확도 benchmark는 NOT_RUN이다.
+일반 통화의 생산 Android 연결, 임의 개인 원음 수집, 실제 Google 계정/GMS/Drive/API, 최초 승인 credential 생산 공급자, 정확한 06시 보고와 Kakao 발송은 미연결/NOT_RUN이다. 공개 sandbox의 native transport는 메모리 합성이다. 새 OAuth·실제 자격증명·외부 전송·새 권한·보안 완화·iCloud 정리는 수행하지 않았다.

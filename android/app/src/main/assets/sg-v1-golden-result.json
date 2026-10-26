@@ -1,0 +1,39 @@
+{
+  "input": {
+    "schema_version": 1,
+    "demo": true,
+    "summary": "가상 샘플 배송을 13일로 조정할 수 있으나 최종 일정은 미확정이며, 확인 후 안내하기로 했습니다.",
+    "tasks": [
+      {
+        "title": "가상 샘플 배송 최종 일정 확인 후 안내",
+        "owner": "미확인",
+        "due": null,
+        "status": "open",
+        "evidence": {
+          "call_id": "synthetic-call-a",
+          "quote": "최종 일정은 다시 확인해서 알려드리겠습니다."
+        }
+      }
+    ]
+  },
+  "validated": {
+    "schema_version": 1,
+    "demo": true,
+    "summary": "가상 샘플 배송을 13일로 조정할 수 있으나 최종 일정은 미확정이며, 확인 후 안내하기로 했습니다.",
+    "tasks": [
+      {
+        "title": "가상 샘플 배송 최종 일정 확인 후 안내",
+        "owner": "미확인",
+        "due": null,
+        "status": "open",
+        "evidence": {
+          "call_id": "synthetic-call-a",
+          "quote": "최종 일정은 다시 확인해서 알려드리겠습니다."
+        }
+      }
+    ],
+    "applied": false
+  },
+  "fingerprint": "b49c2725bb37fbc51b012fca2c9f2cd1388e435e0d12080f11d98f0d1bbec336",
+  "provenance": "parent reported v4 fixed synthetic; local golden vector only"
+}

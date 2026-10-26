@@ -1,0 +1,25 @@
+{
+  "contract": "ieum.automation.configuration.v1",
+  "enabled": false,
+  "ownerId": "REQUIRES_VERIFIED_DRIVE_OWNER_PERMISSION_ID",
+  "driveAccount": "developer@example.invalid",
+  "accountEpoch": 0,
+  "reportZone": "Etc/UTC",
+  "publicOrigin": "https://REQUIRES_APPROVED_PRIVATE_WORKER.example",
+  "transcriptionModel": "REQUIRES_APPROVED_TRANSCRIPTION_MODEL",
+  "summaryModel": "REQUIRES_APPROVED_SUMMARY_MODEL",
+  "approvals": {
+    "driveRead": false,
+    "externalProcessing": false,
+    "encryptedPersistence": false,
+    "paidApiCalls": false
+  },
+  "maxAudioBytes": 10485760,
+  "maxPaidCallsPerDay": 2,
+  "intervalSeconds": 30,
+  "port": 8788,
+  "dataDir": "./approved-private-data",
+  "costApprovalRef": "REQUIRES_EXPLICIT_MAX_COST_AND_MODEL_APPROVAL",
+  "approvedAudioSha256": [],
+  "automaticUsePolicy": null
+}

@@ -1,0 +1,362 @@
+[
+  {
+    "id": "TIME01",
+    "name": "UTC 21:00 is KST 06:00",
+    "given": "2026-10-25T21:00:00Z",
+    "expected": "reportDay=2026-10-26; daily [2026-10-24T15:00Z,2026-10-25T15:00Z)",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "TIME02",
+    "name": "One instant before 06:00",
+    "given": "2026-10-25T20:59:59Z",
+    "expected": "latest due reportDay=2026-10-25; no early report for 26",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "TIME03",
+    "name": "Midnight exclusive end",
+    "given": "facts at 2026-10-25T14:59:59.999Z and 15:00:00Z",
+    "expected": "first belongs to reportDay26 daily; second excluded",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "TIME04",
+    "name": "Year rollover",
+    "given": "reportDay=2027-01-01",
+    "expected": "daily target 2026-12-31; rolling seven ends 2027-01-01",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "TIME05",
+    "name": "Leap day",
+    "given": "reportDay=2028-03-01",
+    "expected": "daily target 2028-02-29; seven calendar days",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "TIME06",
+    "name": "Device timezone change",
+    "given": "same instant; device LA -> UTC -> Seoul",
+    "expected": "same reportKey/window; no duplicate or omitted day",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "TIME07",
+    "name": "Recent week",
+    "given": "reportDay=2026-10-26",
+    "expected": "include Oct19-25 KST; exclude Oct18 and Oct26; no daily-report text concatenation double count",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "SYNC01",
+    "name": "23h primary then midnight delta",
+    "given": "primary23h then source at23:59",
+    "expected": "second included before06h; stable source/version dedup",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "SYNC02",
+    "name": "Late arrival old occurrence",
+    "given": "ingested after06h, occurred previous day",
+    "expected": "same reportKey new revision; today report not polluted",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "SYNC03",
+    "name": "Unknown occurrence time",
+    "given": "source has no call time",
+    "expected": "no fabricated date; unknown count/coverage warning",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "SYNC04",
+    "name": "Failed sync checkpoint",
+    "given": "fetch accepted but local transaction fails",
+    "expected": "cursor unchanged; retry from last durable cursor",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "SYNC05",
+    "name": "No meaningful delta",
+    "given": "cursor changes, canonical visible snapshot identical",
+    "expected": "no new report revision/outbox",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "SYNC06",
+    "name": "Partial scope",
+    "given": "Naver unavailable / SMS not in approved scope",
+    "expected": "coverage incomplete; not comprehensive completed report",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "DEDUP01",
+    "name": "Repeated registration",
+    "given": "ensure 100 times",
+    "expected": "one active work per unique identity",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "DEDUP02",
+    "name": "Concurrent triggers",
+    "given": "periodic catchup and target worker at once",
+    "expected": "one committed report revision/outbox under DB unique/CAS",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "DEDUP03",
+    "name": "Identical result repeated",
+    "given": "same source/revision/content twice",
+    "expected": "no additional item/revision or delivery attempt",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "DEDUP04",
+    "name": "Crash after atomic commit",
+    "given": "kill before worker success return",
+    "expected": "reopen existing revision/outbox; no duplicate body",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "RECOVERY01",
+    "name": "Reboot with scheduled work",
+    "given": "reboot before06h",
+    "expected": "persisted work restored; due date recomputed from durable state",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Android device/AVD + host tests"
+  },
+  {
+    "id": "RECOVERY02",
+    "name": "Doze delays06h",
+    "given": "release from Doze09h",
+    "expected": "correct target day, actual execution time recorded; no punctuality claim",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Android device/AVD + host tests"
+  },
+  {
+    "id": "RECOVERY03",
+    "name": "Long offline",
+    "given": "30 due days; batch7",
+    "expected": "successive batches process all30; oldest cursor retained",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "RECOVERY04",
+    "name": "Crash midway backlog",
+    "given": "3 of7 days committed",
+    "expected": "resume4th; committed3 not duplicated",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "RECOVERY05",
+    "name": "Force-stop",
+    "given": "force-stop then open after3 days",
+    "expected": "catchup only when OS permits; report disabled if opted out",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Android device/AVD + host tests"
+  },
+  {
+    "id": "RECOVERY06",
+    "name": "Clock backwards/forwards",
+    "given": "wall clock shift then reconcile",
+    "expected": "no early report; existing date keys dedup; elapsed retry policy safe",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "FAIL01",
+    "name": "Transient generation failure",
+    "given": "snapshot temporarily locked",
+    "expected": "visible failure/retry; no success marker/outbox before commit",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "FAIL02",
+    "name": "Permanent error",
+    "given": "invalid protected snapshot/receipt",
+    "expected": "hold visible; no endless retry/no fabricated complete",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "FAIL03",
+    "name": "Offline report",
+    "given": "network unavailable, local verified facts exist",
+    "expected": "local partial report generated; external requests deferred",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "FAIL04",
+    "name": "Manual retry after failure",
+    "given": "user retry same failed revision",
+    "expected": "current permission/generation rechecked; same identity; no duplicate acknowledged send",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "CANCEL01",
+    "name": "Disable before due",
+    "given": "disable while enqueued",
+    "expected": "durable disabled generation; OS work cancelled; no report commit",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "CANCEL02",
+    "name": "Disable while running",
+    "given": "disable after read before commit",
+    "expected": "generation fence rejects stale commit/outbox",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "CANCEL03",
+    "name": "Cancel then re-enable",
+    "given": "old worker resumes after new schedule",
+    "expected": "old generation fenced; new work uses current setup",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "EMPTY01",
+    "name": "Known empty day",
+    "given": "coverage complete,0 records",
+    "expected": "stored no-business-data report; empty flag; not failure",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "EMPTY02",
+    "name": "Unknown empty day",
+    "given": "sync unavailable,0 local records",
+    "expected": "input coverage unknown; cannot claim no work existed",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "INPUT01",
+    "name": "Newer failed result",
+    "given": "old reviewed summary + current FAILED/ERROR",
+    "expected": "preserve old text but count failed/pending; not fully reviewed",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "INPUT02",
+    "name": "User manual DONE/archive",
+    "given": "late accepted result arrives",
+    "expected": "DONE/archive protection preserved; report respects visibility",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "DELIVERY01",
+    "name": "Dry-run rendering",
+    "given": "synthetic reports to dry-run adapter",
+    "expected": "DRY_RUN_RECORDED; actual sends0; no ACKNOWLEDGED",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "DELIVERY02",
+    "name": "Provider acknowledges",
+    "given": "test double returns matching ACK",
+    "expected": "ACKNOWLEDGED only for that exact envelope; mock evidence labelled",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "DELIVERY03",
+    "name": "Timeout after possible acceptance",
+    "given": "provider no response",
+    "expected": "UNKNOWN; no delivery success; no blind automatic resend",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "DELIVERY04",
+    "name": "Retryable reject",
+    "given": "known non-acceptance e.g rate-limit test double",
+    "expected": "persist nextAttemptAt; bounded exponential retry; identical key",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "DELIVERY05",
+    "name": "Crash/expired lease",
+    "given": "claim worker dies; restart and stale ACK",
+    "expected": "reconcile uncertainty; stale claim cannot overwrite newer attempt",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  },
+  {
+    "id": "DELIVERY06",
+    "name": "ACK mismatch/manual resend",
+    "given": "wrong revision ACK then manual retry already ACKed",
+    "expected": "wrong ACK rejected; ACKed revision not resent; no recipient read claim",
+    "status": "NOT_RUN",
+    "evidence": null,
+    "requiredEnvironment": "Existing product tests with synthetic fixtures"
+  }
+]

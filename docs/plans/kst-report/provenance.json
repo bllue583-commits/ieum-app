@@ -1,0 +1,70 @@
+{
+  "capturedAtUtc": "2026-10-26T06:38:52Z",
+  "sourceLibraryId": "libfile_73a12fce61548191acd85aa98e06ddf9",
+  "expectedSize": 47058330,
+  "expectedSha256": "4d610dd012a2760c0a1ea2cf132141f80d4bfd19276d0e5176aa857e6fd06cf0",
+  "sourcePresenceVerified": false,
+  "sourceHashVerified": false,
+  "sourceAudit": "NOT_RUN",
+  "materialize": {
+    "prepare": "SUCCESS",
+    "transfer": "FAILED_DOWNLOAD",
+    "exitCode": 1,
+    "metadataEnvironment": {
+      "setxattr": false,
+      "getxattr": false
+    },
+    "denied": false,
+    "outcome": "NO_VALID_LOCAL_SOURCE"
+  },
+  "localFallbackSearch": {
+    "roots": [
+      "<private-Windows-Downloads>",
+      "<private-Windows-Documents>"
+    ],
+    "pattern": "case-insensitive ieum|이음|code34 archive and directory names",
+    "candidatesFound": 0,
+    "scope": "Readable names only; unreadable entries may be omitted",
+    "privateContentsRead": false
+  },
+  "changes": {
+    "productFiles": 0,
+    "sharedCoreFiles": 0,
+    "databaseFiles": 0,
+    "applicationTestsWritten": 0,
+    "integrationPatches": 0,
+    "handoffArtifacts": true
+  },
+  "externalActions": {
+    "login": 0,
+    "oauth": 0,
+    "tokenCreation": 0,
+    "permissionChanges": 0,
+    "realMessageReads": 0,
+    "realSends": 0,
+    "automationsCreated": 0
+  },
+  "blueprint": {
+    "url": "https://chatgpt.com/space/page_257b0a73cf808191a03c02362edc2673",
+    "requestedSequence": 53,
+    "returnedSequence": null,
+    "title": "이음 기능 설계도와 검증 일지",
+    "directSourceAudit": false
+  },
+  "blockers": [
+    {
+      "action": "Materialize pinned product source",
+      "target": "libfile_73a12fce61548191acd85aa98e06ddf9",
+      "state": "FAILED_NOT_DENIED",
+      "reason": "Library helper download failed; no independent local source found. Windows xattrs also unavailable.",
+      "next": "Supported Library materialization on authorized host; do not reuse failed temp bytes or old signed URL."
+    }
+  ],
+  "testCounts": {
+    "productPass": 0,
+    "productFail": 0,
+    "productNotRun": 40,
+    "contractFixtureValidation": "See contract-validation.json; not product acceptance"
+  },
+  "exportNote": "Historical Windows design provenance; paths redacted for Git. Mac migration now verifies code34 separately. Product implementation remains zero for this plan."
+}

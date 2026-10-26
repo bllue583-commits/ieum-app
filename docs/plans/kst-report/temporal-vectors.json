@@ -1,0 +1,100 @@
+{
+  "description": "Independent executable specification fixtures, not Android implementation tests; dates deliberately fixed and synthetic.",
+  "windows": [
+    {
+      "id": "WINDOW_REGULAR",
+      "reportDay": "2026-10-26",
+      "dailyStart": "2026-10-24T15:00:00Z",
+      "weekStart": "2026-10-18T15:00:00Z",
+      "end": "2026-10-25T15:00:00Z",
+      "due": "2026-10-25T21:00:00Z",
+      "primary": "2026-10-25T14:00:00Z"
+    },
+    {
+      "id": "WINDOW_YEAR",
+      "reportDay": "2027-01-01",
+      "dailyStart": "2026-12-30T15:00:00Z",
+      "weekStart": "2026-12-24T15:00:00Z",
+      "end": "2026-12-31T15:00:00Z",
+      "due": "2026-12-31T21:00:00Z",
+      "primary": "2026-12-31T14:00:00Z"
+    },
+    {
+      "id": "WINDOW_LEAP",
+      "reportDay": "2028-03-01",
+      "dailyStart": "2028-02-28T15:00:00Z",
+      "weekStart": "2028-02-22T15:00:00Z",
+      "end": "2028-02-29T15:00:00Z",
+      "due": "2028-02-29T21:00:00Z",
+      "primary": "2028-02-29T14:00:00Z"
+    },
+    {
+      "id": "WINDOW_LEAP_WEEK",
+      "reportDay": "2028-03-05",
+      "dailyStart": "2028-03-03T15:00:00Z",
+      "weekStart": "2028-02-26T15:00:00Z",
+      "end": "2028-03-04T15:00:00Z",
+      "due": "2028-03-04T21:00:00Z",
+      "primary": "2028-03-04T14:00:00Z"
+    }
+  ],
+  "due": [
+    {
+      "id": "DUE_BEFORE",
+      "instant": "2026-10-25T20:59:59.999999Z",
+      "expected": "2026-10-25"
+    },
+    {
+      "id": "DUE_AT",
+      "instant": "2026-10-25T21:00:00Z",
+      "expected": "2026-10-26"
+    },
+    {
+      "id": "DUE_OFFSET",
+      "instant": "2026-10-26T06:00:00+09:00",
+      "expected": "2026-10-26"
+    },
+    {
+      "id": "DUE_MIDNIGHT",
+      "instant": "2026-10-25T15:00:00Z",
+      "expected": "2026-10-25"
+    },
+    {
+      "id": "DUE_DELAYED",
+      "instant": "2026-10-26T00:00:00Z",
+      "expected": "2026-10-26"
+    },
+    {
+      "id": "DUE_YEAR",
+      "instant": "2026-12-31T21:00:00Z",
+      "expected": "2027-01-01"
+    },
+    {
+      "id": "DUE_LEAP",
+      "instant": "2028-02-29T21:00:00Z",
+      "expected": "2028-03-01"
+    }
+  ],
+  "membership": [
+    {
+      "id": "IN_START",
+      "at": "2026-10-24T15:00:00Z",
+      "included": true
+    },
+    {
+      "id": "IN_LAST",
+      "at": "2026-10-25T14:59:59.999999Z",
+      "included": true
+    },
+    {
+      "id": "OUT_END",
+      "at": "2026-10-25T15:00:00Z",
+      "included": false
+    },
+    {
+      "id": "OUT_BEFORE",
+      "at": "2026-10-24T14:59:59.999999Z",
+      "included": false
+    }
+  ]
+}

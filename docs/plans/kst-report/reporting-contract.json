@@ -1,0 +1,132 @@
+{
+  "schema": "ieum.reporting.integration-proposal.v1",
+  "status": "PROPOSED_NOT_PRODUCT_IMPLEMENTED",
+  "sourceAudit": "BLOCKED_SOURCE_NOT_MATERIALIZED",
+  "timezone": "Asia/Seoul",
+  "reportTargetLocalTime": "06:00",
+  "primarySyncLocalTime": "23:00",
+  "dailyWindow": "[reportDay-1 at 00:00 KST, reportDay at 00:00 KST)",
+  "rollingWeekWindow": "[reportDay-7 at 00:00 KST, reportDay at 00:00 KST)",
+  "identity": {
+    "reportKey": [
+      "current owner partition",
+      "Asia/Seoul",
+      "reportDay",
+      "kind=DAILY|ROLLING_7_DAY"
+    ],
+    "revision": "increments only when canonical visible snapshot fingerprint changes",
+    "deliveryKey": [
+      "reportKey",
+      "revision",
+      "channel",
+      "destination opaque binding"
+    ]
+  },
+  "ports": {
+    "SnapshotPort": {
+      "input": [
+        "windowStartInstantInclusive",
+        "windowEndInstantExclusive",
+        "priorIngestCursor?"
+      ],
+      "output": [
+        "snapshotId",
+        "stableCursor",
+        "verifiedFacts[]",
+        "pendingCount",
+        "failedCount",
+        "reviewRequiredCount",
+        "connectionRequiredCount",
+        "unknownOccurrenceTimeCount",
+        "coverage=COMPLETE|PARTIAL|UNKNOWN",
+        "lastSuccessfulSyncAt?",
+        "sourceRevisions[]"
+      ],
+      "required": "Use existing protected store and canonical ACCEPT or valid current USER_REVIEW_SUMMARY receipts. Never manufacture a receipt; fence owner/policy/source revisions."
+    },
+    "IncrementalSyncPort": {
+      "input": [
+        "window",
+        "durableCursor",
+        "reason=23H_PRIMARY|PRE_REPORT|LATE_RESULT|MANUAL",
+        "scheduleGeneration"
+      ],
+      "output": [
+        "requestId",
+        "state=ACCEPTED|COMPLETE|DEFERRED|FAILED|UNAVAILABLE",
+        "committedCursor?",
+        "errorCode?"
+      ],
+      "required": "Acceptance is not completion. Commit cursor only after accepted data durable store; retain original source/job/lease policy. No account access by report module."
+    },
+    "ReportRepository": {
+      "commands": [
+        "loadEnabledSchedule",
+        "listDueReportDays",
+        "readConsistentSnapshot",
+        "commitReportAndOutboxAtomically",
+        "claimOutboxCompareAndSet",
+        "completeClaimWithFence",
+        "cancelGeneration",
+        "recordManualRetry"
+      ],
+      "required": "Reuse existing protected ledger; share DB changes as integration patch, not direct overwrite. Transaction checks enabled generation and current owner."
+    },
+    "DeliveryAdapter": {
+      "input": [
+        "immutable body",
+        "reportKey",
+        "revision",
+        "idempotencyKey",
+        "destination opaque binding"
+      ],
+      "output": [
+        "DRY_RUN",
+        "ACK(providerReceiptId, matching idempotencyKey, acceptedAt)",
+        "RETRYABLE_FAILURE",
+        "PERMANENT_FAILURE",
+        "UNKNOWN"
+      ],
+      "required": "No live adapter enabled this task; no ACK implies no DELIVERED. ACK validates exact envelope/destination correlation. Provider acceptance is not recipient read confirmation."
+    }
+  },
+  "states": {
+    "generation": [
+      "NOT_DUE",
+      "PENDING",
+      "BUILDING",
+      "GENERATED_PARTIAL",
+      "GENERATED_COMPLETE",
+      "FAILED",
+      "CANCELLED"
+    ],
+    "delivery": [
+      "NOT_REQUESTED",
+      "OUTBOX_READY",
+      "DRY_RUN_RECORDED",
+      "IN_FLIGHT",
+      "RETRY_WAIT",
+      "FAILED",
+      "UNKNOWN",
+      "ACKNOWLEDGED",
+      "CANCELLED"
+    ],
+    "forbidden": [
+      "DRY_RUN_RECORDED -> ACKNOWLEDGED without real provider ACK",
+      "UNKNOWN -> ACKNOWLEDGED without matching ACK",
+      "GENERATED_* -> delivery success by inference",
+      "mark coverage COMPLETE when synchronization scope is unknown"
+    ]
+  },
+  "scheduler": {
+    "engine": "Existing Android WorkManager schedule/ensure after source audit",
+    "registration": "Unique work names + persistent ledger unique report keys; KEEP/UPDATE policy must match old code and cancellation semantics",
+    "targets": "Existing one-time targets for KST 23h/06h plus periodic reconciliation; local generation unconstrained by network",
+    "retry": "Bounded exponential backoff for known retryable failures, persisted nextAttemptAt and attemptCount; permanent failure stays visible until manual retry",
+    "cancellation": "Persistent generation increment fences in-flight commits; cancel OS work after durable disable",
+    "recovery": "Reboot WorkManager persistence + app ensure; crashes recover unfinished durable work without reissuing ACKed revisions",
+    "backlog": "Process oldest pending days in bounded batches; persist cursor after each commit; never discard backlog by limiting batch size",
+    "forceStop": "No promise of execution while OS force-stopped; reconcile after app launch",
+    "deliveryUncertainty": "If provider cannot reconcile or honor idempotency key, UNKNOWN requires explicit review/manual retry with duplicate-risk notice"
+  }
+}
