@@ -34,7 +34,10 @@ Windows 예약명·금지 문자·대소문자 충돌 검사는 발견0입니다
 - Python 기존 adapter: PASS3 / SKIP2 / 실패0. 외부 과거 관측 입력은 이 Git 사본에 없음.
 - 맥락 설계 입력 검사: PASS12. Android·DB·엔진 실행0, 제품 시나리오30 NOT_RUN.
 - KST 설계 입력 검사: PASS18. 최초 누락 provenance로 1오류가 있었고 필요한 비식별 provenance를 포함한 뒤 재실행18 PASS. 제품 인수40 NOT_RUN.
-- Android core/app JVM·lint·assembleDebug: 결과는 아래 최종 실행 기록을 따릅니다. JNI 생성 생략(`IEUM_SKIP_ANDROID_NATIVE=1`)으로 공개 기기 STT APK의 기능 인수를 주장하지 않습니다.
+- Android `:core:test`: 27시험 PASS / 실패0 / skip0.
+- Android 최초 전체 `:app:testDebugUnitTest`: 1039시험 중 PASS1033 / 실패4 / SKIP2. T81~T84의 외부 WAV 누락 실패였으며 과거 개인 경로 의존을 환경변수로 옮겼습니다. 같은 고정 SHA의 승인된 과거 합성 WAV로 해당4시험 재실행은 PASS4 / 실패0 / skip0입니다. 최초 전체 실행과 집중 재검증을 합쳐 단일 1039 PASS 실행으로 표현하지 않습니다. P3302/P3303는 기존 로컬 엔진 pin 미설정으로 SKIP입니다.
+- Android `:app:lintDebug`: 오류0 / Fatal0 / 경고35. `:app:assembleDebug`: PASS. JNI 생성 생략(`IEUM_SKIP_ANDROID_NATIVE=1`)으로 공개 기기 STT APK의 기능 인수를 주장하지 않습니다.
+- 실행 로그는 ignore된 `evidence/git-migration-host-cache.log`, `evidence/git-migration-focused-lint-build.log`에 로컬 보존합니다. 최초 sandbox 소켓 제한과 read-only 캐시 경로 오설정은 실행 환경 수정 뒤 해소됐습니다.
 - 실제 기기/AVD·Google/GMS/Drive·새 OAuth·실자료 전송·유료 호출·Kakao 수신·Windows 실빌드: NOT_RUN.
 
 원본 보존 재확인: 제품355의 SHA 불변, 원본 APK38417366 bytes/SHA256 `440629f74494459c33bc9b2b349845291add6e7ff9a9cda74cfae752ad746b1e`, 원본 ZIP 해시 불변.
@@ -46,3 +49,7 @@ GitHub 연결 계정은 `bllue583-commits`(user ID344692378)입니다. 소유 �
 현재 도구에는 저장소 생성 기능이 없고, Mac Git credential helper에 기존 GitHub 인증이 없으며 브라우저는 GitHub 로그아웃 상태입니다. 전용 빈 비공개 저장소 생성/브라우저 직접 로그인 요청이 사용자 응답 대기입니다. 비밀번호·토큰을 채팅으로 요청하지 않았습니다. 새 OAuth/지속 접근/보안설정 변경은 실행하지 않았습니다.
 
 따라서 **저장소 생성·remote 설정·push는 미실행**이며 공개범위·원격 commit 일치·원격 clean clone 검증은 대기입니다. 임시 local clone 검증은 원격 인증/접근 검증과 구별합니다. 이 상태에서 후속 worker가 원격 개발을 시작할 수 있다고 선언하지 않습니다.
+
+## 로컬 전달 검증
+
+검토된 export 377파일은 `EXPORT_FILES.txt`에 나열합니다. main의 commit을 만들고 별도 임시 로컬 clone에서 HEAD/tree·파일 수·핵심 버전/설정·binary fixture SHA·민감정보 패턴·설계 validator를 확인합니다. 원격 URL/공개범위/원격 commit/원격 clone은 인증 완료 뒤 별도로 확인해야 합니다. `git log -1 --format=%H`로 이 사본의 기준 SHA를 읽을 수 있습니다.
