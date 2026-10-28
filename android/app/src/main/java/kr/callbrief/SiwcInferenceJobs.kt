@@ -96,7 +96,7 @@ internal class SiwcInferenceJobs(context:Context,private val scope:String,
                 "approvedSnapshot" to snapshot,"approvedSnapshotSha256" to AstraAudioContract.sha(StrictJson.bytes(snapshot))),instructions)
     }
     fun cancel(id:String)=store.transaction {
-        if(state(id)!="NOT_PREPARED")db.execSQL("UPDATE siwc_stages SET state='CANCELLED_REMOTE_UNKNOWN',reason='SIWC_LOCAL_CANCEL_REMOTE_NOT_CONFIRMED' WHERE scope=? AND id=?",arrayOf(scope,id));null
+        db.execSQL("UPDATE siwc_stages SET state='CANCELLED_REMOTE_UNKNOWN',reason='SIWC_LOCAL_CANCEL_REMOTE_NOT_CONFIRMED' WHERE scope=? AND id=? AND state IN ('PREPARED','RUNNING','COMPLETE')",arrayOf(scope,id));null
     }
     override fun close()=store.close()
     companion object {

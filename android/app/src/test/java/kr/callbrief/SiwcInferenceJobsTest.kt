@@ -53,6 +53,18 @@ class SiwcInferenceJobsTest:ProtectedTextHostTestBase() {
     @Test fun missingModelStopsBeforeInference()=runBlocking(Dispatchers.IO) {
         val port=FixturePort();port.available=false;jobs(port).use{j->assertEquals("MODEL_UNAVAILABLE",j.run(request,::validate).state)};assertEquals(0,port.calls)
     }
+    @Test fun explicitCompletedRevocationKeepsObservationButFencesFiles()=runBlocking(Dispatchers.IO){
+        val port=FixturePort();jobs(port).use{j->
+            assertEquals("COMPLETE",j.run(request,::validate).state);val before=j.completed(request,::validate)
+            j.cancel(request.key());assertEquals("CANCELLED_REMOTE_UNKNOWN",j.state(request.key()));assertNotNull(j.observed(request));assertEquals(before.output,j.observed(request)!!["output"])
+            assertNotNull(runCatching{j.completed(request,::validate)}.exceptionOrNull());assertEquals(1,port.calls)
+        }
+    }
+    @Test fun cancellingRejectedObservationKeepsItsOriginalMeaning()=runBlocking(Dispatchers.IO){
+        val port=FixturePort();jobs(port).use{j->
+            assertEquals("REJECTED",j.run(request){error("INVALID_CANDIDATE_SCHEMA")}.state);j.cancel(request.key());assertEquals("REJECTED",j.state(request.key()));assertNotNull(j.observed(request));assertEquals(1,port.calls)
+        }
+    }
     @Test fun invalidCompletedSchemaIsRejectedAndContextCannotStart()=runBlocking(Dispatchers.IO) {
         val port=FixturePort();jobs(port).use{j->assertEquals("REJECTED",j.run(request){error("INVALID_CANDIDATE_SCHEMA")}.state)
             assertNotNull(runCatching{j.context(request,mapOf("revision" to 1L),"gpt-6-astra","xhigh","policy")}.exceptionOrNull())};assertEquals(1,port.calls)

@@ -105,6 +105,22 @@ internal class SiwcNativeReviewStore(private val context:Context,private val own
             .put("candidate",JSONObject(CandidateJson.encode(ProtectedContextCodec.decode(r["ledger"].toString()),Fences(0,0,0,0,0,0,0))))
             .put("canonicalWriteAllowed",false).put("userApproved",db.query("SELECT id FROM siwc_native_user_reviews WHERE id=?",id).isNotEmpty())
     }
+    /** Current saved candidate/receipt only. No inference, file publication or user command.
+     * An approved local receipt can be read without claiming it is a new model/account result. */
+    fun savedCandidate(request:String):JSONObject?=db.transaction {
+        check(current() && intake.available(request)) { "SIWC_NATIVE_CURRENT_REQUIRED" }
+        val rows=db.query("""SELECT c.* FROM siwc_native_candidates c JOIN automation_jobs j
+            ON j.id=c.job_id AND j.result_revision=c.revision AND j.result_digest=c.digest
+            WHERE c.request_id=? AND j.state='REVIEW_REQUIRED'""".trimIndent(),request)
+        check(rows.size<=1) { "SIWC_SAVED_CANDIDATE_CONFLICT" }
+        val row=rows.singleOrNull() ?: return@transaction null
+        val id=row["id"].toString();val receipt=reviewedReceipt(id)
+        if(receipt==null) {
+            val t=prepare(request)
+            check(isCurrent(t) && row["snapshot_sha"]==t.contract.snapshotSha && row["policy_sha"]==t.policySha) { "SIWC_NATIVE_CURRENT_REQUIRED" }
+        }
+        candidate(id).put("summaryReceipt",receipt ?: JSONObject.NULL)
+    }
     /** A historical user receipt is read, never reapplied. A superseding result/summary or
      * revoked source prevents presenting it as the current reviewed candidate on reopening. */
     fun reviewedReceipt(id:String):String?=db.transaction {

@@ -114,12 +114,14 @@ class SiwcNativeStoreIntegrationTest:ProtectedTextHostTestBase() {
         val received=native.receive(t,files,a,c,true);val key=received.getString("id");val digest=received.getString("digest")
         assertEquals(2,port.calls);assertEquals(2,count("automation_results"));assertEquals(0,count("workflow_items"));assertEquals(0,count("workflow_reviewed_summaries"))
         assertFalse(received.getBoolean("canonicalWriteAllowed"));assertFalse(received.getBoolean("userApproved"));assertEquals("SIWC_FIXTURE_FILE_REVIEW_PROPOSAL",received.getString("origin"))
+        assertEquals(key,native.savedCandidate(t.request)!!.getString("id"));assertFalse(native.savedCandidate(t.request)!!.getBoolean("userApproved"))
         assertEquals(key,native.receive(t,files,a,c,true).getString("id"));assertEquals(2,count("automation_results"))
         reject("EXPLICIT_USER_REVIEW"){native.approve(t,key,digest,false)}
         reject("REVIEW_CHANGED"){native.approve(t,key,"a".repeat(64),true)}
         val receipt=native.approve(t,key,digest,true);assertEquals(1,count("workflow_reviewed_summaries"));assertEquals(1,count("workflow_items"));assertEquals(1,count("siwc_native_user_reviews"))
         assertEquals(receipt,native.approve(t,key,digest,true));assertEquals(1,count("workflow_items"));assertTrue(snapshot(id).getString("reviewed_summary").startsWith("합성 결과파일 후보"))
         assertEquals(receipt,native.approve(native.prepare(t.request),key,digest,true));assertEquals(receipt,native.reviewedReceipt(key));assertEquals(1,count("workflow_items"))
+        assertEquals(receipt,native.savedCandidate(t.request)!!.getString("summaryReceipt"));assertEquals(1,count("workflow_items"))
         assertEquals(listOf(receipt),native.approveSelection(mapOf(t to (key to digest)),true));assertEquals(1,count("workflow_items"))
     }}}
     @Test fun nativeTransactionFailureRollsBackResultAndCandidateAfterFileCommit()=runBlocking(Dispatchers.IO){withGate({error("FIXTURE_TRANSACTION_ABORT")}){_,native,t,_->bundle(native,t){files,a,c,_->
@@ -167,6 +169,7 @@ class SiwcNativeStoreIntegrationTest:ProtectedTextHostTestBase() {
             store.accept(t.job,AutomationAnalysis(3,"c".repeat(64),"{\"fixture\":\"later result\"}",t.contract.text,"별도 후보","별도 후보",org.json.JSONArray(),JSONObject(t.frozenHandoff).getString("frozenRequestJson")),AutomationAssurance("PUBLIC_TEST_LATER_RESULT"))
         }finally{store.release(t.job)}}
         reject("SUPERSEDED"){native.approve(t,got.getString("id"),got.getString("digest"),true)}
+        assertNull(native.savedCandidate(t.request))
         assertEquals(0,count("siwc_native_user_reviews"));assertEquals(0,count("workflow_reviewed_summaries"));assertEquals(1,count("siwc_native_candidates"))
     }}}
 }

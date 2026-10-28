@@ -92,6 +92,7 @@ internal open class ConnectionCenterActivity : ComponentActivity() {
         val v=session.view();val google=section(body,"Google · Drive")
         val chatgpt=section(body,"ChatGPT · 분석 연결")
         chatgpt.addView(button("ChatGPT 연결 · 동의 대기") { startActivity(Intent(this,SiwcRuntimeActivity::class.java)) }.apply{tag="siwc_connection"})
+        chatgpt.addView(button("승인된 공개 음성 ChatGPT 분석") { startActivity(Intent(this,SiwcAppAnalysisActivity::class.java)) }.apply{tag="siwc_app_analysis"})
         google.addView(label(if(v.accountLabel.isBlank()) "연결된 Google 계정이 없어요." else "현재 계정: ${v.accountLabel}",bold=true))
         google.addView(label(when(v.phase) {
             GoogleConnectionSession.Phase.ACTIVE -> "계정·Drive 접근 확인됨"

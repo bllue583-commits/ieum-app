@@ -11,7 +11,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** Public bundled WAV sandbox. Real Android JNI/Keystore/SQLite; native transport is in-memory.
  * Never installs a global session/provider, reads actual accounts or touches normal user stores. */
-internal class AndroidLocalSttPilot(context:Context,exercise:String="public-v1"):AutoCloseable {
+internal class AndroidLocalSttPilot(context:Context,exercise:String="public-v1",koreanOnly:Boolean=false):AutoCloseable {
     init{check(BuildConfig.SYNTHETIC_TOOLS_ENABLED){"SYNTHETIC_TOOLS_DISABLED"};require(exercise.matches(Regex("[a-z0-9-]{1,40}")))}
     private val base=object:ContextWrapper(context.applicationContext) {
         override fun getApplicationContext():Context=this
@@ -28,19 +28,20 @@ internal class AndroidLocalSttPilot(context:Context,exercise:String="public-v1")
         override fun write(value:JSONObject){settings.update{it.put("publicPilotSession",JSONObject(value.toString()))}}
     })
     private val stop=AtomicBoolean(false)
-    private val source=PublicSource(base)
+    private val source=PublicSource(base,koreanOnly)
     val engine=AndroidWhisperEngine(scoped)
     @Volatile private var activeRunner:AndroidWhisperRunner?=null
+    @Volatile private var activeSiwc:SiwcApprovedInference?=null
     private var clock=System.currentTimeMillis()
     init {
         // Explicitly fake authorization contract in this private sandbox; no Google SDK/token.
         val e=session.begin(session.view().ownerId.isNotBlank());session.activate(e,"public-stt@example.invalid","public-stt@example.invalid",owner,"PUBLIC_SYNTHETIC_NOT_A_GOOGLE_TOKEN")
     }
     private val scope get()=checkNotNull(DriveALocalScope.current(session))
-    private class PublicSource(private val context:Context):SelectedRecordingSource {
+    private class PublicSource(private val context:Context,koreanOnly:Boolean):SelectedRecordingSource {
         override val rootUri="content://ieum-public-android-stt/tree/bundled"
         override val explicitlySyntheticScope=true
-        private val docs=listOf("public-ko.wav","public-en.wav").map{n->SourceDocument(n,"$rootUri/document/$n",n,context.assets.open("local-stt/$n").use{it.available().toLong()},"audio/wav",1790812800000L)}
+        private val docs=(if(koreanOnly)listOf("public-ko.wav") else listOf("public-ko.wav","public-en.wav")).map{n->SourceDocument(n,"$rootUri/document/$n",n,context.assets.open("local-stt/$n").use{it.available().toLong()},"audio/wav",1790812800000L)}
         override fun checkSelected(){}
         override fun inventory()=SourceInventory(docs,docs.map{it.documentId}.toSet(),true)
         override fun stat(document:SourceDocument)=docs.single{it.documentId==document.documentId}
@@ -281,6 +282,70 @@ internal class AndroidLocalSttPilot(context:Context,exercise:String="public-v1")
         }
     }
     private fun contextForTrial()=base.baseContext.applicationContext
-    fun cancel(){stop.set(true);activeRunner?.cancel();engine.cancel()}
+    /** Foreground app path. No arbitrary audio/path, retry key, endpoint or approval identifier
+     * is accepted. The fixture port is only supplied by a debug in-process test factory. */
+    fun siwcAppAction(action:String,key:String="",candidateId:String="",digest:String="",confirmed:Boolean=false,
+        fixturePort:((SiwcNativeContract)->SiwcInferencePort)?=null):JSONObject {
+        check(BuildConfig.DEBUG && BuildConfig.SIWC_PERSONAL_TRIAL_APPROVED) { "SIWC_PERSONAL_TRIAL_NOT_APPROVED" }
+        require(action in setOf("PLAN","ANALYSE","CONTEXT_PLAN","CONTEXT","RECEIVE","REVIEW","RESTORE"))
+        check(action !in setOf("ANALYSE","CONTEXT","REVIEW") || confirmed) { "SIWC_EXPLICIT_ACTION_APPROVAL_REQUIRED" }
+        return integrated{intake,_,current->
+            val request=integrationRequests(intake).single{r->intake.view(r).getString("audioSha")=="69ac671cd328486d14dfdaa413ec0a511c21e5708953fbe3dc2a280a6a2cf20d"}
+            val app=contextForTrial()
+            SiwcSessionStore(app,SiwcAuthHttp()).use{sessions->
+                AndroidAutomationStore(scoped,scope.owner,scope.epoch,current,{AndroidAutomationRuntime.policyHash(settings.snapshot())},{s->source.inventory().documents.any{it.uri==s.getString("actual_uri")}}, {"Etc/UTC"}).use{store->
+                    if(action=="RESTORE")SiwcNativeReviewStore(scoped,owner,intake,store,current,settings::snapshot).use{local->
+                        val saved=local.savedCandidate(request)
+                        if(saved?.getBoolean("userApproved")==true)return@integrated JSONObject().put("phase","REVIEWED").put("candidate",saved).put("summaryReceipt",saved.getString("summaryReceipt"))
+                            .put("fixture",saved.getString("origin")=="SIWC_FIXTURE_FILE_REVIEW_PROPOSAL").put("actualAndroidSTTCalls",engine.calls)
+                    }
+                    val authScope=sessions.runtimeScope(scope.key)
+                    val accountCurrent={current() && runCatching{sessions.runtimeScope(scope.key)==authScope}.getOrDefault(false)}
+                    SiwcNativeReviewStore(scoped,owner,intake,store,accountCurrent,settings::snapshot).use{native->
+                        val ticket=native.prepare(request)
+                        SiwcTrialBudget(app,if(fixturePort==null)"PERSONAL_PUBLIC_20261026" else "APP_UI_PUBLIC_FIXTURE_20261028").use{budget->
+                            SiwcApprovedInference(scoped,sessions,scope.key,native,ticket,budget,fixturePort?.invoke(ticket.contract)).use{trial->
+                                activeSiwc=trial;if(stop.get())trial.requestStop()
+                                try {
+                                    val result=JSONObject().put("fixture",fixturePort!=null).put("auth",JSONObject(sessions.audit())).put("analysisKey",trial.analysis.key())
+                                        .put("model",trial.analysis.model).put("requestedEffort",trial.analysis.effort).put("manifestSha256",trial.analysis.sourceManifestSha)
+                                        .put("snapshotSha256",ticket.contract.snapshotSha).put("publicSourcePack",JSONObject(ticket.contract.pack)).put("approvedSnapshot",JSONObject(ticket.contract.snapshot))
+                                        .put("accountLabel",sessions.registrations().single{it.key==sessions.activeKey()}.email.ifBlank{"검증된 ChatGPT 계정 · 이메일 미제공"})
+                                    fun outcome(o:SiwcInferenceJobs.Outcome,done:String) {
+                                        result.put("stageState",o.state).put("reason",o.reason).put("phase",if(o.state=="COMPLETE")done else "HELD")
+                                        o.completion?.let{result.put("completion",JSONObject().put("responseId",it.responseId).put("actualModel",it.actualModel).put("effectiveEffort",it.effectiveEffort).put("output",JSONObject(it.output)).put("streamSha256",it.rawSha256))}
+                                    }
+                                    when(action){
+                                        "PLAN"->{val catalog=trial.catalog();result.put("catalog",JSONArray(catalog)).put("phase",if(trial.analysis.model in catalog)"ANALYSIS_READY" else "MODEL_UNAVAILABLE")}
+                                        "ANALYSE"->outcome(trial.analyse(key,confirmed),"ANALYSIS_DONE")
+                                        "CONTEXT_PLAN"->{val c=trial.prepareContext();result.put("contextKey",c.key()).put("contextModel",c.model).put("contextEffort",c.effort).put("progress",JSONObject(trial.progress())).put("phase","CONTEXT_READY")}
+                                        "CONTEXT"->{trial.prepareContext();outcome(trial.reconcile(key,confirmed),"CONTEXT_DONE")}
+                                        "RECEIVE"->{trial.prepareContext();result.put("candidate",trial.receiveCandidate(fixturePort!=null)).put("phase","CANDIDATE")}
+                                        "REVIEW"->{
+                                            val saved=checkNotNull(native.savedCandidate(request)) { "SIWC_SAVED_CANDIDATE_REQUIRED" }
+                                            check(saved.getString("id")==candidateId && saved.getString("digest")==digest && saved.getJSONObject("artifact").getString("scope")==authScope) { "SIWC_REVIEW_CHANGED" }
+                                            val receipt=native.approve(ticket,candidateId,digest,confirmed)
+                                            result.put("candidate",native.candidate(candidateId)).put("summaryReceipt",receipt).put("phase","REVIEWED")
+                                        }
+                                        "RESTORE"->{
+                                            val saved=native.savedCandidate(request)
+                                            if(saved!=null){check(saved.getJSONObject("artifact").getString("scope")==authScope) { "SIWC_ACCOUNT_CHANGED" };result.put("candidate",saved).put("phase","CANDIDATE")}
+                                            else {
+                                                val progress=trial.progress();result.put("progress",JSONObject(progress))
+                                                val a=progress["analysisState"];val c=progress["contextState"]
+                                                result.put("phase",when{a=="COMPLETE" && c=="COMPLETE"->"CONTEXT_DONE";a=="COMPLETE" && c in setOf("NOT_PREPARED","PREPARED")->"ANALYSIS_DONE";a in setOf("NOT_PREPARED","PREPARED")->"BOUND";else->"HELD"})
+                                            }
+                                        }
+                                    }
+                                    result.put("budget",JSONObject(budget.snapshot())).put("actualAndroidSTTCalls",engine.calls)
+                                } finally {if(activeSiwc===trial)activeSiwc=null}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    fun cancel(){stop.set(true);activeSiwc?.requestStop();activeRunner?.cancel();engine.cancel()}
     override fun close(){activeRunner=null}
 }

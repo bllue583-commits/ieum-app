@@ -14,6 +14,7 @@
         <activity android:name=".AndroidLocalSttActivity" android:exported="false" />
         <activity android:name=".SiwcRuntimeActivity" android:exported="false" />
         <activity android:name=".SiwcPublicResultActivity" android:exported="false" />
+        <activity android:name=".SiwcAppAnalysisActivity" android:exported="false" />
         <activity android:name=".DailyReportActivity" android:exported="false" />
         <activity android:name=".RecordingWorkflowActivity" android:exported="false" />
         <activity android:name=".RelatedReadOnlyActivity" android:exported="false" />
