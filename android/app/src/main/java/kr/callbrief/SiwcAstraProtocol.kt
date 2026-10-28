@@ -1,6 +1,7 @@
 package kr.callbrief
 
 import kr.callagent.drive.StrictJson
+import okhttp3.Call
 import okhttp3.CookieJar
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -107,9 +108,12 @@ internal interface SiwcInferencePort {
     fun models(scope:String):List<String>
     fun invoke(request:SiwcAstraProtocol.Invocation,stopped:()->Boolean):SiwcAstraProtocol.Completion
 }
-internal class SiwcAstraHttp(private val grant:()->SiwcRuntimeGrant?,private val now:()->Long=System::currentTimeMillis):SiwcInferencePort {
-    private val client=OkHttpClient.Builder().cookieJar(CookieJar.NO_COOKIES).followRedirects(false).followSslRedirects(false)
-        .retryOnConnectionFailure(false).connectTimeout(10,TimeUnit.SECONDS).readTimeout(60,TimeUnit.SECONDS).callTimeout(10,TimeUnit.MINUTES).build()
+internal class SiwcAstraHttp(private val grant:()->SiwcRuntimeGrant?,private val now:()->Long=System::currentTimeMillis,
+    private val calls:Call.Factory=defaultClient()):SiwcInferencePort {
+    companion object {
+        private fun defaultClient()=OkHttpClient.Builder().cookieJar(CookieJar.NO_COOKIES).followRedirects(false).followSslRedirects(false)
+            .retryOnConnectionFailure(false).connectTimeout(10,TimeUnit.SECONDS).readTimeout(60,TimeUnit.SECONDS).callTimeout(10,TimeUnit.MINUTES).build()
+    }
     private fun approved(scope:String,invocationKey:String?=null):SiwcRuntimeGrant {
         val g=grant() ?: error("SIWC_REGISTRATION_AND_GRANT_REQUIRED")
         check(g.scope==scope && g.expiresMs>now() && g.planUsageApproved && (invocationKey==null || invocationKey in g.approvedInvocationKeys)) { "SIWC_CURRENT_APPROVED_GRANT_REQUIRED" }
@@ -120,23 +124,29 @@ internal class SiwcAstraHttp(private val grant:()->SiwcRuntimeGrant?,private val
     }
     override fun models(scope:String):List<String> {
         val g=approved(scope);val request=Request.Builder().url(SiwcAstraProtocol.ORIGIN+"/models").header("Authorization","Bearer "+g.accessToken).build()
-        return client.newCall(request).execute().use { response ->
+        val call=calls.newCall(request)
+        return SiwcCallCancellation(call){runCatching{approved(scope)===g}.getOrDefault(false).not()}.use {
+          call.execute().use { response ->
             status(response.code);val input=checkNotNull(response.body).byteStream();val out=java.io.ByteArrayOutputStream();val buffer=ByteArray(8192)
             input.use{while(true){val n=it.read(buffer);if(n<0)break;check(out.size()+n<=262144){"SIWC_RESPONSE_SIZE"};out.write(buffer,0,n)}}
             check(approved(scope)===g) { "SIWC_ACCOUNT_CHANGED" }
             SiwcAstraProtocol.catalog(out.toByteArray())
+          }
         }
     }
     override fun invoke(request:SiwcAstraProtocol.Invocation,stopped:()->Boolean):SiwcAstraProtocol.Completion {
         val g=approved(request.scope,request.key());check(!stopped()) { "SIWC_LOCALLY_CANCELLED_REMOTE_UNKNOWN" }
         val http=Request.Builder().url(SiwcAstraProtocol.ORIGIN+"/responses").header("Authorization","Bearer "+g.accessToken)
             .header("Accept","text/event-stream").post(request.body().toRequestBody("application/json; charset=utf-8".toMediaType())).build()
-        val call=client.newCall(http)
-        return call.execute().use{response->status(response.code)
+        val call=calls.newCall(http)
+        fun cancelled()=stopped() || runCatching{approved(request.scope,request.key())===g}.getOrDefault(false).not()
+        return SiwcCallCancellation(call,::cancelled).use {
+          call.execute().use{response->status(response.code)
             check(response.header("Content-Type").orEmpty().substringBefore(';').trim()=="text/event-stream") { "SIWC_SSE_REQUIRED" }
             checkNotNull(response.body).byteStream().use { input ->
-                SiwcAstraProtocol.completed(input,request) { val cancelled=stopped() || runCatching{approved(request.scope,request.key())===g}.getOrDefault(false).not();if(cancelled)call.cancel();cancelled }
+                SiwcAstraProtocol.completed(input,request,::cancelled)
             }
+          }
         }
     }
 }
