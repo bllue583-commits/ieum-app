@@ -1,6 +1,8 @@
 # 큰 기능 이정표와 Git 통합 계약
 
-**최신 판정:** [runtime 왕복·독립 인수 검토와 SIWC 구현 계약](RUNTIME_ACCEPTANCE_20261026.md)을 우선 읽는다. 통합 `dc0c16b`는 공개 전사·검토 저장·PARTIAL 보고의 로컬 기반 데모다. 앱 내 ChatGPT 로그인·기존 폴더 선택 후 실제 **Whisper 전사→GPT-6 Astra xhigh 내용 분석→별도 맥락 추론→결과파일→앱 검증·보호 저장** 왕복이 최우선 OPEN이며 내부 규칙 추출을 의미 분석 완료로 세지 않는다. SIWC의 원음 직접 입력 미지원과 Private client/Android callback 검증을 명시한다. 신규 담당은 `feature/astra-audio-roundtrip` / `01a177e0-5d8a-72dc-831d-884f96b5a033`이다. 아래 base 기준 코드·초기 통합순서는 과거 출발점으로 보존하고 최신 상태/배치와 구분한다.
+**최신 판정(10월28일):** [큰 기능별 서비스 인수와 다음 실행 순서](SERVICE_ACCEPTANCE_20261028.md)를 우선 읽는다. 원격 `b2144b0`의 로그인·두 job·결과파일·명시 검토 저장과 AOSP 공개 JNI+fixture 종단을 확인했다. 실제 계정의 Astra 분석·맥락 완료는 아직 입증되지 않았다. **M1 실제 계정 왕복→M2 누적 갱신→M3 일반 녹음·긴 통화 자동 처리→M4 SMS·네이버→M5 실제06시 보고→M6 S25 운영 인수** 순서다. 원격/미커밋, 모의/실제 호출, 새 생성/기존 업무 갱신을 구분한다. 아래 base 코드·초기 분업은 역사적 출발점이다.
+
+[10월26일 runtime 계약·독립 검토](RUNTIME_ACCEPTANCE_20261026.md)는 당시 `dc0c16b` 근거로 보존한다. 이후 G01/G02 수정·SIWC 통합·최신 취소 회귀는 위 10월28일 문서의 고정 SHA와 원증거를 따른다.
 
 [후속 SIWC 등록 판정](SIWC_REGISTRATION_DECISION.md): 공식 개인 로컬 프로젝트 경로를 확인했으며 Private 저장소의 공개 전환은 선행조건이 아니다. 첫 공식 로그인에서 client를 동적으로 등록한다. 업무 운영 범위·Android callback·실제 grant/추론은 별도 검증하며 `4b3ecff`의 fixture 기반 왕복 계층을 실제 Astra 실행으로 세지 않는다.
 
