@@ -14,8 +14,13 @@ internal interface SiwcAuthTransport {
     fun token(form:Map<String,String>):ByteArray
     fun revoke(metadata:SiwcOAuthProtocol.Metadata,clientId:String,refreshToken:String):Boolean
 }
-internal class SiwcAuthHttp:SiwcAuthTransport {
+internal class SiwcAuthHttp(private val observe:(String)->Unit={}):SiwcAuthTransport {
     private val client=OkHttpClient.Builder().cookieJar(CookieJar.NO_COOKIES).followRedirects(false).followSslRedirects(false)
+        .eventListener(object:okhttp3.EventListener(){
+            private fun kind(call:okhttp3.Call)=when(call.request().url.encodedPath){"/api/accounts/oauth/token"->"TOKEN";"/api/accounts/oauth/revoke"->"REVOKE";"/.well-known/openid-configuration"->"DISCOVERY";else->"JWKS"}
+            override fun requestBodyEnd(call:okhttp3.Call,byteCount:Long){observe("SIWC_AUTH_"+kind(call)+"_BODY_SENT")}
+            override fun responseHeadersEnd(call:okhttp3.Call,response:okhttp3.Response){observe("SIWC_AUTH_"+kind(call)+"_HTTP_"+response.code)}
+        })
         .retryOnConnectionFailure(false).connectTimeout(10,TimeUnit.SECONDS).readTimeout(15,TimeUnit.SECONDS).callTimeout(30,TimeUnit.SECONDS).build()
     private fun read(request:Request):ByteArray=client.newCall(request).execute().use {r->
         val out=java.io.ByteArrayOutputStream();r.body?.byteStream()?.use{input->val b=ByteArray(4096);while(true){val n=input.read(b);if(n<0)break;check(out.size()+n<=131072) { "SIWC_AUTH_RESPONSE_SIZE" };out.write(b,0,n)}}

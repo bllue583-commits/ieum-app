@@ -35,6 +35,15 @@ internal class SiwcSessionStore(context:Context,private val transport:SiwcAuthTr
     fun hostId()=meta()[0] as String
     fun epoch()=meta()[2] as Long
     fun activeKey()=meta()[1] as String
+    /** Safe trial evidence only; never returns a credential, email, subject or issued client ID. */
+    fun audit():Map<String,Any?> =ProtectedDatabase.read(db){
+        val key=activeKey();val r=registrations().singleOrNull{it.key==key};val t=if(r==null)null else tokens(key)
+        mapOf("active" to (r?.state=="ACTIVE" && t!=null),"registrationSha256" to key,"epoch" to epoch(),
+            "incompleteRegistrationCount" to incompleteRegistrationIds().size,
+            "verifiedSubjectPresent" to !r?.subject.isNullOrBlank(),"emailPresent" to !r?.email.isNullOrBlank(),
+            "grantedScopes" to (t?.scopes?.sorted() ?: emptyList<String>()),"accessExpiresMs" to t?.expiresMs,
+            "refreshStored" to !t?.refresh.isNullOrBlank(),"refreshSchedulingVerified" to (t?.earliestRaw==null))
+    }
     fun registrations():List<Registration> = ProtectedDatabase.read(db) {db.rawQuery("SELECT id,client,subject,email,state,status FROM siwc_auth_accounts ORDER BY id",null).use{c->buildList{while(c.moveToNext())add(Registration(c.getString(0),c.getString(1),c.getString(2),c.getString(3),c.getString(4),c.getString(5)))}}}
     private fun registration(key:String)=registrations().single{it.key==key}
     private fun tokens(key:String):Tokens?=ProtectedDatabase.read(db) {db.rawQuery("SELECT record FROM siwc_auth_accounts WHERE id=?",arrayOf(key)).use{c->if(c.moveToFirst() && !c.isNull(0))Tokens.read(c.getBlob(0)) else null}}

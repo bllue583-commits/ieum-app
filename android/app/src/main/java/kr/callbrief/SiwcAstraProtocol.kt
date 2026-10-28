@@ -109,9 +109,14 @@ internal interface SiwcInferencePort {
     fun invoke(request:SiwcAstraProtocol.Invocation,stopped:()->Boolean):SiwcAstraProtocol.Completion
 }
 internal class SiwcAstraHttp(private val grant:()->SiwcRuntimeGrant?,private val now:()->Long=System::currentTimeMillis,
-    private val calls:Call.Factory=defaultClient()):SiwcInferencePort {
+    calls:Call.Factory?=null,observe:(String)->Unit={}):SiwcInferencePort {
+    private val calls=calls ?: defaultClient(observe)
     companion object {
-        private fun defaultClient()=OkHttpClient.Builder().cookieJar(CookieJar.NO_COOKIES).followRedirects(false).followSslRedirects(false)
+        private fun defaultClient(observe:(String)->Unit)=OkHttpClient.Builder().cookieJar(CookieJar.NO_COOKIES).followRedirects(false).followSslRedirects(false)
+            .eventListener(object:okhttp3.EventListener(){
+                override fun requestBodyEnd(call:Call,byteCount:Long){if(call.request().url.encodedPath=="/v1/responses")observe("SIWC_POST_BODY_SENT")}
+                override fun responseHeadersEnd(call:Call,response:okhttp3.Response){observe((if(call.request().url.encodedPath=="/v1/models")"SIWC_MODELS_HTTP_" else "SIWC_POST_HTTP_")+response.code)}
+            })
             .retryOnConnectionFailure(false).connectTimeout(10,TimeUnit.SECONDS).readTimeout(60,TimeUnit.SECONDS).callTimeout(10,TimeUnit.MINUTES).build()
     }
     private fun approved(scope:String,invocationKey:String?=null):SiwcRuntimeGrant {

@@ -19,11 +19,14 @@ import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 
 /** Only native approved configuration may enable authentication. No Intent, preference,
- * desktop credential or remote flag supplies it. This build deliberately has no approval. */
+ * desktop credential or remote flag supplies it. A normal build has no approval; a bounded personal trial needs an explicit local build property. */
 internal object SiwcLoginRuntime {
     class Dependencies(val transport:SiwcAuthTransport,val browser:SiwcBrowserSurface,
         val approvedConfig:(String?)->SiwcOAuthConfig?)
-    fun dependencies(context:Context)=Dependencies(SiwcAuthHttp(),SiwcAndroidBrowser(context,SiwcRuntimeActivity::class.java),{null})
+    fun dependencies(context:Context)=Dependencies(SiwcAuthHttp{code->if(BuildConfig.SIWC_PERSONAL_TRIAL_APPROVED)SiwcTrialBudget(context.applicationContext).use{it.event(code)}},SiwcAndroidBrowser(context,SiwcRuntimeActivity::class.java,if(BuildConfig.SIWC_PERSONAL_TRIAL_APPROVED)"org.mozilla.firefox" else null),{client->
+        if(BuildConfig.SIWC_PERSONAL_TRIAL_APPROVED && BuildConfig.SYNTHETIC_TOOLS_ENABLED)
+            SiwcOAuthConfig("USER_APPROVED_PERSONAL_PUBLIC_TRIAL_20261026",client,client==null) else null
+    })
     // In-process instrumentation SPI; never populated from an exported component or result file.
     @Volatile internal var testDependencies:((Context)->Dependencies)?=null
     fun create(context:Context):SiwcLoginModel {
@@ -103,6 +106,7 @@ class SiwcRuntimeActivity:ComponentActivity() {
         body.removeAllViews();body.addView(text("ChatGPT 연결"))
         body.addView(text("이음에서 공식 브라우저 로그인을 시작하고 이 화면으로 돌아와요. Google 연결과 별도로 보관해요."))
         body.addView(text("첫 연결에는 본인 계정의 identity·플랜 사용량·지속 접근 권한 동의가 필요해요. 공개 음성의 전사와 합성 업무 자료만 시험하며 원음은 전송하지 않아요. 추가 credits 구매나 자동 과금 전환은 하지 않아요."))
+        if(BuildConfig.SIWC_PERSONAL_TRIAL_APPROVED)body.addView(text("승인된 개인 시험은 한국어 공개 전사·합성 업무만 사용해 분석 1회와 별도 맥락 1회로 제한해요. 실패·결과 미확인도 추가 호출하지 않아요."))
         body.addView(text(if(!v.enabled)"새 로그인·사용량 동의 승인을 기다리고 있어요. 현재 연결 버튼은 비활성 상태예요." else "로그인 동의와 각 분석의 전사 전송·사용량 승인은 별개예요."))
         body.addView(button("Continue with ChatGPT","siwc_continue",v.ready && v.enabled && !v.busy){model.start()})
         for(choice in v.choices)body.addView(button((if(v.selected==choice.key)"선택됨 · " else "등록 선택 · ")+choice.label,"siwc_choice",!v.busy){model.select(choice.key)})

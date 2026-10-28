@@ -250,6 +250,37 @@ internal class AndroidLocalSttPilot(context:Context,exercise:String="public-v1")
         }
         JSONObject().put("phase","EXPLICIT_USER_SIWC_FIXTURE_REVIEW").put("receipts",receipts).put("actualAstraCalls",0).put("actualOAuthGrants",0)
     }
+    /** Explicit opt-in instrumentation/foreground trial. Exactly one public Korean source;
+     * caller supplies the previously displayed exact key before either real model invocation. */
+    fun siwcLiveTrial(action:String,displayedKey:String=""):JSONObject=integrated{intake,_,current->
+        check(BuildConfig.DEBUG && BuildConfig.SIWC_PERSONAL_TRIAL_APPROVED){"SIWC_PERSONAL_TRIAL_NOT_APPROVED"}
+        check(action in setOf("PLAN","ANALYSE","CONTEXT_PLAN","CONTEXT","RECEIVE","OBSERVE"))
+        val request=integrationRequests(intake).single{r->intake.view(r).getString("audioSha")=="69ac671cd328486d14dfdaa413ec0a511c21e5708953fbe3dc2a280a6a2cf20d"}
+        val appContext=contextForTrial()
+        SiwcSessionStore(appContext,SiwcAuthHttp()).use{sessions->
+            SiwcTrialBudget(appContext).use{budget->
+                AndroidAutomationStore(scoped,scope.owner,scope.epoch,current,{AndroidAutomationRuntime.policyHash(settings.snapshot())},{s->source.inventory().documents.any{it.uri==s.getString("actual_uri")}}, {"Etc/UTC"}).use{store->
+                    SiwcNativeReviewStore(scoped,owner,intake,store,current,settings::snapshot).use{native->
+                        val ticket=native.prepare(request)
+                        SiwcApprovedInference(scoped,sessions,scope.key,native,ticket,budget).use{trial->
+                            val result=JSONObject().put("action",action).put("auth",JSONObject(sessions.audit())).put("analysisKey",trial.analysis.key())
+                                .put("manifestSha256",trial.analysis.sourceManifestSha).put("snapshotSha256",ticket.contract.snapshotSha)
+                                .put("model",trial.analysis.model).put("requestedEffort",trial.analysis.effort)
+                            when(action){
+                                "PLAN"->{val catalog=trial.catalog();result.put("catalog",JSONArray(catalog)).put("astraAvailable",trial.analysis.model in catalog).put("publicSourcePack",JSONObject(ticket.contract.pack))}
+                                "ANALYSE"->{val o=trial.analyse(displayedKey,true);result.put("stageState",o.state).put("reason",o.reason);trial.observedAnalysis()?.let{result.put("completionObservation",JSONObject(it))};o.completion?.let{result.put("responseId",it.responseId).put("actualModel",it.actualModel).put("effectiveEffort",it.effectiveEffort).put("output",JSONObject(it.output))}}
+                                "CONTEXT_PLAN"->{val c=trial.prepareContext();result.put("contextKey",c.key()).put("contextModel",c.model).put("contextEffort",c.effort)}
+                                "CONTEXT"->{trial.prepareContext();val o=trial.reconcile(displayedKey,true);result.put("stageState",o.state).put("reason",o.reason);trial.observedContext()?.let{result.put("completionObservation",JSONObject(it))};o.completion?.let{result.put("responseId",it.responseId).put("actualModel",it.actualModel).put("effectiveEffort",it.effectiveEffort).put("output",JSONObject(it.output))}}
+                                "RECEIVE"->{trial.prepareContext();result.put("candidate",trial.receiveCandidate())}
+                            }
+                            result.put("budget",JSONObject(budget.snapshot())).put("androidProcessId",android.os.Process.myPid())
+                        }
+                    }
+                }
+            }
+        }
+    }
+    private fun contextForTrial()=base.baseContext.applicationContext
     fun cancel(){stop.set(true);activeRunner?.cancel();engine.cancel()}
     override fun close(){activeRunner=null}
 }

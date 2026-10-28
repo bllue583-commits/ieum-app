@@ -1,5 +1,7 @@
 # SIWC 앱 연결·결과파일 검토 통합
 
+아래는 b2144b0 차수의 기록이다. 이후 사용자 승인에 따른 native 활성화·횟수 제한·첫 실제 진입과 추가 브라우저 약관에서의 중단은 [승인 시험 기록](SIWC_APPROVED_TRIAL_20261026.md)에 별도로 보존한다.
+
 기준은 `c55b0402d8ddd17d370f6f2a28bc5ff13fccda55`, 작업 branch는 `integration/siwc-runtime-20261026`이다. 원격 feature `5f53fe6ff9bb6cd9b643a593bbc581670d13cfec`를 no-ff merge했다. 기존 integration·feature·main의 원기록과 G01/G02 수정을 보존한다. [인증 모듈](siwc-auth-module.md), [왕복 모듈](astra-audio-roundtrip.md), [기존 인수 계약](RUNTIME_ACCEPTANCE_20261026.md)의 실행/승인 경계를 따른다.
 
 ## 앱 경로

@@ -30,6 +30,7 @@ class SiwcRuntimeDeviceTest {
     private fun model(a:SiwcRuntimeActivity)=SiwcRuntimeActivity::class.java.getDeclaredField("model").apply{isAccessible=true}.get(a) as SiwcLoginModel
     private fun proof(name:String,value:JSONObject) {val app=InstrumentationRegistry.getInstrumentation().targetContext;val dir=File(app.getExternalFilesDir(null),"siwc-device-evidence").apply{mkdirs()};File(dir,name+".json").writeText(value.put("processId",Process.myPid()).put("actualExternalGrants",0).put("actualAstraCalls",0).toString(2))}
     @Test fun unapprovedAppButtonStaysDisabledWithoutBrowserOrListener() {
+        org.junit.Assume.assumeFalse(BuildConfig.SIWC_PERSONAL_TRIAL_APPROVED)
         SiwcLoginRuntime.testDependencies=null
         ActivityScenario.launch(SiwcRuntimeActivity::class.java).use{s->
             var ready=false;await("inactive ready"){s.onActivity{ready=model(it).view.value.ready};ready}

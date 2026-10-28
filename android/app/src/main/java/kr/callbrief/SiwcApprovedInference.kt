@@ -7,15 +7,21 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** Foreground, two separate explicit usage approvals. Login alone cannot authorize either
  * invocation. The app's current build exposes no live inference button before grant approval. */
 internal class SiwcApprovedInference(context:Context,private val sessions:SiwcSessionStore,private val ownerScope:String,
-    private val native:SiwcNativeReviewStore,private val ticket:SiwcNativeReviewStore.Ticket):AutoCloseable {
+    private val native:SiwcNativeReviewStore,private val ticket:SiwcNativeReviewStore.Ticket,
+    private val budget:SiwcTrialBudget?=null):AutoCloseable {
     private val stopped=AtomicBoolean(false)
     private val authScope=sessions.runtimeScope(ownerScope)
     private val approved=mutableSetOf<String>()
     private fun current()=!stopped.get() && native.isCurrent(ticket) && runCatching{sessions.runtimeScope(ownerScope)==authScope}.getOrDefault(false)
-    private val port=SiwcAstraHttp(grant={if(current())sessions.inferenceGrant(ownerScope,synchronized(approved){approved.toSet()}) else null})
+    private val http=SiwcAstraHttp(grant={if(current())sessions.inferenceGrant(ownerScope,synchronized(approved){approved.toSet()}) else null},observe={budget?.event(it)})
+    private val port=budget?.port(http) ?: http
+    init {budget?.bind(authScope,AstraAudioContract.sha(StrictJson.bytes(ticket.contract.pack)),ticket.contract.snapshotSha)}
     private val jobs=SiwcInferenceJobs(context,authScope,port,::current)
     private val files=SiwcResultFiles(context,authScope,jobs,::current)
     val analysis=SiwcNativeRoundTrip.analysis(ticket,authScope)
+    fun catalog():List<String>{check(current());return port.models(authScope)}
+    fun observedAnalysis()=jobs.observed(analysis)
+    fun observedContext()=contextRequest?.let(jobs::observed)
     private var contextRequest:SiwcAstraProtocol.Invocation?=null
     fun analyse(displayedKey:String,transferAndUsageConfirmed:Boolean):SiwcInferenceJobs.Outcome {
         check(transferAndUsageConfirmed && displayedKey==analysis.key() && current()) { "SIWC_EXACT_ANALYSIS_USAGE_APPROVAL_REQUIRED" }

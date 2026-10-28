@@ -13,11 +13,18 @@ internal class SiwcInferenceJobs(context:Context,private val scope:String,
     private val store=ProtectedDatabase.open(context,"siwc-inference-v1.db",SCHEMA)
     private val db=store.database()
     init {store.transaction {
+        db.execSQL("CREATE TABLE IF NOT EXISTS siwc_stage_observations(scope TEXT NOT NULL,id TEXT NOT NULL,result BLOB NOT NULL,PRIMARY KEY(scope,id))")
         db.execSQL("UPDATE siwc_stages SET state='UNKNOWN',reason='SIWC_INTERRUPTED_PROCESS' WHERE scope=? AND state='RUNNING' AND process!=?",arrayOf(scope,PROCESS));null
     }}
     data class Outcome(val state:String,val completion:SiwcAstraProtocol.Completion?=null,val reason:String="")
     fun state(id:String)=ProtectedDatabase.read(db){db.rawQuery("SELECT state FROM siwc_stages WHERE scope=? AND id=?",arrayOf(scope,id)).use{if(it.moveToFirst())it.getString(0) else "NOT_PREPARED"}}
     private fun reason(id:String)=ProtectedDatabase.read(db){db.rawQuery("SELECT reason FROM siwc_stages WHERE scope=? AND id=?",arrayOf(scope,id)).use{if(it.moveToFirst())it.getString(0) else ""}}
+    /** A completed HTTP observation retained for offline diagnosis is never an accepted result.
+     * Source/account currentness is still required; rejected JSON cannot become COMPLETE here. */
+    fun observed(request:SiwcAstraProtocol.Invocation):Map<String,Any?>?=ProtectedDatabase.read(db){
+        check(request.scope==scope && current()){"SIWC_SCOPE_CHANGED"}
+        db.rawQuery("SELECT result FROM siwc_stage_observations WHERE scope=? AND id=?",arrayOf(scope,request.key())).use{if(it.moveToFirst())AstraAudioContract.parse(it.getBlob(0)) else null}
+    }
     private fun saved(id:String):SiwcAstraProtocol.Completion=ProtectedDatabase.read(db) {
         db.rawQuery("SELECT result FROM siwc_stages WHERE scope=? AND id=? AND state='COMPLETE'",arrayOf(scope,id)).use { c ->
             check(c.moveToFirst());val r=AstraAudioContract.obj(StrictJson.parseReadOnlyEnvelope(c.getBlob(0)))
@@ -58,10 +65,14 @@ internal class SiwcInferenceJobs(context:Context,private val scope:String,
         try {
             val response=port.invoke(request){!current() || state(id)=="CANCELLED_REMOTE_UNKNOWN"}
             completedObserved=true
-            validate(response.output)
-            check(response.actualModel==request.model && (response.effectiveEffort=="NOT_REPORTED" || response.effectiveEffort==request.effort)) { "SIWC_OBSERVATION_CHANGED" }
             val bytes=StrictJson.bytes(mapOf("responseId" to response.responseId,"actualModel" to response.actualModel,
                 "effectiveEffort" to response.effectiveEffort,"output" to response.output,"rawSha256" to response.rawSha256))
+            store.transaction {
+                check(current() && state(id)=="RUNNING") { "SIWC_CANCELLED_OR_SCOPE_CHANGED" }
+                db.execSQL("INSERT INTO siwc_stage_observations VALUES(?,?,?)",arrayOf(scope,id,bytes));null
+            }
+            validate(response.output)
+            check(response.actualModel==request.model && (response.effectiveEffort=="NOT_REPORTED" || response.effectiveEffort==request.effort)) { "SIWC_OBSERVATION_CHANGED" }
             store.transaction {
                 check(current() && state(id)=="RUNNING") { "SIWC_CANCELLED_OR_SCOPE_CHANGED" }
                 db.execSQL("UPDATE siwc_stages SET state='COMPLETE',result=? WHERE scope=? AND id=?",arrayOf(bytes,scope,id));null

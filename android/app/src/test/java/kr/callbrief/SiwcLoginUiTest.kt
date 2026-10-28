@@ -20,6 +20,7 @@ class SiwcLoginUiTest:ProtectedTextHostTestBase() {
     @After fun cleanup(){SiwcLoginRuntime.testDependencies=null}
     private fun await(predicate:()->Boolean) {val until=System.nanoTime()+5_000_000_000L;while(System.nanoTime()<until){shadowOf(Looper.getMainLooper()).idle();if(predicate())return;Thread.sleep(10)};assertTrue(predicate())}
     @Test fun defaultLoginIsDisabledAndResumeDoesNotPrompt() {
+        org.junit.Assume.assumeFalse(BuildConfig.SIWC_PERSONAL_TRIAL_APPROVED)
         val c=Robolectric.buildActivity(SiwcRuntimeActivity::class.java).setup();val a=c.get()
         await{a.window.decorView.findViewWithTag<Button>("siwc_continue")!=null}
         val button=a.window.decorView.findViewWithTag<Button>("siwc_continue");assertFalse(button.isEnabled);button.performClick()

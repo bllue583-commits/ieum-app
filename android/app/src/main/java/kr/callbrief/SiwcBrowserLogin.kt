@@ -19,14 +19,16 @@ internal interface SiwcBrowserSurface {
     /** A request to return is not proof Android actually foregrounded the activity. */
     fun requestReturn():Boolean
 }
-internal class SiwcAndroidBrowser(context:Context,returnActivity:Class<out Activity>):SiwcBrowserSurface {
+internal class SiwcAndroidBrowser(context:Context,returnActivity:Class<out Activity>,private val browserPackage:String?=null):SiwcBrowserSurface {
     private val app=context.applicationContext
     private val returnIntent:PendingIntent
     init {require(returnActivity.name.startsWith(app.packageName+"."))
         returnIntent=PendingIntent.getActivity(app,7811,Intent(app,returnActivity).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)}
     override fun open(url:String) {
         val uri=url.toUri();check(uri.scheme=="https" && uri.host=="auth.openai.com" && uri.port in setOf(-1,443) && uri.userInfo==null && uri.fragment==null && uri.path=="/api/accounts/authorize") { "SIWC_BROWSER_ORIGIN" }
-        app.startActivity(Intent(Intent.ACTION_VIEW,uri).addCategory(Intent.CATEGORY_BROWSABLE).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        val intent=Intent(Intent.ACTION_VIEW,uri).addCategory(Intent.CATEGORY_BROWSABLE).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        browserPackage?.let{check(it=="org.mozilla.firefox"){"SIWC_TRIAL_BROWSER_PACKAGE"};intent.setPackage(it)}
+        app.startActivity(intent)
     }
     override fun requestReturn()=runCatching{returnIntent.send();true}.getOrDefault(false)
 }

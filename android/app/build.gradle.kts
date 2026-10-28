@@ -18,6 +18,10 @@ android {
         val kakaoLive=providers.gradleProperty("kakao.liveSendEnabled").orElse("false").get()
         require(kakaoLive in listOf("true","false"))
         buildConfigField("boolean", "DAILY_REPORT_KAKAO_LIVE_ENABLED", kakaoLive)
+        // Off by default. A local build may enable only the explicitly approved personal trial.
+        val siwcTrial=providers.gradleProperty("ieum.siwcPersonalTrialApproved").orElse("false").get()
+        require(siwcTrial in listOf("true","false"))
+        buildConfigField("boolean","SIWC_PERSONAL_TRIAL_APPROVED",siwcTrial)
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes {
@@ -26,6 +30,7 @@ android {
             isMinifyEnabled = false
             isDebuggable = false
             buildConfigField("boolean","SYNTHETIC_TOOLS_ENABLED","false")
+            buildConfigField("boolean","SIWC_PERSONAL_TRIAL_APPROVED","false")
             buildConfigField("String","GOOGLE_ANDROID_CLIENT_ID","\"\"")
         }
         create("validation") {
