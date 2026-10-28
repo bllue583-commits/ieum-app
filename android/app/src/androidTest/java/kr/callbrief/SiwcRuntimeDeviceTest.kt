@@ -94,18 +94,24 @@ class SiwcRuntimeDeviceTest {
             };return
         }
         ActivityScenario.launch(SiwcPublicResultActivity::class.java).use{s->
-            fun phase():Int {var v=-1;s.onActivity{v=SiwcPublicResultActivity::class.java.getDeclaredField("phase").apply{isAccessible=true}.getInt(it)};return v}
+            fun phase():Int {var v=-1;s.onActivity{v=it.testState.phase};return v}
             fun next(expected:Int){s.onActivity{assertTrue(it.window.decorView.findViewWithTag<Button>("siwc_public_next").performClick())};await("public phase $expected",150000){phase()==expected}}
-            fun pilot():AndroidLocalSttPilot {var p:AndroidLocalSttPilot?=null;s.onActivity{p=SiwcPublicResultActivity::class.java.getDeclaredField("pilot").apply{isAccessible=true}.get(it) as AndroidLocalSttPilot};return p!!}
+            fun pilot():AndroidLocalSttPilot {var p:AndroidLocalSttPilot?=null;s.onActivity{p=it.testState.pilot};return p!!}
             next(1);assertEquals(2,pilot().engine.calls);next(2)
             val scoped=pilot().scoped
             fun count(table:String)=AndroidSqlPort(scoped,GeneralLocalStore.DATABASE,scoped.assets.open("call_core_schema.sql")).use{db->if(db.query("SELECT name FROM sqlite_master WHERE name=?",table).isEmpty())0L else db.query("SELECT count(*) n FROM $table").single()["n"] as Long}
             val before=count("workflow_items");next(3)
             assertEquals(2L,count("siwc_native_candidates"));assertEquals(0L,count("siwc_native_user_reviews"));assertEquals(0L,count("workflow_reviewed_summaries"));assertEquals(before,count("workflow_items"))
-            var candidate:JSONObject?=null;s.onActivity{candidate=SiwcPublicResultActivity::class.java.getDeclaredField("candidates").apply{isAccessible=true}.get(it) as JSONObject}
+            var candidate:JSONObject?=null;var owner:SiwcPublicResultModel?=null
+            s.onActivity{candidate=it.testState.candidates;owner=it.testState}
             assertEquals(4,candidate!!.getInt("fixtureCompletions"));assertEquals(0,candidate!!.getInt("actualAstraCalls"))
+            val frozen=candidate.toString();val samePilot=pilot()
+            s.recreate();s.onActivity{assertSame(owner,it.testState);assertSame(samePilot,it.testState.pilot);assertEquals(3,it.testState.phase);assertEquals(frozen,it.testState.candidates.toString());assertTrue(it.window.decorView.findViewWithTag<Button>("siwc_public_next").isEnabled)}
+            assertEquals(2,pilot().engine.calls);assertEquals(0L,count("siwc_native_user_reviews"));assertEquals(0L,count("workflow_reviewed_summaries"));assertEquals(before,count("workflow_items"))
             next(4);assertEquals(2L,count("siwc_native_user_reviews"));assertEquals(2L,count("workflow_reviewed_summaries"));assertEquals(before+2,count("workflow_items"));assertEquals(2,pilot().engine.calls)
-            proof("public-file",JSONObject().put("actualJniCalls",pilot().engine.calls).put("fixtureCompletions",4).put("candidatesBeforeReview",2).put("userReviewsAfter",2).put("itemsBefore",before).put("itemsAfter",count("workflow_items")).put("candidateOnlyBeforeUserClick",true).put("fixtureResult",candidate))
+            s.recreate();s.onActivity{assertSame(owner,it.testState);assertEquals(4,it.testState.phase);assertFalse(it.window.decorView.findViewWithTag<Button>("siwc_public_next").isEnabled)}
+            assertEquals(2,pilot().engine.calls);assertEquals(before+2,count("workflow_items"))
+            proof("public-file",JSONObject().put("candidateAndReviewedPhasesSurviveRecreation",true).put("actualJniCalls",pilot().engine.calls).put("fixtureCompletions",4).put("candidatesBeforeReview",2).put("userReviewsAfter",2).put("itemsBefore",before).put("itemsAfter",count("workflow_items")).put("candidateOnlyBeforeUserClick",true).put("fixtureResult",candidate))
         }
     }
 }

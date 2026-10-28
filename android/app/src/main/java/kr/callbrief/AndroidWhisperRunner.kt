@@ -32,7 +32,7 @@ internal class AndroidWhisperEngine(private val context:Context) {
     private val library=File(context.applicationInfo.nativeLibraryDir,"libieum_whisper.so")
     private val model=File(context.noBackupFilesDir,"android-local-stt/ggml-tiny-q5_1.bin")
     private val active=java.util.concurrent.atomic.AtomicLong(0)
-    var calls=0;private set
+    @Volatile var calls=0;private set
     private fun hash(file:File)=file.inputStream().use{input->val d=java.security.MessageDigest.getInstance("SHA-256");val b=ByteArray(8192);while(true){val n=input.read(b);if(n<0)break;d.update(b,0,n)};d.digest().joinToString(""){"%02x".format(it)}}
     fun verify() {
         check(library.isFile&&library.length()==pin.getJSONObject("native").getJSONObject(abi).getLong("bytes")&&hash(library)==runtimeSha){"ANDROID_STT_RUNTIME_PIN"}
