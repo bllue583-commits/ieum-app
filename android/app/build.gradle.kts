@@ -18,6 +18,12 @@ android {
         val kakaoLive=providers.gradleProperty("kakao.liveSendEnabled").orElse("false").get()
         require(kakaoLive in listOf("true","false"))
         buildConfigField("boolean", "DAILY_REPORT_KAKAO_LIVE_ENABLED", kakaoLive)
+        // Pipeline (docs/contracts): public server keys are compiled in, never read from the inbox.
+        val pipeline=groovy.json.JsonSlurper().parse(rootProject.file("../config/pipeline.json")) as Map<*,*>
+        fun pipelineValue(key:String)=(pipeline[key] as? String ?: "").also { require(Regex("[A-Za-z0-9+/=._-]*").matches(it)) { "PIPELINE_CONFIG_$key" } }
+        buildConfigField("String","PIPELINE_INBOX_REPOSITORY","\""+pipelineValue("inboxRepository")+"\"")
+        buildConfigField("String","PIPELINE_SERVER_SIGNING_KEY","\""+pipelineValue("serverSigningKey")+"\"")
+        buildConfigField("String","PIPELINE_SERVER_ENCRYPTION_KEY","\""+pipelineValue("serverEncryptionKey")+"\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes {

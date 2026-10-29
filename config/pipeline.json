@@ -1,0 +1,6 @@
+{
+  "note": "Public configuration only. Server public keys are written by tools/setup_pipeline.py; private keys live in GitHub Actions secrets.",
+  "inboxRepository": "bllue583-commits/ieum-inbox",
+  "serverSigningKey": "",
+  "serverEncryptionKey": ""
+}

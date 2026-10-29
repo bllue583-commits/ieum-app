@@ -28,9 +28,11 @@ jobs:
         working-directory: worker
         run: |
           if [ -f package-lock.json ]; then npm ci --ignore-scripts; fi
-          node --test tests/*.test.mjs 2>&1 | tee node-test.log
-          grep -E '^not ok' node-test.log | sed 's/^/::error title=node test::/' || true
-          test "${PIPESTATUS[0]}" = 0
+          set +e
+          node --test tests/*.test.mjs > node-test.log 2>&1; status=$?
+          cat node-test.log
+          grep -E '^(not ok|# (tests|pass|fail))' node-test.log | sed 's/^/::notice title=node test::/'
+          exit $status
 
   android:
     runs-on: ubuntu-latest
