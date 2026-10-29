@@ -86,7 +86,7 @@ jobs:
             --timeout 45m --results-dir "$dir" --format=json > ftl.json 2> ftl.log
           status=$?; set -e
           cat ftl.log | tail -20; cat ftl.json
-          bucket=$(grep -o 'gs://[^/]*' ftl.log | head -1)
+          bucket="gs://$(grep -o 'storage/browser/[^/]*' ftl.log | head -1 | cut -d/ -f3)"
           mkdir -p device-results && gcloud storage cp -r "$bucket/$dir" device-results/ || true
           echo "::notice title=device::${{ steps.device.outputs.name }} (${{ steps.device.outputs.model }}/${{ steps.device.outputs.version }}) exit=$status"
           find device-results -name '*.json' -path '*device-test*' -exec sh -c 'echo "::notice title=$(basename $1)::$(tr -d "\n" < $1 | cut -c1-900)"' _ {} \;
