@@ -79,7 +79,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         val now=clock()
         port.execute("INSERT INTO call_records(record_id,recording_id,started_ms,duration_ms,counterpart,counterpart_key,transcript,segments_json,state,created_ms) VALUES(?,?,?,?,?,?,?,?,?,?)",
             id,t.recordingId,t.originalStartedAtMs,t.durationMs,t.counterpart,counterpartKey(t.counterpart),t.text,segments.toString(),TRANSCRIBED,now)
-        port.execute("UPDATE call_records SET transcript='',segments_json='[]' WHERE state='ANALYZED' AND created_ms<? AND transcript!=''",now-TRANSCRIPT_KEEP_DAYS*86_400_000L)
+        port.execute("UPDATE call_records SET transcript='',segments_json='[]' WHERE state='ANALYZED' AND created_ms<CAST(? AS INTEGER) AND transcript!=''",now-TRANSCRIPT_KEEP_DAYS*86_400_000L)
         true
     }
 
@@ -94,7 +94,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
     fun record(id:String):CallRecord?=rows("SELECT * FROM call_records WHERE record_id=?",id).singleOrNull()?.let(::map)
     fun pending():List<CallRecord> =rows("SELECT * FROM call_records WHERE state IN ('TRANSCRIBED','WAITING_CONSENT','WAITING_KEY') ORDER BY created_ms").map(::map)
     /** Calls of one KST day, newest first. A call without a start time counts on the day it was stored. */
-    fun day(day:LocalDate):List<CallRecord> =rows("SELECT * FROM call_records WHERE COALESCE(started_ms,created_ms)>=? AND COALESCE(started_ms,created_ms)<? ORDER BY COALESCE(started_ms,created_ms) DESC",
+    fun day(day:LocalDate):List<CallRecord> =rows("SELECT * FROM call_records WHERE COALESCE(started_ms,created_ms)>=CAST(? AS INTEGER) AND COALESCE(started_ms,created_ms)<CAST(? AS INTEGER) ORDER BY COALESCE(started_ms,created_ms) DESC",
         startOf(day),startOf(day.plusDays(1))).map(::map)
     fun setState(id:String,state:String,error:String?=null)=port.execute("UPDATE call_records SET state=?,error=? WHERE record_id=?",state,error,id)
     /** "모두 다시 분석": waiting and failed records go back to the queue. */
@@ -158,5 +158,5 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         .filter { val d=it.str("due_text")!!.trim();d.matches(ISO_DATE) && d<=today.toString() }
         .map { CallTodoItem(it.str("id")!!,it.str("title")!!,it.str("due_text")!!.trim(),it.str("status")!!,it.long("revision")!!) }
     /** AI-created items created during one KST day. */
-    fun newTaskCount(day:LocalDate):Int=(rows("SELECT COUNT(*) AS n FROM call_task_bindings WHERE created_ms>=? AND created_ms<?",startOf(day),startOf(day.plusDays(1))).single().long("n") ?: 0).toInt()
+    fun newTaskCount(day:LocalDate):Int=(rows("SELECT COUNT(*) AS n FROM call_task_bindings WHERE created_ms>=CAST(? AS INTEGER) AND created_ms<CAST(? AS INTEGER)",startOf(day),startOf(day.plusDays(1))).single().long("n") ?: 0).toInt()
 }

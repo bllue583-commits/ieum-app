@@ -55,8 +55,9 @@ internal object CallDigestSchedule {
         .setInitialDelay(Duration.between(now,CallDigestTime.next(now,hour)).toMillis(),TimeUnit.MILLISECONDS)
         .setInputData(workDataOf("kind" to kind)).build()
     private fun enqueue(context:Context,kind:String,policy:ExistingWorkPolicy) {
+        val wm=WorkManager.getInstance(context.applicationContext)
         val (evening,morning)=hours(context)
-        WorkManager.getInstance(context.applicationContext).enqueueUniqueWork("ieum.calls.digest.$kind",policy,
+        wm.enqueueUniqueWork("ieum.calls.digest.$kind",policy,
             request(kind,Instant.now(),if(kind==EVENING) evening else morning))
     }
     fun ensure(context:Context) { enqueue(context,EVENING,ExistingWorkPolicy.KEEP);enqueue(context,MORNING,ExistingWorkPolicy.KEEP) }
