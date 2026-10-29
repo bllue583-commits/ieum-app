@@ -32,6 +32,9 @@
         <activity android:name=".ScopedNaverMailSettingsActivity" android:exported="false" />
         <activity android:name=".ScopedKakaoSettingsActivity" android:exported="false" />
         <activity android:name=".NativeGoogleTrialActivity" android:exported="false" />
+        <activity android:name=".pipeline.PipelineReportActivity" android:exported="false" />
+        <activity android:name=".pipeline.PipelineReviewActivity" android:exported="false" />
+        <activity android:name=".pipeline.PipelineSettingsActivity" android:exported="false" />
         <activity android:name=".KakaoDigestEntryActivity" android:exported="true" android:enabled="@bool/kakao_connection_enabled">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

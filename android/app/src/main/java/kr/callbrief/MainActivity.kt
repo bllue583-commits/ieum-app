@@ -922,6 +922,10 @@ open class MainActivity : ComponentActivity() {
             visibleItems.forEach { (todo,row) ->val item=card();item.addView(text(todo.getString("title"),22f,true));item.addView(text(TaskStatus.fromWire(todo.getString("status")).label));item.addView(text(recordingLabel(row)))
                 if(todo.optString("due_text").isNotBlank())item.addView(text("직접 입력 기한: ${todo.getString("due_text")}"))
                 item.addView(button("todo 내용·완료 수정") { RecordingWorkflowActivity.open(this,row.getString("file_id"),todo.getString("id")) }.apply { tag="edit_todo_${todo.getString("id")}" }) }
+            if(pipelineReviewCount>0) card().addView(button("AI 분석 검토 · ${pipelineReviewCount}건 확인 필요") {
+                startActivity(Intent(this,kr.callbrief.pipeline.PipelineReviewActivity::class.java))
+            }.apply { tag="pipeline_review_badge" })
+            refreshPipelineReviewCount()
             val actions = card()
             actions.addView(button("어제 수집·변경 확인") { showPreviousDayReview() })
             actions.addView(button("기기 저장 목록 새로고침") { refreshBoard() })
@@ -972,6 +976,20 @@ open class MainActivity : ComponentActivity() {
         actions.addView(button(if (requestedReportDate == null) "어제 브리핑 보기" else "$requestedReportDate 브리핑 보기") { showDigest() })
         actions.addView(button("목록 새로고침") { refreshBoard() })
 
+    }
+    private var pipelineReviewCount = 0
+    private var pipelineReviewLoading = false
+    /** Review badge: read-only count of open AI review items; never creates or migrates a store. */
+    private fun refreshPipelineReviewCount() {
+        val scoped = storageContext ?: return
+        if (pipelineReviewLoading || demoMode) return
+        pipelineReviewLoading = true
+        lifecycleScope.launch {
+            val count = runCatching { withContext(Dispatchers.IO) { kr.callbrief.pipeline.PipelineReviewBadge.count(scoped) } }.getOrDefault(0)
+            pipelineReviewLoading = false
+            if (!localUiAvailable() || demoMode) return@launch
+            if (count != pipelineReviewCount) { pipelineReviewCount = count; if (!settingsShowing && tab == 2) renderHome(syncRunning) }
+        }
     }
     private fun enableDemo() {
         if(!BuildConfig.SYNTHETIC_TOOLS_ENABLED){notice("합성 예시는 검증용 빌드에서만 사용할 수 있어요.");return}
@@ -1095,6 +1113,9 @@ open class MainActivity : ComponentActivity() {
         connections.addView(button("매일 오전 6시 보고 · 보관과 실행 상태") {
             requestLocalCancel();startActivity(Intent(this,DailyReportActivity::class.java))
         }.apply { tag="daily_report_settings" })
+        connections.addView(button("아침 보고") { requestLocalCancel();startActivity(Intent(this,kr.callbrief.pipeline.PipelineReportActivity::class.java)) }.apply { tag="pipeline_report_entry" })
+        connections.addView(button("AI 분석 설정") { requestLocalCancel();startActivity(Intent(this,kr.callbrief.pipeline.PipelineSettingsActivity::class.java)) }.apply { tag="pipeline_settings_entry" })
+        connections.addView(button("AI 분석 검토") { requestLocalCancel();startActivity(Intent(this,kr.callbrief.pipeline.PipelineReviewActivity::class.java)) }.apply { tag="pipeline_review_entry" })
         if(storageContext==null) { card().addView(text("계정 저장 정보를 읽지 못했어요. 기존 자료와 설정은 바꾸지 않았어요."));return }
         val state = try { settings.snapshot() } catch (_: Exception) {
             card().addView(text("기기 설정을 읽지 못했어요. 저장된 설정을 지우거나 바꾸지 않았어요.", bold = true)); return
