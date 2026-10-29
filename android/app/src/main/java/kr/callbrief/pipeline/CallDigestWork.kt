@@ -85,7 +85,7 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
         if(Build.VERSION.SDK_INT>=33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) return
         val manager=context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(CHANNEL,"이음 통화 정리",NotificationManager.IMPORTANCE_DEFAULT))
-        val intent=Intent(context,TodayCallsActivity::class.java).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        val intent=Intent(context,if(kind==CallDigestSchedule.MORNING) CallTasksActivity::class.java else TodayCallsActivity::class.java).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         val pending=PendingIntent.getActivity(context,kind.hashCode(),intent,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val notification=Notification.Builder(context,CHANNEL).setSmallIcon(R.drawable.ic_callbrief)
             .setContentTitle(m.title).setContentText(m.text).setContentIntent(pending).setAutoCancel(true).setLocalOnly(true)

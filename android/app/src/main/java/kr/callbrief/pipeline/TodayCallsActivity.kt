@@ -1,7 +1,6 @@
 package kr.callbrief.pipeline
 
 import android.content.Intent
-import android.graphics.Typeface
 import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
@@ -12,29 +11,22 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.time.Instant
 import java.time.LocalDate
-import java.time.format.DateTimeFormatter
-import java.util.Locale
 
-/** "오늘의 통화": one KST day of analyzed calls, today's due items, and a detail view per call. */
+/** "오늘의 통화": one KST day of calls as big cards (time, who, 2-3 line summary, promises),
+ * the urgent to-dos on top, and one tap to a detail page. */
 class TodayCallsActivity:ComponentActivity() {
     private lateinit var body:LinearLayout
-    private var day:LocalDate=CallRecordStore.kstDay(System.currentTimeMillis())
+    private var day:LocalDate=CallUi.today()
     private var detail:String?=null
     private var calls:List<CallRecord> =emptyList()
     private var due:List<CallTodoItem> =emptyList()
-    private val today get()=CallRecordStore.kstDay(System.currentTimeMillis())
 
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState);window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         savedInstanceState?.getString("day")?.let { day=LocalDate.parse(it) }
         detail=savedInstanceState?.getString("detail")
-        val scroll=ScrollView(this).apply { tag="today_calls_scroll" };body=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
-        scroll.setOnApplyWindowInsetsListener { view,insets ->
-            val p=dp(16);view.setPadding(p,insets.systemWindowInsetTop+p,p,insets.systemWindowInsetBottom+p);insets
-        }
-        scroll.addView(body);setContentView(scroll)
+        body=CallUi.page(this);(body.parent as View).tag="today_calls_scroll"
         onBackPressedDispatcher.addCallback(this,object:OnBackPressedCallback(true) {
             override fun handleOnBackPressed() { if(detail!=null) { detail=null;render() } else finish() }
         })
@@ -42,97 +34,89 @@ class TodayCallsActivity:ComponentActivity() {
     override fun onResume() { super.onResume();load() }
     override fun onSaveInstanceState(out:Bundle) { super.onSaveInstanceState(out);out.putString("day",day.toString());detail?.let { out.putString("detail",it) } }
 
-    private fun dp(v:Int)=(v*resources.displayMetrics.density+0.5f).toInt()
-    private fun label(value:String,size:Float=18f,bold:Boolean=false)=TextView(this).apply {
-        text=value;textSize=size;setPadding(0,dp(6),0,dp(6));if(bold)setTypeface(typeface,Typeface.BOLD)
-    }
-    private fun button(value:String,action:()->Unit)=Button(this).apply { text=value;textSize=18f;isAllCaps=false;minHeight=dp(56);setOnClickListener { action() } }
-    private fun divider()=View(this).apply { setBackgroundColor(0x22000000);layoutParams=LinearLayout.LayoutParams(-1,dp(1)).apply { topMargin=dp(8);bottomMargin=dp(8) } }
-    private fun time(ms:Long?)=ms?.let { DateTimeFormatter.ofPattern("HH:mm").format(Instant.ofEpochMilli(it).atZone(CallRecordStore.KST)) } ?: "시각 미상"
-    private fun dateTitle(d:LocalDate)=DateTimeFormatter.ofPattern("M월 d일 (E)",Locale.KOREAN).format(d)+when(d) { today -> " · 오늘";today.minusDays(1) -> " · 어제";else -> "" }
-
     private fun load() {
         val target=day
         lifecycleScope.launch {
             val result=runCatching { withContext(Dispatchers.IO) {
-                CallRecordStore(CallPipelineStartup.storage(this@TodayCallsActivity)).use { it.day(target) to it.dueItems(today) }
+                CallRecordStore(CallPipelineStartup.storage(this@TodayCallsActivity)).use { it.day(target) to it.dueItems(CallUi.today()) }
             } }
             if(isFinishing||isDestroyed||target!=day)return@launch
             result.onSuccess { (c,d) -> calls=c;due=d;render() }
-            result.onFailure { body.removeAllViews();body.addView(label("저장된 통화를 읽지 못했어요. 잠시 후 다시 열어 주세요.")) }
+            result.onFailure { body.removeAllViews();body.addView(CallUi.text(this@TodayCallsActivity,"저장된 통화를 읽지 못했어요. 잠시 후 다시 열어주세요.")) }
         }
     }
+    private fun go(d:LocalDate) { day=d;detail=null;load() }
 
     private fun render() {
         body.removeAllViews()
         val record=detail?.let { id -> calls.firstOrNull { it.recordId==id } }
         if(record!=null) { renderDetail(record);return }
         detail=null
-        body.addView(label("오늘의 통화",26f,true))
-        val header=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL;gravity=android.view.Gravity.CENTER_VERTICAL;tag="today_calls_date" }
-        header.addView(button("◀") { day=day.minusDays(1);load() }.apply { contentDescription="전날" },LinearLayout.LayoutParams(dp(64),-2))
-        header.addView(label(dateTitle(day),20f,true).apply { gravity=android.view.Gravity.CENTER },LinearLayout.LayoutParams(0,-2,1f))
-        header.addView(button("▶") { day=day.plusDays(1);load() }.apply { contentDescription="다음날";isEnabled=day<today },LinearLayout.LayoutParams(dp(64),-2))
-        body.addView(header)
+        body.addView(CallUi.title(this,"${CallUi.dayWord(day)}의 통화"))
+        body.addView(CallUi.text(this,CallUi.date(day),CallUi.SUMMARY,color=CallUi.SUBTLE).apply { tag="today_calls_date" })
+        val nav=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
+        val half={ LinearLayout.LayoutParams(0,-2,1f).apply { marginEnd=CallUi.dp(this@TodayCallsActivity,6) } }
+        nav.addView(CallUi.button(this,"◀ 전날") { go(day.minusDays(1)) }.apply { contentDescription="전날 통화 보기" },half())
+        if(day!=CallUi.today()) nav.addView(CallUi.button(this,"오늘로") { go(CallUi.today()) },half())
+        nav.addView(CallUi.button(this,"다음날 ▶") { go(day.plusDays(1)) }.apply { contentDescription="다음날 통화 보기";isEnabled=day<CallUi.today() },LinearLayout.LayoutParams(0,-2,1f))
+        body.addView(nav)
 
-        body.addView(label("오늘 할 일",22f,true))
-        if(due.isEmpty()) body.addView(label("기한이 오늘이거나 지난 할 일이 없어요."))
-        due.forEach { item ->
-            val late=item.due<today.toString()
-            body.addView(label("• ${item.title}\n   ${if(late) "기한 지남 · " else "오늘까지 · "}${item.due}${if(item.status=="needs_confirmation") " · 끝났는지 확인 필요" else ""}"))
+        if(day==CallUi.today()) {
+            body.addView(CallUi.heading(this,"오늘 할 일"))
+            if(due.isEmpty()) body.addView(CallUi.text(this,"오늘까지 해야 할 일이 없어요."))
+            due.take(5).forEach { item ->
+                val late=CallUi.overdue(item.due)
+                body.addView(CallUi.text(this,"• ${item.title} — ${CallUi.dueWords(item.due)}"+(if(item.status=="needs_confirmation") " (확인 필요)" else ""),
+                    CallUi.BODY,late,if(late) CallUi.WARN else CallUi.INK))
+            }
+            if(due.size>5) body.addView(CallUi.text(this,"외 ${due.size-5}개",CallUi.SMALL,color=CallUi.SUBTLE))
+            body.addView(CallUi.button(this,"할 일 전체 보기") { startActivity(Intent(this,CallTasksActivity::class.java)) })
         }
-        body.addView(divider())
-        body.addView(label("통화 ${calls.size}건",22f,true))
-        if(calls.isEmpty()) body.addView(label("이 날짜에 정리된 통화가 없어요."))
+
+        body.addView(CallUi.heading(this,"통화 ${calls.size}건"))
+        if(calls.isEmpty()) body.addView(CallUi.text(this,"이 날짜에 정리된 통화가 없어요."))
         calls.forEach { c ->
-            val card=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL;isClickable=true;setPadding(0,dp(4),0,dp(4));tag="call_${c.recordId}" }
-            card.addView(label("${time(c.startedMs)} · ${c.displayName}",20f,true))
-            card.addView(label(c.summary ?: stateText(c.state,c.error)).apply { maxLines=3;ellipsize=android.text.TextUtils.TruncateAt.END })
-            c.analysis?.promises?.forEach { card.addView(label("약속: ${promiseLine(it)}")) }
+            val card=CallUi.card(this,warn=c.state==CallRecordStore.FAILED).apply { isClickable=true;tag="call_${c.recordId}";contentDescription="${c.displayName} 통화 자세히 보기" }
+            card.addView(CallUi.text(this,"${CallUi.time(c.startedMs)}  ${c.displayName}",CallUi.HEADING,true))
+            if(c.summary!=null) card.addView(CallUi.text(this,c.summary,CallUi.SUMMARY).apply { maxLines=3;ellipsize=android.text.TextUtils.TruncateAt.END })
+            else card.addView(CallUi.text(this,CallUi.state(c.state),CallUi.SUMMARY,true,if(c.state==CallRecordStore.FAILED) CallUi.WARN else CallUi.SUBTLE))
+            c.analysis?.promises?.take(3)?.forEach { card.addView(CallUi.text(this,"🤝 약속: ${promiseLine(it)}",CallUi.BODY)) }
+            card.addView(CallUi.text(this,"눌러서 자세히 보기 ›",CallUi.SMALL,color=CallUi.ACCENT))
             card.setOnClickListener { detail=c.recordId;render() }
-            body.addView(card);body.addView(divider())
+            body.addView(card)
         }
-        body.addView(button("통화 정리 설정") { startActivity(Intent(this,CallSettingsActivity::class.java)) })
     }
 
-    private fun promiseLine(p:ClaudeCallAnalysis.Promise)=p.text+(p.due?.let { " ($it)" } ?: "")+when(p.owner) { "me" -> " · 내가";"them" -> " · 상대가";else -> "" }
-
-    private fun stateText(state:String,error:String?)=when(state) {
-        CallRecordStore.TRANSCRIBED -> "분석 대기"
-        CallRecordStore.WAITING_KEY -> "API 키 필요"
-        CallRecordStore.WAITING_CONSENT -> "동의 필요"
-        CallRecordStore.FAILED -> "실패: 다시 시도"+(error?.let { " ($it)" } ?: "")
-        else -> ""
-    }
+    private fun promiseLine(p:ClaudeCallAnalysis.Promise)=p.text+(p.due?.let { " (${CallUi.dueWords(it)})" } ?: "")+when(p.owner) { "me" -> " · 내가 할 일";"them" -> " · 상대가 할 일";else -> "" }
 
     private fun renderDetail(c:CallRecord) {
-        body.addView(button("← 목록") { detail=null;render() })
-        body.addView(label("${time(c.startedMs)} · ${c.displayName}",24f,true))
-        body.addView(label("${dateTitle(CallRecordStore.kstDay(c.dayMs))} · ${c.durationMs/60000}분 ${(c.durationMs/1000)%60}초"))
+        body.addView(CallUi.button(this,"← 통화 목록으로") { detail=null;render() })
+        body.addView(CallUi.title(this,c.displayName))
+        body.addView(CallUi.text(this,"${CallUi.date(CallRecordStore.kstDay(c.dayMs))} ${CallUi.time(c.startedMs)} · 통화 ${CallUi.duration(c.durationMs)}",CallUi.BODY,color=CallUi.SUBTLE))
         if(c.state!=CallRecordStore.ANALYZED) {
-            body.addView(label(stateText(c.state,c.error),20f,true))
+            body.addView(CallUi.text(this,CallUi.state(c.state),CallUi.SUMMARY,true,if(c.state==CallRecordStore.FAILED) CallUi.WARN else CallUi.INK))
             when(c.state) {
-                CallRecordStore.FAILED -> body.addView(button("다시 시도") { retry(c.recordId) })
-                CallRecordStore.WAITING_KEY,CallRecordStore.WAITING_CONSENT -> body.addView(button("통화 정리 설정 열기") { startActivity(Intent(this,CallSettingsActivity::class.java)) })
+                CallRecordStore.FAILED -> body.addView(CallUi.bigButton(this,"","다시 정리하기") { retry(c.recordId) })
+                CallRecordStore.WAITING_KEY,CallRecordStore.WAITING_CONSENT -> body.addView(CallUi.bigButton(this,"⚙️","설정 열기") { startActivity(Intent(this,CallSettingsActivity::class.java)) })
             }
         }
         val a=c.analysis
         if(a!=null) {
-            body.addView(label("요약",20f,true));body.addView(label(a.summary))
-            if(a.keyPoints.isNotEmpty()) { body.addView(label("핵심 내용",20f,true));a.keyPoints.forEach { body.addView(label("• $it")) } }
+            body.addView(CallUi.heading(this,"요약"));body.addView(CallUi.text(this,a.summary,CallUi.SUMMARY))
+            if(a.keyPoints.isNotEmpty()) { body.addView(CallUi.heading(this,"중요한 내용"));a.keyPoints.forEach { body.addView(CallUi.text(this,"• $it")) } }
             if(a.promises.isNotEmpty()) {
-                body.addView(label("약속",20f,true))
-                a.promises.forEach { body.addView(label("• ${promiseLine(it)}\n   “${it.quote}”")) }
+                body.addView(CallUi.heading(this,"약속"))
+                a.promises.forEach { body.addView(CallUi.text(this,"🤝 ${promiseLine(it)}",CallUi.BODY,true));body.addView(CallUi.text(this,"“${it.quote}”",CallUi.SMALL,color=CallUi.SUBTLE)) }
             }
             val done=c.applied.filter { it.applied }
             if(done.isNotEmpty()) {
-                body.addView(label("할 일",20f,true))
-                done.forEach { t -> body.addView(label("• "+when(t.op) { "create" -> "새 할 일";"update" -> "수정";else -> "완료 확인 필요" }+": ${t.title}"+(t.due?.let { " ($it)" } ?: ""))) }
+                body.addView(CallUi.heading(this,"할 일 목록에 반영한 것"))
+                done.forEach { t -> body.addView(CallUi.text(this,"• "+when(t.op) { "create" -> "새 할 일";"update" -> "바뀐 할 일";else -> "끝났는지 확인 필요" }+": ${t.title}"+(t.due?.takeIf{it.isNotBlank()}?.let { " (${CallUi.dueWords(it)})" } ?: ""))) }
             }
         }
         if(c.transcript.isNotBlank()) {
-            val full=label(c.transcript).apply { visibility=View.GONE;setTextIsSelectable(false) }
-            body.addView(button("전체 자막 보기") { full.visibility=if(full.visibility==View.GONE) View.VISIBLE else View.GONE }.apply { tag="toggle_transcript" })
+            val full=CallUi.text(this,c.transcript,CallUi.BODY).apply { visibility=View.GONE }
+            body.addView(CallUi.button(this,"통화 내용 전체 보기") { full.visibility=if(full.visibility==View.GONE) View.VISIBLE else View.GONE }.apply { tag="toggle_transcript" })
             body.addView(full)
         }
     }
@@ -143,7 +127,7 @@ class TodayCallsActivity:ComponentActivity() {
                 runCatching { CallRecordStore(CallPipelineStartup.storage(this@TodayCallsActivity)).use { it.setState(id,CallRecordStore.TRANSCRIBED) } }
                 runCatching { CallPipelineStartup.enqueueAnalysis(this@TodayCallsActivity) }
             }
-            Toast.makeText(this@TodayCallsActivity,"다시 분석을 요청했어요.",Toast.LENGTH_SHORT).show();load()
+            Toast.makeText(this@TodayCallsActivity,"다시 정리할게요. 잠시만 기다려 주세요.",Toast.LENGTH_SHORT).show();load()
         }
     }
 }

@@ -34,6 +34,7 @@ internal data class CallRecord(
 }
 
 /** An open workflow item shown in "오늘 할 일". */
+internal data class OpenItem(val id:String,val title:String,val due:String,val status:String,val revision:Long,val edition:String,val counterpart:String?)
 internal data class CallTodoItem(val id:String,val title:String,val due:String,val status:String,val revision:Long)
 
 internal class CallRecordStore(context:Context,private val clock:()->Long=System::currentTimeMillis):AutoCloseable {
@@ -157,6 +158,11 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
     fun dueItems(today:LocalDate):List<CallTodoItem> =rows("SELECT id,title,due_text,status,revision FROM workflow_items WHERE status!='done' AND due_text!='' ORDER BY due_text,created_ms")
         .filter { val d=it.str("due_text")!!.trim();d.matches(ISO_DATE) && d<=today.toString() }
         .map { CallTodoItem(it.str("id")!!,it.str("title")!!,it.str("due_text")!!.trim(),it.str("status")!!,it.long("revision")!!) }
+    /** Every open to-do (any source), newest first, with the latest call counterpart of its recording. */
+    fun openItems():List<OpenItem> =rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.edition,
+        (SELECT c.counterpart FROM call_records c WHERE c.recording_id=i.recording_id ORDER BY c.created_ms DESC LIMIT 1) AS counterpart
+        FROM workflow_items i WHERE i.status!='done' AND i.kind='TODO' ORDER BY i.created_ms DESC LIMIT 300""")
+        .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),it.str("counterpart")) }
     /** AI-created items created during one KST day. */
     fun newTaskCount(day:LocalDate):Int=(rows("SELECT COUNT(*) AS n FROM call_task_bindings WHERE created_ms>=CAST(? AS INTEGER) AND created_ms<CAST(? AS INTEGER)",startOf(day),startOf(day.plusDays(1))).single().long("n") ?: 0).toInt()
 }

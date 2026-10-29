@@ -171,7 +171,7 @@ open class MainActivity : ComponentActivity() {
         val accountSavedState=savedInstanceState?.takeIf { !it.containsKey("storageScope") || it.getString("storageScope")==storageScope }
         val savedUi=(storageContext ?: this).getSharedPreferences("local_ui_v2",MODE_PRIVATE)
         tab = (accountSavedState?.getInt("tab", 0) ?: savedUi.getInt("tab",0)).coerceIn(0, 3)
-        settingsShowing = accountSavedState?.getBoolean("settingsShowing", false) ?: false
+        settingsShowing = accountSavedState?.getBoolean("settingsShowing", false) ?: intent.getBooleanExtra("open_settings", false)
         requestedReportDate = intentDate(intent)
         val debugDemo = intent.getBooleanExtra("demo", false) &&
             (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
@@ -197,6 +197,7 @@ open class MainActivity : ComponentActivity() {
             override fun handleOnBackPressed() {
                 when {
                     launchIntro?.isShowing == true -> launchIntro?.finish()
+                    settingsShowing && intent.getBooleanExtra("open_settings", false) -> finish()
                     settingsShowing -> { settingsShowing = false; buildShell() }
                     tab != 0 -> { tab = 0; buildShell() }
                     selectedCallDate == null -> returnToSelectedDate()
