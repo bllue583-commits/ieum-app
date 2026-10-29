@@ -1,0 +1,60 @@
+{
+  "schema": "ieum.daily-report.v1",
+  "reportId": "35f7d0973b2c584633572611359db587885311785347b4a888a4e09a7ba0f286",
+  "deviceId": "7b6482eec97a0eac212ab1f989822426992347fd71b7e56c9a24e4dc5adbdd01",
+  "reportDate": "2026-10-30",
+  "zone": "Asia/Seoul",
+  "range": {
+    "fromMs": 1793199600000,
+    "untilMs": 1793286000000
+  },
+  "revision": 1,
+  "generatedAtMs": 1793306820000,
+  "cases": [
+    {
+      "caseId": "case_public_1",
+      "label": "공개 시험 업무",
+      "summary": "견적서 금요일까지 발송 요청, 계약서 초안 확인 요청.",
+      "cumulativeSummary": "지난 통화: 견적 요청 접수\n견적서 금요일까지 발송 요청, 계약서 초안 확인 요청.",
+      "newTasks": [
+        {
+          "title": "계약서 초안 확인",
+          "due": null,
+          "status": "needs_confirmation"
+        }
+      ],
+      "changedTasks": [
+        {
+          "taskId": "task_quote",
+          "title": "견적서 발송",
+          "due": "2026-10-30",
+          "status": "open"
+        }
+      ],
+      "needsConfirmation": [
+        {
+          "taskId": null,
+          "title": "계약서 초안 확인",
+          "reason": "DONE_CLAIMED"
+        }
+      ],
+      "transcriptIds": [
+        "c4cf4251f551f82726425f794c8842d6f8da5751896efb4d70832f6d9f780506"
+      ]
+    }
+  ],
+  "pending": {
+    "untranscribed": 0,
+    "awaitingAnalysis": 0,
+    "failed": 0,
+    "unknownTime": 0,
+    "deviceStatusAtMs": 1793300400000
+  },
+  "weekly": {
+    "fromMs": 1792681200000,
+    "untilMs": 1793286000000,
+    "summary": "공개 시험 업무: 견적·계약 진행."
+  },
+  "digest": "7f3a09bdf5e475c89e611b731faf225acacaf5016987c9be722f62c0d4eb5229",
+  "signature": "MEUCIB6W3fXspdcq0O+uxRplhyEBIbkr78cZsQc1uEgYZ2f7AiEAvKOScv27kqZ50jq+Xn+LU/Q/8A5r9RawFRPchOxn4Qk="
+}

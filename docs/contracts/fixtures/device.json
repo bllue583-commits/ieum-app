@@ -1,0 +1,8 @@
+{
+  "schema": "ieum.device.v1",
+  "deviceId": "7b6482eec97a0eac212ab1f989822426992347fd71b7e56c9a24e4dc5adbdd01",
+  "signingKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEKTbuiL9vZ+DPgizcRG24hrKvZ/OTHo9RYQcdAqf3bf1CwyQdCPsFuhHFUR+DMW7ClfbxGXAqKovDmtV7UbwVNQ==",
+  "encryptionKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEmeCSsPy5jbsfhaKQ2Mc0pEpaE+10zNJwWi5LGa0ru+IPBlIkFFzpW2wlzoqKCBclXvgThmdUiXtma5KM1lAZLQ==",
+  "label": "public fixture device",
+  "registeredAtMs": 1793260000000
+}

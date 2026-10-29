@@ -1,0 +1,98 @@
+name: ci
+
+# Build and test on GitHub-hosted runners. The development workspace has no access to the
+# Gradle/Maven/Android repositories, so this is where Kotlin compiles and JVM tests run.
+on:
+  push:
+    branches: ['feature/**', 'main']
+    paths: ['android/**', 'worker/**', 'docs/contracts/**', 'tools/**', '.github/workflows/android-ci.yml']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Node tests
+        working-directory: worker
+        run: |
+          if [ -f package-lock.json ]; then npm ci --ignore-scripts; fi
+          node --test tests/*.test.mjs 2>&1 | tee node-test.log
+          grep -E '^not ok' node-test.log | sed 's/^/::error title=node test::/' || true
+          test "${PIPESTATUS[0]}" = 0
+
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      IEUM_SKIP_ANDROID_NATIVE: '1'
+      ROBOLECTRIC_JAR_URL: https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented/15-robolectric-13954326-i7/android-all-instrumented-15-robolectric-13954326-i7.jar
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '17'}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-36 build-tools;35.0.0'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            gradle-user/caches
+            gradle-user/wrapper
+            robolectric-jar
+          key: gradle-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+      - name: Prepare Robolectric runtime
+        run: |
+          mkdir -p robolectric-jar
+          [ -f robolectric-jar/android-all.jar ] || curl -fsSL "$ROBOLECTRIC_JAR_URL" -o robolectric-jar/android-all.jar
+          python3 tools/prepare_host_tests.py robolectric-jar/android-all.jar
+      - name: JVM tests and lint
+        id: gradle
+        run: |
+          export ANDROID_SDK_ROOT="$ANDROID_HOME" IEUM_NODE_BINARY="$(command -v node)"
+          python3 run_gradle.py --log ci-gradle.log :core:test :app:testDebugUnitTest :app:lintDebug
+      - name: Summarize results
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import glob, os, xml.etree.ElementTree as ET
+          tests = fails = skips = 0; lines = []
+          for path in glob.glob('android/**/build/test-results/**/*.xml', recursive=True):
+              root = ET.parse(path).getroot()
+              for case in root.iter('testcase'):
+                  tests += 1
+                  if case.find('skipped') is not None: skips += 1
+                  for bad in list(case.findall('failure')) + list(case.findall('error')):
+                      fails += 1
+                      msg = (bad.get('message') or '').replace('\n', ' ')[:300]
+                      lines.append(f"{case.get('classname')}.{case.get('name')}: {msg}")
+          print(f"JVM tests: {tests}, failed: {fails}, skipped: {skips}")
+          for l in lines[:50]: print(f"::error title=jvm test::{l}")
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write(f"JVM tests: {tests}, failed: {fails}, skipped: {skips}\n\n" + "\n".join('- ' + l for l in lines[:50]) + "\n")
+          EOF
+          if [ -f evidence/ci-gradle.log ]; then
+            grep -E '^e: |error:|FAILED|BUILD (SUCCESSFUL|FAILED)' evidence/ci-gradle.log | head -60 | while IFS= read -r line; do echo "::warning title=gradle::${line:0:400}"; done
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-test-results
+          retention-days: 7
+          path: |
+            evidence/ci-gradle.log
+            android/**/build/test-results/**/*.xml
+            android/app/build/reports/lint-results-debug.*

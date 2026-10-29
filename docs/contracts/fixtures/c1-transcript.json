@@ -1,0 +1,79 @@
+{
+  "schema": "ieum.transcript.v1",
+  "transcriptId": "c4cf4251f551f82726425f794c8842d6f8da5751896efb4d70832f6d9f780506",
+  "deviceId": "7b6482eec97a0eac212ab1f989822426992347fd71b7e56c9a24e4dc5adbdd01",
+  "createdAtMs": 1793264400000,
+  "source": {
+    "recordingId": "public_fixture_1",
+    "sourceVersion": 1,
+    "audioSha256": "86bffb6b1e68a6688f7b79ffcb7d38d1ceed4c0acbe9a6fc986bb01be4f8fcbd",
+    "durationMs": 8000,
+    "originalStartedAtMs": 1793260800000
+  },
+  "stt": {
+    "engine": "WHISPER_CPP_LOCAL",
+    "model": "ggml-large-v3-turbo-q5_0",
+    "modelSha256": "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+    "runtimeSha256": "44bc2a7dc8290c0db633114d2bdab91705996e0636443c9bc60e67eb7f663a63",
+    "language": "ko",
+    "vadApplied": false,
+    "segments": [
+      {
+        "startMs": 0,
+        "endMs": 2400,
+        "text": "안녕하세요, 공개 합성 시험 통화입니다."
+      },
+      {
+        "startMs": 2400,
+        "endMs": 5200,
+        "text": " 견적서는 금요일까지 보내주세요."
+      },
+      {
+        "startMs": 5200,
+        "endMs": 8000,
+        "text": " 계약서 초안도 확인 부탁드립니다."
+      }
+    ],
+    "text": "안녕하세요, 공개 합성 시험 통화입니다. 견적서는 금요일까지 보내주세요. 계약서 초안도 확인 부탁드립니다.",
+    "textSha256": "2ea49acab9c13b064ab6693234c7b36f7acf7b7fbd64fc41be88ec2795bf8321"
+  },
+  "business": {
+    "boardRevision": 7,
+    "linkedCaseId": "case_public_1",
+    "cases": [
+      {
+        "caseId": "case_public_1",
+        "label": "공개 시험 업무",
+        "summary": "지난 통화: 견적 요청 접수",
+        "revision": 3,
+        "tasks": [
+          {
+            "taskId": "task_quote",
+            "title": "견적서 발송",
+            "assignee": "확인 필요",
+            "due": null,
+            "status": "open",
+            "manualFields": []
+          },
+          {
+            "taskId": "task_manual",
+            "title": "현장 방문",
+            "assignee": "",
+            "due": "2026-11-03",
+            "status": "done",
+            "manualFields": [
+              "status"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "policy": {
+    "epoch": 2,
+    "consentEpoch": 1,
+    "exclusionChecked": true
+  },
+  "digest": "44e844a6c832f471ad29f6f8f6ab6029c46241222323060c26c0bff7b7530bc9",
+  "signature": "MEYCIQD9jpP3g62reIk8tDBUBazSlagWXjq+nd4oupujrKnBTAIhAMtWTg8yLjRnlJbwSKcwe7Ynx5bbtQDwqA18H7V7Iye3"
+}

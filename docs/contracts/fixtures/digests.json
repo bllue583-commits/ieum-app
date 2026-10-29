@@ -1,0 +1,18 @@
+{
+  "c0": {
+    "digest": "33e13660c6d04fd6b9f609edbac8ee59f96c9b5cadd963386c44497ecb872056",
+    "canonicalUnsignedSha256": "26f504571ccdbf15f0227807f7d1c9675553d76b4ca34c0b4e0bd7de32f900f3"
+  },
+  "c1": {
+    "digest": "44e844a6c832f471ad29f6f8f6ab6029c46241222323060c26c0bff7b7530bc9",
+    "canonicalUnsignedSha256": "37e0b8d45eaa82bb5b5777697b0e250363c2e41a370aa27d7e0cbc01ea778c16"
+  },
+  "c2": {
+    "digest": "47b8e565a3538d5da3e89ae703aff01e1109a2d69596362d49a5e79856a3cce9",
+    "canonicalUnsignedSha256": "9cb3eb20a878467b524b169e55c0c6643b5b9bf723ee4d0ae8977daff432310f"
+  },
+  "c3": {
+    "digest": "7f3a09bdf5e475c89e611b731faf225acacaf5016987c9be722f62c0d4eb5229",
+    "canonicalUnsignedSha256": "88cca15363aedce17b00331d3f5d89bbc4b8874a1f60f52e368abc816ca7f662"
+  }
+}
