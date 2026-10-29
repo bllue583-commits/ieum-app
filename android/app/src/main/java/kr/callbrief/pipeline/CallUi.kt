@@ -47,6 +47,7 @@ internal object CallUi {
     }
     fun text(a:Activity,value:String,size:Float=BODY,bold:Boolean=false,color:Int=INK)=TextView(a).apply {
         text=value;textSize=size;setTextColor(color);setLineSpacing(0f,1.2f);setPadding(0,dp(a,6),0,dp(a,6))
+        if(android.os.Build.VERSION.SDK_INT>=33)lineBreakWordStyle=android.graphics.text.LineBreakConfig.LINE_BREAK_WORD_STYLE_PHRASE // wrap Korean at word boundaries
         if(bold)setTypeface(typeface,Typeface.BOLD)
     }
     fun title(a:Activity,value:String)=text(a,value,TITLE,true)
