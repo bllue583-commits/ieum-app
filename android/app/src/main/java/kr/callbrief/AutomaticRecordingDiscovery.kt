@@ -84,6 +84,7 @@ internal object AutomaticRecordingDiscovery {
                 active(session)
                 try {if(cancelled())session.cancel();scan=session.cycle()}finally{active(null)}
             }
+            if(!cancelled())runCatching{kr.callbrief.pipeline.CallTranscriptionWork.enqueue(context)} // new recordings -> transcribe soon
             blocked(context,binding,stopped)?.let{return it}
             val result=if(binding.nativeScope.isBlank())outcome("WAITING_AUTH","NO_PREVIOUS_VERIFIED_ACCOUNT")
                 else AndroidAutomationRuntime.reconcileDiscovery(context,binding.owner,binding.epoch,binding.nativeScope,cancelled)

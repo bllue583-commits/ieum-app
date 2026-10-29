@@ -10,7 +10,7 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
     data class Key(val recordingId:String,val sourceVersion:Long,val audioSha:String)
     /** A current recording version with encrypted audio in the vault. */
     data class Candidate(val key:Key,val displayName:String,val uri:String,val mime:String,val startedAtMs:Long?,
-                         val archived:Boolean,val grantActive:Boolean)
+                         val archived:Boolean,val grantActive:Boolean,val bytes:Long=0,val modifiedMs:Long=0)
     data class Job(val candidate:Candidate,val state:String,val reason:String,val attempts:Int)
 
     private val db=AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql"))
@@ -29,14 +29,15 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
     }
 
     private val select="""SELECT r.recording_id,r.source_version,v.audio_sha256,r.display_name,r.mime_type,r.original_started_at_ms,
-        l.actual_uri,a.archived,g.active AS grant_active
+        r.byte_count,r.modified_at_ms,l.actual_uri,a.archived,g.active AS grant_active
         FROM recordings r JOIN source_versions v ON v.recording_id=r.recording_id AND v.source_version=r.source_version
         JOIN local_files l ON l.recording_id=r.recording_id JOIN local_visibility a ON a.recording_id=r.recording_id
         JOIN folder_grants g ON g.grant_id=r.grant_id
         JOIN vault2_refs q ON q.recording_id=r.recording_id AND q.source_version=r.source_version AND q.owner_key=r.owner_key AND q.plaintext_sha256=v.audio_sha256"""
     private fun candidate(r:Map<String,Any?>)=Candidate(Key(r["recording_id"].toString(),(r["source_version"] as Number).toLong(),r["audio_sha256"].toString()),
         r["display_name"].toString(),r["actual_uri"].toString(),r["mime_type"].toString(),(r["original_started_at_ms"] as Number?)?.toLong(),
-        (r["archived"] as Number).toInt()==1,(r["grant_active"] as Number).toInt()==1)
+        (r["archived"] as Number).toInt()==1,(r["grant_active"] as Number).toInt()==1,
+        (r["byte_count"] as Number?)?.toLong() ?: 0,(r["modified_at_ms"] as Number?)?.toLong() ?: 0)
 
     /** The owner's current recording versions with encrypted audio, newest first. */
     fun candidates():List<Candidate> = db.query("$select WHERE r.owner_key=? AND r.presence='PRESENT' ORDER BY coalesce(r.original_started_at_ms,r.modified_at_ms,0) DESC",
