@@ -1,0 +1,95 @@
+name: real-device-test
+
+# Runs CallPipelineDeviceTest on a physical Samsung flagship in Firebase Test Lab (public audio only).
+# Keyless: GitHub OIDC -> Workload Identity Federation. Repo variables (not secrets, just IDs):
+# GCP_PROJECT, GCP_WIF_PROVIDER, GCP_SERVICE_ACCOUNT.
+on:
+  workflow_dispatch:
+    inputs:
+      repeat: {description: 'How many times the 7.6 s Korean sample is repeated', default: '8'}
+      model: {description: 'Test Lab model id (empty = newest Galaxy S)', default: ''}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  firebase:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      TINY_MODEL_URL: https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '17'}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-36 build-tools;35.0.0 ndk;28.2.13676358 cmake;3.22.1'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            gradle-user/caches
+            gradle-user/wrapper
+            models
+          key: device-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+      - name: Build APKs
+        run: |
+          mkdir -p models
+          [ -f models/ggml-tiny-q5_1.bin ] || curl -fsSL "$TINY_MODEL_URL" -o models/ggml-tiny-q5_1.bin
+          export ANDROID_SDK_ROOT="$ANDROID_HOME" IEUM_NODE_BINARY="$(command -v node)" \
+            IEUM_ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/28.2.13676358" IEUM_CMAKE_BINARY="$ANDROID_HOME/cmake/3.22.1/bin/cmake" \
+            IEUM_ANDROID_WHISPER_MODEL="$PWD/models/ggml-tiny-q5_1.bin"
+          python3 run_gradle.py --log device-build.log :app:assembleDebug :app:assembleDebugAndroidTest
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+        with: {project_id: '${{ vars.GCP_PROJECT }}'}
+      - name: Pick device
+        id: device
+        run: |
+          gcloud firebase test android models list --filter='form=PHYSICAL AND brand=samsung' \
+            --format='csv[no-heading](id,name,supportedVersionIds.list(separator=";"))' | tee models.csv
+          want='${{ inputs.model }}'
+          python3 - "$want" <<'EOF' >> "$GITHUB_OUTPUT"
+          import csv, re, sys
+          rows = [r for r in csv.reader(open('models.csv')) if len(r) == 3]
+          want = sys.argv[1]
+          def rank(r):
+              m = re.search(r'Galaxy S(\d+)', r[1]); return (int(m.group(1)) if m else 0, 'Ultra' in r[1])
+          pick = next((r for r in rows if r[0] == want), None) if want else max(rows, key=rank)
+          print(f"model={pick[0]}"); print(f"version={max(pick[2].split(';'), key=int)}"); print(f"name={pick[1]}")
+          EOF
+      - name: Run on ${{ steps.device.outputs.name }}
+        run: |
+          dir="ieum-${GITHUB_RUN_ID}"
+          set +e
+          gcloud firebase test android run --type instrumentation \
+            --app android/app/build/outputs/apk/debug/app-debug.apk \
+            --test android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
+            --device "model=${{ steps.device.outputs.model }},version=${{ steps.device.outputs.version }}" \
+            --test-targets 'class kr.callbrief.pipeline.CallPipelineDeviceTest' \
+            --environment-variables 'repeat=${{ inputs.repeat }}' \
+            --directories-to-pull /sdcard/Android/data/kr.callbrief/files/device-test \
+            --timeout 45m --results-dir "$dir" --format=json > ftl.json 2> ftl.log
+          status=$?; set -e
+          cat ftl.log | tail -20; cat ftl.json
+          bucket=$(grep -o 'gs://[^/]*' ftl.log | head -1)
+          mkdir -p device-results && gcloud storage cp -r "$bucket/$dir" device-results/ || true
+          echo "::notice title=device::${{ steps.device.outputs.name }} (${{ steps.device.outputs.model }}/${{ steps.device.outputs.version }}) exit=$status"
+          find device-results -name '*.json' -path '*device-test*' -exec sh -c 'echo "::notice title=$(basename $1)::$(tr -d "\n" < $1 | cut -c1-900)"' _ {} \;
+          exit $status
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: real-device-results
+          retention-days: 14
+          path: |
+            device-results/
+            ftl.json
+            ftl.log
+            models.csv
