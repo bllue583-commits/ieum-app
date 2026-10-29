@@ -41,7 +41,8 @@ internal object CallUi {
         if(!allowCaptureForTests)a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
         val column=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
         val scroll=ScrollView(a).apply { setBackgroundColor(PAGE);isFillViewport=true;tag="page_scroll" }
-        scroll.setOnApplyWindowInsetsListener { v,insets -> val p=dp(a,18);v.setPadding(p,insets.systemWindowInsetTop+p,p,insets.systemWindowInsetBottom+p);insets }
+        val p=dp(a,18);scroll.setPadding(p,p,p,p)
+        scroll.setOnApplyWindowInsetsListener { v,insets -> v.setPadding(p+insets.systemWindowInsetLeft,insets.systemWindowInsetTop+p,p+insets.systemWindowInsetRight,insets.systemWindowInsetBottom+p);insets }
         scroll.addView(column);a.setContentView(scroll);return column
     }
     fun text(a:Activity,value:String,size:Float=BODY,bold:Boolean=false,color:Int=INK)=TextView(a).apply {

@@ -65,7 +65,7 @@ jobs:
           disk-size: 3G
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
           disable-animations: true
-          script: bash tools/run_device_test.sh
+          script: IEUM_REPEAT=1 bash tools/run_device_test.sh
       - name: Summarize
         if: always()
         run: |

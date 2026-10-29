@@ -63,8 +63,15 @@ class CallPipelineDeviceTest {
         val segments=decoded.chunks.flatMap{(offset,pcm)->WhisperCallTranscriber(AndroidWhisperEngine(storage),model).transcribe(file,pcm){false}
             .map{CallTranscript.Segment(it.startMs+offset,it.endMs+offset,it.text)}}
         val text=segments.joinToString(""){it.text}.trim();assertTrue(text.isNotEmpty())
-        val now=System.currentTimeMillis()
-        val t=CallTranscript("device-test-$now",1,"sha-$now",now-60_000,decoded.durationMs,
+        val now=System.currentTimeMillis();val recording="device-test-$now"
+        // A real call always has its imported recording row; seed a synthetic one (no audio file behind it).
+        kr.co.callsummary.core.android.AndroidSqlPort(storage,kr.callbrief.GeneralLocalStore.DATABASE,storage.assets.open("call_core_schema.sql")).use { p -> p.transaction {
+            p.execute("INSERT OR IGNORE INTO board_state(owner_key,revision) VALUES(?,0)",kr.callbrief.GeneralLocalStore.OWNER)
+            p.execute("INSERT OR IGNORE INTO folder_grants VALUES('device-test',?,'content://device-test/tree',1,1,1)",kr.callbrief.GeneralLocalStore.OWNER)
+            p.execute("INSERT INTO recordings(recording_id,owner_key,grant_id,document_id,display_name,mime_type,byte_count,first_seen_ms,last_seen_ms,source_seq,source_version,head_revision) VALUES(?,?,'device-test',?,?,'audio/mp4',10,0,0,1,1,1)",
+                recording,kr.callbrief.GeneralLocalStore.OWNER,recording,"통화 녹음 김민수_251029_101500.m4a");null
+        } }
+        val t=CallTranscript(recording,1,"sha-$now",now-60_000,decoded.durationMs,
             CallTranscriptionRunner.counterpart("통화 녹음 김민수_251029_101500.m4a"),text,segments,model.modelName,model.modelSha256,decoded.vadApplied)
         CallSinkImpl(context){}.onTranscript(t)
         val stored=CallRecordStore(storage).use{it.record(CallRecordStore.recordId(t))}
@@ -76,6 +83,8 @@ class CallPipelineDeviceTest {
             listOf(ClaudeCallAnalysis.Task("create",null,"김민수 님께 견적서 보내기",CallUi.today().toString(),quote))))}
         val after=CallRecordStore(storage).use{it.record(stored.recordId)!!}
         report("t3_pipeline",JSONObject().put("state",after.state).put("counterpart",after.displayName).put("openTasks",CallRecordStore(storage).use{it.openItems().size}).put("transcript",text.take(200)))
+        assertEquals(CallRecordStore.ANALYZED,after.state)
+        assertTrue("task not created",CallRecordStore(storage).use{it.openItems()}.any{it.title.contains("견적서")})
     }
 
     /** Samsung recordings are m4a/AAC at 44.1 kHz: MediaCodec decode, resample, transcribe. */
@@ -94,7 +103,7 @@ class CallPipelineDeviceTest {
             ActivityScenario.launch(cls).use { s ->
                 var ok=false
                 repeat(100){ if(!ok){ s.onActivity{a->ok=ready(a)};if(!ok)Thread.sleep(100) } }
-                inst.waitForIdleSync();Thread.sleep(500)
+                inst.waitForIdleSync();Thread.sleep(2000);inst.waitForIdleSync()
                 val bmp=inst.uiAutomation.takeScreenshot()
                 File(out,"$name.png").outputStream().use{bmp.compress(Bitmap.CompressFormat.PNG,100,it)}
                 shots.put(name,ok);assertTrue("$name did not render",ok)
