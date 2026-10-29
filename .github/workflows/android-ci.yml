@@ -5,7 +5,7 @@ name: ci
 on:
   push:
     branches: ['feature/**', 'main']
-    paths: ['android/**', 'worker/**', 'docs/contracts/**', 'tools/**', '.github/workflows/android-ci.yml']
+    paths: ['android/**', 'worker/**', 'tools/**', '.github/workflows/android-ci.yml']
   pull_request:
   workflow_dispatch:
 
