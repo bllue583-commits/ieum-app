@@ -114,7 +114,7 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
     override fun doWork():Result {
         val storage=AccountStorageContext.selected(applicationContext)
         val thermal=(applicationContext.getSystemService(Context.POWER_SERVICE) as? PowerManager)
-        val tooHot={ thermal!=null && thermal.currentThermalStatus>=PowerManager.THERMAL_STATUS_SEVERE }
+        val tooHot={ android.os.Build.VERSION.SDK_INT>=29 && thermal!=null && thermal.currentThermalStatus>=PowerManager.THERMAL_STATUS_SEVERE }
         if(tooHot())return Result.retry()
         val model=PipelineModelManager(storage)
         if(model.verifiedModelFile()==null){PipelineModelDownloadWork.enqueue(applicationContext);return Result.success()}
