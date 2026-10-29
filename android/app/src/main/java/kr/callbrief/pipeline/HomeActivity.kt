@@ -2,7 +2,6 @@ package kr.callbrief.pipeline
 
 import android.content.Intent
 import android.os.Bundle
-import android.view.WindowManager
 import android.widget.LinearLayout
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
@@ -21,7 +20,7 @@ class HomeActivity:ComponentActivity() {
     private lateinit var body:LinearLayout
 
     override fun onCreate(savedInstanceState:Bundle?) {
-        super.onCreate(savedInstanceState);window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        super.onCreate(savedInstanceState)
         body=CallUi.page(this)
         CallPipelineStartup.init(this)
     }

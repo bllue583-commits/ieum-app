@@ -1,7 +1,6 @@
 package kr.callbrief.pipeline
 
 import android.os.Bundle
-import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -18,7 +17,7 @@ class CallTasksActivity:ComponentActivity() {
     private var items:List<OpenItem> =emptyList()
 
     override fun onCreate(savedInstanceState:Bundle?) {
-        super.onCreate(savedInstanceState);window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        super.onCreate(savedInstanceState)
         body=CallUi.page(this)
     }
     override fun onResume() { super.onResume();load() }

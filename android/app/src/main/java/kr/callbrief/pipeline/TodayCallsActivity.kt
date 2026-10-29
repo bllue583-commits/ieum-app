@@ -3,7 +3,6 @@ package kr.callbrief.pipeline
 import android.content.Intent
 import android.os.Bundle
 import android.view.View
-import android.view.WindowManager
 import android.widget.*
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -23,7 +22,7 @@ class TodayCallsActivity:ComponentActivity() {
     private var due:List<CallTodoItem> =emptyList()
 
     override fun onCreate(savedInstanceState:Bundle?) {
-        super.onCreate(savedInstanceState);window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        super.onCreate(savedInstanceState)
         savedInstanceState?.getString("day")?.let { day=LocalDate.parse(it) }
         detail=savedInstanceState?.getString("detail")
         body=CallUi.page(this);(body.parent as View).tag="today_calls_scroll"

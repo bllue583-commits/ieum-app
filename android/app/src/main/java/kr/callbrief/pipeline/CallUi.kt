@@ -35,7 +35,10 @@ internal object CallUi {
     fun dp(a:Activity,v:Int)=(v*a.resources.displayMetrics.density+0.5f).toInt()
 
     /** A scrolling page with system-bar padding; returns the column to add views to. */
+    /** Device tests only: lets UiAutomation capture the screens. The app itself never sets it. */
+    @Volatile internal var allowCaptureForTests=false
     fun page(a:Activity):LinearLayout {
+        if(!allowCaptureForTests)a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
         val column=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
         val scroll=ScrollView(a).apply { setBackgroundColor(PAGE);isFillViewport=true;tag="page_scroll" }
         scroll.setOnApplyWindowInsetsListener { v,insets -> val p=dp(a,18);v.setPadding(p,insets.systemWindowInsetTop+p,p,insets.systemWindowInsetBottom+p);insets }

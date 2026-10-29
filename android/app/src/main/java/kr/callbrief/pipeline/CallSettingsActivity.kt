@@ -3,7 +3,6 @@ package kr.callbrief.pipeline
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
-import android.view.WindowManager
 import android.widget.*
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
@@ -20,7 +19,7 @@ class CallSettingsActivity:ComponentActivity() {
     private fun settings()=SecureSettings(CallPipelineStartup.storage(this))
 
     override fun onCreate(savedInstanceState:Bundle?) {
-        super.onCreate(savedInstanceState);window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        super.onCreate(savedInstanceState)
         body=CallUi.page(this)
     }
     override fun onResume() { super.onResume();refresh() }
