@@ -65,7 +65,8 @@ internal class PipelineModelManager(
     override val modelName:String get()=spec.name
     override val runtimeSha256:String get()=runtimePin() ?: ""
 
-    val directory:File get()=File(context.noBackupFilesDir,"pipeline-stt")
+    /** Device-level (not per account): one copy of the 574 MB model for the whole app. */
+    val directory:File get()=File(kr.callbrief.AutomationConnectionBindings.base(context).noBackupFilesDir,"pipeline-stt")
     val modelFile:File get()=File(directory,spec.fileName)
     val partFile:File get()=File(directory,spec.fileName+".part")
     private val markerFile:File get()=File(directory,spec.fileName+".verified")
@@ -159,7 +160,5 @@ internal class PipelineModelManager(
             Build.SUPPORTED_ABIS.firstOrNull{native.has(it)}?.let{native.getJSONObject(it).getString("sha256")}
         }.getOrNull()
 
-        /** Enqueue the one-time model download (Wi-Fi/unmetered, storage not low). Existing work is kept. */
-        fun schedule(context:Context)=PipelineModelDownloadWork.enqueue(context)
     }
 }
