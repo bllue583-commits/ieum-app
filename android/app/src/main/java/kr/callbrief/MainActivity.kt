@@ -166,6 +166,7 @@ open class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        kr.callbrief.pipeline.CallPipelineStartup.init(this)
         try { selectStorageScope() } catch(_:Exception) { storageContext=null }
         val accountSavedState=savedInstanceState?.takeIf { !it.containsKey("storageScope") || it.getString("storageScope")==storageScope }
         val savedUi=(storageContext ?: this).getSharedPreferences("local_ui_v2",MODE_PRIVATE)
@@ -412,6 +413,9 @@ open class MainActivity : ComponentActivity() {
             contentDescription = "초기 설정 열기"; setCompoundDrawablesWithIntrinsicBounds(lineIcon("gear"), null, null, null)
         }, LinearLayout.LayoutParams(dp(56), dp(56)))
         root.addView(header)
+        if (!demoMode) root.addView(button("오늘의 통화") { startActivity(Intent(this, kr.callbrief.pipeline.TodayCallsActivity::class.java)) }.apply {
+            tag = "today_calls"; textSize = 20f; setTypeface(typeface, Typeface.BOLD)
+        }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
         if(busy) root.addView(Button(this).apply {
             text="로컬 작업 중단";textSize=18f;minHeight=dp(56)
             setOnClickListener { requestLocalCancel() }
@@ -1086,6 +1090,8 @@ open class MainActivity : ComponentActivity() {
             })
             example.addView(button("합성 예시 닫고 실제 설정 보기") { closeDemo() }); return
         }
+        val calls=card();calls.addView(text("통화 정리",24f,true))
+        calls.addView(button("통화 정리 설정") { startActivity(Intent(this,kr.callbrief.pipeline.CallSettingsActivity::class.java)) }.apply { tag="call_settings" })
         val connections=card();connections.addView(text("계정과 연결",24f,true))
         connections.addView(text(runCatching { val v=GoogleConnectionSession.get(this).view();if(v.accountLabel.isBlank()) "Google 미연결 · 기기의 기존 기록" else "Google 계정: ${v.accountLabel}" }.getOrDefault("계정 정보 확인 필요")))
         connections.addView(button("Google 계정 관리") { openConnections() })
