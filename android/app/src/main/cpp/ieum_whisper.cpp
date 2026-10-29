@@ -12,6 +12,8 @@ static void quiet_log(enum ggml_log_level, const char *, void *) {}
 struct Run {
     std::atomic<bool> cancelled{false};
     std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + std::chrono::seconds(90);
+    Run() = default;
+    explicit Run(int seconds) : deadline(std::chrono::steady_clock::now() + std::chrono::seconds(seconds)) {}
 };
 static std::mutex runs_mutex;
 static std::unordered_map<jlong, std::shared_ptr<Run>> runs;
@@ -48,8 +50,8 @@ extern "C" JNIEXPORT void JNICALL Java_kr_callbrief_AndroidWhisperNative_cancel(
 extern "C" JNIEXPORT void JNICALL Java_kr_callbrief_AndroidWhisperNative_release(JNIEnv *, jobject, jlong id) {
     std::lock_guard<std::mutex> guard(runs_mutex); runs.erase(id);
 }
-extern "C" JNIEXPORT jbyteArray JNICALL Java_kr_callbrief_AndroidWhisperNative_transcribe(
-        JNIEnv * env, jobject, jlong id, jstring model, jfloatArray pcm, jstring language) {
+static jbyteArray run_transcribe(JNIEnv * env, jlong id, jstring model, jfloatArray pcm, jstring language, int threads,
+        int min_segments, int max_segments, size_t max_output) {
     auto run = find_run(id);
     if (!run || stopped(run.get())) { fail(env,"ANDROID_STT_STOPPED"); return nullptr; }
     auto count = env->GetArrayLength(pcm);
@@ -63,7 +65,7 @@ extern "C" JNIEXPORT jbyteArray JNICALL Java_kr_callbrief_AndroidWhisperNative_t
     if (stopped(run.get())) { whisper_free(ctx); fail(env,"ANDROID_STT_STOPPED"); return nullptr; }
     const char * lang = env->GetStringUTFChars(language,nullptr);
     auto params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    params.n_threads = 2; params.language = lang; params.translate = false;
+    params.n_threads = threads; params.language = lang; params.translate = false;
     params.print_realtime = false; params.print_progress = false; params.print_timestamps = false; params.print_special = false;
     params.no_context = true; params.single_segment = false; params.initial_prompt = nullptr;
     params.abort_callback = stopped; params.abort_callback_user_data = run.get();
@@ -73,7 +75,7 @@ extern "C" JNIEXPORT jbyteArray JNICALL Java_kr_callbrief_AndroidWhisperNative_t
     env->ReleaseStringUTFChars(language,lang);
     if (status != 0 || stopped(run.get())) { whisper_free(ctx); fail(env,"ANDROID_STT_NOT_COMPLETED"); return nullptr; }
     int segments = whisper_full_n_segments(ctx);
-    if (segments < 1 || segments > 256) { whisper_free(ctx); fail(env,"ANDROID_STT_SEGMENT_LIMIT"); return nullptr; }
+    if (segments < min_segments || segments > max_segments) { whisper_free(ctx); fail(env,"ANDROID_STT_SEGMENT_LIMIT"); return nullptr; }
     std::string json = "{\"transcription\":[";
     for (int i=0; i<segments; ++i) {
         if (i) json += ',';
@@ -83,8 +85,25 @@ extern "C" JNIEXPORT jbyteArray JNICALL Java_kr_callbrief_AndroidWhisperNative_t
     }
     json += "],\"runtime\":\"whisper.cpp-v1.7.6-android-cpu\"}";
     whisper_free(ctx);
-    if (json.size() > 262144) { fail(env,"ANDROID_STT_OUTPUT_LIMIT"); return nullptr; }
+    if (json.size() > max_output) { fail(env,"ANDROID_STT_OUTPUT_LIMIT"); return nullptr; }
     auto result = env->NewByteArray(static_cast<jsize>(json.size()));
     if (result) env->SetByteArrayRegion(result,0,static_cast<jsize>(json.size()),reinterpret_cast<const jbyte *>(json.data()));
     return result;
+}
+
+extern "C" JNIEXPORT jbyteArray JNICALL Java_kr_callbrief_AndroidWhisperNative_transcribe(
+        JNIEnv * env, jobject, jlong id, jstring model, jfloatArray pcm, jstring language) {
+    return run_transcribe(env, id, model, pcm, language, 2, 1, 256, 262144);
+}
+// Pipeline additions: caller-chosen deadline and thread count; same quiet, CPU-only engine.
+extern "C" JNIEXPORT jlong JNICALL Java_kr_callbrief_AndroidWhisperNative_beginTimed(JNIEnv *, jobject, jint seconds) {
+    if (seconds < 30) seconds = 30; if (seconds > 3600) seconds = 3600;
+    auto id = next_id.fetch_add(1); std::lock_guard<std::mutex> guard(runs_mutex);
+    runs.emplace(id, std::make_shared<Run>(static_cast<int>(seconds))); return id;
+}
+extern "C" JNIEXPORT jbyteArray JNICALL Java_kr_callbrief_AndroidWhisperNative_transcribeModel(
+        JNIEnv * env, jobject, jlong id, jstring model, jfloatArray pcm, jstring language, jint threads) {
+    if (threads < 1) threads = 1; if (threads > 8) threads = 8;
+    // A silent chunk is valid here (0 segments); the pipeline drops it and keeps exact offsets.
+    return run_transcribe(env, id, model, pcm, language, static_cast<int>(threads), 0, 2048, 1048576);
 }

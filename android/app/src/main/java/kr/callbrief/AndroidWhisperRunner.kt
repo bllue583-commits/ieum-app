@@ -20,6 +20,9 @@ internal object AndroidWhisperNative {
     external fun cancel(id:Long)
     external fun release(id:Long)
     external fun transcribe(id:Long,model:String,pcm:FloatArray,language:String):ByteArray
+    // Pipeline (lane A) additions; the pilot entry points above keep their exact behaviour.
+    external fun beginTimed(seconds:Int):Long
+    external fun transcribeModel(id:Long,model:String,pcm:FloatArray,language:String,threads:Int):ByteArray
 }
 internal data class AndroidWhisperOutput(val raw:ByteArray,val text:String,val segments:JSONArray)
 
@@ -50,6 +53,24 @@ internal class AndroidWhisperEngine(private val context:Context) {
         if(loadedSha==null){System.load(library.canonicalPath);loadedSha=runtimeSha}
     }
     fun cancel(){active.get().takeIf{it!=0L}?.let{AndroidWhisperNative.cancel(it)}}
+    /** Pipeline: only the pinned native runtime is checked and loaded here; the bundled tiny model is not touched. */
+    fun loadRuntime()=synchronized(LOAD_LOCK) {
+        check(library.isFile&&library.length()==pin.getJSONObject("native").getJSONObject(abi).getLong("bytes")&&hash(library)==runtimeSha){"ANDROID_STT_RUNTIME_PIN"}
+        check(loadedSha==null||loadedSha==runtimeSha){"ANDROID_STT_RUNTIME_CHANGED"}
+        if(loadedSha==null){System.load(library.canonicalPath);loadedSha=runtimeSha}
+    }
+    /** Pipeline: a caller-verified model file (size+SHA-256 checked by its owner) and an explicit language.
+     * The model must still be verified before and after native work; raw native JSON is returned. */
+    fun transcribeVerifiedModel(model:File,stillVerified:()->Boolean,pcm:FloatArray,language:String,threads:Int,timeoutSeconds:Int,stopped:()->Boolean):ByteArray=synchronized(EXECUTION_LOCK) {
+        check(language in setOf("ko","en","auto")){"ANDROID_STT_LANGUAGE"}
+        check(!stopped()){"ANDROID_STT_STOPPED"};check(stillVerified()&&model.isFile){"PIPELINE_STT_MODEL_UNVERIFIED"};loadRuntime()
+        val id=AndroidWhisperNative.beginTimed(timeoutSeconds.coerceIn(30,3600));active.set(id)
+        try {
+            check(!stopped()){"ANDROID_STT_STOPPED"};calls++
+            val raw=AndroidWhisperNative.transcribeModel(id,model.canonicalPath,pcm,language,threads.coerceIn(1,8))
+            check(!stopped()){"ANDROID_STT_STOPPED"};check(stillVerified()){"PIPELINE_STT_MODEL_UNVERIFIED"};raw
+        }finally{active.set(0);AndroidWhisperNative.release(id)}
+    }
     fun transcribe(audio:ByteArray,stopped:()->Boolean):AndroidWhisperOutput=synchronized(EXECUTION_LOCK) {
         check(!stopped()){"ANDROID_STT_STOPPED"};prepare();val pcm=decodePcm(audio);val id=AndroidWhisperNative.begin();active.set(id)
         try {
