@@ -38,3 +38,35 @@ data class PipelineServerKeys(val signing:PublicKey,val encryption:PublicKey) {
             else PipelineServerKeys(PipelineContract.publicKey(signingSpki),PipelineContract.publicKey(encryptionSpki))
     }
 }
+
+/** Lane C implements (it owns cases, tasks and case summaries); lane A calls it to build C1.business. */
+interface PipelineBusinessSource {
+    /** The C1 `business` block for this recording: boardRevision, linkedCaseId, cases (validated by PipelineContract). */
+    fun business(recordingId:String):Map<String,Any?>
+}
+
+/** Lane A implements (it owns the transcription queue and keeps every uploaded C1 locally, protected). */
+interface PipelineTranscriptIndex {
+    /** The exact C1 document that was uploaded, or null when this device never produced it. */
+    fun transcript(transcriptId:String):Map<String,Any?>?
+    /** recordingId for a transcript produced on this device, or null. */
+    fun recordingFor(transcriptId:String):String?
+}
+
+/** SecureSettings keys shared by lanes A and C. Values are written only by explicit user actions
+ * (settings screen, lane C) except the status keys, which lane A owns. */
+object PipelineSettingsKeys {
+    /** Fine-grained GitHub token, Contents read/write on the inbox repository only. Never logged. */
+    const val INBOX_TOKEN="pipelineInboxToken"
+    /** 0 = no consent to send transcripts to the external AI. Incremented on every grant or withdrawal. */
+    const val CONSENT_EPOCH="pipelineConsentEpoch"
+    const val CONSENT_GRANTED="pipelineConsentGranted"
+    /** Incremented whenever exclusions or other source policy change. */
+    const val POLICY_EPOCH="pipelinePolicyEpoch"
+    /** Lane A status: NOT_DOWNLOADED | DOWNLOADING | READY | FAILED | UNSUPPORTED. */
+    const val MODEL_STATE="pipelineModelState"
+    const val LAST_TRANSCRIBED_MS="pipelineLastTranscribedMs"
+    const val LAST_UPLOAD_MS="pipelineLastUploadMs"
+    /** Lane C status. */
+    const val LAST_FETCH_MS="pipelineLastFetchMs"
+}
