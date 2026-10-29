@@ -62,7 +62,7 @@ internal object CallDigestSchedule {
     }
     fun ensure(context:Context) { enqueue(context,EVENING,ExistingWorkPolicy.KEEP);enqueue(context,MORNING,ExistingWorkPolicy.KEEP) }
     fun reschedule(context:Context) { enqueue(context,EVENING,ExistingWorkPolicy.REPLACE);enqueue(context,MORNING,ExistingWorkPolicy.REPLACE) }
-    /** From inside the running worker: APPEND would chain onto itself, so a fresh unique name per kind is replaced. */
+    /** From inside the running worker: appended after the current run, so tomorrow's delay starts once this one finishes. */
     fun next(context:Context,kind:String) = enqueue(context,kind,ExistingWorkPolicy.APPEND_OR_REPLACE)
 }
 
