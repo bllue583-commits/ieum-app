@@ -45,6 +45,11 @@ jobs:
             IEUM_ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/28.2.13676358" IEUM_CMAKE_BINARY="$ANDROID_HOME/cmake/3.22.1/bin/cmake" \
             IEUM_ANDROID_WHISPER_MODEL="$PWD/models/ggml-tiny-q5_1.bin"
           python3 run_gradle.py --log device-build.log :app:assembleDebug :app:assembleDebugAndroidTest
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/share/swift /usr/local/share/boost /opt/hostedtoolcache/CodeQL /usr/local/lib/node_modules
+          rm -rf android/app/build/intermediates android/app/build/tmp android/app/build/android-whisper gradle-user/caches/transforms-* || true
+          df -h / | tail -1
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -56,8 +61,8 @@ jobs:
           target: google_apis
           arch: x86_64
           cores: 4
-          ram-size: 6144M
-          disk-size: 6G
+          ram-size: 4096M
+          disk-size: 3G
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
           disable-animations: true
           script: bash tools/run_device_test.sh
