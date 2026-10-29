@@ -93,6 +93,8 @@ class CallSettingsActivity:ComponentActivity() {
             PipelineModelDownloadWork.enqueue(this);Toast.makeText(this,"Wi-Fi에 연결되면 받기 시작해요.",Toast.LENGTH_LONG).show()
         })
 
+        if(kr.callbrief.BuildConfig.SYNTHETIC_TOOLS_ENABLED&&modelState=="READY") body.addView(button("속도 측정 (시험용)") { benchmark() }.apply { tag="benchmark" })
+
         body.addView(CallUi.heading(this,"4. 알림 시각"))
         hourRow("저녁 정리 알림",PipelineSettingsKeys.EVENING_HOUR,s.optInt(PipelineSettingsKeys.EVENING_HOUR,19))
         hourRow("아침 할 일 알림",PipelineSettingsKeys.MORNING_HOUR,s.optInt(PipelineSettingsKeys.MORNING_HOUR,6))
@@ -113,6 +115,32 @@ class CallSettingsActivity:ComponentActivity() {
                 Toast.makeText(this@CallSettingsActivity,"${n}건을 다시 정리할게요.",Toast.LENGTH_SHORT).show();refresh()
             }
         }.apply { tag="reanalyze_all" })
+    }
+
+    /** Test builds only: transcribe the bundled public Korean sample (repeated to about one minute)
+     * with the large model and record the speed. No call recording or network is needed. */
+    private fun benchmark() {
+        busy=true;Toast.makeText(this,"속도를 재는 중이에요. 1~3분 걸릴 수 있어요.",Toast.LENGTH_LONG).show()
+        lifecycleScope.launch {
+            val result=withContext(Dispatchers.IO) { runCatching {
+                val storage=CallPipelineStartup.storage(this@CallSettingsActivity);val model=PipelineModelManager(storage)
+                val file=checkNotNull(model.verifiedModelFile()) { "MODEL_NOT_READY" }
+                val one=PipelineAudioMath.decodeWav(assets.open("local-stt/public-ko.wav").use{it.readBytes()}).chunks.flatMap{it.second.asList()}
+                val pcm=FloatArray(one.size*8){ one[it%one.size] }
+                val started=System.currentTimeMillis()
+                val segments=WhisperCallTranscriber(kr.callbrief.AndroidWhisperEngine(storage),model).transcribe(file,pcm){false}
+                val elapsed=System.currentTimeMillis()-started;val audioMs=pcm.size*1000L/16000
+                val perMinute=elapsed*60000/audioMs
+                settings().update{ it.put(PipelineSettingsKeys.LAST_MS_PER_AUDIO_MINUTE,perMinute).put(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,System.currentTimeMillis()) }
+                Triple(perMinute,audioMs,segments.joinToString(""){it.text}.trim().take(80))
+            } }
+            busy=false
+            result.onSuccess { (perMinute,audioMs,text) ->
+                android.app.AlertDialog.Builder(this@CallSettingsActivity).setTitle("속도 측정 결과")
+                    .setMessage("녹음 ${audioMs/1000}초를 처리했어요.\n녹음 1분당 약 ${perMinute/1000}초 걸려요.\n\n인식된 앞부분: $text").setPositiveButton("확인",null).show()
+            }.onFailure { Toast.makeText(this@CallSettingsActivity,if(it.message=="MODEL_NOT_READY") "먼저 음성 인식 모델을 받아주세요." else "측정하지 못했어요.",Toast.LENGTH_LONG).show() }
+            refresh()
+        }
     }
 
     private fun hourRow(name:String,key:String,hour:Int) {
