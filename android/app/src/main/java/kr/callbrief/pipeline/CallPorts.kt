@@ -45,3 +45,9 @@ object PipelineSettingsKeys {
     const val EVENING_HOUR="callsEveningHour"
     const val MORNING_HOUR="callsMorningHour"
 }
+
+/** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets
+ * [factory] at app start (and in its tests); the transcription worker reads it and stays idle when null. */
+object CallTranscriptSinks {
+    @Volatile var factory:((android.content.Context)->CallTranscriptSink)?=null
+}
