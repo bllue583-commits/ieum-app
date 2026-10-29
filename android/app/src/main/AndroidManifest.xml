@@ -13,6 +13,8 @@
         <activity android:name=".SyntheticPilotActivity" android:exported="false" />
         <activity android:name=".AndroidLocalSttActivity" android:exported="false" />
         <activity android:name=".DailyReportActivity" android:exported="false" />
+        <activity android:name=".pipeline.TodayCallsActivity" android:exported="false" />
+        <activity android:name=".pipeline.CallSettingsActivity" android:exported="false" />
         <activity android:name=".RecordingWorkflowActivity" android:exported="false" />
         <activity android:name=".RelatedReadOnlyActivity" android:exported="false" />
         <activity android:name=".NaverMailReviewActivity" android:exported="false" />
