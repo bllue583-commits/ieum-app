@@ -19,17 +19,25 @@ import java.time.Instant
 import java.time.LocalDate
 import java.util.concurrent.TimeUnit
 
-/** Notification text composed locally from stored counts. No call content beyond counts and up to 2 names. */
+/** Notification text composed locally. The expanded notification lists the to-dos (morning) or the
+ * calls with their one-line summaries (evening), so the report can be read without opening the app. */
 internal object CallDigestText {
-    data class Message(val title:String,val text:String)
+    data class Message(val title:String,val text:String,val lines:List<String> =emptyList())
+    const val MAX_LINES=7
+    private fun more(lines:List<String>)=if(lines.size>MAX_LINES) lines.take(MAX_LINES-1)+"외 ${lines.size-MAX_LINES+1}개" else lines
     fun evening(calls:List<CallRecord>,newTasks:Int):Message {
         val names=calls.map { it.displayName }.filter { it!="상대 미상" }.distinct().take(2)
         val who=if(names.isEmpty()) "" else " · "+names.joinToString(", ")+(if(calls.size>names.size) " 등" else "")
-        return Message("오늘 통화 ${calls.size}건 · 새 할 일 ${newTasks}개","탭해서 오늘의 통화를 확인하세요$who")
+        val lines=calls.sortedBy { it.startedMs ?: 0 }.map { c ->
+            "${CallUi.time(c.startedMs)} ${c.displayName} — "+(c.summary?.substringBefore('\n')?.take(60) ?: CallUi.state(c.state))
+        }
+        return Message("오늘 통화 ${calls.size}건 · 새 할 일 ${newTasks}개",if(calls.isEmpty()) "오늘 정리된 통화가 없어요" else "펼치면 통화별 요약이 보여요$who",more(lines))
     }
     fun morning(items:List<CallTodoItem>,today:LocalDate):Message {
         val overdue=items.count { it.due<today.toString() }
-        return Message("오늘 할 일 ${items.size}개"+(if(overdue>0) " (지난 기한 ${overdue}개)" else ""),"탭해서 오늘 할 일을 확인하세요")
+        val lines=items.sortedBy { it.due }.map { "• ${it.title} — ${CallUi.dueWords(it.due)}"+(if(it.status=="needs_confirmation") " (확인 필요)" else "") }
+        return Message("오늘 할 일 ${items.size}개"+(if(overdue>0) " (지난 기한 ${overdue}개)" else ""),
+            if(items.isEmpty()) "오늘까지 할 일이 없어요" else lines.first().removePrefix("• "),more(lines))
     }
     fun evening(store:CallRecordStore,day:LocalDate)=evening(store.day(day),store.newTaskCount(day))
     fun morning(store:CallRecordStore,day:LocalDate)=morning(store.dueItems(day),day)
@@ -80,16 +88,24 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
         CallDigestSchedule.next(applicationContext,kind)
         Result.success()
     }
-    private fun post(kind:String,m:CallDigestText.Message) {
-        val context=applicationContext
+    private fun post(kind:String,m:CallDigestText.Message)=CallDigestNotifier.post(applicationContext,kind,m)
+}
+
+/** Posts the morning/evening report. Also used by the device test. */
+internal object CallDigestNotifier {
+    fun post(context:Context,kind:String,m:CallDigestText.Message) {
         if(Build.VERSION.SDK_INT>=33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) return
         val manager=context.getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(NotificationChannel(CHANNEL,"이음 통화 정리",NotificationManager.IMPORTANCE_DEFAULT))
+        manager.createNotificationChannel(NotificationChannel(CallDigestWork.CHANNEL,"이음 통화 정리",NotificationManager.IMPORTANCE_DEFAULT))
         val intent=Intent(context,if(kind==CallDigestSchedule.MORNING) CallTasksActivity::class.java else TodayCallsActivity::class.java).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         val pending=PendingIntent.getActivity(context,kind.hashCode(),intent,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val notification=Notification.Builder(context,CHANNEL).setSmallIcon(R.drawable.ic_callbrief)
+        val notification=Notification.Builder(context,CallDigestWork.CHANNEL).setSmallIcon(R.drawable.ic_callbrief)
             .setContentTitle(m.title).setContentText(m.text).setContentIntent(pending).setAutoCancel(true).setLocalOnly(true)
-            .setVisibility(Notification.VISIBILITY_PRIVATE).build()
+            .setStyle(Notification.InboxStyle().setBigContentTitle(m.title).also { st -> m.lines.forEach { st.addLine(it) } })
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            // Lock screen shows only the counts; the list appears once unlocked.
+            .setPublicVersion(Notification.Builder(context,CallDigestWork.CHANNEL).setSmallIcon(R.drawable.ic_callbrief).setContentTitle(m.title).setContentText("잠금을 풀면 내용이 보여요").build())
+            .build()
         manager.notify("ieum.calls.$kind",700,notification)
     }
 }

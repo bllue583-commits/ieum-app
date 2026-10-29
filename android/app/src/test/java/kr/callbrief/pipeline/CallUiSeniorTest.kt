@@ -40,7 +40,7 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
         val root=a.window.decorView
         for(tag in listOf("home_today","home_calls_button","home_tasks_button","home_settings_button","home_more_button","home_setup"))assertNotNull(tag,root.findViewWithTag<View>(tag))
         val all=texts(a).joinToString("\n"){it.text.toString()}
-        assertTrue(all,all.contains("통화 3건 (정리 중 1건)"));assertTrue(all.contains("기한 지난 일 1개"));assertTrue(all.contains("처음 설정 1/4"))
+        assertTrue(all,all.contains("통화 3건 (정리 중 1건)"));assertTrue(all.contains("기한 지난 일 1개"));assertTrue(all.contains("처음 설정 3/6"))
         assertFalse(all,english.containsMatchIn(all))
         val buttons=views(root).filterIsInstance<Button>().filter{(it.tag as? String)?.startsWith("home_")==true}
         assertTrue(buttons.all{ it.minHeight>=(56*it.resources.displayMetrics.density).toInt() })

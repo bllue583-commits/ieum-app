@@ -173,6 +173,52 @@ internal object PipelineAudioMath {
         return cuts
     }
 
+    /** Drops long silences so Whisper only runs on speech. Speech = 30 ms windows louder than
+     * max(0.006, min(3 x the 20th-percentile level, 0.3 x the 90th)); gaps under [keepGapMs] are kept, each region gets [padMs]
+     * on both sides. Each output chunk's offset is the original position of its first sample; times inside
+     * a chunk are on the shortened audio (hence vadApplied=true). Nothing is removed if little is silent. */
+    fun speechOnly(audio:PipelineDecodedAudio,rate:Int=TARGET_RATE,keepGapMs:Long=1500,padMs:Long=300,minSavedRatio:Double=0.1):PipelineDecodedAudio {
+        val win=rate*30/1000
+        data class Piece(val origin:Long,val samples:FloatArray)
+        val pieces=ArrayList<Piece>()
+        var total=0L;var kept=0L
+        for((offset,pcm) in audio.chunks){
+            total+=pcm.size
+            val rms=rmsWindows(pcm,rate,30)
+            if(rms.isEmpty())continue
+            val sorted=rms.sorted();val floor=sorted[rms.size/5];val loud=sorted[rms.size*9/10]
+            val threshold=max(0.006f,min(floor*3,loud*0.3f)) // continuous speech: the floor is speech itself
+            val gap=(keepGapMs/30).toInt();val pad=(padMs/30).toInt()
+            var i=0
+            while(i<rms.size){
+                if(rms[i]<threshold){i++;continue}
+                var end=i;var quiet=0;var j=i
+                while(j<rms.size&&quiet<=gap){ if(rms[j]>=threshold){end=j;quiet=0} else quiet++; j++ }
+                val a=max(0,(i-pad)*win);val b=min(pcm.size,(end+1+pad)*win)
+                if(pieces.isNotEmpty()&&pieces.last().let{it.origin+it.samples.size>=offset*rate/1000+a}) {
+                    val last=pieces.removeAt(pieces.size-1);val lastEnd=last.origin+last.samples.size;val start=offset*rate/1000
+                    val extra=pcm.copyOfRange(max(a,(lastEnd-start).toInt()),b);pieces.add(Piece(last.origin,last.samples+extra))
+                } else pieces.add(Piece(offset*rate/1000+a,pcm.copyOfRange(a,b)))
+                i=end+1+pad
+            }
+        }
+        kept=pieces.sumOf{it.samples.size.toLong()}
+        if(total==0L||kept==0L||kept>total*(1-minSavedRatio))return audio
+        // Pack speech pieces into chunks of at most MAX_CHUNK_MS (a single over-long piece is split normally).
+        val maxLen=(rate*MAX_CHUNK_MS/1000).toInt()
+        val out=ArrayList<Pair<Long,FloatArray>>()
+        var buf=PipelineAudioFloats(1024);var bufOrigin=-1L
+        fun flush(){ if(buf.size>0){out+=(bufOrigin*1000/rate) to buf.toArray()};buf=PipelineAudioFloats(1024);bufOrigin=-1L }
+        for(p in pieces){
+            if(p.samples.size>maxLen){ flush();split(p.samples,rate).forEach{(ms,x)->out+=(p.origin*1000/rate+ms) to x};continue }
+            if(buf.size+p.samples.size>maxLen)flush()
+            if(bufOrigin<0)bufOrigin=p.origin
+            buf.add(p.samples)
+        }
+        flush()
+        return PipelineDecodedAudio(audio.durationMs,out,vadApplied=true)
+    }
+
     /** Chunks as (original start ms, samples). Lengths sum to the input length. */
     fun split(samples:FloatArray,rate:Int=TARGET_RATE,maxChunkMs:Long=MAX_CHUNK_MS):List<Pair<Long,FloatArray>> {
         if(samples.isEmpty())return emptyList()

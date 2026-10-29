@@ -55,4 +55,19 @@ class CallTranscriptionUnitTest {
         assertEquals(listOf(0L,1000L,300000L,301000L),shifted.map{it.startMs})
         assertEquals(303000L,shifted.last().endMs)
     }
+
+    @Test fun speechOnlyDropsLongSilenceAndKeepsOriginalOffsets() {
+        val rate=16000
+        fun tone(sec:Double)=FloatArray((rate*sec).toInt()){ (0.3*sin(2*PI*440*it/rate)).toFloat() }
+        fun quiet(sec:Double)=FloatArray((rate*sec).toInt())
+        val pcm=tone(2.0)+quiet(10.0)+tone(3.0)+quiet(0.5)+tone(1.0)
+        val out=PipelineAudioMath.speechOnly(PipelineDecodedAudio(pcm.size*1000L/rate,listOf(0L to pcm),false))
+        assertTrue(out.vadApplied)
+        val kept=out.chunks.sumOf{it.second.size}/rate.toDouble()
+        assertTrue("kept $kept s",kept in 6.0..8.5)
+        assertEquals(0L,out.chunks.first().first)
+        val mostlySpeech=tone(5.0)+quiet(0.4)+tone(5.0)
+        val same=PipelineDecodedAudio(10400,listOf(0L to mostlySpeech),false)
+        assertTrue(PipelineAudioMath.speechOnly(same)===same)
+    }
 }

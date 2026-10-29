@@ -42,18 +42,35 @@ class CallPipelineDeviceTest {
         assertNotNull(model.verifiedModelFile())
     }
 
+    /** Speed on speech only (6 threads, then 8), then on a call-like recording with 4 s pauses between sentences,
+     * which the silence skipping should shorten. */
     @Test fun t2_koreanSpeedWithLargeModel() {
         val model=PipelineModelManager(storage);val file=checkNotNull(model.verifiedModelFile())
         val repeat=InstrumentationRegistry.getArguments().getString("repeat")?.toIntOrNull() ?: 3
         val one=publicKorean();val pcm=FloatArray(one.size*repeat){one[it%one.size]}
+        val audioMs=pcm.size*1000L/16000
+        val result=JSONObject().put("audioSeconds",audioMs/1000.0).put("cores",Runtime.getRuntime().availableProcessors()).put("device",android.os.Build.MODEL)
+        var text=""
+        for(threads in listOf(6,8)) {
+            val started=System.currentTimeMillis()
+            val segments=WhisperCallTranscriber(AndroidWhisperEngine(storage),model,threads).transcribe(file,pcm){false}
+            val elapsed=System.currentTimeMillis()-started
+            text=segments.joinToString(""){it.text}.trim()
+            result.put("secondsPerAudioMinute_threads$threads",elapsed*60.0/audioMs)
+        }
+        // Call-like: each sentence followed by 4 s of near silence.
+        val pause=FloatArray(16000*4){ ((it*7919)%200-100)/100000f }
+        val call=(0 until repeat).flatMap{one.asList()+pause.asList()}.toFloatArray()
+        val callMs=call.size*1000L/16000
+        val trimmed=PipelineAudioMath.speechOnly(PipelineDecodedAudio(callMs,PipelineAudioMath.split(call),false))
         val started=System.currentTimeMillis()
-        val segments=WhisperCallTranscriber(AndroidWhisperEngine(storage),model).transcribe(file,pcm){false}
-        val elapsed=System.currentTimeMillis()-started;val audioMs=pcm.size*1000L/16000
-        val text=segments.joinToString(""){it.text}.trim()
-        report("t2_speed",JSONObject().put("audioSeconds",audioMs/1000.0).put("elapsedSeconds",elapsed/1000.0)
-            .put("secondsPerAudioMinute",elapsed*60.0/audioMs).put("cores",Runtime.getRuntime().availableProcessors())
-            .put("device",android.os.Build.MODEL).put("segments",segments.size).put("text",text.take(300)))
+        val callText=trimmed.chunks.flatMap{(_,x)->WhisperCallTranscriber(AndroidWhisperEngine(storage),model).transcribe(file,x){false}}.joinToString(""){it.text}.trim()
+        val elapsed=System.currentTimeMillis()-started
+        result.put("callAudioSeconds",callMs/1000.0).put("callSpeechSeconds",trimmed.chunks.sumOf{it.second.size}/16000.0)
+            .put("callSecondsPerAudioMinute",elapsed*60.0/callMs).put("text",text.take(200)).put("callText",callText.take(200))
+        report("t2_speed",result)
         assertTrue("no Korean recognized: $text",text.any{it in '가'..'힣'})
+        assertTrue("silence not skipped",trimmed.vadApplied);assertTrue(callText.contains("견적서"))
     }
 
     /** The transcription side hands a real transcript to the app's sink; without a key the call waits, plainly worded. */
@@ -119,5 +136,16 @@ class CallPipelineDeviceTest {
         shot("3_tasks",CallTasksActivity::class.java){text(it,"견적서 보내기")}
         shot("4_settings",CallSettingsActivity::class.java){text(it,"Claude 키")}
         report("t4_screens",shots)
+    }
+
+    /** The morning report is posted as a notification that lists the to-dos (no tap needed to read them). */
+    @Test fun t5_morningReportNotification() {
+        val message=CallRecordStore(storage).use{CallDigestText.morning(it,CallUi.today())}
+        CallDigestNotifier.post(context,CallDigestSchedule.MORNING,message)
+        Thread.sleep(1000)
+        val posted=context.getSystemService(android.app.NotificationManager::class.java).activeNotifications.firstOrNull{it.tag=="ieum.calls.${CallDigestSchedule.MORNING}"}
+        val lines=posted?.notification?.extras?.getCharSequenceArray(android.app.Notification.EXTRA_TEXT_LINES)?.map{it.toString()}.orEmpty()
+        report("t5_notification",JSONObject().put("posted",posted!=null).put("title",message.title).put("lines",org.json.JSONArray(lines)))
+        assertNotNull("morning notification not shown",posted);assertTrue(lines.any{it.contains("견적서")})
     }
 }

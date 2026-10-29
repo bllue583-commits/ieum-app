@@ -16,8 +16,12 @@ import kr.callbrief.SecureSettings
  * and three big doors (오늘의 통화 / 할 일 / 설정). Older features sit behind "기타 기능". */
 class HomeActivity:ComponentActivity() {
     internal data class Snapshot(val folder:Boolean,val key:Boolean,val consent:Boolean,val model:String,
-                                 val calls:Int,val working:Int,val newTasks:Int,val due:Int,val overdue:Int,val lastAnalyzedMs:Long)
+                                 val calls:Int,val working:Int,val newTasks:Int,val due:Int,val overdue:Int,val lastAnalyzedMs:Long,
+                                 val notify:Boolean=true,val battery:Boolean=true)
     private lateinit var body:LinearLayout
+    private val askNotify=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { load() }
+    private fun notifyAllowed()=android.os.Build.VERSION.SDK_INT<33||checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)==android.content.pm.PackageManager.PERMISSION_GRANTED
+    private fun batteryFree()=getSystemService(android.os.PowerManager::class.java)?.isIgnoringBatteryOptimizations(packageName)==true
 
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
@@ -46,7 +50,7 @@ class HomeActivity:ComponentActivity() {
         val (calls,due,newTasks)=CallRecordStore(storage).use { Triple(it.day(today),it.dueItems(today),it.newTaskCount(today)) }
         return Snapshot(folder,s.optString(PipelineSettingsKeys.CLAUDE_API_KEY).isNotBlank(),s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false),
             s.optString(PipelineSettingsKeys.MODEL_STATE),calls.size,calls.count{it.state!=CallRecordStore.ANALYZED},newTasks,
-            due.size,due.count{CallUi.overdue(it.due)},s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0))
+            due.size,due.count{CallUi.overdue(it.due)},s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),batteryFree())
     }
 
     private fun open(target:Class<*>,setup:Intent.()->Unit={}) = startActivity(Intent(this,target).apply(setup))
@@ -58,10 +62,10 @@ class HomeActivity:ComponentActivity() {
 
         if(s==null) { body.addView(CallUi.text(this,"정보를 읽지 못했어요. 잠시 후 다시 열어주세요."));doors();return }
 
-        val steps=listOf(s.folder,s.key,s.consent,s.model=="READY")
+        val steps=listOf(s.folder,s.key,s.consent,s.model=="READY",s.notify,s.battery)
         if(!steps.all{it}) {
             val c=CallUi.card(this,warn=true).apply { tag="home_setup" }
-            c.addView(CallUi.text(this,"처음 설정 ${steps.count{it}}/4",CallUi.HEADING,true))
+            c.addView(CallUi.text(this,"처음 설정 ${steps.count{it}}/${steps.size}",CallUi.HEADING,true))
             fun step(n:Int,done:Boolean,label:String,detail:String,action:()->Unit) {
                 c.addView(CallUi.text(this,(if(done) "✓ " else "$n. ")+label,CallUi.BODY,true,if(done) CallUi.OK else CallUi.INK))
                 if(!done) { c.addView(CallUi.text(this,detail,CallUi.SMALL,color=CallUi.SUBTLE));c.addView(CallUi.button(this,"$label 하기",action)) }
@@ -72,6 +76,13 @@ class HomeActivity:ComponentActivity() {
             step(4,s.model=="READY","음성 인식 모델 받기",
                 if(s.model=="DOWNLOADING") "받는 중이에요. Wi-Fi에 연결해 두세요. (약 570MB)" else "Wi-Fi에서 한 번만 받아요. (약 570MB)") {
                 PipelineModelDownloadWork.enqueue(this);android.widget.Toast.makeText(this,"Wi-Fi에 연결되면 받기 시작해요.",android.widget.Toast.LENGTH_LONG).show();load()
+            }
+            step(5,s.notify,"알림 허용","아침 6시 할 일, 저녁 7시 통화 정리를 알림으로 보내드려요.") {
+                if(android.os.Build.VERSION.SDK_INT>=33)askNotify.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
+            step(6,s.battery,"배터리 제한 풀기","휴대폰이 쉬는 동안에도 통화를 정리하려면 한 번 허용해 주세요.") {
+                runCatching { startActivity(Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,android.net.Uri.parse("package:$packageName"))) }
+                    .onFailure { startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
             }
             body.addView(c)
         }

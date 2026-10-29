@@ -57,7 +57,7 @@ static jbyteArray run_transcribe(JNIEnv * env, jlong id, jstring model, jfloatAr
     auto count = env->GetArrayLength(pcm);
     if (count < 1600 || count > 5242880) { fail(env,"ANDROID_STT_PCM_SIZE"); return nullptr; }
     const char * path = env->GetStringUTFChars(model,nullptr);
-    auto cp = whisper_context_default_params(); cp.use_gpu = false; cp.flash_attn = false;
+    auto cp = whisper_context_default_params(); cp.use_gpu = false; cp.flash_attn = true;
     whisper_log_set(quiet_log,nullptr);
     auto * ctx = whisper_init_from_file_with_params(path,cp);
     env->ReleaseStringUTFChars(model,path);

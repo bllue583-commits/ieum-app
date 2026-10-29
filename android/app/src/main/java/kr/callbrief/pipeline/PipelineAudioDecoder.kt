@@ -9,15 +9,15 @@ import java.nio.ByteOrder
 
 /** On-device decoder for call recordings: WAV is parsed directly; m4a/AAC, amr/3gp and anything else
  * MediaExtractor understands go through MediaCodec to PCM. Output is 16 kHz mono, chunked at quiet
- * points into pieces of at most five minutes. Silence skipping is off: [PipelineDecodedAudio.vadApplied]
- * is false and each chunk's offset is its exact position in the original recording.
+ * points into pieces of at most five minutes. Long silences are dropped ([PipelineAudioMath.speechOnly]); each chunk's offset is the original
+ * position of its first sample.
  * Audio stays in memory on this device; nothing is written to disk or sent anywhere. */
 internal class PipelineAudioDecoder:PipelineAudioSource {
     override fun decode(bytes:ByteArray,mime:String):PipelineDecodedAudio {
         check(bytes.isNotEmpty()){"PIPELINE_AUDIO_EMPTY"}
-        if(PipelineAudioMath.isWav(bytes))return PipelineAudioMath.decodeWav(bytes)
+        if(PipelineAudioMath.isWav(bytes))return PipelineAudioMath.speechOnly(PipelineAudioMath.decodeWav(bytes))
         check(!mime.lowercase().let{it=="audio/wav"||it=="audio/x-wav"||it=="audio/wave"}){"PIPELINE_AUDIO_WAV_HEADER"}
-        return decodeWithMediaCodec(bytes)
+        return PipelineAudioMath.speechOnly(decodeWithMediaCodec(bytes))
     }
 
     private class Source(private val bytes:ByteArray):MediaDataSource() {
