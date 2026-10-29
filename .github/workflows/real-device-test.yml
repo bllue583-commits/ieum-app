@@ -1,9 +1,12 @@
 name: real-device-test
 
 # Runs CallPipelineDeviceTest on a physical Samsung flagship in Firebase Test Lab (public audio only).
-# Keyless: GitHub OIDC -> Workload Identity Federation. Repo variables (not secrets, just IDs):
-# GCP_PROJECT, GCP_WIF_PROVIDER, GCP_SERVICE_ACCOUNT.
+# Keyless: GitHub OIDC -> Workload Identity Federation (only this repo may use it). The IDs below are not secrets.
+# Runs on manual dispatch, or when this file changes (Spark plan: 5 physical runs a day).
 on:
+  push:
+    branches: ['feature/**']
+    paths: ['.github/workflows/real-device-test.yml']
   workflow_dispatch:
     inputs:
       repeat: {description: 'How many times the 7.6 s Korean sample is repeated', default: '8'}
@@ -18,6 +21,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
+      GCP_PROJECT: ieum-test-2946626
+      GCP_WIF_PROVIDER: projects/623994611665/locations/global/workloadIdentityPools/github/providers/ieum
+      GCP_SERVICE_ACCOUNT: ftl-runner@ieum-test-2946626.iam.gserviceaccount.com
+      REPEAT: ${{ inputs.repeat || '8' }}
+      WANT_MODEL: ${{ inputs.model || '' }}
       TINY_MODEL_URL: https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin
     steps:
       - uses: actions/checkout@v4
@@ -45,16 +53,16 @@ jobs:
           python3 run_gradle.py --log device-build.log :app:assembleDebug :app:assembleDebugAndroidTest
       - uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
-          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v2
-        with: {project_id: '${{ vars.GCP_PROJECT }}'}
+        with: {project_id: '${{ env.GCP_PROJECT }}'}
       - name: Pick device
         id: device
         run: |
           gcloud firebase test android models list --filter='form=PHYSICAL AND brand=samsung' \
             --format='csv[no-heading](id,name,supportedVersionIds.list(separator=";"))' | tee models.csv
-          want='${{ inputs.model }}'
+          want="$WANT_MODEL"
           python3 - "$want" <<'EOF' >> "$GITHUB_OUTPUT"
           import csv, re, sys
           rows = [r for r in csv.reader(open('models.csv')) if len(r) == 3]
@@ -73,7 +81,7 @@ jobs:
             --test android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
             --device "model=${{ steps.device.outputs.model }},version=${{ steps.device.outputs.version }}" \
             --test-targets 'class kr.callbrief.pipeline.CallPipelineDeviceTest' \
-            --environment-variables 'repeat=${{ inputs.repeat }}' \
+            --environment-variables "repeat=$REPEAT" \
             --directories-to-pull /sdcard/Android/data/kr.callbrief/files/device-test \
             --timeout 45m --results-dir "$dir" --format=json > ftl.json 2> ftl.log
           status=$?; set -e
