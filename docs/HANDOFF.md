@@ -105,6 +105,19 @@ python run_gradle.py --log local-$(date +%H%M%S).log :app:compileDebugKotlin
 - 화면은 XML/Compose가 아니라 코드로 View를 만드는 방식(`CallUi.kt` 헬퍼). 디자인 개편 시 `CallUi`부터 정리하면 전 화면에 반영됨.
 - 테스트 제약: `ContextLedgerTest`·`CallUiSeniorTest`가 버튼 외 글자 18sp 이상, 영어 상태값 노출 금지를 검사함(50대 기준 유지).
 
+## 5-1. 사용자 결정 (10/30 16시)
+- **"모든 권한 허용"** — 시안 선택·UI 개편 범위·도구 설치까지 묻지 말고 끝까지 진행 (시안도 Claude가 고름).
+- **화면 캡처 허용** — 앱의 캡처 차단(`CallUi.page`의 `FLAG_SECURE`)을 없애도 됨. 이렇게 하면 별도 스위치 없이 이 PC 에뮬레이터에서 `adb exec-out screencap`으로 바로 화면 확인 가능. (주의: 배포 APK가 `assembleDebug`로 만들어지므로 "debug 빌드만 캡처 허용" 같은 구분은 의미 없음)
+- 개발은 사용자가 "시작"할 때까지 일시 중지.
+
+### UI 작업 진행 순서 (확정)
+1. 내비게이션 바 겹침 수정 — 원인: `CallUi.page`의 ScrollView가 `clipToPadding=false`라 글자가 시스템 바 뒤로 들어감. 스크롤 패딩은 인셋만, 여백은 안쪽 column으로 옮기고 `clipToPadding=true`.
+2. 빠른 확인 환경 — `FLAG_SECURE` 제거 + 이 PC 전용 시험 데이터(업체·사람·통화·할 일)를 넣는 방법(예: `IEUM_LOCAL_PREVIEW=1` 빌드 필드 또는 adb로 실행하는 시험 데이터 채우기). 네이티브 없이(`IEUM_SKIP_ANDROID_NATIVE=1`) 빌드해 에뮬레이터 `ieum34`에 설치 → 몇 분 주기로 고치고 캡처.
+3. 시안 2~3개 → Claude가 하나 선택 (PRODUCT.md 4.5 방향, "깔끔함"을 넘어 "세련됨": 글꼴·숫자 강조·아이콘·밀도)
+4. 설계도 "화면 디자인" 절 개정
+5. `CallUi` 개편 → 전 화면 적용 (18sp 테스트 규칙 유지 여부 결정: 보조 글자 16sp를 쓰려면 `CallUiSeniorTest`/`ContextLedgerTest` 기준을 의도적으로 바꿀 것)
+6. device-test(40분) + 실기기 1회로 최종 확인
+
 ## 6. 다음 할 일 (순서대로)
 1. **UI 개편 (1순위)** — 위 5번 문제 해결. 설계도 "화면 디자인" 절을 먼저 개정 → `CallUi` 정리(버튼 2단계: 주요/보조·텍스트 버튼, 아이콘, 상단 바, 인셋 처리, 줄 간격) → 각 화면 적용 → device-test 스크린샷으로 직접 판단 → 필요 시 실기기 1회.
 2. **아내 폰(S25) 설치 확인** — 사용자가 APK 파일로 직접 설치 예정(`C:\Users\bllue\Downloads\ieum-v1013.apk`, sha256 `b29705d8…a50f7`). 설치 후 실제 녹음 폴더 연결 → 첫 통화가 1시간 안에 정리되는지 확인. 이후 업데이트는 자동.
