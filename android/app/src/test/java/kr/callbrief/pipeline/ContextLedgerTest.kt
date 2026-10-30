@@ -180,6 +180,40 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         assertTrue(detail,detail.contains("단가 재견적 진행"));assertTrue(detail.contains("단가 재견적 받기"));assertTrue(detail.contains("철근 단가 협의"))
     }
 
+    @Test fun renamedPersonShowsEverywhereAndOldSpellingStillMatches() {
+        val first=call(1,counterpart=null)
+        apply(first,analysis(cp("김철주","△△철강","과장")))
+        val id=store().use { it.peopleOf(port().use { p -> p.query("SELECT id FROM companies").single()["id"] as String }).single().id }
+        assertFalse(store().use { it.renamePerson(id,"   ") })
+        assertTrue(store().use { it.renamePerson(id," 김철수 ") })
+        assertTrue(store().use { it.record(first.recordId)!!.displayName }.startsWith("김철수"))
+        // The model hears the old spelling again: same person, corrected name.
+        val second=call(2,counterpart=null)
+        apply(second,analysis(cp("김철주","△△철강")))
+        assertEquals(1,count("people"))
+        assertTrue(store().use { it.record(second.recordId)!!.displayName }.startsWith("김철수"))
+        val names=store().use { it.request(call(3,counterpart=null)).personNames }
+        assertTrue(names.toString(),"김철수" in names && "김철주" !in names)
+    }
+
+    @Test fun companiesScreenRenamesAPerson() {
+        apply(call(1),analysis(cp("김철주","△△철강","과장")))
+        apply(call(2,counterpart="010-2222-0002"),analysis(cp("박영희",null,"공무",staff=true)))
+        val a=Robolectric.buildActivity(CompaniesActivity::class.java).setup().get()
+        settle { texts(a).any { it.text.toString()=="업체 없는 사람 (우리 직원 등)" } }
+        assertTrue(texts(a).any { it.text.toString()=="박영희" })
+        views(a.window.decorView).first { (it.tag as? String)?.startsWith("company_")==true }.performClick()
+        settle { texts(a).any { it.text.toString()=="사람 (1)" } }
+        views(a.window.decorView).first { (it.tag as? String)?.startsWith("person_rename_")==true }.performClick()
+        val dialog=org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
+        val input=views(dialog.window!!.decorView).filterIsInstance<android.widget.EditText>().single()
+        assertEquals("김철주",input.text.toString())
+        input.setText("김철수")
+        dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick()
+        settle { texts(a).any { it.text.toString()=="김철수" } }
+        assertFalse(texts(a).any { it.text.toString()=="김철주" })
+    }
+
     @Test fun morningLineHomeDoorAndSettingsMemo() {
         apply(call(1),analysis(cp("김민수","△△철강"),"요약",listOf(create("단가 재견적 받기")),"현장 메모 본문"))
         val m=store().use { CallDigestText.morning(it,java.time.LocalDate.of(2026,10,30)) }

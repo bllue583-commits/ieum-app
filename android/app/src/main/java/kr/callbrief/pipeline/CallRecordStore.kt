@@ -27,9 +27,11 @@ internal data class CallRecord(
     val error:String?,
     val createdMs:Long,
     val analyzedMs:Long?,
+    /** The ledger person this call is linked to; carries the user's name corrections. */
+    val linkedPerson:String?=null,
 ) {
-    /** Name for display: analysis name/company first, then the recording's counterpart. */
-    val displayName:String get()=listOfNotNull(analysis?.counterpartName,analysis?.counterpartCompany).joinToString(" · ").ifBlank { counterpart?.takeIf { it.isNotBlank() } ?: "상대 미상" }
+    /** Name for display: ledger/analysis name and company first, then the recording's counterpart. */
+    val displayName:String get()=listOfNotNull(linkedPerson ?: analysis?.counterpartName,analysis?.counterpartCompany).joinToString(" · ").ifBlank { counterpart?.takeIf { it.isNotBlank() } ?: "상대 미상" }
     val dayMs:Long get()=startedMs ?: createdMs
 }
 
@@ -39,7 +41,8 @@ internal data class CallTodoItem(val id:String,val title:String,val due:String,v
 /** One company of the ledger with what the list screen shows. */
 internal data class CompanyRow(val id:String,val name:String,val trade:String?,val openTasks:Int,val lastCallMs:Long?)
 internal data class CompanyCall(val recordId:String,val dayMs:Long,val person:String?,val summary:String?)
-internal data class CompanyDetail(val id:String,val name:String,val trade:String?,val memo:String,val tasks:List<OpenItem>,val calls:List<CompanyCall>)
+internal data class PersonRow(val id:String,val name:String,val role:String?,val isStaff:Boolean)
+internal data class CompanyDetail(val id:String,val name:String,val trade:String?,val memo:String,val tasks:List<OpenItem>,val calls:List<CompanyCall>,val people:List<PersonRow> =emptyList())
 
 internal class CallRecordStore(context:Context,private val clock:()->Long=System::currentTimeMillis):AutoCloseable {
     data class Applied(val op:String,val itemId:String,val title:String,val due:String?,val applied:Boolean)
@@ -63,7 +66,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
             "CREATE TABLE IF NOT EXISTS companies(id TEXT PRIMARY KEY,name TEXT NOT NULL UNIQUE,trade TEXT,memo TEXT NOT NULL DEFAULT '',updated_ms INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS people(id TEXT PRIMARY KEY,name TEXT NOT NULL,phone_key TEXT UNIQUE,company_id TEXT,role TEXT,is_staff INTEGER NOT NULL DEFAULT 0,updated_ms INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS call_links(record_id TEXT PRIMARY KEY,person_id TEXT,company_id TEXT)",
-            "CREATE TABLE IF NOT EXISTS task_companies(item_id TEXT PRIMARY KEY,company_id TEXT NOT NULL)")
+            "CREATE TABLE IF NOT EXISTS task_companies(item_id TEXT PRIMARY KEY,company_id TEXT NOT NULL)",
+            // Names the user corrected away from (spaces removed), so a repeated mishearing still finds the right person.
+            "CREATE TABLE IF NOT EXISTS person_aliases(name_key TEXT PRIMARY KEY,person_id TEXT NOT NULL)")
         fun recordId(t:CallTranscript)="${t.recordingId}|${t.sourceVersion}|${t.audioSha256}"
         /** Digits only for a phone number, otherwise the trimmed name; null when unknown. */
         fun counterpartKey(counterpart:String?):String? {
@@ -105,15 +110,16 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
             Applied(it.getString("op"),it.getString("itemId"),it.getString("title"),it.optString("due").ifEmpty { null },it.getBoolean("applied")) } }.orEmpty()
         return CallRecord(r.str("record_id")!!,r.str("recording_id")!!,r.long("started_ms"),r.long("duration_ms") ?: 0,r.str("counterpart"),r.str("counterpart_key"),
             r.str("transcript").orEmpty(),r.str("state")!!,r.str("summary"),json?.optJSONObject("analysis")?.let { ClaudeCallAnalysis.parse(it) },applied,
-            r.str("error"),r.long("created_ms")!!,r.long("analyzed_ms"))
+            r.str("error"),r.long("created_ms")!!,r.long("analyzed_ms"),r.str("linked_person"))
     }
     /** Subscription mode: when the transcript was last dropped into the inbox. */
     fun sentMs(id:String):Long?=rows("SELECT sent_ms FROM call_inbox_sent WHERE record_id=?",id).singleOrNull()?.long("sent_ms")
     fun markSent(id:String,ms:Long)=port.execute("INSERT OR REPLACE INTO call_inbox_sent VALUES(?,?)",id,ms)
-    fun record(id:String):CallRecord?=rows("SELECT * FROM call_records WHERE record_id=?",id).singleOrNull()?.let(::map)
+    private val withPerson="SELECT c.*,p.name AS linked_person FROM call_records c LEFT JOIN call_links l ON l.record_id=c.record_id LEFT JOIN people p ON p.id=l.person_id"
+    fun record(id:String):CallRecord?=rows("$withPerson WHERE c.record_id=?",id).singleOrNull()?.let(::map)
     fun pending():List<CallRecord> =rows("SELECT * FROM call_records WHERE state IN ('TRANSCRIBED','WAITING_CONSENT','WAITING_KEY') ORDER BY created_ms").map(::map)
     /** Calls of one KST day, newest first. A call without a start time counts on the day it was stored. */
-    fun day(day:LocalDate):List<CallRecord> =rows("SELECT * FROM call_records WHERE COALESCE(started_ms,created_ms)>=CAST(? AS INTEGER) AND COALESCE(started_ms,created_ms)<CAST(? AS INTEGER) ORDER BY COALESCE(started_ms,created_ms) DESC",
+    fun day(day:LocalDate):List<CallRecord> =rows("$withPerson WHERE COALESCE(c.started_ms,c.created_ms)>=CAST(? AS INTEGER) AND COALESCE(c.started_ms,c.created_ms)<CAST(? AS INTEGER) ORDER BY COALESCE(c.started_ms,c.created_ms) DESC",
         startOf(day),startOf(day.plusDays(1))).map(::map)
     fun setState(id:String,state:String,error:String?=null)=port.execute("UPDATE call_records SET state=?,error=? WHERE record_id=?",state,error,id)
     /** "모두 다시 분석": waiting and failed records go back to the queue. */
@@ -132,8 +138,11 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         rows("SELECT l.person_id FROM call_links l JOIN call_records c ON c.record_id=l.record_id WHERE c.counterpart_key=? AND l.person_id IS NOT NULL ORDER BY c.created_ms DESC LIMIT 1",key)
             .firstOrNull()?.let { personById(it.str("person_id"))?.let { p -> return p } }
         return if(key.all { it.isDigit() }) rows("SELECT * FROM people WHERE phone_key=?",key).firstOrNull()
-        else rows("SELECT * FROM people WHERE REPLACE(name,' ','')=?",noSpace(key)).firstOrNull()
+        else personNamed(key).firstOrNull()
     }
+    /** People with this name, ignoring spaces, or whose earlier wrong name the user corrected. */
+    private fun personNamed(name:String)=rows("SELECT * FROM people WHERE REPLACE(name,' ','')=?",noSpace(name))
+        .ifEmpty { rows("SELECT p.* FROM person_aliases a JOIN people p ON p.id=a.person_id WHERE a.name_key=?",noSpace(name)) }
     private fun upsertCompany(name:String,now:Long):String {
         val clean=normName(name)!!
         val old=rows("SELECT id FROM companies WHERE REPLACE(name,' ','')=?",noSpace(clean)).firstOrNull()
@@ -146,7 +155,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         val name=normName(cp.personName) ?: return null
         var row=phone?.let { rows("SELECT * FROM people WHERE phone_key=?",it).firstOrNull() }
         if(row==null) {
-            val same=rows("SELECT * FROM people WHERE REPLACE(name,' ','')=?",noSpace(name)).filter { phone==null || it.str("phone_key")==null }
+            val same=personNamed(name).filter { phone==null || it.str("phone_key")==null }
             row=same.firstOrNull { it.str("company_id")==companyId } ?: same.firstOrNull { it.str("company_id")==null || companyId==null }
         }
         val role=normName(cp.role)
@@ -175,7 +184,22 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         val calls=rows("""SELECT c.record_id,COALESCE(c.started_ms,c.created_ms) AS day_ms,c.summary,p.name AS person FROM call_links l JOIN call_records c ON c.record_id=l.record_id
             LEFT JOIN people p ON p.id=l.person_id WHERE l.company_id=? ORDER BY day_ms DESC LIMIT 10""",id)
             .map { CompanyCall(it.str("record_id")!!,it.long("day_ms") ?: 0,it.str("person"),it.str("summary")) }
-        return CompanyDetail(id,name,co.str("trade"),co.str("memo").orEmpty(),tasks,calls)
+        return CompanyDetail(id,name,co.str("trade"),co.str("memo").orEmpty(),tasks,calls,peopleOf(id))
+    }
+    private fun personRow(r:Map<String,Any?>)=PersonRow(r.str("id")!!,r.str("name")!!,r.str("role"),r.long("is_staff")==1L)
+    /** People of one company, or with [companyId] null those without a company (staff and unknown). */
+    fun peopleOf(companyId:String?):List<PersonRow> =
+        (if(companyId==null) rows("SELECT * FROM people WHERE company_id IS NULL OR is_staff=1 ORDER BY updated_ms DESC")
+         else rows("SELECT * FROM people WHERE company_id=? AND is_staff=0 ORDER BY updated_ms DESC",companyId)).map(::personRow)
+    /** The user fixes a misheard name. The old name is kept as an alias so the same mishearing maps back to this person. */
+    fun renamePerson(id:String,name:String):Boolean=port.transaction {
+        val clean=normName(name)?.take(30) ?: return@transaction false
+        val old=personById(id)?.str("name") ?: return@transaction false
+        if(old==clean) return@transaction true
+        port.execute("UPDATE people SET name=?,updated_ms=? WHERE id=?",clean,clock(),id)
+        port.execute("DELETE FROM person_aliases WHERE name_key=?",noSpace(clean))
+        if(noSpace(old)!=noSpace(clean)) port.execute("INSERT OR REPLACE INTO person_aliases VALUES(?,?)",noSpace(old),id)
+        true
     }
 
     /** Everything the model should know, because it remembers nothing between calls: the site memo, who is calling

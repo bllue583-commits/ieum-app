@@ -133,7 +133,7 @@ class HomeActivity:ComponentActivity() {
         body.addView(CallUi.gap(this,6))
         body.addView(CallUi.door(this,"오늘의 통화",s?.let{"오늘 ${it.calls}건"+(if(it.working>0) " · 정리 중 ${it.working}건" else "")} ?: "") { open(TodayCallsActivity::class.java) }.apply { tag="home_calls_button" })
         body.addView(CallUi.door(this,"할 일",s?.let{ if(it.due>0) "오늘까지 ${it.due}개" else "목록 보기" } ?: "") { open(CallTasksActivity::class.java) }.apply { tag="home_tasks_button" })
-        body.addView(CallUi.door(this,"업체별 보기",s?.let{ if(it.companies>0) "업체 ${it.companies}곳" else "통화가 쌓이면 채워져요" } ?: "") { open(CompaniesActivity::class.java) }.apply { tag="home_companies_button" })
+        body.addView(CallUi.door(this,"업체·사람 보기",s?.let{ if(it.companies>0) "업체 ${it.companies}곳 · 이름 고치기" else "통화가 쌓이면 채워져요" } ?: "") { open(CompaniesActivity::class.java) }.apply { tag="home_companies_button" })
         body.addView(CallUi.door(this,"설정",s?.let{ if(listOf(it.folder,it.consent,it.model=="READY",it.notify,it.battery).all{x->x}) "녹음 폴더 · 알림 시각" else "처음 설정을 마쳐 주세요" } ?: "") { open(CallSettingsActivity::class.java) }.apply { tag="home_settings_button" })
     }
 }
