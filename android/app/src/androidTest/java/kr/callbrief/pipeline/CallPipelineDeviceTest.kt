@@ -128,7 +128,7 @@ class CallPipelineDeviceTest {
         fun <A:Activity> shot(name:String,cls:Class<A>,ready:(A)->Boolean) {
             ActivityScenario.launch(cls).use { s ->
                 var ok=false
-                repeat(100){ if(!ok){ s.onActivity{a->ok=ready(a)};if(!ok)Thread.sleep(100) } }
+                repeat(300){ if(!ok){ s.onActivity{a->ok=ready(a)};if(!ok)Thread.sleep(100) } }
                 inst.waitForIdleSync();Thread.sleep(2000);inst.waitForIdleSync()
                 val bmp=inst.uiAutomation.takeScreenshot()
                 File(out,"$name.png").outputStream().use{bmp.compress(Bitmap.CompressFormat.PNG,100,it)}
@@ -147,8 +147,9 @@ class CallPipelineDeviceTest {
         shot("5_companies",CompaniesActivity::class.java){text(it,"△△철강")}
         // Company detail with its people and the [이름 고치기] button.
         val companyTag="company_"+CallRecordStore(storage).use{it.companies().first().id}
+        var opened=false // one tap: every tap restarts the (slow on emulators) detail load
         shot("6_company_detail",CompaniesActivity::class.java){ a ->
-            if(!text(a,"사람 (")) a.window.decorView.findViewWithTag<View>(companyTag)?.performClick()
+            if(!opened) a.window.decorView.findViewWithTag<View>(companyTag)?.let { it.performClick();opened=true }
             text(a,"사람 (")&&text(a,"이름 고치기") }
         report("t4_screens",shots)
     }
