@@ -116,7 +116,7 @@ class HomeActivity:ComponentActivity() {
                 if(s.model=="DOWNLOADING") "다시 확인하기" else "모델 받기") {
                 PipelineModelDownloadWork.enqueue(this);android.widget.Toast.makeText(this,"Wi-Fi에 연결되면 받기 시작해요.",android.widget.Toast.LENGTH_LONG).show();load()
             },
-            Step(s.notify,"알림 허용","아침 6시 할 일, 저녁 7시 통화 정리를 알림으로 보내드려요.","알림 허용하기") {
+            Step(s.notify,"알림 허용","아침 6시에 체크할 일을, 저녁 7시에 통화 정리를 알림으로 보내드려요.","알림 허용하기") {
                 if(android.os.Build.VERSION.SDK_INT>=33)askNotify.launch(android.Manifest.permission.POST_NOTIFICATIONS)
             },
             Step(s.battery,"배터리 제한 풀기","휴대폰이 쉬는 동안에도 통화를 정리하려면 한 번 허용해 주세요.","제한 풀기") {
