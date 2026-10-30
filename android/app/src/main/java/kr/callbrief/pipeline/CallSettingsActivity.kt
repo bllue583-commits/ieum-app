@@ -22,6 +22,7 @@ class CallSettingsActivity:ComponentActivity() {
         if(r.resultCode==RESULT_OK) CallFolder.save(this,r.data)?.let { Toast.makeText(this,it,Toast.LENGTH_LONG).show() }
         refresh()
     }
+    private val askSms=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { refresh() }
     private fun settings()=SecureSettings(CallPipelineStartup.storage(this))
 
     override fun onCreate(savedInstanceState:Bundle?) {
@@ -64,12 +65,20 @@ class CallSettingsActivity:ComponentActivity() {
 
     private fun render(s:JSONObject,counts:Map<String,Int>,siteMemo:String?=null) {
         page.removeAllViews();body=page
-        CallUi.band(page,"설정","녹음 폴더와 정리 방식, 알림 시각")
+        CallUi.band(page,"설정","처음 설정한 것도 여기서 언제든 바꿀 수 있어요")
 
         group(CallUi.heading(this,"1. 녹음 폴더"))
         val folder=s.optString("treeUri").isNotBlank()
         body.addView(CallUi.text(this,if(folder) "연결됨 ✓  새 통화를 자동으로 가져와요." else "아직 연결하지 않았어요. 통화 녹음 폴더를 골라 주세요.",CallUi.BODY,true,if(folder) CallUi.OK else CallUi.WARN).apply { tag="folder_state" })
         body.addView(button(if(folder) "폴더 바꾸기" else "녹음 폴더 고르기") { pickFolder.launch(CallFolder.pickIntent()) }.apply { tag="folder_pick" })
+
+        group(CallUi.heading(this,"문자"))
+        val sms=checkSelfPermission(android.Manifest.permission.READ_SMS)==android.content.pm.PackageManager.PERMISSION_GRANTED
+        body.addView(CallUi.text(this,if(sms) "허용됨 ✓  업무 문자도 통화와 함께 정리해요." else "문자를 읽도록 허용하면 업무 문자도 통화와 함께 정리해요.",CallUi.BODY,sms,if(sms) CallUi.OK else CallUi.INK).apply { tag="sms_state" })
+        if(!sms) body.addView(button("문자 읽기 허용") { askSms.launch(android.Manifest.permission.READ_SMS) }.apply { tag="sms_allow" })
+
+        group(CallUi.heading(this,"메일"))
+        body.addView(CallUi.text(this,"업무 메일 연결은 곧 여기서 할 수 있어요. 연결하면 메일도 업체와 사람별로 함께 정리해요.",CallUi.BODY,color=CallUi.SUBTLE).apply { tag="mail_state" })
 
         group(CallUi.heading(this,"2. 통화 정리 방식"))
         val hasKey=s.optString(PipelineSettingsKeys.CLAUDE_API_KEY).isNotBlank()
@@ -114,8 +123,9 @@ class CallSettingsActivity:ComponentActivity() {
         if(kr.callbrief.BuildConfig.SYNTHETIC_TOOLS_ENABLED&&!CallInboxConfig.enabled&&modelState=="READY") body.addView(button("속도 측정 (시험용)") { benchmark() }.apply { tag="benchmark" })
 
         group(CallUi.heading(this,"5. 알림 시각"))
-        hourRow("저녁 정리 알림",PipelineSettingsKeys.EVENING_HOUR,s.optInt(PipelineSettingsKeys.EVENING_HOUR,19))
-        hourRow("아침 체크 알림",PipelineSettingsKeys.MORNING_HOUR,s.optInt(PipelineSettingsKeys.MORNING_HOUR,6))
+        hourRow("저녁 통화 정리",PipelineSettingsKeys.EVENING_HOUR,s.optInt(PipelineSettingsKeys.EVENING_HOUR,19),15..23)
+        body.addView(CallUi.divider(this))
+        hourRow("아침 체크할 일",PipelineSettingsKeys.MORNING_HOUR,s.optInt(PipelineSettingsKeys.MORNING_HOUR,6),4..11)
 
         group(CallUi.heading(this,"현장 상황 메모"))
         body.addView(CallUi.text(this,siteMemo ?: "첫 통화들에서 자동으로 채워져요",CallUi.BODY,color=if(siteMemo==null) CallUi.SUBTLE else CallUi.INK).apply { tag="site_memo" })
@@ -164,12 +174,32 @@ class CallSettingsActivity:ComponentActivity() {
         }
     }
 
-    private fun hourRow(name:String,key:String,hour:Int) {
-        val row=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL }
-        val words=when { hour==0 -> "밤 12시";hour<12 -> "오전 ${hour}시";hour==12 -> "낮 12시";else -> "오후 ${hour-12}시" }
-        row.addView(CallUi.text(this,"$name\n$words",CallUi.BODY,true),LinearLayout.LayoutParams(0,-2,1f))
-        row.addView(button("−1시간") { save(true) { it.put(key,(hour+23)%24) } }.apply { contentDescription="$name 한 시간 앞당기기" },LinearLayout.LayoutParams(CallUi.dp(this,110),-2).apply { marginEnd=CallUi.dp(this@CallSettingsActivity,6) })
-        row.addView(button("+1시간") { save(true) { it.put(key,(hour+1)%24) } }.apply { contentDescription="$name 한 시간 늦추기" },LinearLayout.LayoutParams(CallUi.dp(this,110),-2))
-        body.addView(row)
+    private fun hourWords(h:Int)=when { h==0 -> "밤 12시";h<12 -> "오전 ${h}시";h==12 -> "낮 12시";else -> "오후 ${h-12}시" }
+
+    /** One alert time: name on the left, the time large on the right, a slider below over a sensible range.
+     * Saved when the finger lifts, so dragging does not reschedule on every step. */
+    private fun hourRow(name:String,key:String,hour:Int,range:IntRange) {
+        val box=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL;setPadding(0,CallUi.dp(this@CallSettingsActivity,6),0,CallUi.dp(this@CallSettingsActivity,10)) }
+        val head=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL }
+        head.addView(CallUi.text(this,name,CallUi.BODY),LinearLayout.LayoutParams(0,-2,1f))
+        val value=CallUi.text(this,hourWords(hour),CallUi.HEADING,true,CallUi.ACCENT).apply { tag="hour_$key" }
+        head.addView(value)
+        box.addView(head)
+        box.addView(SeekBar(this).apply {
+            min=range.first;max=range.last;progress=hour.coerceIn(range);contentDescription="$name 시각 고르기"
+            progressTintList=android.content.res.ColorStateList.valueOf(CallUi.ACCENT);thumbTintList=progressTintList
+            progressBackgroundTintList=android.content.res.ColorStateList.valueOf(CallUi.MUTED_BAR)
+            minimumHeight=CallUi.dp(this@CallSettingsActivity,48);setPadding(CallUi.dp(this@CallSettingsActivity,8),0,CallUi.dp(this@CallSettingsActivity,8),0)
+            setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s:SeekBar,p:Int,fromUser:Boolean) { value.text=hourWords(p);if(android.os.Build.VERSION.SDK_INT>=30) s.stateDescription=hourWords(p) }
+                override fun onStartTrackingTouch(s:SeekBar) {}
+                override fun onStopTrackingTouch(s:SeekBar) { if(s.progress!=hour) save(true) { it.put(key,s.progress) } }
+            })
+        },LinearLayout.LayoutParams(-1,-2).apply { topMargin=CallUi.dp(this@CallSettingsActivity,8);marginStart=-CallUi.dp(this@CallSettingsActivity,8);marginEnd=-CallUi.dp(this@CallSettingsActivity,8) })
+        val ends=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
+        ends.addView(CallUi.text(this,hourWords(range.first),CallUi.SMALL,color=CallUi.FAINT),LinearLayout.LayoutParams(0,-2,1f))
+        ends.addView(CallUi.text(this,hourWords(range.last),CallUi.SMALL,color=CallUi.FAINT))
+        box.addView(ends)
+        body.addView(box)
     }
 }

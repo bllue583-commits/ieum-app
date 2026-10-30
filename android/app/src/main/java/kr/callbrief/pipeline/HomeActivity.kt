@@ -22,13 +22,15 @@ class HomeActivity:ComponentActivity() {
                                  /** Open to-dos per company, most first ("업체 없음" for the rest). */
                                  val byCompany:List<Pair<String,Int>> =emptyList(),
                                  /** Today's calls, latest first, for the memo list. */
-                                 val memos:List<CallRecord> =emptyList())
+                                 val memos:List<CallRecord> =emptyList(),
+                                 val sms:Boolean=true)
     private lateinit var body:LinearLayout
     private val pickFolder=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { r ->
         if(r.resultCode==RESULT_OK) CallFolder.save(this,r.data)?.let { android.widget.Toast.makeText(this,it,android.widget.Toast.LENGTH_LONG).show() }
         load()
     }
     private val askNotify=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { load() }
+    private val askSms=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { load() }
     private fun notifyAllowed()=android.os.Build.VERSION.SDK_INT<33||checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)==android.content.pm.PackageManager.PERMISSION_GRANTED
     private fun batteryFree()=getSystemService(android.os.PowerManager::class.java)?.isIgnoringBatteryOptimizations(packageName)==true
 
@@ -71,7 +73,8 @@ class HomeActivity:ComponentActivity() {
         return Snapshot(folder,s.optString(PipelineSettingsKeys.CLAUDE_API_KEY).isNotBlank(),s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false),
             s.optString(PipelineSettingsKeys.MODEL_STATE),calls.size,calls.count{it.state!=CallRecordStore.ANALYZED},newTasks,
             due.size,due.count{CallUi.overdue(it.due)},s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),batteryFree(),percent,next,companies,
-            week,byCompany,calls.sortedByDescending { it.startedMs ?: 0 }.take(4))
+            week,byCompany,calls.sortedByDescending { it.startedMs ?: 0 }.take(4),
+            checkSelfPermission(android.Manifest.permission.READ_SMS)==android.content.pm.PackageManager.PERMISSION_GRANTED)
     }
 
     private fun agree() {
@@ -109,6 +112,7 @@ class HomeActivity:ComponentActivity() {
         class Step(val done:Boolean,val label:String,val detail:String,val button:String,val action:()->Unit)
         val steps=listOfNotNull(
             Step(s.folder,"녹음 폴더 연결","통화 녹음 폴더(보통 Recordings › Call)가 열리면 아래 [이 폴더 사용]을 누르세요.","녹음 폴더 고르기") { pickFolder.launch(CallFolder.pickIntent()) },
+            Step(s.sms,"문자 읽기 허용","업무 문자도 통화와 함께 정리해요. 문자는 휴대폰 안에서 읽어요.","문자 읽기 허용") { askSms.launch(android.Manifest.permission.READ_SMS) },
             if(CallInboxConfig.enabled) null else Step(s.key,"Claude 키 넣기","통화를 요약하는 데 쓰는 키예요. 설정 화면에 붙여 넣으면 돼요.","설정에서 키 넣기") { open(CallSettingsActivity::class.java) },
             Step(s.consent,"정리 동의","녹음 파일은 휴대폰에 그대로 두고, 글자로 바꾼 통화 내용만 보내 정리해요. 설정에서 언제든 끌 수 있어요.","동의하고 켜기") { agree() },
             Step(s.model=="READY","음성 인식 모델 받기",
