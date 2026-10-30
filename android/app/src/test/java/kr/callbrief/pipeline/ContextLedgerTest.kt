@@ -214,6 +214,28 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         assertFalse(texts(a).any { it.text.toString()=="김철주" })
     }
 
+    @Test fun personalTextIsDeletedAndPersonalCallHidden() {
+        val day=java.time.LocalDate.of(2026,10,29)
+        store().use { it.insertMessage("sms:01012345678:9",started,"01012345678","[오전 10:00 받은 문자] 오늘 저녁 뭐 먹어?") }
+        val text=store().use { s -> s.day(day).single { it.kind=="문자" } }
+        store().use { it.applyAnalysis(text.recordId,ClaudeCallAnalysis("개인 내용",emptyList(),null,null,emptyList(),emptyList(),business=false)) }
+        assertNull(store().use { it.record(text.recordId) })
+        assertEquals(0,port().use { (it.query("SELECT COUNT(*) AS n FROM recordings WHERE recording_id='sms:01012345678:9'").single()["n"] as Number).toInt() })
+        val c=call(1)
+        apply(c,ClaudeCallAnalysis("개인 내용",emptyList(),null,null,emptyList(),emptyList(),business=false))
+        assertEquals("ANALYZED",store().use { it.record(c.recordId)!!.state })
+        assertEquals("",store().use { it.record(c.recordId)!!.transcript })
+        assertTrue(store().use { s -> s.day(day).none { it.recordId==c.recordId } })
+        assertEquals(0,count("companies"))
+    }
+
+    @Test fun workTextBecomesARecordWithCheckItems() {
+        store().use { it.insertMessage("sms:01011110001:3",started,"01011110001","[오전 10:00 받은 문자] 철근 반입 금요일 오전으로 확정했습니다") }
+        val r=store().use { s -> s.day(java.time.LocalDate.of(2026,10,29)).single { it.kind=="문자" } }
+        store().use { it.applyAnalysis(r.recordId,analysis(cp("김민수","△△철강"),"철근 반입 확정",listOf(ClaudeCallAnalysis.Task("create",null,"금요일 철근 반입 확인","2026-10-30","철근 반입 금요일 오전으로 확정",null)))) }
+        assertTrue(store().use { it.openItems() }.any { it.title=="금요일 철근 반입 확인" && it.company=="△△철강" })
+    }
+
     @Test fun morningLineHomeDoorAndSettingsMemo() {
         apply(call(1),analysis(cp("김민수","△△철강"),"요약",listOf(create("단가 재견적 받기")),"현장 메모 본문"))
         val m=store().use { CallDigestText.morning(it,java.time.LocalDate.of(2026,10,30)) }

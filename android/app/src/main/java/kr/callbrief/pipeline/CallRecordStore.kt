@@ -145,7 +145,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
     fun pending():List<CallRecord> =rows("SELECT * FROM call_records WHERE state IN ('TRANSCRIBED','WAITING_CONSENT','WAITING_KEY') ORDER BY created_ms").map(::map)
     /** Calls of one KST day, newest first. A call without a start time counts on the day it was stored. */
     fun day(day:LocalDate):List<CallRecord> =rows("$withPerson WHERE COALESCE(c.started_ms,c.created_ms)>=CAST(? AS INTEGER) AND COALESCE(c.started_ms,c.created_ms)<CAST(? AS INTEGER) ORDER BY COALESCE(c.started_ms,c.created_ms) DESC",
-        startOf(day),startOf(day.plusDays(1))).map(::map)
+        startOf(day),startOf(day.plusDays(1))).map(::map).filter { it.analysis?.business!=false } // personal calls stay hidden
     fun setState(id:String,state:String,error:String?=null)=port.execute("UPDATE call_records SET state=?,error=? WHERE record_id=?",state,error,id)
     /** "모두 다시 분석": waiting and failed records go back to the queue. */
     fun requeueAll():Int=port.transaction {
@@ -266,6 +266,16 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
     fun applyAnalysis(id:String,a:ClaudeCallAnalysis):List<Applied> =port.transaction {
         val record=rows("SELECT recording_id,counterpart_key FROM call_records WHERE record_id=?",id).single()
         val recording=record.str("recording_id")!!
+        // Personal, not work: a text or mail is deleted outright; a call keeps only a bare "done" mark (so it is not
+        // transcribed again) with its words wiped. Neither reaches the ledger, the lists or the check items.
+        if(!a.business) {
+            if(MessageKind.of(recording)!="통화") {
+                port.execute("DELETE FROM call_inbox_sent WHERE record_id=?",id);port.execute("DELETE FROM call_records WHERE record_id=?",id)
+                port.execute("DELETE FROM recordings WHERE recording_id=? AND grant_id='messages'",recording)
+            } else port.execute("UPDATE call_records SET state='ANALYZED',transcript='',segments_json='[]',summary=NULL,analysis_json=?,analyzed_ms=? WHERE record_id=?",
+                JSONObject().put("analysis",JSONObject().put("summary","개인 내용").put("business",false)).toString(),clock(),id)
+            return@transaction emptyList()
+        }
         // workflow_items needs the recording row; without it the tasks stay suggestions in the analysis only.
         val hasRecording=rows("SELECT 1 FROM recordings WHERE recording_id=?",recording).isNotEmpty()
         val case=rows("SELECT case_id FROM workflow_links WHERE recording_id=?",recording).singleOrNull()?.str("case_id")

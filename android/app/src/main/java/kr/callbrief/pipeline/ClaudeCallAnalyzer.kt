@@ -69,6 +69,8 @@ internal data class ClaudeCallAnalysis(
     val siteMemo:String?=null,
     val companyMemo:String?=null,
     val companyTrade:String?=null,
+    /** False when a text or mail turns out personal: it is then dropped, not stored or summarised. */
+    val business:Boolean=true,
 ) {
     data class Promise(val text:String,val due:String?,val owner:String,val quote:String)
     data class Task(val op:String,val taskId:String?,val title:String,val due:String?,val quote:String,val company:String?=null)
@@ -77,6 +79,7 @@ internal data class ClaudeCallAnalysis(
         .put("counterpartName",counterpartName ?: JSONObject.NULL).put("counterpartCompany",counterpartCompany ?: JSONObject.NULL)
         .put("counterpart",counterpart?.let { JSONObject().put("personName",it.personName ?: JSONObject.NULL).put("companyName",it.companyName ?: JSONObject.NULL).put("role",it.role ?: JSONObject.NULL).put("isStaff",it.isStaff) } ?: JSONObject.NULL)
         .put("siteMemo",siteMemo ?: JSONObject.NULL).put("companyMemo",companyMemo ?: JSONObject.NULL).put("companyTrade",companyTrade ?: JSONObject.NULL)
+        .put("business",business)
         .put("promises",JSONArray().apply { promises.forEach { put(JSONObject().put("text",it.text).put("due",it.due ?: JSONObject.NULL).put("owner",it.owner).put("quote",it.quote)) } })
         .put("tasks",JSONArray().apply { tasks.forEach { put(JSONObject().put("op",it.op).put("taskId",it.taskId ?: JSONObject.NULL).put("title",it.title).put("due",it.due ?: JSONObject.NULL).put("quote",it.quote).put("company",it.company ?: JSONObject.NULL)) } })
     companion object {
@@ -95,7 +98,7 @@ internal data class ClaudeCallAnalysis(
                 name,company,
                 o.optJSONArray("promises").objects().map { Promise(it.optString("text").trim(),it.str("due"),it.optString("owner","unknown").lowercase(),it.optString("quote").trim()) },
                 o.optJSONArray("tasks").objects().map { Task(it.optString("op").lowercase(),it.str("taskId"),it.optString("title").trim(),it.str("due"),it.optString("quote").trim(),it.str("company")) },
-                counterpart,o.str("siteMemo"),o.str("companyMemo"),o.str("companyTrade"))
+                counterpart,o.str("siteMemo"),o.str("companyMemo"),o.str("companyTrade"),o.optBoolean("business",true))
         }
     }
 }
@@ -123,6 +126,7 @@ internal class ClaudeCallAnalyzer(private val http:ClaudeCallHttp=OkHttpClaudeCa
             "siteMemo" to nullable("string").put("description","현장 상황 메모 전체 새 글(600자 이내), 바뀐 게 없으면 null"),
             "companyMemo" to nullable("string").put("description","상대 업체 메모 전체 새 글(400자 이내), 바뀐 게 없으면 null"),
             "companyTrade" to nullable("string").put("description","상대 업체 공종(철근, 타설, 전기 등) 또는 null"),
+            "business" to JSONObject().put("type","boolean").put("description","업무와 관련 있으면 true, 개인적인 문자·메일이면 false"),
             "promises" to array(obj("text" to str(),"due" to date(),"owner" to enum("me","them","unknown"),"quote" to str("자막 원문 그대로"))),
             "tasks" to array(obj("op" to enum("create","update","done_suggested"),"taskId" to nullable("string"),"title" to str(),"due" to date(),"quote" to str("자막 원문 그대로"),"company" to nullable("string"))))
         val SYSTEM="""
@@ -145,6 +149,7 @@ internal class ClaudeCallAnalyzer(private val http:ClaudeCallHttp=OkHttpClaudeCa
 15. companyMemo는 상대 업체에 대한 지금 상태를 짧게 요약한 전체 새 글입니다(400자 이내, 덧붙이지 말고 다시 쓰기). 바꿀 것이 없거나 상대 업체를 모르면 null입니다. companyTrade는 통화에서 알 수 있는 공종(철근, 타설, 전기 등) 한두 단어이며 모르면 null입니다.
 16. tasks의 company에는 그 일이 속한 업체 이름을 [이름 목록]의 표기로 쓰고, 모르면 null로 두세요.
 17. 메시지 맨 위 "종류"가 문자나 메일이면 <transcript> 안의 글은 음성 자막이 아니라 업무 문자(시각과 보낸 문자/받은 문자 표시가 붙음) 또는 메일(제목, 보낸 사람, 본문)입니다. "자막"이라고 한 규칙은 그 글에 똑같이 적용하고, quote도 그 글에서 그대로 복사하세요. summary는 "누구에게서 무슨 문자(메일)가 왔고 무엇을 하기로 했는지"를 씁니다. 보낸 문자의 약속은 사용자의 약속(owner "me")입니다.
+18. business는 이 통화·문자·메일이 사용자의 일(현장, 협력업체, 회사 업무)과 관련 있으면 true입니다. 문자와 메일은 업무 상대만 골라 오지 않으므로 가족, 지인, 쇼핑, 택배, 광고, 금융 알림 같은 개인적인 것도 옵니다. 그런 것이면 business를 false로 하고, summary는 "개인 내용"이라고만 쓰고 나머지 목록은 비우며 이름, 메모, 업체도 모두 null로 두세요. 개인 내용은 요약하거나 옮겨 적지 마세요. 통화는 거의 업무지만, 분명히 개인 통화면 false로 하세요.
 """.trim()
         private fun durationText(ms:Long)=if(ms<=0) "미상" else "${ms/60000}분 ${(ms/1000)%60}초"
         private fun clip(t:String,n:Int)=t.replace(Regex("\\s+")," ").trim().let { if(it.length>n) it.take(n-1)+"…" else it }

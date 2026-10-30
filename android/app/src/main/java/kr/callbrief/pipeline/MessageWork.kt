@@ -11,23 +11,27 @@ import kr.callbrief.SecureSettings
 import java.util.Properties
 import java.util.concurrent.TimeUnit
 
-/** Work text messages and mail, taken in like calls: each becomes a record the hourly analysis summarises into the
- * same ledger and check items. Nothing is read before the user's 정리 동의; only text leaves the phone, and only
- * through the same analysis path as call transcripts. */
+/** Text messages and mail, taken in like calls: each becomes a record the hourly analysis summarises into the same
+ * ledger and check items. All of them are read (user decision 10/30): the analysis decides work or personal, and a
+ * personal one is deleted, never stored or summarised. Machine messages (ads, codes, card and bank alerts, mass mail)
+ * are dropped on the phone first and never sent. Nothing is read before the user's 정리 동의. */
 internal object MessageIntake {
     private const val FIRST_LOOK_MS=2*86_400_000L
     private fun hhmm(ms:Long)=CallUi.time(ms)
 
-    /** Business numbers only: a text from a number the ledger has never seen is not read. */
+    /** Digits of a person's number; short service numbers (1588 and the like) give null and are not read. */
     internal fun phoneKey(address:String?):String? {
         val d=address.orEmpty().filter { it.isDigit() }.let { if(it.startsWith("82") && it.length>=11) "0"+it.drop(2) else it }
-        return d.takeIf { it.length>=8 }
+        return d.takeIf { it.length>=8 && it.startsWith("0") }
     }
+    /** Sent by a machine, not a person: advertising, verification codes, card and bank notices. */
+    private val MACHINE=Regex("\\(광고\\)|무료\\s*수신\\s*거부|인증\\s*번호|인증코드|승인\\s*[0-9,]+\\s*원|[0-9,]+원\\s*승인|입금\\s*[0-9,]+원|출금\\s*[0-9,]+원|배송\\s*(완료|출발|예정)")
+    internal fun automated(body:String)=MACHINE.containsMatchIn(body)
 
     /** One record per number with the texts that arrived since the last look, oldest first. */
     internal data class Sms(val id:Long,val atMs:Long,val sent:Boolean,val phone:String,val body:String)
-    internal fun threads(messages:List<Sms>,known:Set<String>):List<Pair<String,List<Sms>>> =
-        messages.filter { it.phone in known && it.body.isNotBlank() }.groupBy { it.phone }.map { (p,l) -> p to l.sortedBy { it.atMs } }
+    internal fun threads(messages:List<Sms>):List<Pair<String,List<Sms>>> =
+        messages.filter { it.body.isNotBlank() && !automated(it.body) }.groupBy { it.phone }.map { (p,l) -> p to l.sortedBy { it.atMs } }
     internal fun threadText(list:List<Sms>)=list.joinToString("\n") { "[${hhmm(it.atMs)} ${if(it.sent) "보낸 문자" else "받은 문자"}] ${it.body.trim().take(2000)}" }
 
     fun takeSms(context:Context,store:CallRecordStore,settings:SecureSettings):Int {
@@ -43,7 +47,7 @@ internal object MessageIntake {
         }
         if(found.isEmpty())return 0
         var added=0
-        for((phone,list) in threads(found,store.knownPhones()))
+        for((phone,list) in threads(found))
             if(store.insertMessage("${MessageKind.SMS}$phone:${list.last().id}",list.first().atMs,phone,threadText(list))) added++
         settings.update { it.put(PipelineSettingsKeys.LAST_SMS_MS,found.maxOf { m -> m.atMs }) }
         return added
