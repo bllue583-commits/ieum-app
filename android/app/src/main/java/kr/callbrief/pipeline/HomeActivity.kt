@@ -61,6 +61,12 @@ class HomeActivity:ComponentActivity() {
             due.size,due.count{CallUi.overdue(it.due)},s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),batteryFree(),percent,next)
     }
 
+    private fun agree() {
+        lifecycleScope.launch {
+            withContext(Dispatchers.IO) { runCatching { SecureSettings(CallPipelineStartup.storage(this@HomeActivity)).update { it.put(PipelineSettingsKeys.CONSENT_GRANTED,true) } } }
+            CallPipelineStartup.settingsChanged(this@HomeActivity);load()
+        }
+    }
     private fun open(target:Class<*>,setup:Intent.()->Unit={}) = startActivity(Intent(this,target).apply(setup))
 
     internal fun render(s:Snapshot?) {
@@ -77,27 +83,32 @@ class HomeActivity:ComponentActivity() {
         }
         if(s==null) { body.addView(CallUi.text(this,"정보를 읽지 못했어요. 잠시 후 다시 열어주세요."));doors(null);return }
 
-        val steps=listOf(s.folder,s.key||CallInboxConfig.enabled,s.consent,s.model=="READY",s.notify,s.battery)
-        if(!steps.all{it}) {
-            val c=CallUi.card(this,rail=CallUi.AMBER_RAIL).apply { tag="home_setup" }
-            c.addView(CallUi.text(this,"처음 설정 ${steps.count{it}}/${steps.size}",CallUi.HEADING,true))
-            fun step(n:Int,done:Boolean,label:String,detail:String,action:()->Unit) {
-                c.addView(CallUi.text(this,(if(done) "✓ " else "$n. ")+label,CallUi.BODY,true,if(done) CallUi.OK else CallUi.INK))
-                if(!done) { c.addView(CallUi.text(this,detail,CallUi.SMALL,color=CallUi.SUBTLE));c.addView(CallUi.button(this,"$label 하기",action)) }
-            }
-            step(1,s.folder,"녹음 폴더 연결","통화 녹음 폴더(보통 Recordings › Call)가 열리면 아래 [이 폴더 사용]을 누르세요.") { pickFolder.launch(CallFolder.pickIntent()) }
-            if(!CallInboxConfig.enabled) step(2,s.key,"Claude 키 넣기","통화를 요약하는 데 쓰는 키예요. 설정 화면에 붙여 넣으면 돼요.") { open(CallSettingsActivity::class.java) }
-            step(3,s.consent,"정리 동의","녹음은 휴대폰에 그대로 두고, 글자로 바꾼 내용만 보내 정리해요.") { open(CallSettingsActivity::class.java) }
-            step(4,s.model=="READY","음성 인식 모델 받기",
-                if(s.model=="DOWNLOADING") "받는 중이에요"+(if(s.modelPercent>=0) " ${s.modelPercent}%" else "")+". Wi-Fi에 연결해 두세요. (약 570MB)" else "Wi-Fi에서 한 번만 받아요. (약 570MB)") {
+        // First-run checklist: done steps get a tick, only the next step is open (one thing at a time).
+        class Step(val done:Boolean,val label:String,val detail:String,val button:String,val action:()->Unit)
+        val steps=listOfNotNull(
+            Step(s.folder,"녹음 폴더 연결","통화 녹음 폴더(보통 Recordings › Call)가 열리면 아래 [이 폴더 사용]을 누르세요.","녹음 폴더 고르기") { pickFolder.launch(CallFolder.pickIntent()) },
+            if(CallInboxConfig.enabled) null else Step(s.key,"Claude 키 넣기","통화를 요약하는 데 쓰는 키예요. 설정 화면에 붙여 넣으면 돼요.","설정에서 키 넣기") { open(CallSettingsActivity::class.java) },
+            Step(s.consent,"정리 동의","녹음 파일은 휴대폰에 그대로 두고, 글자로 바꾼 통화 내용만 보내 정리해요. 설정에서 언제든 끌 수 있어요.","동의하고 켜기") { agree() },
+            Step(s.model=="READY","음성 인식 모델 받기",
+                if(s.model=="DOWNLOADING") "받는 중이에요"+(if(s.modelPercent>=0) " ${s.modelPercent}%" else "")+". Wi-Fi에 연결해 두세요. (약 570MB)" else "Wi-Fi에서 한 번만 받아요. (약 570MB)",
+                if(s.model=="DOWNLOADING") "다시 확인하기" else "모델 받기") {
                 PipelineModelDownloadWork.enqueue(this);android.widget.Toast.makeText(this,"Wi-Fi에 연결되면 받기 시작해요.",android.widget.Toast.LENGTH_LONG).show();load()
-            }
-            step(5,s.notify,"알림 허용","아침 6시 할 일, 저녁 7시 통화 정리를 알림으로 보내드려요.") {
+            },
+            Step(s.notify,"알림 허용","아침 6시 할 일, 저녁 7시 통화 정리를 알림으로 보내드려요.","알림 허용하기") {
                 if(android.os.Build.VERSION.SDK_INT>=33)askNotify.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-            }
-            step(6,s.battery,"배터리 제한 풀기","휴대폰이 쉬는 동안에도 통화를 정리하려면 한 번 허용해 주세요.") {
+            },
+            Step(s.battery,"배터리 제한 풀기","휴대폰이 쉬는 동안에도 통화를 정리하려면 한 번 허용해 주세요.","제한 풀기") {
                 runCatching { startActivity(Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,android.net.Uri.parse("package:$packageName"))) }
                     .onFailure { startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+            })
+        if(!steps.all{it.done}) {
+            val c=CallUi.card(this,rail=CallUi.AMBER_RAIL).apply { tag="home_setup" }
+            c.addView(CallUi.text(this,"처음 설정 ${steps.count{it.done}}/${steps.size}",CallUi.HEADING,true))
+            val next=steps.indexOfFirst { !it.done }
+            steps.forEachIndexed { i,st ->
+                val color=when { st.done -> CallUi.OK;i==next -> CallUi.INK;else -> CallUi.SUBTLE }
+                c.addView(CallUi.text(this,(if(st.done) "✓  " else "${i+1}.  ")+st.label,CallUi.BODY,i==next,color))
+                if(i==next) { c.addView(CallUi.text(this,st.detail,CallUi.SMALL,color=CallUi.SUBTLE));c.addView(CallUi.bigButton(this,"",st.button,st.action).apply { tag="home_setup_next" }) }
             }
             body.addView(c)
         }
