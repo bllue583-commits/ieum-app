@@ -104,7 +104,9 @@ class CallPipelineDeviceTest {
         val quote=text.take(8)
         CallRecordStore(storage).use{it.applyAnalysis(stored.recordId,ClaudeCallAnalysis("김민수 님과 견적서 일정을 이야기했어요. 금요일까지 견적서를 보내기로 했어요.",
             listOf("견적서는 금요일까지"),"김민수",null,listOf(ClaudeCallAnalysis.Promise("견적서 보내기",CallUi.today().plusDays(1).toString(),"me",quote)),
-            listOf(ClaudeCallAnalysis.Task("create",null,"김민수 님께 견적서 보내기",CallUi.today().toString(),quote))))}
+            listOf(ClaudeCallAnalysis.Task("create",null,"김민수 님께 견적서 보내기",CallUi.today().toString(),quote,"△△철강")),
+            counterpart=ClaudeCallAnalysis.Counterpart("김민수","△△철강","과장",false),siteMemo="3층 슬래브 타설 준비 중, 철근 반입 금요일",
+            companyMemo="철근 단가 재견적 진행 중",companyTrade="철근"))}
         val after=CallRecordStore(storage).use{it.record(stored.recordId)!!}
         report("t3_pipeline",JSONObject().put("state",after.state).put("counterpart",after.displayName).put("openTasks",CallRecordStore(storage).use{it.openItems().size}).put("transcript",text.take(200)))
         assertEquals(CallRecordStore.ANALYZED,after.state)
@@ -142,6 +144,12 @@ class CallPipelineDeviceTest {
         shot("2_today",TodayCallsActivity::class.java){text(it,"김민수")}
         shot("3_tasks",CallTasksActivity::class.java){text(it,"견적서 보내기")}
         shot("4_settings",CallSettingsActivity::class.java){text(it,"통화 정리 방식")}
+        shot("5_companies",CompaniesActivity::class.java){text(it,"△△철강")}
+        // Company detail with its people and the [이름 고치기] button.
+        val companyTag="company_"+CallRecordStore(storage).use{it.companies().first().id}
+        shot("6_company_detail",CompaniesActivity::class.java){ a ->
+            if(!text(a,"사람 (")) a.window.decorView.findViewWithTag<View>(companyTag)?.performClick()
+            text(a,"사람 (")&&text(a,"이름 고치기") }
         report("t4_screens",shots)
     }
 
