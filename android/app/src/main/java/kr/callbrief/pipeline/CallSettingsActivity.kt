@@ -35,10 +35,11 @@ class CallSettingsActivity:ComponentActivity() {
             val result=runCatching { withContext(Dispatchers.IO) {
                 val s=runCatching { settings().snapshot() }.getOrDefault(JSONObject())
                 val counts=runCatching { CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.counts() } }.getOrDefault(emptyMap())
-                s to counts
+                val memo=runCatching { CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.siteMemo() } }.getOrNull()
+                Triple(s,counts,memo)
             } }
             if(isFinishing||isDestroyed)return@launch
-            result.onSuccess { (s,c) -> render(s,c) }
+            result.onSuccess { (s,c,m) -> render(s,c,m) }
         }
     }
 
@@ -54,7 +55,7 @@ class CallSettingsActivity:ComponentActivity() {
         }
     }
 
-    private fun render(s:JSONObject,counts:Map<String,Int>) {
+    private fun render(s:JSONObject,counts:Map<String,Int>,siteMemo:String?=null) {
         body.removeAllViews()
         body.addView(CallUi.title(this,"설정"))
 
@@ -108,6 +109,9 @@ class CallSettingsActivity:ComponentActivity() {
         body.addView(CallUi.heading(this,"5. 알림 시각"))
         hourRow("저녁 정리 알림",PipelineSettingsKeys.EVENING_HOUR,s.optInt(PipelineSettingsKeys.EVENING_HOUR,19))
         hourRow("아침 할 일 알림",PipelineSettingsKeys.MORNING_HOUR,s.optInt(PipelineSettingsKeys.MORNING_HOUR,6))
+
+        body.addView(CallUi.heading(this,"현장 상황 메모"))
+        body.addView(CallUi.text(this,siteMemo ?: "첫 통화들에서 자동으로 채워져요",CallUi.BODY,color=if(siteMemo==null) CallUi.SUBTLE else CallUi.INK).apply { tag="site_memo" })
 
         body.addView(CallUi.heading(this,"지금 상태"))
         val speed=s.optLong(PipelineSettingsKeys.LAST_MS_PER_AUDIO_MINUTE,0)

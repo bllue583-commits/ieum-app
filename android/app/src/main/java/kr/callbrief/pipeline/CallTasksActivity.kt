@@ -51,6 +51,7 @@ class CallTasksActivity:ComponentActivity() {
             list.forEach { item ->
                 val rail=CallUi.railFor(item.due)
                 val c=CallUi.card(this,rail=rail).apply { tag="task_${item.id}" }
+                item.company?.let { c.addView(CallUi.text(this,"[$it]",CallUi.SMALL,true,CallUi.ACCENT)) }
                 c.addView(CallUi.text(this,item.title,CallUi.SUMMARY,true))
                 c.addView(CallUi.pill(this,CallUi.dueWords(item.due)+(CallUi.taskStatus(item.status).takeIf{it.isNotEmpty()}?.let{" · $it"} ?: ""),
                     when(rail) { CallUi.WARN -> CallUi.WARN;null -> CallUi.SUBTLE;else -> CallUi.AMBER }))

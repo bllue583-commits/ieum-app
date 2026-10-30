@@ -65,7 +65,7 @@ class TodayCallsActivity:ComponentActivity() {
             if(due.isEmpty()) body.addView(CallUi.text(this,"오늘까지 해야 할 일이 없어요."))
             due.take(5).forEach { item ->
                 val late=CallUi.overdue(item.due)
-                body.addView(CallUi.text(this,"• ${item.title} — ${CallUi.dueWords(item.due)}"+(if(item.status=="needs_confirmation") " (확인 필요)" else ""),
+                body.addView(CallUi.text(this,"• ${item.company?.let { "[$it] " } ?: ""}${item.title} — ${CallUi.dueWords(item.due)}"+(if(item.status=="needs_confirmation") " (확인 필요)" else ""),
                     CallUi.BODY,late,if(late) CallUi.WARN else CallUi.INK))
             }
             if(due.size>5) body.addView(CallUi.text(this,"외 ${due.size-5}개",CallUi.SMALL,color=CallUi.SUBTLE))

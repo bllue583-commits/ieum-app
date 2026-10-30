@@ -16,7 +16,7 @@ import kr.callbrief.SecureSettings
 class HomeActivity:ComponentActivity() {
     internal data class Snapshot(val folder:Boolean,val key:Boolean,val consent:Boolean,val model:String,
                                  val calls:Int,val working:Int,val newTasks:Int,val due:Int,val overdue:Int,val lastAnalyzedMs:Long,
-                                 val notify:Boolean=true,val battery:Boolean=true,val modelPercent:Int=-1,val nextReport:String="")
+                                 val notify:Boolean=true,val battery:Boolean=true,val modelPercent:Int=-1,val nextReport:String="",val companies:Int=0)
     private lateinit var body:LinearLayout
     private val pickFolder=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { r ->
         if(r.resultCode==RESULT_OK) CallFolder.save(this,r.data)?.let { android.widget.Toast.makeText(this,it,android.widget.Toast.LENGTH_LONG).show() }
@@ -53,12 +53,13 @@ class HomeActivity:ComponentActivity() {
         }
         val today=CallUi.today()
         val (calls,due,newTasks)=CallRecordStore(storage).use { Triple(it.day(today),it.dueItems(today),it.newTaskCount(today)) }
+        val companies=runCatching { CallRecordStore(storage).use { it.companyCount() } }.getOrDefault(0)
         val mm=PipelineModelManager(storage)
         val percent=if(mm.partFile.isFile) (mm.partFile.length()*100/574041195L).toInt().coerceIn(0,99) else -1
         val next=CallUi.nextReport(s.optInt(PipelineSettingsKeys.EVENING_HOUR,19),s.optInt(PipelineSettingsKeys.MORNING_HOUR,6))
         return Snapshot(folder,s.optString(PipelineSettingsKeys.CLAUDE_API_KEY).isNotBlank(),s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false),
             s.optString(PipelineSettingsKeys.MODEL_STATE),calls.size,calls.count{it.state!=CallRecordStore.ANALYZED},newTasks,
-            due.size,due.count{CallUi.overdue(it.due)},s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),batteryFree(),percent,next)
+            due.size,due.count{CallUi.overdue(it.due)},s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),batteryFree(),percent,next,companies)
     }
 
     private fun agree() {
@@ -132,6 +133,7 @@ class HomeActivity:ComponentActivity() {
         body.addView(CallUi.gap(this,6))
         body.addView(CallUi.door(this,"오늘의 통화",s?.let{"오늘 ${it.calls}건"+(if(it.working>0) " · 정리 중 ${it.working}건" else "")} ?: "") { open(TodayCallsActivity::class.java) }.apply { tag="home_calls_button" })
         body.addView(CallUi.door(this,"할 일",s?.let{ if(it.due>0) "오늘까지 ${it.due}개" else "목록 보기" } ?: "") { open(CallTasksActivity::class.java) }.apply { tag="home_tasks_button" })
+        body.addView(CallUi.door(this,"업체별 보기",s?.let{ if(it.companies>0) "업체 ${it.companies}곳" else "통화가 쌓이면 채워져요" } ?: "") { open(CompaniesActivity::class.java) }.apply { tag="home_companies_button" })
         body.addView(CallUi.door(this,"설정",s?.let{ if(listOf(it.folder,it.consent,it.model=="READY",it.notify,it.battery).all{x->x}) "녹음 폴더 · 알림 시각" else "처음 설정을 마쳐 주세요" } ?: "") { open(CallSettingsActivity::class.java) }.apply { tag="home_settings_button" })
     }
 }

@@ -17,6 +17,7 @@
         </activity>
         <activity android:name=".pipeline.TodayCallsActivity" android:exported="false" />
         <activity android:name=".pipeline.CallTasksActivity" android:exported="false" />
+        <activity android:name=".pipeline.CompaniesActivity" android:exported="false" />
         <activity android:name=".pipeline.CallSettingsActivity" android:exported="false" />
         <receiver android:name=".pipeline.UpdateStatusReceiver" android:exported="false" />
     </application>
