@@ -28,7 +28,10 @@ jobs:
       - name: Anything to check?
         id: look
         run: |
-          names=$(gh api "repos/$INBOX/contents/results" --jq '.[] | select(.name|startswith("selftest-")) | .name' 2>/dev/null || true)
+          names=""
+          if gh api "repos/$INBOX/contents/results" > results.json 2>/dev/null; then
+            names=$(jq -r '.[] | select(.type=="file" and (.name|startswith("selftest-"))) | .name' results.json)
+          fi
           echo "results=$(echo $names)" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event_name }}" = schedule ] && [ -z "$names" ]; then echo "skip=1" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/setup-java@v4
