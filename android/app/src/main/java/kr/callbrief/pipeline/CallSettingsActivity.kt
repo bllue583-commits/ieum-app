@@ -24,7 +24,7 @@ class CallSettingsActivity:ComponentActivity() {
 
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
-        body=CallUi.page(this)
+        body=CallUi.page(this,CallUi.Tab.SETTINGS)
     }
     override fun onResume() { super.onResume();refresh() }
 
@@ -57,7 +57,7 @@ class CallSettingsActivity:ComponentActivity() {
 
     private fun render(s:JSONObject,counts:Map<String,Int>,siteMemo:String?=null) {
         body.removeAllViews()
-        body.addView(CallUi.title(this,"설정"))
+        CallUi.band(body,"설정","녹음 폴더와 정리 방식, 알림 시각")
 
         body.addView(CallUi.heading(this,"1. 녹음 폴더"))
         val folder=s.optString("treeUri").isNotBlank()
@@ -120,7 +120,7 @@ class CallSettingsActivity:ComponentActivity() {
         body.addView(CallUi.text(this,"마지막으로 정리한 때: ${CallUi.dateTime(s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0))}"))
         val waiting=(counts[CallRecordStore.TRANSCRIBED] ?: 0)+(counts[CallRecordStore.WAITING_KEY] ?: 0)+(counts[CallRecordStore.WAITING_CONSENT] ?: 0)
         val failed=counts[CallRecordStore.FAILED] ?: 0
-        body.addView(CallUi.text(this,"정리된 통화 ${counts[CallRecordStore.ANALYZED] ?: 0}건 · 기다리는 통화 ${waiting}건 · 정리 못 한 통화 ${failed}건",CallUi.BODY,true))
+        body.addView(CallUi.text(this,"정리된 통화 ${counts[CallRecordStore.ANALYZED] ?: 0}건, 기다리는 통화 ${waiting}건, 정리 못 한 통화 ${failed}건",CallUi.BODY,true))
         if(waiting+failed>0) body.addView(button("기다리는 통화 다시 정리하기") {
             busy=true
             lifecycleScope.launch {

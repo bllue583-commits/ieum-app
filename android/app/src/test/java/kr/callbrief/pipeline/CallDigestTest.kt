@@ -35,7 +35,7 @@ class CallDigestTest:ProtectedTextHostTestBase() {
             assertEquals(listOf("late"),s.day(LocalDate.of(2026,10,28)).map { it.recordingId })
             assertEquals(listOf("unknown","noon","early"),s.day(LocalDate.of(2026,10,29)).map { it.recordingId })
             val m=CallDigestText.evening(s,LocalDate.of(2026,10,29))
-            assertEquals("오늘 통화 3건 · 새 할 일 0개",m.title)
+            assertEquals("오늘 통화 3건, 새 할 일 0개",m.title)
             assertTrue(m.text.contains("010-1111-2222"));assertTrue(m.text.contains("홍길동"));assertFalse(m.text.contains("통화 내용"))
         }
         assertEquals(LocalDate.of(2026,10,28),CallRecordStore.kstDay(kst("2026-10-28T23:59:00")))
@@ -45,7 +45,7 @@ class CallDigestTest:ProtectedTextHostTestBase() {
     @Test fun eveningTextNamesAtMostTwo() {
         fun rec(name:String?)=CallRecord(name ?: "x",name ?: "x",0,0,name,null,"","TRANSCRIBED",null,null,emptyList(),null,0,null)
         val m=CallDigestText.evening(listOf(rec("가"),rec("나"),rec("다"),rec(null)),2)
-        assertEquals("오늘 통화 4건 · 새 할 일 2개",m.title);assertTrue(m.text.contains("가, 나 등"));assertFalse(m.text.contains("다"))
+        assertEquals("오늘 통화 4건, 새 할 일 2개",m.title);assertTrue(m.text.contains("가, 나 등"));assertFalse(m.text.contains("다"))
     }
 
     @Test fun morningCountsDueTodayAndOverdue() {

@@ -135,7 +135,7 @@ internal class ClaudeCallAnalyzer(private val http:ClaudeCallHttp=OkHttpClaudeCa
 7. 일이 끝났다고 스스로 결정하지 마세요. 끝난 것으로 보이면 op "done_suggested"로 제안만 합니다.
 8. 날짜는 통화 시각을 기준으로 계산해 YYYY-MM-DD로 쓰고, 알 수 없으면 null로 둡니다.
 9. promises의 owner는 사용자가 할 일이면 "me", 상대가 할 일이면 "them", 모르면 "unknown"입니다.
-10. 사용자가 해야 하는 약속(owner "me")은 tasks에도 create 또는 update로 넣으세요.
+10. tasks는 사용자가 나중에 "됐는지 확인할 일" 목록입니다. 사용자는 부장이라 상대에게 일을 시키는 경우가 많습니다. 상대가 하기로 한 약속(owner "them")과 사용자가 하기로 한 약속(owner "me") 모두 tasks에 create 또는 update로 넣으세요. 상대가 할 일의 title은 "김민수 과장 견적서 회신 확인"처럼 누가 무엇을 했는지 확인하는 말로 짧게 쓰세요.
 11. 사용자는 건설 현장 한 곳의 업무를 맡고 있고, 통화 상대는 협력업체(철근, 타설, 전기 등) 사람이거나 같은 회사 직원입니다. 메시지 위쪽의 [현장 상황 메모], [상대], [업체], [최근 통화], [열린 할 일]을 읽고 맥락을 이어서 판단하세요. 다른 업체의 열린 할 일과 같은 일이면 그 taskId로 "update"하세요. taskId는 메시지에 있는 것만 쓸 수 있습니다.
 12. counterpart에는 이번 통화 상대의 personName(이름), companyName(업체), role(직책), isStaff(우리 회사 직원이면 true, 이때 companyName은 null)를 씁니다. 자막이나 [이름 목록]에서 확인되지 않으면 null로 두고, 자막과 [이름 목록]에 없는 이름은 절대 지어내지 마세요. counterpartName과 counterpartCompany는 같은 값을 넣습니다.
 13. 자막의 이름은 음성 인식 오타가 있을 수 있으니, [이름 목록]에 비슷한 이름이 있으면 목록의 표기를 그대로 쓰세요.

@@ -18,7 +18,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.SQLiteMode
 
-/** Senior-friendly UI: plain words, big text, big buttons, the three doors on the home screen. */
+/** Senior-friendly UI: plain words, big text, big buttons, the dashboard and bottom bar on the home screen. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[35],shadows=[ShadowTextKeys::class,ShadowTextKeys.ExistingApprovedSettings::class,ShadowTextAtomicFile::class])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
@@ -40,7 +40,7 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
         val root=a.window.decorView
         for(tag in listOf("home_today","home_calls_button","home_tasks_button","home_settings_button","home_setup"))assertNotNull(tag,root.findViewWithTag<View>(tag))
         val all=texts(a).joinToString("\n"){it.text.toString()}
-        assertTrue(all,all.contains("통화 3건 (정리 중 1건)"));assertTrue(all.contains("기한 지난 일 1개"));assertTrue(all.contains("처음 설정 3/6"))
+        assertTrue(all,all.contains("오늘 통화"));assertTrue(all.contains("정리 중 1건"));assertTrue(all.contains("새 체크"));assertTrue(all.contains("처음 설정 3/6"))
         assertFalse(all,english.containsMatchIn(all))
         val buttons=views(root).filterIsInstance<Button>().filter{(it.tag as? String)?.startsWith("home_")==true}
         assertTrue(buttons.all{ it.minHeight>=(56*it.resources.displayMetrics.density).toInt() })
@@ -52,7 +52,7 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
         val a=home(HomeActivity.Snapshot(true,true,true,"READY",1,0,1,1,0,1_793_300_000_000))
         assertTrue(texts(a).filter{it !is Button}.all{ sp(it)>=18f })
         val today=Robolectric.buildActivity(TodayCallsActivity::class.java).setup().get()
-        settle(today) { texts(today).any { it.text.toString()=="오늘 할 일" } }
+        settle(today) { texts(today).any { it.text.toString()=="통화 기록" } }
         assertTrue(texts(today).filter{it !is Button}.all{ sp(it)>=18f })
         val settings=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
         settle(settings) { texts(settings).any { it.text.toString()=="설정" } }
@@ -70,12 +70,13 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
         assertEquals("확인 필요",CallUi.taskStatus("needs_confirmation"))
     }
 
-    @Test fun tasksAreGroupedUrgentFirst() {
-        val t=CallUi.today()
-        fun item(id:String,due:String,status:String="open")=OpenItem(id,id,due,status,1,"",null)
+    @Test fun tasksAreGroupedByRequestDay() {
+        val now=System.currentTimeMillis();val day=86_400_000L
+        fun item(id:String,at:Long,status:String="open")=OpenItem(id,id,"",status,1,"",null,createdMs=at)
         val a=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get()
-        val groups=a.groups(listOf(item("later",t.plusDays(3).toString()),item("none",""),item("late",t.minusDays(1).toString()),item("now",t.toString()),item("check","","needs_confirmation")))
-        assertEquals(listOf("기한 지난 일","오늘까지","끝났는지 확인해 주세요","다가오는 일","기한 없는 일"),groups.map{it.first})
+        val groups=a.groups(listOf(item("old",now-5*day),item("today",now),item("yesterday",now-day),item("check",now,"needs_confirmation")))
+        assertEquals(listOf("끝났는지 확인해 주세요","오늘 요청한 일","어제 요청한 일","그전에 요청한 일"),groups.map{it.first})
+        assertEquals("오늘 요청",CallUi.requested(now))
     }
 
     @Test fun nextReportTimeIsPlainKorean() {

@@ -31,13 +31,15 @@ internal data class CallRecord(
     val linkedPerson:String?=null,
 ) {
     /** Name for display: ledger/analysis name and company first, then the recording's counterpart. */
-    val displayName:String get()=listOfNotNull(linkedPerson ?: analysis?.counterpartName,analysis?.counterpartCompany).joinToString(" · ").ifBlank { counterpart?.takeIf { it.isNotBlank() } ?: "상대 미상" }
+    /** "△△철강 김민수": company then person, the way it is said aloud. */
+    val displayName:String get()=listOfNotNull(analysis?.counterpartCompany,linkedPerson ?: analysis?.counterpartName).joinToString(" ").ifBlank { counterpart?.takeIf { it.isNotBlank() } ?: "상대 미상" }
     val dayMs:Long get()=startedMs ?: createdMs
 }
 
 /** An open workflow item shown in "오늘 할 일". */
-internal data class OpenItem(val id:String,val title:String,val due:String,val status:String,val revision:Long,val edition:String,val counterpart:String?,val company:String?=null)
-internal data class CallTodoItem(val id:String,val title:String,val due:String,val status:String,val revision:Long,val company:String?=null)
+internal data class OpenItem(val id:String,val title:String,val due:String,val status:String,val revision:Long,val edition:String,val counterpart:String?,val company:String?=null,
+                              /** When the to-do was asked for (the call it came from). */ val createdMs:Long=0)
+internal data class CallTodoItem(val id:String,val title:String,val due:String,val status:String,val revision:Long,val company:String?=null,val createdMs:Long=0)
 /** One company of the ledger with what the list screen shows. */
 internal data class CompanyRow(val id:String,val name:String,val trade:String?,val openTasks:Int,val lastCallMs:Long?)
 internal data class CompanyCall(val recordId:String,val dayMs:Long,val person:String?,val summary:String?)
@@ -178,9 +180,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
     fun companyDetail(id:String):CompanyDetail? {
         val co=companyById(id) ?: return null
         val name=co.str("name")!!
-        val tasks=rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.edition FROM task_companies tc JOIN workflow_items i ON i.id=tc.item_id
+        val tasks=rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.edition,i.created_ms FROM task_companies tc JOIN workflow_items i ON i.id=tc.item_id
             WHERE tc.company_id=? AND i.status!='done' AND i.kind='TODO' ORDER BY i.created_ms DESC""",id)
-            .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),null,name) }
+            .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),null,name,it.long("created_ms") ?: 0) }
         val calls=rows("""SELECT c.record_id,COALESCE(c.started_ms,c.created_ms) AS day_ms,c.summary,p.name AS person FROM call_links l JOIN call_records c ON c.record_id=l.record_id
             LEFT JOIN people p ON p.id=l.person_id WHERE l.company_id=? ORDER BY day_ms DESC LIMIT 10""",id)
             .map { CompanyCall(it.str("record_id")!!,it.long("day_ms") ?: 0,it.str("person"),it.str("summary")) }
@@ -296,17 +298,17 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
     }
 
     /** Open items (any source) with an ISO due date on or before [today]. */
-    fun dueItems(today:LocalDate):List<CallTodoItem> =rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,
+    fun dueItems(today:LocalDate):List<CallTodoItem> =rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.created_ms,
         (SELECT co.name FROM task_companies tc JOIN companies co ON co.id=tc.company_id WHERE tc.item_id=i.id) AS cname
         FROM workflow_items i WHERE i.status!='done' AND i.due_text!='' ORDER BY i.due_text,i.created_ms""")
         .filter { val d=it.str("due_text")!!.trim();d.matches(ISO_DATE) && d<=today.toString() }
-        .map { CallTodoItem(it.str("id")!!,it.str("title")!!,it.str("due_text")!!.trim(),it.str("status")!!,it.long("revision")!!,it.str("cname")) }
+        .map { CallTodoItem(it.str("id")!!,it.str("title")!!,it.str("due_text")!!.trim(),it.str("status")!!,it.long("revision")!!,it.str("cname"),it.long("created_ms") ?: 0) }
     /** Every open to-do (any source), newest first, with the latest call counterpart of its recording. */
-    fun openItems():List<OpenItem> =rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.edition,
+    fun openItems():List<OpenItem> =rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.edition,i.created_ms,
         (SELECT c.counterpart FROM call_records c WHERE c.recording_id=i.recording_id ORDER BY c.created_ms DESC LIMIT 1) AS counterpart,
         (SELECT co.name FROM task_companies tc JOIN companies co ON co.id=tc.company_id WHERE tc.item_id=i.id) AS cname
         FROM workflow_items i WHERE i.status!='done' AND i.kind='TODO' ORDER BY i.created_ms DESC LIMIT 300""")
-        .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),it.str("counterpart"),it.str("cname")) }
+        .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),it.str("counterpart"),it.str("cname"),it.long("created_ms") ?: 0) }
     /** The user's "완료했어요": marks one item done and records the edit so analysis never touches it again. */
     fun completeItem(item:String,revision:Long)=port.transaction {
         val old=rows("SELECT * FROM workflow_items WHERE id=?",item).single()

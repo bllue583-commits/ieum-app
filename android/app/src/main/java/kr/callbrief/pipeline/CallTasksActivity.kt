@@ -9,7 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** "할 일": every open to-do, the urgent ones first, each with one big "완료" button.
+/** "할 일": every open to-do, grouped by the day it was asked for, each with one "완료" button.
  * Completion is always the user's explicit action (the AI only ever marks "확인 필요"). */
 class CallTasksActivity:ComponentActivity() {
     private lateinit var body:LinearLayout
@@ -17,7 +17,7 @@ class CallTasksActivity:ComponentActivity() {
 
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
-        body=CallUi.page(this)
+        body=CallUi.page(this,CallUi.Tab.TASKS)
     }
     override fun onResume() { super.onResume();load() }
 
@@ -29,35 +29,26 @@ class CallTasksActivity:ComponentActivity() {
         }
     }
 
+    /** Grouped by when they were asked for, newest first; ones the AI thinks are finished come first for a check. */
     internal fun groups(all:List<OpenItem>):List<Pair<String,List<OpenItem>>> {
-        val today=CallUi.today().toString()
-        fun iso(i:OpenItem)=Regex("\\d{4}-\\d{2}-\\d{2}").matches(i.due)
-        val overdue=all.filter{iso(it)&&it.due<today}.sortedBy{it.due}
-        val dueToday=all.filter{iso(it)&&it.due==today}
-        val check=all.filter{it.status=="needs_confirmation"&&it !in overdue&&it !in dueToday}
-        val later=all.filter{iso(it)&&it.due>today&&it !in check}.sortedBy{it.due}
-        val none=all.filter{it !in overdue&&it !in dueToday&&it !in check&&it !in later}
-        return listOf("기한 지난 일" to overdue,"오늘까지" to dueToday,"끝났는지 확인해 주세요" to check,"다가오는 일" to later,"기한 없는 일" to none).filter{it.second.isNotEmpty()}
+        val today=CallUi.today()
+        fun day(i:OpenItem)=CallRecordStore.kstDay(i.createdMs)
+        val check=all.filter { it.status=="needs_confirmation" }
+        val rest=(all-check.toSet()).sortedByDescending { it.createdMs }
+        return listOf("끝났는지 확인해 주세요" to check,"오늘 요청한 일" to rest.filter { day(it)==today },
+            "어제 요청한 일" to rest.filter { day(it)==today.minusDays(1) },"그전에 요청한 일" to rest.filter { day(it)<today.minusDays(1) })
+            .filter { it.second.isNotEmpty() }
     }
 
     private fun render(ok:Boolean) {
         body.removeAllViews()
-        body.addView(CallUi.title(this,"할 일"))
-        if(!ok) { body.addView(CallUi.text(this,"할 일을 읽지 못했어요. 잠시 후 다시 열어주세요."));return }
-        if(items.isEmpty()) { body.addView(CallUi.text(this,"남은 할 일이 없어요.",CallUi.SUMMARY));return }
-        body.addView(CallUi.text(this,"남은 할 일 ${items.size}개",CallUi.SUMMARY,color=CallUi.SUBTLE))
+        CallUi.band(body,"체크할 일",if(ok) "확인할 일이 ${items.size}개 남았어요" else null)
+        if(!ok) { body.addView(CallUi.text(this,"체크할 일을 읽지 못했어요. 잠시 후 다시 열어주세요."));return }
+        if(items.isEmpty()) { body.addView(CallUi.card(this).apply { addView(CallUi.text(this@CallTasksActivity,"체크할 일이 없어요.",CallUi.SUMMARY,color=CallUi.OK)) });return }
         for((name,list) in groups(items)) {
-            body.addView(CallUi.heading(this,"$name (${list.size})"))
+            body.addView(CallUi.section(this,name,"${list.size}개"))
             list.forEach { item ->
-                val rail=CallUi.railFor(item.due)
-                val c=CallUi.card(this,rail=rail).apply { tag="task_${item.id}" }
-                item.company?.let { c.addView(CallUi.text(this,"[$it]",CallUi.SMALL,true,CallUi.ACCENT)) }
-                c.addView(CallUi.text(this,item.title,CallUi.SUMMARY,true))
-                c.addView(CallUi.pill(this,CallUi.dueWords(item.due)+(CallUi.taskStatus(item.status).takeIf{it.isNotEmpty()}?.let{" · $it"} ?: ""),
-                    when(rail) { CallUi.WARN -> CallUi.WARN;null -> CallUi.SUBTLE;else -> CallUi.AMBER }))
-                item.counterpart?.let { c.addView(CallUi.text(this,"$it 님과의 통화에서",CallUi.SMALL,color=CallUi.SUBTLE)) }
-                c.addView(CallUi.button(this,"완료했어요") { complete(item) }.apply { tag="done_${item.id}" })
-                body.addView(c)
+                body.addView(CallUi.taskRow(this,item.title,item.createdMs,item.company,item.counterpart,item.status) { complete(item) }.apply { tag="task_${item.id}" })
             }
         }
     }
@@ -67,7 +58,7 @@ class CallTasksActivity:ComponentActivity() {
             val ok=withContext(Dispatchers.IO) { runCatching {
                 CallRecordStore(CallPipelineStartup.storage(this@CallTasksActivity)).use { it.completeItem(item.id,item.revision) }
             }.isSuccess }
-            Toast.makeText(this@CallTasksActivity,if(ok) "완료로 바꿨어요." else "바꾸지 못했어요. 다시 시도해 주세요.",Toast.LENGTH_SHORT).show();load()
+            Toast.makeText(this@CallTasksActivity,if(ok) "확인했어요. 목록에서 뺐어요." else "바꾸지 못했어요. 다시 시도해 주세요.",Toast.LENGTH_SHORT).show();load()
         }
     }
 }

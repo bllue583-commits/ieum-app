@@ -27,7 +27,7 @@ class CompaniesActivity:ComponentActivity() {
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
         detailId=savedInstanceState?.getString("company")
-        body=CallUi.page(this);(body.parent as View).tag="companies_scroll"
+        body=CallUi.page(this,CallUi.Tab.COMPANIES)
         onBackPressedDispatcher.addCallback(this,object:OnBackPressedCallback(true) {
             override fun handleOnBackPressed() { if(detailId!=null) { detailId=null;load() } else finish() }
         })
@@ -51,32 +51,36 @@ class CompaniesActivity:ComponentActivity() {
 
     private fun render() {
         body.removeAllViews()
-        if(failed) { body.addView(CallUi.title(this,"업체·사람 보기"));body.addView(CallUi.text(this,"업체 정보를 읽지 못했어요. 잠시 후 다시 열어주세요."));return }
+        if(failed) { CallUi.band(body,"업체와 사람");body.addView(CallUi.text(this,"업체 정보를 읽지 못했어요. 잠시 후 다시 열어주세요."));return }
         val d=detail
         if(detailId!=null && d!=null) { renderDetail(d);return }
         detailId=null
-        body.addView(CallUi.title(this,"업체·사람 보기"))
-        if(rows.isEmpty()) body.addView(CallUi.text(this,"아직 업체가 없어요. 통화가 정리되면 자동으로 채워져요.",CallUi.SUMMARY))
-        else body.addView(CallUi.text(this,"업체 ${rows.size}곳 · 최근에 통화한 순서",CallUi.SUMMARY,color=CallUi.SUBTLE))
+        CallUi.band(body,"업체와 사람",if(rows.isEmpty()) null else "업체 ${rows.size}곳, 최근에 통화한 순서예요")
+        if(rows.isEmpty()) body.addView(CallUi.card(this).apply { addView(CallUi.text(this@CompaniesActivity,"아직 업체가 없어요. 통화가 정리되면 자동으로 채워져요.",CallUi.BODY,color=CallUi.SUBTLE)) })
         rows.forEach { c ->
-            val card=CallUi.card(this).apply { isClickable=true;tag="company_${c.id}";contentDescription="${c.name} 자세히 보기" }
-            card.addView(CallUi.text(this,c.name,CallUi.HEADING,true))
-            c.trade?.let { card.addView(CallUi.pill(this,it,CallUi.ACCENT)) }
-            card.addView(CallUi.text(this,"열린 할 일 ${c.openTasks}개",CallUi.BODY,c.openTasks>0,if(c.openTasks>0) CallUi.INK else CallUi.SUBTLE))
-            card.addView(CallUi.text(this,"마지막 통화 "+(c.lastCallMs?.let { CallUi.date(CallRecordStore.kstDay(it)) } ?: "아직 없음"),CallUi.SMALL,color=CallUi.SUBTLE))
-            card.addView(CallUi.text(this,"사람·메모 자세히 보기 ›",CallUi.BODY,true,CallUi.ACCENT))
+            val card=CallUi.card(this).apply { isClickable=true;tag="company_${c.id}";contentDescription="${c.name}, 사람과 메모 자세히 보기" }
+            val top=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL;gravity=android.view.Gravity.CENTER_VERTICAL }
+            top.addView(CallUi.text(this,c.name,CallUi.HEADING,true),LinearLayout.LayoutParams(0,-2,1f))
+            c.trade?.let { top.addView(CallUi.pill(this,it,CallUi.ACCENT).apply { layoutParams=LinearLayout.LayoutParams(-2,-2).apply { marginEnd=CallUi.dp(this@CompaniesActivity,8) } }) }
+            top.addView(android.widget.ImageView(this).apply { setImageDrawable(CallUi.icon(this@CompaniesActivity,"chevron",CallUi.SUBTLE,20)) })
+            card.addView(top)
+            card.addView(CallUi.text(this,(if(c.openTasks>0) "체크할 일 ${c.openTasks}개" else "체크할 일 없음")+", "+
+                (c.lastCallMs?.let { "${CallUi.dayWord(CallRecordStore.kstDay(it))} 마지막 통화" } ?: "통화 기록 없음"),CallUi.SMALL,color=if(c.openTasks>0) CallUi.INK else CallUi.SUBTLE))
             card.setOnClickListener { detailId=c.id;load() }
             body.addView(card)
         }
-        if(loose.isNotEmpty()) { body.addView(CallUi.heading(this,"업체 없는 사람 (우리 직원 등)"));loose.forEach(::personCard) }
+        if(loose.isNotEmpty()) { body.addView(CallUi.section(this,"업체 없는 사람 (우리 직원 등)"));loose.forEach(::personCard) }
     }
 
+    /** One person: name, role, and a quiet [이름 고치기] for misheard names. */
     private fun personCard(p:PersonRow) {
-        val card=CallUi.card(this).apply { tag="person_${p.id}" }
-        card.addView(CallUi.text(this,p.name,CallUi.HEADING,true))
-        listOfNotNull(p.role,"우리 직원".takeIf { p.isStaff }).joinToString(" · ").takeIf { it.isNotEmpty() }
-            ?.let { card.addView(CallUi.text(this,it,CallUi.BODY,color=CallUi.SUBTLE)) }
-        card.addView(CallUi.button(this,"이름 고치기") { rename(p) }.apply { tag="person_rename_${p.id}" })
+        val card=CallUi.card(this).apply { tag="person_${p.id}";orientation=LinearLayout.HORIZONTAL;gravity=android.view.Gravity.CENTER_VERTICAL }
+        val words=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
+        words.addView(CallUi.text(this,p.name,CallUi.HEADING,true))
+        listOfNotNull(p.role,"우리 직원".takeIf { p.isStaff }).joinToString(", ").takeIf { it.isNotEmpty() }
+            ?.let { words.addView(CallUi.text(this,it,CallUi.SMALL,color=CallUi.SUBTLE)) }
+        card.addView(words,LinearLayout.LayoutParams(0,-2,1f))
+        card.addView(CallUi.linkButton(this,"이름 고치기") { rename(p) }.apply { tag="person_rename_${p.id}";contentDescription="${p.name} 이름 고치기" })
         body.addView(card)
     }
 
@@ -101,30 +105,21 @@ class CompaniesActivity:ComponentActivity() {
     }
 
     private fun renderDetail(d:CompanyDetail) {
-        body.addView(CallUi.button(this,"← 업체 목록으로") { detailId=null;load() }.apply { tag="companies_back" })
-        body.addView(CallUi.title(this,d.name))
-        d.trade?.let { body.addView(CallUi.pill(this,it,CallUi.ACCENT)) }
-        body.addView(CallUi.heading(this,"업체 메모"))
-        body.addView(CallUi.text(this,d.memo.ifBlank { "아직 메모가 없어요. 통화가 쌓이면 자동으로 채워져요." },CallUi.BODY,color=if(d.memo.isBlank()) CallUi.SUBTLE else CallUi.INK))
-        body.addView(CallUi.heading(this,"사람 (${d.people.size})"))
-        if(d.people.isEmpty()) body.addView(CallUi.text(this,"아직 알게 된 사람이 없어요."))
+        CallUi.band(body,d.name,d.trade?.let { "공종 $it" },back={ detailId=null;load() })
+        body.addView(CallUi.section(this,"업체 메모"))
+        body.addView(CallUi.card(this).apply { addView(CallUi.text(this@CompaniesActivity,d.memo.ifBlank { "아직 메모가 없어요. 통화가 쌓이면 자동으로 채워져요." },CallUi.BODY,color=if(d.memo.isBlank()) CallUi.SUBTLE else CallUi.INK)) })
+        body.addView(CallUi.section(this,"사람 (${d.people.size})"))
+        if(d.people.isEmpty()) body.addView(CallUi.text(this,"아직 알게 된 사람이 없어요.",CallUi.BODY,color=CallUi.SUBTLE))
         d.people.forEach(::personCard)
-        body.addView(CallUi.heading(this,"열린 할 일 (${d.tasks.size})"))
-        if(d.tasks.isEmpty()) body.addView(CallUi.text(this,"남은 할 일이 없어요."))
-        d.tasks.forEach { t ->
-            val rail=CallUi.railFor(t.due)
-            val c=CallUi.card(this,rail=rail).apply { tag="company_task_${t.id}" }
-            c.addView(CallUi.text(this,t.title,CallUi.SUMMARY,true))
-            c.addView(CallUi.pill(this,CallUi.dueWords(t.due)+(CallUi.taskStatus(t.status).takeIf { it.isNotEmpty() }?.let { " · $it" } ?: ""),
-                when(rail) { CallUi.WARN -> CallUi.WARN;null -> CallUi.SUBTLE;else -> CallUi.AMBER }))
-            body.addView(c)
-        }
-        body.addView(CallUi.heading(this,"최근 통화"))
-        if(d.calls.isEmpty()) body.addView(CallUi.text(this,"아직 통화 기록이 없어요."))
+        body.addView(CallUi.section(this,"체크할 일 (${d.tasks.size})"))
+        if(d.tasks.isEmpty()) body.addView(CallUi.text(this,"체크할 일이 없어요.",CallUi.BODY,color=CallUi.SUBTLE))
+        d.tasks.forEach { t -> body.addView(CallUi.taskRow(this,t.title,t.createdMs,null,t.counterpart,t.status).apply { tag="company_task_${t.id}" }) }
+        body.addView(CallUi.section(this,"최근 통화"))
+        if(d.calls.isEmpty()) body.addView(CallUi.text(this,"아직 통화 기록이 없어요.",CallUi.BODY,color=CallUi.SUBTLE))
         d.calls.forEach { call ->
             val c=CallUi.card(this).apply { tag="company_call_${call.recordId}" }
-            c.addView(CallUi.text(this,CallUi.date(CallRecordStore.kstDay(call.dayMs))+(call.person?.let { " · $it" } ?: ""),CallUi.BODY,true))
-            c.addView(CallUi.text(this,call.summary ?: "아직 정리 중이에요",CallUi.BODY,color=if(call.summary==null) CallUi.SUBTLE else CallUi.INK))
+            c.addView(CallUi.text(this,CallUi.dayWord(CallRecordStore.kstDay(call.dayMs))+(call.person?.let { ", $it 님과 통화" } ?: ""),CallUi.SMALL,true,CallUi.ACCENT))
+            c.addView(CallUi.text(this,call.summary ?: "아직 정리 중이에요",CallUi.BODY,color=if(call.summary==null) CallUi.SUBTLE else CallUi.INK).apply { maxLines=3;ellipsize=android.text.TextUtils.TruncateAt.END })
             body.addView(c)
         }
     }

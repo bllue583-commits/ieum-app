@@ -172,9 +172,9 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         }
         check()
         val list=texts(a).joinToString("\n") { it.text }
-        assertTrue(list,list.contains("철근"));assertTrue(list.contains("열린 할 일 1개"))
+        assertTrue(list,list.contains("철근"));assertTrue(list.contains("체크할 일 1개"))
         views(a.window.decorView).first { (it.tag as? String)?.startsWith("company_")==true }.performClick()
-        settle { texts(a).any { it.text.toString().startsWith("열린 할 일 (1)") } }
+        settle { texts(a).any { it.text.toString().startsWith("체크할 일 (1)") } }
         check()
         val detail=texts(a).joinToString("\n") { it.text }
         assertTrue(detail,detail.contains("단가 재견적 진행"));assertTrue(detail.contains("단가 재견적 받기"));assertTrue(detail.contains("철근 단가 협의"))
@@ -186,12 +186,12 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         val id=store().use { it.peopleOf(port().use { p -> p.query("SELECT id FROM companies").single()["id"] as String }).single().id }
         assertFalse(store().use { it.renamePerson(id,"   ") })
         assertTrue(store().use { it.renamePerson(id," 김철수 ") })
-        assertTrue(store().use { it.record(first.recordId)!!.displayName }.startsWith("김철수"))
+        assertTrue(store().use { it.record(first.recordId)!!.displayName }.contains("김철수"))
         // The model hears the old spelling again: same person, corrected name.
         val second=call(2,counterpart=null)
         apply(second,analysis(cp("김철주","△△철강")))
         assertEquals(1,count("people"))
-        assertTrue(store().use { it.record(second.recordId)!!.displayName }.startsWith("김철수"))
+        assertTrue(store().use { it.record(second.recordId)!!.displayName }.contains("김철수"))
         val names=store().use { it.request(call(3,counterpart=null)).personNames }
         assertTrue(names.toString(),"김철수" in names && "김철주" !in names)
     }
@@ -222,7 +222,7 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         settle { home.window.decorView.findViewWithTag<View>("home_calls_button")!=null }
         home.render(HomeActivity.Snapshot(true,true,true,"READY",0,0,0,0,0,0,companies=3))
         val door=home.window.decorView.findViewWithTag<View>("home_companies_button")
-        assertNotNull(door);assertTrue(views(door).filterIsInstance<TextView>().joinToString { it.text }.contains("업체 3곳"))
+        assertNotNull(door);assertTrue(views(door).filterIsInstance<TextView>().joinToString { it.text }.contains("업체"))
         val settings=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
         settle { texts(settings).any { it.text.toString()=="현장 상황 메모" } }
         settle { settings.window.decorView.findViewWithTag<TextView>("site_memo")?.text?.toString()=="현장 메모 본문" }

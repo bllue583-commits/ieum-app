@@ -18,7 +18,11 @@ internal class CallRecordAnalysisRunner(
     private val inbox:CallInboxStore?=CallInboxConfig.store(),
 ) {
     /** Returns false when a network-type failure should be retried later by WorkManager. */
-    fun runPending():Boolean = if(inbox!=null) runInbox(inbox) else runApi()
+    fun runPending():Boolean = when {
+        kr.callbrief.BuildConfig.LOCAL_PREVIEW -> true // preview calls stay as seeded
+        inbox!=null -> runInbox(inbox)
+        else -> runApi()
+    }
 
     /** Sends waiting transcripts (once; again after [RESEND_MS] without an answer), then applies any results. */
     private fun runInbox(store:CallInboxStore):Boolean = try {
@@ -81,7 +85,8 @@ internal class CallRecordAnalysisRunner(
 internal object CallInboxConfig {
     fun store():CallInboxStore? = kr.callbrief.BuildConfig.IEUM_INBOX_TOKEN.takeIf { it.isNotBlank() }
         ?.let { GitHubInboxStore(kr.callbrief.BuildConfig.IEUM_INBOX_REPO,it) }
-    val enabled get()=kr.callbrief.BuildConfig.IEUM_INBOX_TOKEN.isNotBlank()
+    /** The preview build shows the subscription screens but has no token, so nothing is uploaded. */
+    val enabled get()=kr.callbrief.BuildConfig.IEUM_INBOX_TOKEN.isNotBlank()||kr.callbrief.BuildConfig.LOCAL_PREVIEW
 }
 internal const val RESEND_MS=6*3_600_000L
 

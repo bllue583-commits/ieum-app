@@ -11,12 +11,18 @@ import kotlinx.coroutines.withContext
 import kr.callbrief.AutomaticRecordingDiscovery
 import kr.callbrief.SecureSettings
 
-/** App home: what happened today at a glance, the first-run checklist until setup is done,
- * and three big doors (오늘의 통화 / 할 일 / 설정). Older features sit behind "기타 기능". */
+/** App home, a dashboard: today's numbers, the first-run checklist until setup is done, today's call memos,
+ * open to-dos per company and this week's calls per day. The bottom bar leads to every other screen. */
 class HomeActivity:ComponentActivity() {
     internal data class Snapshot(val folder:Boolean,val key:Boolean,val consent:Boolean,val model:String,
                                  val calls:Int,val working:Int,val newTasks:Int,val due:Int,val overdue:Int,val lastAnalyzedMs:Long,
-                                 val notify:Boolean=true,val battery:Boolean=true,val modelPercent:Int=-1,val nextReport:String="",val companies:Int=0)
+                                 val notify:Boolean=true,val battery:Boolean=true,val modelPercent:Int=-1,val nextReport:String="",val companies:Int=0,
+                                 /** Calls per day, six days ago .. today. */
+                                 val week:List<Int> =emptyList(),
+                                 /** Open to-dos per company, most first ("업체 없음" for the rest). */
+                                 val byCompany:List<Pair<String,Int>> =emptyList(),
+                                 /** Today's calls, latest first, for the memo list. */
+                                 val memos:List<CallRecord> =emptyList())
     private lateinit var body:LinearLayout
     private val pickFolder=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { r ->
         if(r.resultCode==RESULT_OK) CallFolder.save(this,r.data)?.let { android.widget.Toast.makeText(this,it,android.widget.Toast.LENGTH_LONG).show() }
@@ -28,8 +34,9 @@ class HomeActivity:ComponentActivity() {
 
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
-        body=CallUi.page(this)
+        body=CallUi.page(this,CallUi.Tab.HOME)
         CallPipelineStartup.init(this)
+        if(LaunchIntro.claim(intent?.action==Intent.ACTION_MAIN,savedInstanceState!=null)) LaunchIntro.show(this)
     }
     override fun onResume() { super.onResume();load()
         if(intent?.getBooleanExtra("install_update",false)==true) { intent.removeExtra("install_update");CallUpdate.install(this) } }
@@ -45,21 +52,26 @@ class HomeActivity:ComponentActivity() {
 
     private fun read():Snapshot {
         val storage=CallPipelineStartup.storage(this)
+        if(kr.callbrief.BuildConfig.LOCAL_PREVIEW) PreviewSeed.ensure(storage)
         val s=SecureSettings(storage).snapshot()
         val folder=s.optString("treeUri").isNotBlank()
-        if(folder) {
+        if(folder&&!kr.callbrief.BuildConfig.LOCAL_PREVIEW) {
             runCatching { AutomaticRecordingDiscovery.ensure(storage) }
             runCatching { CallTranscriptionWork.schedule(storage) }
         }
         val today=CallUi.today()
         val (calls,due,newTasks)=CallRecordStore(storage).use { Triple(it.day(today),it.dueItems(today),it.newTaskCount(today)) }
         val companies=runCatching { CallRecordStore(storage).use { it.companyCount() } }.getOrDefault(0)
+        val week=runCatching { CallRecordStore(storage).use { s -> (6 downTo 0).map { s.day(today.minusDays(it.toLong())).size } } }.getOrDefault(emptyList())
+        val open=runCatching { CallRecordStore(storage).use { it.openItems() } }.getOrDefault(emptyList())
+        val byCompany=open.groupingBy { it.company ?: "업체 없음" }.eachCount().entries.sortedByDescending { it.value }.map { it.key to it.value }
         val mm=PipelineModelManager(storage)
         val percent=if(mm.partFile.isFile) (mm.partFile.length()*100/574041195L).toInt().coerceIn(0,99) else -1
         val next=CallUi.nextReport(s.optInt(PipelineSettingsKeys.EVENING_HOUR,19),s.optInt(PipelineSettingsKeys.MORNING_HOUR,6))
         return Snapshot(folder,s.optString(PipelineSettingsKeys.CLAUDE_API_KEY).isNotBlank(),s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false),
             s.optString(PipelineSettingsKeys.MODEL_STATE),calls.size,calls.count{it.state!=CallRecordStore.ANALYZED},newTasks,
-            due.size,due.count{CallUi.overdue(it.due)},s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),batteryFree(),percent,next,companies)
+            due.size,due.count{CallUi.overdue(it.due)},s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),batteryFree(),percent,next,companies,
+            week,byCompany,calls.sortedByDescending { it.startedMs ?: 0 }.take(4))
     }
 
     private fun agree() {
@@ -72,17 +84,26 @@ class HomeActivity:ComponentActivity() {
 
     internal fun render(s:Snapshot?) {
         body.removeAllViews()
-        body.addView(CallUi.title(this,"이음").apply { tag="home_title" })
-        body.addView(CallUi.text(this,CallUi.date(CallUi.today())+" · 오늘의 통화를 대신 기억해요",CallUi.SMALL,color=CallUi.SUBTLE))
+        CallUi.band(body,"이음",CallUi.date(CallUi.today()),eyebrow=CallUi.greeting(),overlap=true)
+        if(s==null) { body.addView(CallUi.card(this).apply { addView(CallUi.text(this@HomeActivity,"정보를 읽지 못했어요. 잠시 후 다시 열어주세요.")) });return }
+
+        // Today at a glance: three big numbers, then when the next report comes.
+        val today=CallUi.card(this).apply { tag="home_today";setPadding(CallUi.dp(this@HomeActivity,18),CallUi.dp(this@HomeActivity,16),CallUi.dp(this@HomeActivity,16),CallUi.dp(this@HomeActivity,12)) }
+        val left=s.byCompany.sumOf { it.second }
+        today.addView(CallUi.stats(this,listOf(Triple("${s.calls}","오늘 통화",CallUi.INK),Triple("${s.newTasks}","새 체크",CallUi.INK),
+            Triple("$left","체크할 일",CallUi.INK))).apply { tag="home_calls" })
+        today.addView(CallUi.divider(this))
+        today.addView(CallUi.text(this,s.nextReport.takeIf{it.isNotBlank()}?.let{"다음 알림 $it"} ?: "마지막 정리 "+CallUi.dateTime(s.lastAnalyzedMs),CallUi.SMALL,color=CallUi.SUBTLE).apply { tag="home_next_report" })
+        if(s.working>0) today.addView(CallUi.pill(this,"정리 중 ${s.working}건",CallUi.ACCENT))
+        body.addView(today)
 
         CallUpdate.ready(this)?.let { u ->
-            val c=CallUi.card(this).apply { tag="home_update" }
+            val c=CallUi.card(this,rail=CallUi.ACCENT).apply { tag="home_update" }
             c.addView(CallUi.text(this,"새 버전이 준비됐어요",CallUi.HEADING,true))
             if(u.notes.isNotBlank()) c.addView(CallUi.text(this,u.notes,CallUi.BODY))
-            c.addView(CallUi.bigButton(this,"⬇️","지금 업데이트") { CallUpdate.install(this) }.apply { tag="home_update_button" })
+            c.addView(CallUi.bigButton(this,"","지금 업데이트") { CallUpdate.install(this) }.apply { tag="home_update_button" })
             body.addView(c)
         }
-        if(s==null) { body.addView(CallUi.text(this,"정보를 읽지 못했어요. 잠시 후 다시 열어주세요."));doors(null);return }
 
         // First-run checklist: done steps get a tick, only the next step is open (one thing at a time).
         class Step(val done:Boolean,val label:String,val detail:String,val button:String,val action:()->Unit)
@@ -114,26 +135,34 @@ class HomeActivity:ComponentActivity() {
             body.addView(c)
         }
 
-        // Today at a glance: one plain sentence per fact, the urgent one in colour.
-        val today=CallUi.card(this).apply { tag="home_today" }
-        today.addView(CallUi.text(this,"통화 ${s.calls}건"+(if(s.working>0) " (정리 중 ${s.working}건)" else ""),CallUi.HEADING,true).apply { tag="home_calls";setPadding(0,0,0,CallUi.dp(this@HomeActivity,2)) })
-        today.addView(CallUi.text(this,"새로 생긴 할 일 ${s.newTasks}개",CallUi.BODY,color=CallUi.SUBTLE))
-        when {
-            s.overdue>0 -> today.addView(CallUi.pill(this,"기한 지난 일 ${s.overdue}개 · 오늘까지 ${s.due-s.overdue}개",CallUi.WARN))
-            s.due>0 -> today.addView(CallUi.pill(this,"오늘까지 할 일 ${s.due}개",CallUi.AMBER))
-            else -> today.addView(CallUi.text(this,"오늘까지 할 일은 없어요",CallUi.BODY,color=CallUi.OK))
+        // Today's call memos: who, when, one sentence. Tap a memo for the whole call.
+        body.addView(CallUi.section(this,"오늘 통화 메모",if(s.calls>0) "전체 보기 ›" else null) { CallUi.go(this,CallUi.Tab.CALLS) })
+        val memo=CallUi.card(this).apply { tag="home_memos";setPadding(0,CallUi.dp(this@HomeActivity,4),0,CallUi.dp(this@HomeActivity,4)) }
+        if(s.memos.isEmpty()) memo.addView(CallUi.text(this,"오늘은 아직 정리된 통화가 없어요",CallUi.BODY,color=CallUi.SUBTLE).apply { setPadding(CallUi.dp(this@HomeActivity,16),CallUi.dp(this@HomeActivity,10),CallUi.dp(this@HomeActivity,16),CallUi.dp(this@HomeActivity,10)) })
+        s.memos.forEachIndexed { i,c ->
+            if(i>0) memo.addView(android.view.View(this).apply { setBackgroundColor(CallUi.LINE) },LinearLayout.LayoutParams(-1,CallUi.dp(this,1)).apply { marginStart=CallUi.dp(this@HomeActivity,16) })
+            memo.addView(CallUi.memoRow(this,CallUi.time(c.startedMs),c.displayName,c.summary?.let(CallUi::firstSentence) ?: CallUi.state(c.state),c.summary==null) {
+                startActivity(Intent(this,TodayCallsActivity::class.java).putExtra(TodayCallsActivity.EXTRA_CALL,c.recordId))
+            }.apply { tag="home_memo_${c.recordId}" })
         }
-        val foot=listOfNotNull(s.nextReport.takeIf{it.isNotBlank()}?.let{"다음 알림 $it"},"마지막 정리 "+CallUi.dateTime(s.lastAnalyzedMs))
-        today.addView(CallUi.text(this,foot.joinToString("\n"),CallUi.SMALL,color=CallUi.SUBTLE).apply { tag="home_next_report";setPadding(0,CallUi.dp(this@HomeActivity,10),0,0) })
-        body.addView(today)
-        doors(s)
-    }
+        body.addView(memo)
 
-    private fun doors(s:Snapshot?) {
-        body.addView(CallUi.gap(this,6))
-        body.addView(CallUi.door(this,"오늘의 통화",s?.let{"오늘 ${it.calls}건"+(if(it.working>0) " · 정리 중 ${it.working}건" else "")} ?: "") { open(TodayCallsActivity::class.java) }.apply { tag="home_calls_button" })
-        body.addView(CallUi.door(this,"할 일",s?.let{ if(it.due>0) "오늘까지 ${it.due}개" else "목록 보기" } ?: "") { open(CallTasksActivity::class.java) }.apply { tag="home_tasks_button" })
-        body.addView(CallUi.door(this,"업체·사람 보기",s?.let{ if(it.companies>0) "업체 ${it.companies}곳 · 이름 고치기" else "통화가 쌓이면 채워져요" } ?: "") { open(CompaniesActivity::class.java) }.apply { tag="home_companies_button" })
-        body.addView(CallUi.door(this,"설정",s?.let{ if(listOf(it.folder,it.consent,it.model=="READY",it.notify,it.battery).all{x->x}) "녹음 폴더 · 알림 시각" else "처음 설정을 마쳐 주세요" } ?: "") { open(CallSettingsActivity::class.java) }.apply { tag="home_settings_button" })
+        // Open to-dos per company: one bar each, the busiest on top.
+        if(left>0) {
+            body.addView(CallUi.section(this,"업체별 체크할 일","전체 보기 ›") { CallUi.go(this,CallUi.Tab.TASKS) })
+            val c=CallUi.card(this).apply { tag="home_task_mix" }
+            val max=s.byCompany.maxOf { it.second }
+            s.byCompany.take(5).forEach { (name,n) -> c.addView(CallUi.barRow(this,name,n,max)) }
+            body.addView(c)
+        }
+
+        // This week's calls, one bar per day, today in navy.
+        if(s.week.size==7) {
+            body.addView(CallUi.section(this,"이번 주 통화","${s.week.sum()}건"))
+            val c=CallUi.card(this).apply { tag="home_week" }
+            val days=(6 downTo 0).map { CallUi.today().minusDays(it.toLong()) }
+            c.addView(CallUi.BarChart(this,s.week,days.mapIndexed { i,d -> if(i==6) "오늘" else CallUi.weekday(d) }),LinearLayout.LayoutParams(-1,CallUi.dp(this,150)))
+            body.addView(c)
+        }
     }
 }

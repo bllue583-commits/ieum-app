@@ -21,6 +21,8 @@ android {
         require(inboxToken.matches(Regex("[A-Za-z0-9_]*"))) { "IEUM_INBOX_TOKEN format" }
         buildConfigField("String","IEUM_INBOX_TOKEN","\""+inboxToken+"\"")
         buildConfigField("String","IEUM_INBOX_REPO","\"bllue583-commits/ieum-inbox\"")
+        // Local design preview (IEUM_LOCAL_PREVIEW=1, never in CI): sample calls on first launch, nothing sent anywhere.
+        buildConfigField("boolean","LOCAL_PREVIEW",(System.getenv("IEUM_LOCAL_PREVIEW")=="1").toString())
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes {

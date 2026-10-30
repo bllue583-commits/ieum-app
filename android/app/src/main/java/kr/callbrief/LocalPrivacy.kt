@@ -72,7 +72,7 @@ object LocalPrivacy {
     }
     fun requireAllowed(recording: RecordingRef, state: JSONObject): RecordingIdentity {
         require(!blocked(recording,state)) { "개인정보 제외 규칙으로 차단된 통화예요." }
-        require(collectionDecision(recording,state)==LocalCollectionDecision.ALLOW) { "파일명의 번호·이름 범위 확인이 필요한 통화예요. 음성은 읽지 않았어요." }
+        require(collectionDecision(recording,state)==LocalCollectionDecision.ALLOW) { "파일명의 번호와 이름 범위 확인이 필요한 통화예요. 음성은 읽지 않았어요." }
         return identity(recording,state) ?: RecordingIdentity("", recording.name.substringBeforeLast('.'))
     }
 }

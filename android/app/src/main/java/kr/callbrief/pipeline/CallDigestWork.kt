@@ -27,11 +27,11 @@ internal object CallDigestText {
     private fun more(lines:List<String>)=if(lines.size>MAX_LINES) lines.take(MAX_LINES-1)+"외 ${lines.size-MAX_LINES+1}개" else lines
     fun evening(calls:List<CallRecord>,newTasks:Int):Message {
         val names=calls.map { it.displayName }.filter { it!="상대 미상" }.distinct().take(2)
-        val who=if(names.isEmpty()) "" else " · "+names.joinToString(", ")+(if(calls.size>names.size) " 등" else "")
+        val who=if(names.isEmpty()) "" else names.joinToString(", ")+(if(calls.size>names.size) " 등" else "")+"과 통화했어요. "
         val lines=calls.sortedBy { it.startedMs ?: 0 }.map { c ->
-            "${CallUi.time(c.startedMs)} ${c.displayName} — "+(c.summary?.substringBefore('\n')?.take(60) ?: CallUi.state(c.state))
+            "${CallUi.time(c.startedMs)} ${c.displayName} — "+(c.summary?.let(CallUi::firstSentence) ?: CallUi.state(c.state))
         }
-        return Message("오늘 통화 ${calls.size}건 · 새 할 일 ${newTasks}개",if(calls.isEmpty()) "오늘 정리된 통화가 없어요" else "펼치면 통화별 요약이 보여요$who",more(lines))
+        return Message("오늘 통화 ${calls.size}건, 새 할 일 ${newTasks}개",if(calls.isEmpty()) "오늘 정리된 통화가 없어요" else "${who}펼치면 통화별 요약이 보여요",more(lines))
     }
     fun morning(items:List<CallTodoItem>,today:LocalDate):Message {
         val overdue=items.count { it.due<today.toString() }
