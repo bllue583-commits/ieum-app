@@ -56,3 +56,4 @@ private-library/
 **/fixture_integrity_result.json
 .kotlin/
 *.salive
+.claude/
