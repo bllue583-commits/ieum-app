@@ -15,61 +15,96 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-/** One look for every call screen, sized for a reader in his 50s: large sp text (scales with the
- * system font size), dark text on a light background, full-width buttons at least 64dp tall, plain Korean. */
+/** One look for every call screen. Blueprint blue on a cool concrete-grey page, white sheets with a hairline
+ * edge (no shadows), safety amber only for "due today". Sized for a reader in his 50s: large sp text that
+ * scales with the system font size, touch targets of 60dp and more, plain Korean. */
 internal object CallUi {
     const val TITLE=28f
-    const val HEADING=23f
+    const val HEADING=21f
     const val SUMMARY=20f
     const val BODY=19f
     const val SMALL=18f
-    val INK=Color.parseColor("#111111")
-    val SUBTLE=Color.parseColor("#3A3A3A")
-    val ACCENT=Color.parseColor("#0B57D0")
-    val WARN=Color.parseColor("#B3261E")
-    val OK=Color.parseColor("#1E7A34")
-    val PAGE=Color.parseColor("#FFFFFF")
-    val CARD=Color.parseColor("#EEF3FB")
-    val CARD_WARN=Color.parseColor("#FDEEEC")
+    val INK=Color.parseColor("#1C2731")
+    val SUBTLE=Color.parseColor("#56636E")
+    val ACCENT=Color.parseColor("#1F5C99")
+    val ACCENT_SOFT=Color.parseColor("#E6EEF6")
+    val AMBER=Color.parseColor("#A86F00")
+    val AMBER_RAIL=Color.parseColor("#E3A21A")
+    val WARN=Color.parseColor("#B23A2B")
+    val OK=Color.parseColor("#2E7656")
+    val PAGE=Color.parseColor("#F2F4F5")
+    val CARD=Color.parseColor("#FFFFFF")
+    val LINE=Color.parseColor("#DCE1E5")
+    val CARD_WARN=CARD
 
     fun dp(a:Activity,v:Int)=(v*a.resources.displayMetrics.density+0.5f).toInt()
 
-    /** A scrolling page with system-bar padding; returns the column to add views to. */
     /** Device tests only: lets UiAutomation capture the screens. The app itself never sets it. */
     @Volatile internal var allowCaptureForTests=false
+    /** A scrolling page with system-bar padding; returns the column to add views to. */
     fun page(a:Activity):LinearLayout {
         if(!allowCaptureForTests)a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        a.window.decorView.setBackgroundColor(PAGE)
+        if(android.os.Build.VERSION.SDK_INT>=30) a.window.insetsController?.setSystemBarsAppearance(
+            android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+            android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS)
         val column=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
-        val scroll=ScrollView(a).apply { setBackgroundColor(PAGE);isFillViewport=true;tag="page_scroll" }
-        val p=dp(a,18);scroll.setPadding(p,p,p,p)
-        scroll.setOnApplyWindowInsetsListener { v,insets -> v.setPadding(p+insets.systemWindowInsetLeft,insets.systemWindowInsetTop+p,p+insets.systemWindowInsetRight,insets.systemWindowInsetBottom+p);insets }
+        val scroll=ScrollView(a).apply { setBackgroundColor(PAGE);isFillViewport=true;tag="page_scroll";clipToPadding=false }
+        val p=dp(a,20);scroll.setPadding(p,p,p,p)
+        scroll.setOnApplyWindowInsetsListener { v,insets -> v.setPadding(p+insets.systemWindowInsetLeft,insets.systemWindowInsetTop+dp(a,12),p+insets.systemWindowInsetRight,insets.systemWindowInsetBottom+p);insets }
         scroll.addView(column);a.setContentView(scroll);return column
     }
     fun text(a:Activity,value:String,size:Float=BODY,bold:Boolean=false,color:Int=INK)=TextView(a).apply {
-        text=value;textSize=size;setTextColor(color);setLineSpacing(0f,1.2f);setPadding(0,dp(a,6),0,dp(a,6))
+        text=value;textSize=size;setTextColor(color);setLineSpacing(0f,1.25f);setPadding(0,dp(a,4),0,dp(a,4))
         if(android.os.Build.VERSION.SDK_INT>=33)lineBreakWordStyle=android.graphics.text.LineBreakConfig.LINE_BREAK_WORD_STYLE_PHRASE // wrap Korean at word boundaries
-        if(bold)setTypeface(typeface,Typeface.BOLD)
+        if(bold)setTypeface(Typeface.create(Typeface.DEFAULT,Typeface.BOLD))
     }
-    fun title(a:Activity,value:String)=text(a,value,TITLE,true)
-    fun heading(a:Activity,value:String)=text(a,value,HEADING,true).apply { setPadding(0,dp(a,16),0,dp(a,6)) }
+    fun title(a:Activity,value:String)=text(a,value,TITLE,true).apply { letterSpacing=-0.01f;setPadding(0,dp(a,8),0,dp(a,2)) }
+    fun heading(a:Activity,value:String)=text(a,value,HEADING,true).apply { setPadding(0,dp(a,24),0,dp(a,6)) }
 
-    private fun rounded(color:Int,stroke:Int?=null,a:Activity)=GradientDrawable().apply { setColor(color);cornerRadius=dp(a,14).toFloat();if(stroke!=null)setStroke(dp(a,2),stroke) }
-    /** Primary full-width button: icon + plain label, 64dp tall. */
-    fun bigButton(a:Activity,icon:String,label:String,action:()->Unit)=Button(a).apply {
-        text=if(icon.isEmpty()) label else "$icon  $label";textSize=22f;isAllCaps=false;setTypeface(typeface,Typeface.BOLD)
-        setTextColor(Color.WHITE);background=rounded(ACCENT,null,a);minHeight=dp(a,68);gravity=Gravity.CENTER
+    private fun sheet(a:Activity,fill:Int,stroke:Int?=null,radius:Int=14)=GradientDrawable().apply {
+        setColor(fill);cornerRadius=dp(a,radius).toFloat();if(stroke!=null)setStroke(dp(a,1),stroke) }
+    /** Primary action: solid blueprint blue, 64dp. [icon] is ignored (kept for call sites); words carry the meaning. */
+    fun bigButton(a:Activity,@Suppress("UNUSED_PARAMETER") icon:String,label:String,action:()->Unit)=Button(a).apply {
+        text=label;textSize=21f;isAllCaps=false;stateListAnimator=null;setTypeface(Typeface.create(Typeface.DEFAULT,Typeface.BOLD))
+        setTextColor(Color.WHITE);background=sheet(a,ACCENT,radius=12);minHeight=dp(a,64);gravity=Gravity.CENTER
         setOnClickListener { action() };layoutParams=LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,8);bottomMargin=dp(a,8) }
     }
-    /** Secondary full-width button (outlined), 60dp tall. */
+    /** Secondary action: soft blue fill, 60dp. */
     fun button(a:Activity,label:String,action:()->Unit)=Button(a).apply {
-        text=label;textSize=SMALL+1;isAllCaps=false;setTextColor(ACCENT);background=rounded(PAGE,ACCENT,a);minHeight=dp(a,60)
+        text=label;textSize=SMALL+1;isAllCaps=false;stateListAnimator=null;setTextColor(ACCENT);background=sheet(a,ACCENT_SOFT,radius=12);minHeight=dp(a,60)
+        setTypeface(Typeface.create(Typeface.DEFAULT,Typeface.BOLD))
         setOnClickListener { action() };layoutParams=LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,6);bottomMargin=dp(a,6) }
     }
-    fun card(a:Activity,warn:Boolean=false)=LinearLayout(a).apply {
-        orientation=LinearLayout.VERTICAL;background=rounded(if(warn) CARD_WARN else CARD,null,a);val p=dp(a,16);setPadding(p,p,p,p)
-        layoutParams=LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,8);bottomMargin=dp(a,8) }
+    /** A white sheet with a hairline edge. [rail] draws a schedule-bar stripe on the left (urgency). */
+    fun card(a:Activity,warn:Boolean=false,rail:Int?=if(warn) WARN else null)=LinearLayout(a).apply {
+        orientation=LinearLayout.VERTICAL
+        val base=sheet(a,CARD,LINE)
+        background=if(rail==null) base else android.graphics.drawable.LayerDrawable(arrayOf(base,sheet(a,rail,radius=14).apply {
+            cornerRadii=floatArrayOf(dp(a,14).toFloat(),dp(a,14).toFloat(),0f,0f,0f,0f,dp(a,14).toFloat(),dp(a,14).toFloat()) })).apply {
+            setLayerWidth(1,dp(a,6));setLayerGravity(1,Gravity.START or Gravity.FILL_VERTICAL) }
+        val p=dp(a,18);setPadding(p+(if(rail!=null) dp(a,6) else 0),p,p,p)
+        layoutParams=LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,6);bottomMargin=dp(a,6) }
+    }
+    /** Navigation row for the home screen: label, one line of status, chevron; 76dp. */
+    fun door(a:Activity,label:String,detail:String,action:()->Unit)=LinearLayout(a).apply {
+        orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;minimumHeight=dp(a,76);isClickable=true;isFocusable=true
+        background=sheet(a,CARD,LINE);val p=dp(a,18);setPadding(p,dp(a,12),p,dp(a,12));contentDescription="$label, $detail"
+        val words=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
+        words.addView(text(a,label,SUMMARY+1,true).apply { setPadding(0,0,0,0) })
+        if(detail.isNotBlank()) words.addView(text(a,detail,SMALL,color=SUBTLE).apply { setPadding(0,dp(a,2),0,0) })
+        addView(words,LinearLayout.LayoutParams(0,-2,1f))
+        addView(text(a,"›",28f,color=ACCENT).apply { setPadding(dp(a,8),0,0,dp(a,2)) })
+        setOnClickListener { action() };layoutParams=LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,6);bottomMargin=dp(a,6) }
+    }
+    /** Small status word in a soft pill (e.g. "오늘까지" in amber). */
+    fun pill(a:Activity,value:String,color:Int)=text(a,value,SMALL,true,color).apply {
+        background=sheet(a,(color and 0x00FFFFFF) or 0x1F000000,radius=20);setPadding(dp(a,12),dp(a,4),dp(a,12),dp(a,4))
+        layoutParams=LinearLayout.LayoutParams(-2,-2).apply { topMargin=dp(a,6) }
     }
     fun gap(a:Activity,h:Int=12)=View(a).apply { layoutParams=LinearLayout.LayoutParams(-1,dp(a,h)) }
+    /** Urgency colour for a due date: overdue red, today amber, otherwise none. */
+    fun railFor(due:String?):Int? = when { overdue(due) -> WARN;due?.trim()==today().toString() -> AMBER_RAIL;else -> null }
 
     // ---- plain Korean formatting -------------------------------------------------
     private val TIME=DateTimeFormatter.ofPattern("a h:mm",Locale.KOREAN)

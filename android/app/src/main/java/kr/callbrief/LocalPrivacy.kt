@@ -61,22 +61,10 @@ object LocalPrivacy {
         val identity = identity(recording,state) ?: return false
         return rules.excluded(identity.alias,identity.phone)
     }
-    fun collectionDecision(recording:RecordingRef,state:JSONObject):LocalCollectionDecision {
-        // Existing exclusions win over approvals. Neither an unknown boundary nor a saved mapping permits a read.
-        if(blocked(recording,state)) return LocalCollectionDecision.EXCLUDE
-        val boundary=kr.callbrief.core.ContactBoundary.parse(recording.name) ?: return LocalCollectionDecision.HOLD
-        // A readable alias field alone cannot establish that an excluded phone is absent.
-        // Require one explicit valid phone or an existing scoped, explicitly confirmed identity.
-        if(identity(recording,state)==null) return LocalCollectionDecision.HOLD
-        if(boundary.phones.isEmpty()) {
-            // A legacy URI-only entry is not a current name/folder confirmation.
-            val key=mappingKey(recording,state) ?: return LocalCollectionDecision.HOLD
-            val mapping=state.optJSONObject("aliasMappings")?.optJSONObject(key) ?: return LocalCollectionDecision.HOLD
-            if(!mapping.optBoolean("reuse_enabled") || mapping.optBoolean("conflict") ||
-                mapping.optString("treeUri")!=state.optString("treeUri")) return LocalCollectionDecision.HOLD
-        }
-        return LocalCollectionDecision.ALLOW
-    }
+    /** Exclusion rules win; otherwise every recording in the folder the user chose (with consent) is read.
+     * Samsung names files by contact name, so a phone number in the name is not required. */
+    fun collectionDecision(recording:RecordingRef,state:JSONObject):LocalCollectionDecision =
+        if(blocked(recording,state)) LocalCollectionDecision.EXCLUDE else LocalCollectionDecision.ALLOW
     fun requireCollectionAllowed(recording:RecordingRef,state:JSONObject) {
         check(collectionDecision(recording,state)==LocalCollectionDecision.ALLOW) {
             if(blocked(recording,state)) "EXCLUDED_BEFORE_READ" else "CONTACT_OR_IDENTITY_REVIEW_REQUIRED"
@@ -85,6 +73,6 @@ object LocalPrivacy {
     fun requireAllowed(recording: RecordingRef, state: JSONObject): RecordingIdentity {
         require(!blocked(recording,state)) { "개인정보 제외 규칙으로 차단된 통화예요." }
         require(collectionDecision(recording,state)==LocalCollectionDecision.ALLOW) { "파일명의 번호·이름 범위 확인이 필요한 통화예요. 음성은 읽지 않았어요." }
-        return requireNotNull(identity(recording,state)) { "상대방 번호 확인이 필요한 통화예요. 음성은 읽지 않았어요." }
+        return identity(recording,state) ?: RecordingIdentity("", recording.name.substringBeforeLast('.'))
     }
 }

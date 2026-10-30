@@ -35,6 +35,7 @@ internal class CallRecordAnalysisRunner(
                 db.markSent(record.recordId,clock())
             }
             for((name,sha) in store.list(CallInbox.RESULTS)) {
+                if(name.startsWith("selftest-")) continue // CI end-to-end check, not a call of this phone
                 val path=CallInbox.RESULTS+"/"+name
                 val parsed=runCatching { CallInbox.parseResult(store.get(path)) }.getOrNull()
                 val record=parsed?.let { db.record(it.first) }

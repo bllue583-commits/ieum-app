@@ -22,12 +22,13 @@ class LocalPrivacyTest : ProtectedTextHostTestBase() {
             .put("treeUri",state.getString("treeUri")).put("phone",phone).put("display_alias","가상업체")
             .put("reuse_enabled",true).put("conflict",false).put("case_id","synthetic-topic")))
     }
-    @Test fun unresolvedNamesFailClosedEvenWithTimeAndGroupAssignment() {
+    @Test fun nameOnlyRecordingsAreReadWhenNotExcluded() {
         val record=record("통화 녹음 가상업체_261009_112233.m4a");val state=state()
         state.put("assignments",JSONObject().put(record.uri.toString(),"synthetic-topic"))
         state.put("timeOverrides",JSONObject().put(record.uri.toString(),"2026-10-09T02:22:33Z"))
         assertNull(LocalPrivacy.identity(record,state))
-        assertThrows(IllegalArgumentException::class.java) { LocalPrivacy.requireAllowed(record,state) }
+        // Samsung names files by contact name: with no exclusion rule the call in the chosen folder is read.
+        assertEquals(LocalCollectionDecision.ALLOW,LocalPrivacy.collectionDecision(record,state))
     }
     @Test fun confirmedAliasReuseIsOptInAndFolderScoped() {
         val record=record("통화 녹음 가상업체_261009_112233.m4a");val state=state();mapping(record,state)
@@ -74,10 +75,10 @@ class LocalPrivacyTest : ProtectedTextHostTestBase() {
         assertNull(LocalPrivacy.identity(briefcase,state));assertNull(LocalPrivacy.identity(punctuation,state))
         assertEquals("01000001111",LocalPrivacy.requireAllowed(heart,state).phone)
     }
-    @Test fun multipleNumbersCannotFallThroughToAliasReuse() {
+    @Test fun multipleNumbersNeverReuseAnAlias() {
         val record=record("통화 녹음 가상업체 01000002222 01000003333_261009_112233.m4a")
         val state=state();mapping(record,state)
         assertNull(LocalPrivacy.identity(record,state))
-        assertThrows(IllegalArgumentException::class.java) { LocalPrivacy.requireAllowed(record,state) }
+        assertEquals(LocalCollectionDecision.ALLOW,LocalPrivacy.collectionDecision(record,state))
     }
 }

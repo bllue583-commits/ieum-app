@@ -104,7 +104,7 @@ class ProtectedTextStorageTest : ProtectedTextHostTestBase() {
     }
     @Test fun T15UnacceptedSourceScopeIsHeldBeforeOpening()=io {
         val keys=HostVaultKeys();val generated=GeneralLocalStoreTest.Source().apply {put()}
-        val unaccepted=object:SelectedRecordingSource by generated {override val explicitlySyntheticScope=false}
+        val unaccepted=object:SelectedRecordingSource by generated {override val explicitlySyntheticScope=false;override val collectionAccepted=false}
         GeneralLocalStoreTest.host(context,keys).use {s->s.initializeEmpty();val r=s.importSelected(unaccepted);assertEquals(1,r.held);assertEquals(0,generated.opens);assertEquals(0,s.snapshot().length())}
         evidence("T15","unaccepted_audio_opens" to 0)
     }

@@ -1,0 +1,86 @@
+name: inbox-e2e
+
+# Real end-to-end check of subscription mode with a PUBLIC SYNTHETIC call:
+#   put   (push of this file / manual): drop a job into ieum-inbox/inbox/ exactly as the phone would
+#   check (every hour at :40):          validate results/selftest-*.json with the phone's parser + filter, then remove it
+on:
+  push:
+    branches: ['feature/**']
+    paths: ['.github/workflows/inbox-e2e.yml', 'android/app/src/test/java/kr/callbrief/pipeline/InboxSelfTest.kt']
+  schedule:
+    - cron: '40 22-23,0-14 * * *' # 07:40-23:40 KST, after each scheduled analysis
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      INBOX: bllue583-commits/ieum-inbox
+      IEUM_SKIP_ANDROID_NATIVE: '1'
+      ROBOLECTRIC_JAR_URL: https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented/15-robolectric-13954326-i7/android-all-instrumented-15-robolectric-13954326-i7.jar
+      GH_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Anything to check?
+        id: look
+        run: |
+          names=$(gh api "repos/$INBOX/contents/results" --jq '.[] | select(.name|startswith("selftest-")) | .name' 2>/dev/null || true)
+          echo "results=$(echo $names)" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = schedule ] && [ -z "$names" ]; then echo "skip=1" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/setup-java@v4
+        if: steps.look.outputs.skip != '1'
+        with: {distribution: temurin, java-version: '17'}
+      - uses: actions/setup-node@v4
+        if: steps.look.outputs.skip != '1'
+        with: {node-version: '22'}
+      - uses: android-actions/setup-android@v3
+        if: steps.look.outputs.skip != '1'
+        with: {packages: 'platforms;android-36 build-tools;35.0.0'}
+      - uses: actions/cache@v4
+        if: steps.look.outputs.skip != '1'
+        with:
+          path: |
+            gradle-user/caches
+            gradle-user/wrapper
+            robolectric-jar
+          key: gradle-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+      - name: Prepare
+        if: steps.look.outputs.skip != '1'
+        run: |
+          mkdir -p robolectric-jar e2e
+          [ -f robolectric-jar/android-all.jar ] || curl -fsSL "$ROBOLECTRIC_JAR_URL" -o robolectric-jar/android-all.jar
+          python3 tools/prepare_host_tests.py robolectric-jar/android-all.jar
+      - name: Check results from the scheduled task
+        if: steps.look.outputs.results != ''
+        run: |
+          export ANDROID_SDK_ROOT="$ANDROID_HOME" IEUM_NODE_BINARY="$(command -v node)"
+          status=0
+          for n in ${{ steps.look.outputs.results }}; do
+            gh api "repos/$INBOX/contents/results/$n" -H 'Accept: application/vnd.github.raw+json' > "e2e/$n"
+            if IEUM_SELFTEST_RESULT="$PWD/e2e/$n" python3 run_gradle.py --log e2e-check.log :app:testDebugUnitTest --tests 'kr.callbrief.pipeline.InboxSelfTest'; then
+              echo "::notice title=inbox-e2e::PASS $n $(tr -d '\n' < e2e/$n.report.json | cut -c1-1200)"
+            else
+              status=1; echo "::error title=inbox-e2e::FAIL $n $(grep -ho 'message="[^"]*"' android/app/build/test-results/testDebugUnitTest/*InboxSelfTest*.xml | head -3)"
+            fi
+            sha=$(gh api "repos/$INBOX/contents/results/$n" --jq .sha)
+            gh api -X DELETE "repos/$INBOX/contents/results/$n" -f message="selftest checked" -f sha="$sha" > /dev/null
+          done
+          exit $status
+      - name: Put a new synthetic job
+        if: github.event_name != 'schedule'
+        run: |
+          export ANDROID_SDK_ROOT="$ANDROID_HOME" IEUM_NODE_BINARY="$(command -v node)"
+          IEUM_SELFTEST_JOB="$PWD/e2e/job.json" python3 run_gradle.py --log e2e-put.log :app:testDebugUnitTest --tests 'kr.callbrief.pipeline.InboxSelfTest'
+          name="selftest-$GITHUB_RUN_ID.json"
+          gh api -X PUT "repos/$INBOX/contents/inbox/$name" -f message="selftest job" -f content="$(base64 -w0 e2e/job.json)" > /dev/null
+          echo "::notice title=inbox-e2e::job inbox/$name placed; the next scheduled analysis answers it"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.look.outputs.skip != '1'
+        with:
+          name: inbox-e2e
+          retention-days: 14
+          path: e2e/

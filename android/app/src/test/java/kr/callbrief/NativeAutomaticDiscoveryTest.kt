@@ -119,12 +119,13 @@ class NativeAutomaticDiscoveryTest {
         try{rows("UPDATE discovery_intake_requests SET commit_payload='changed'");fail("immutable request") }catch(_:RuntimeException){}
         assertEquals(1,rows("SELECT * FROM receipts").size)
     }
-    @Test fun N14NoAudioKeyInitializationAndNoAuthNeededForMetadataQueue()=worker {
-        store().use{s->val src=Source().apply{put(modified=now-300000)};ready(s,src,Time()){assertNull(keys.key);assertEquals(0,src.opens);assertEquals(0,s.snapshot().length());assertEquals(1,it.engine.rows().size)}}
+    /** First run after consent creates the on-device vault key itself (no setup screen any more). */
+    @Test fun N14VaultKeyIsCreatedOnFirstAcceptedRun()=worker {
+        store().use{s->val src=Source().apply{put(modified=now-300000)};ready(s,src,Time()){assertNotNull(keys.key);assertEquals("READY",s.setupState())}}
     }
-    @Test fun N15GeneralSAFModeNeverOpensPersonalDataEvenWhenIdentityAllowed()=worker {
+    @Test fun N15WithoutConsentNeverOpensPersonalData()=worker {
         store().use{s->s.initializeEmpty();val src=Source().apply{put(modified=now-300000)}
-            val general=object:SelectedRecordingSource by src {override val explicitlySyntheticScope=false}
+            val general=object:SelectedRecordingSource by src {override val explicitlySyntheticScope=false;override val collectionAccepted=false}
             val t=Time();NativeDiscoverySession(s,general,selected(src),{JSONObject()},t,{now},false,config).use{n->
                 n.cycle(1,1);t.elapsed+=20;val report=n.cycle(1,1);assertTrue(report.localOutcomes.contains("PERSONAL_DATA_COLLECTION_NOT_ACCEPTED"));assertEquals(0,src.opens);assertEquals(0,s.snapshot().length())}
         }

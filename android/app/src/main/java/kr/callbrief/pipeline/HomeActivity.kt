@@ -75,11 +75,11 @@ class HomeActivity:ComponentActivity() {
             c.addView(CallUi.bigButton(this,"⬇️","지금 업데이트") { CallUpdate.install(this) }.apply { tag="home_update_button" })
             body.addView(c)
         }
-        if(s==null) { body.addView(CallUi.text(this,"정보를 읽지 못했어요. 잠시 후 다시 열어주세요."));doors();return }
+        if(s==null) { body.addView(CallUi.text(this,"정보를 읽지 못했어요. 잠시 후 다시 열어주세요."));doors(null);return }
 
         val steps=listOf(s.folder,s.key||CallInboxConfig.enabled,s.consent,s.model=="READY",s.notify,s.battery)
         if(!steps.all{it}) {
-            val c=CallUi.card(this,warn=true).apply { tag="home_setup" }
+            val c=CallUi.card(this,rail=CallUi.AMBER_RAIL).apply { tag="home_setup" }
             c.addView(CallUi.text(this,"처음 설정 ${steps.count{it}}/${steps.size}",CallUi.HEADING,true))
             fun step(n:Int,done:Boolean,label:String,detail:String,action:()->Unit) {
                 c.addView(CallUi.text(this,(if(done) "✓ " else "$n. ")+label,CallUi.BODY,true,if(done) CallUi.OK else CallUi.INK))
@@ -102,21 +102,25 @@ class HomeActivity:ComponentActivity() {
             body.addView(c)
         }
 
+        // Today at a glance: one plain sentence per fact, the urgent one in colour.
         val today=CallUi.card(this).apply { tag="home_today" }
-        today.addView(CallUi.text(this,"오늘",CallUi.HEADING,true))
-        today.addView(CallUi.text(this,"통화 ${s.calls}건"+(if(s.working>0) " (정리 중 ${s.working}건)" else ""),CallUi.SUMMARY,true).apply { tag="home_calls" })
-        today.addView(CallUi.text(this,"새로 생긴 할 일 ${s.newTasks}개",CallUi.SUMMARY))
-        today.addView(CallUi.text(this,"오늘까지 할 일 ${s.due}개"+(if(s.overdue>0) " · 기한 지난 일 ${s.overdue}개" else ""),CallUi.SUMMARY,color=if(s.overdue>0) CallUi.WARN else CallUi.INK))
-        if(s.nextReport.isNotBlank()) today.addView(CallUi.text(this,"다음 알림: "+s.nextReport,CallUi.BODY,color=CallUi.ACCENT).apply { tag="home_next_report" })
-        today.addView(CallUi.text(this,"마지막 정리: "+CallUi.dateTime(s.lastAnalyzedMs),CallUi.SMALL,color=CallUi.SUBTLE))
+        today.addView(CallUi.text(this,"통화 ${s.calls}건"+(if(s.working>0) " (정리 중 ${s.working}건)" else ""),CallUi.HEADING,true).apply { tag="home_calls";setPadding(0,0,0,CallUi.dp(this@HomeActivity,2)) })
+        today.addView(CallUi.text(this,"새로 생긴 할 일 ${s.newTasks}개",CallUi.BODY,color=CallUi.SUBTLE))
+        when {
+            s.overdue>0 -> today.addView(CallUi.pill(this,"기한 지난 일 ${s.overdue}개 · 오늘까지 ${s.due-s.overdue}개",CallUi.WARN))
+            s.due>0 -> today.addView(CallUi.pill(this,"오늘까지 할 일 ${s.due}개",CallUi.AMBER))
+            else -> today.addView(CallUi.text(this,"오늘까지 할 일은 없어요",CallUi.BODY,color=CallUi.OK))
+        }
+        val foot=listOfNotNull(s.nextReport.takeIf{it.isNotBlank()}?.let{"다음 알림 $it"},"마지막 정리 "+CallUi.dateTime(s.lastAnalyzedMs))
+        today.addView(CallUi.text(this,foot.joinToString("\n"),CallUi.SMALL,color=CallUi.SUBTLE).apply { tag="home_next_report";setPadding(0,CallUi.dp(this@HomeActivity,10),0,0) })
         body.addView(today)
-        doors()
+        doors(s)
     }
 
-    private fun doors() {
-        body.addView(CallUi.bigButton(this,"📞","오늘의 통화") { open(TodayCallsActivity::class.java) }.apply { tag="home_calls_button" })
-        body.addView(CallUi.bigButton(this,"✅","할 일") { open(CallTasksActivity::class.java) }.apply { tag="home_tasks_button" })
-        body.addView(CallUi.bigButton(this,"⚙️","설정") { open(CallSettingsActivity::class.java) }.apply { tag="home_settings_button" })
-
+    private fun doors(s:Snapshot?) {
+        body.addView(CallUi.gap(this,6))
+        body.addView(CallUi.door(this,"오늘의 통화",s?.let{"오늘 ${it.calls}건"+(if(it.working>0) " · 정리 중 ${it.working}건" else "")} ?: "") { open(TodayCallsActivity::class.java) }.apply { tag="home_calls_button" })
+        body.addView(CallUi.door(this,"할 일",s?.let{ if(it.due>0) "오늘까지 ${it.due}개" else "목록 보기" } ?: "") { open(CallTasksActivity::class.java) }.apply { tag="home_tasks_button" })
+        body.addView(CallUi.door(this,"설정",s?.let{ if(listOf(it.folder,it.consent,it.model=="READY",it.notify,it.battery).all{x->x}) "녹음 폴더 · 알림 시각" else "처음 설정을 마쳐 주세요" } ?: "") { open(CallSettingsActivity::class.java) }.apply { tag="home_settings_button" })
     }
 }

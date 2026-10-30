@@ -13,8 +13,10 @@ data class SourceInventory(val documents: List<SourceDocument>, val allDocumentI
 
 interface SelectedRecordingSource {
     val rootUri: String
-    // Personal-data admission stays closed until device/signing/migration acceptance.
+    /** Public synthetic fixtures (tests). */
     val explicitlySyntheticScope: Boolean get() = false
+    /** Real recordings may be read only after the user turned on "정리 동의" for this folder. */
+    val collectionAccepted: Boolean get() = explicitlySyntheticScope
     fun checkSelected()
     fun inventory(): SourceInventory
     fun stat(document: SourceDocument): SourceDocument
@@ -28,6 +30,8 @@ interface SelectedRecordingSource {
 class SafSelectedRecordingSource(private val context: Context, private val settings: SecureSettings,
                                  override val rootUri: String) : SelectedRecordingSource {
     private val resolver = context.contentResolver
+    override val collectionAccepted: Boolean get() = runCatching { settings.snapshot().let {
+        it.optBoolean(kr.callbrief.pipeline.PipelineSettingsKeys.CONSENT_GRANTED,false) && it.optString("treeUri")==rootUri } }.getOrDefault(false)
     private val tree = Uri.parse(rootUri)
     override fun checkSelected() {
         check(settings.snapshot().optString("treeUri") == rootUri) { "SELECTED_FOLDER_CHANGED" }

@@ -77,7 +77,7 @@ internal class NativeDiscoverySession(
             permit(frozen,guard);return store.observeDiscoverySame(frozen,{permit(frozen,guard)},fault)
         }
         private fun permit(c:Commit,g:Guard) {
-            check(source.explicitlySyntheticScope) { "PERSONAL_DATA_COLLECTION_NOT_ACCEPTED" }
+            check(source.collectionAccepted) { "PERSONAL_DATA_COLLECTION_NOT_ACCEPTED" }
             check(c.selection==selection && g.allowed()) { "DISCOVERY_INTAKE_LEASE_CHANGED" }
             source.checkSelected();source.checkReadable(document(c.metadata))
         }
@@ -85,9 +85,12 @@ internal class NativeDiscoverySession(
     val engine=RecordingDiscovery(queue,documents,policy,sink,selection,clock,config,fault,
         Bootstrap { selected,m,_ ->store.discoverySeed(selected,m) })
     fun cycle(pages:Int=4,jobs:Int=4):DiscoveryPump.Cycle {
-        if(!source.explicitlySyntheticScope) {
+        if(!source.collectionAccepted) {
             val result=DiscoveryPump.Cycle();repeat(pages){result.observed+=engine.scanPage()};result.localOutcomes.add("PERSONAL_DATA_COLLECTION_NOT_ACCEPTED");return result
         }
+        // First run after consent: create the on-device vault key once (no existing data to review).
+        if(store.setupState()=="EMPTY") runCatching { store.initializeEmpty() }
+        else if(store.setupState()=="PENDING") runCatching { store.recoverInitialization() }
         if(store.setupState()!="READY") {
             // Metadata queue can work without login or an initialized audio key. No auto key creation.
             val result=DiscoveryPump.Cycle();repeat(pages){result.observed+=engine.scanPage()};result.localOutcomes.add("AUDIO_STORE_INITIALIZATION_REQUIRED");return result

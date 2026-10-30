@@ -49,11 +49,12 @@ class CallTasksActivity:ComponentActivity() {
         for((name,list) in groups(items)) {
             body.addView(CallUi.heading(this,"$name (${list.size})"))
             list.forEach { item ->
-                val late=CallUi.overdue(item.due)
-                val c=CallUi.card(this,warn=late).apply { tag="task_${item.id}" }
+                val rail=CallUi.railFor(item.due)
+                val c=CallUi.card(this,rail=rail).apply { tag="task_${item.id}" }
                 c.addView(CallUi.text(this,item.title,CallUi.SUMMARY,true))
-                val meta=listOfNotNull(CallUi.dueWords(item.due),CallUi.taskStatus(item.status).ifEmpty{null},item.counterpart?.let{"$it 통화"}).joinToString(" · ")
-                c.addView(CallUi.text(this,meta,CallUi.BODY,color=if(late) CallUi.WARN else CallUi.SUBTLE))
+                c.addView(CallUi.pill(this,CallUi.dueWords(item.due)+(CallUi.taskStatus(item.status).takeIf{it.isNotEmpty()}?.let{" · $it"} ?: ""),
+                    when(rail) { CallUi.WARN -> CallUi.WARN;null -> CallUi.SUBTLE;else -> CallUi.AMBER }))
+                item.counterpart?.let { c.addView(CallUi.text(this,"$it 님과의 통화에서",CallUi.SMALL,color=CallUi.SUBTLE)) }
                 c.addView(CallUi.button(this,"완료했어요") { complete(item) }.apply { tag="done_${item.id}" })
                 body.addView(c)
             }

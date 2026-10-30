@@ -79,7 +79,7 @@ class TodayCallsActivity:ComponentActivity() {
             card.addView(CallUi.text(this,"${CallUi.time(c.startedMs)}  ${c.displayName}",CallUi.HEADING,true))
             if(c.summary!=null) card.addView(CallUi.text(this,c.summary,CallUi.SUMMARY).apply { maxLines=3;ellipsize=android.text.TextUtils.TruncateAt.END })
             else card.addView(CallUi.text(this,CallUi.state(c.state),CallUi.SUMMARY,true,if(c.state==CallRecordStore.FAILED) CallUi.WARN else CallUi.SUBTLE))
-            c.analysis?.promises?.take(3)?.forEach { card.addView(CallUi.text(this,"🤝 약속: ${promiseLine(it)}",CallUi.BODY)) }
+            c.analysis?.promises?.take(3)?.forEach { card.addView(CallUi.text(this,"약속  ${promiseLine(it)}",CallUi.BODY)) }
             card.addView(CallUi.text(this,"눌러서 자세히 보기 ›",CallUi.SMALL,color=CallUi.ACCENT))
             card.setOnClickListener { detail=c.recordId;render() }
             body.addView(card)
@@ -105,7 +105,7 @@ class TodayCallsActivity:ComponentActivity() {
             if(a.keyPoints.isNotEmpty()) { body.addView(CallUi.heading(this,"중요한 내용"));a.keyPoints.forEach { body.addView(CallUi.text(this,"• $it")) } }
             if(a.promises.isNotEmpty()) {
                 body.addView(CallUi.heading(this,"약속"))
-                a.promises.forEach { body.addView(CallUi.text(this,"🤝 ${promiseLine(it)}",CallUi.BODY,true));body.addView(CallUi.text(this,"“${it.quote}”",CallUi.SMALL,color=CallUi.SUBTLE)) }
+                a.promises.forEach { body.addView(CallUi.text(this,promiseLine(it),CallUi.BODY,true));body.addView(CallUi.text(this,"“${it.quote}”",CallUi.SMALL,color=CallUi.SUBTLE)) }
             }
             val done=c.applied.filter { it.applied }
             if(done.isNotEmpty()) {
