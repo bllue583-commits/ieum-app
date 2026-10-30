@@ -27,6 +27,13 @@ internal object CallPipelineStartup {
         executor.execute {
             runCatching { CallDigestSchedule.ensure(app) }
             runCatching { enqueueAnalysis(app) }
+            runCatching { CallUpdate.schedule(app) }
+            if(CallInboxConfig.enabled) runCatching {
+                // Collect the scheduled task's results every hour even when no new call arrives.
+                WorkManager.getInstance(app).enqueueUniquePeriodicWork("ieum.calls.inbox",ExistingPeriodicWorkPolicy.KEEP,
+                    PeriodicWorkRequestBuilder<CallAnalysisWork>(1,java.util.concurrent.TimeUnit.HOURS)
+                        .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build())
+            }
         }
     }
     fun enqueueAnalysis(context:Context) {

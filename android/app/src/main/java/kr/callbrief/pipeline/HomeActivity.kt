@@ -28,7 +28,9 @@ class HomeActivity:ComponentActivity() {
         body=CallUi.page(this)
         CallPipelineStartup.init(this)
     }
-    override fun onResume() { super.onResume();load() }
+    override fun onResume() { super.onResume();load()
+        if(intent?.getBooleanExtra("install_update",false)==true) { intent.removeExtra("install_update");CallUpdate.install(this) } }
+    override fun onNewIntent(intent:Intent) { super.onNewIntent(intent);setIntent(intent) }
 
     private fun load() {
         lifecycleScope.launch {
@@ -60,9 +62,16 @@ class HomeActivity:ComponentActivity() {
         body.addView(CallUi.title(this,"이음").apply { tag="home_title" })
         body.addView(CallUi.text(this,CallUi.date(CallUi.today())+" · 오늘의 통화를 대신 기억해요",CallUi.SMALL,color=CallUi.SUBTLE))
 
+        CallUpdate.ready(this)?.let { u ->
+            val c=CallUi.card(this).apply { tag="home_update" }
+            c.addView(CallUi.text(this,"새 버전이 준비됐어요",CallUi.HEADING,true))
+            if(u.notes.isNotBlank()) c.addView(CallUi.text(this,u.notes,CallUi.BODY))
+            c.addView(CallUi.bigButton(this,"⬇️","지금 업데이트") { CallUpdate.install(this) }.apply { tag="home_update_button" })
+            body.addView(c)
+        }
         if(s==null) { body.addView(CallUi.text(this,"정보를 읽지 못했어요. 잠시 후 다시 열어주세요."));doors();return }
 
-        val steps=listOf(s.folder,s.key,s.consent,s.model=="READY",s.notify,s.battery)
+        val steps=listOf(s.folder,s.key||CallInboxConfig.enabled,s.consent,s.model=="READY",s.notify,s.battery)
         if(!steps.all{it}) {
             val c=CallUi.card(this,warn=true).apply { tag="home_setup" }
             c.addView(CallUi.text(this,"처음 설정 ${steps.count{it}}/${steps.size}",CallUi.HEADING,true))
@@ -71,7 +80,7 @@ class HomeActivity:ComponentActivity() {
                 if(!done) { c.addView(CallUi.text(this,detail,CallUi.SMALL,color=CallUi.SUBTLE));c.addView(CallUi.button(this,"$label 하기",action)) }
             }
             step(1,s.folder,"녹음 폴더 연결","휴대폰의 통화 녹음 폴더를 한 번 골라주세요.") { open(MainActivity::class.java){ putExtra("open_settings",true) } }
-            step(2,s.key,"Claude 키 넣기","통화를 요약하는 데 쓰는 키예요. 설정 화면에 붙여 넣으면 돼요.") { open(CallSettingsActivity::class.java) }
+            if(!CallInboxConfig.enabled) step(2,s.key,"Claude 키 넣기","통화를 요약하는 데 쓰는 키예요. 설정 화면에 붙여 넣으면 돼요.") { open(CallSettingsActivity::class.java) }
             step(3,s.consent,"정리 동의","녹음은 휴대폰에 그대로 두고, 글자로 바꾼 내용만 보내 정리해요.") { open(CallSettingsActivity::class.java) }
             step(4,s.model=="READY","음성 인식 모델 받기",
                 if(s.model=="DOWNLOADING") "받는 중이에요. Wi-Fi에 연결해 두세요. (약 570MB)" else "Wi-Fi에서 한 번만 받아요. (약 570MB)") {

@@ -14,9 +14,41 @@ internal class CallRecordAnalysisRunner(
     private val analyzer:ClaudeCallAnalyzer=ClaudeCallAnalyzer(),
     private val settings:()->JSONObject={ SecureSettings(context).snapshot() },
     private val clock:()->Long=System::currentTimeMillis,
+    /** Subscription mode (a scheduled Claude task) when set; otherwise the Claude API key path. */
+    private val inbox:CallInboxStore?=CallInboxConfig.store(),
 ) {
     /** Returns false when a network-type failure should be retried later by WorkManager. */
-    fun runPending():Boolean {
+    fun runPending():Boolean = if(inbox!=null) runInbox(inbox) else runApi()
+
+    /** Sends waiting transcripts (once; again after [RESEND_MS] without an answer), then applies any results. */
+    private fun runInbox(store:CallInboxStore):Boolean = try {
+        val s=settings()
+        val consent=s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false)
+        CallRecordStore(context,clock).use { db ->
+            for(record in db.pending()) {
+                if(!consent) { db.setState(record.recordId,CallRecordStore.WAITING_CONSENT);continue }
+                if(record.state!=CallRecordStore.TRANSCRIBED) db.setState(record.recordId,CallRecordStore.TRANSCRIBED)
+                if(record.transcript.isBlank()) { db.setState(record.recordId,CallRecordStore.FAILED,"EMPTY_TRANSCRIPT");continue }
+                val sent=db.sentMs(record.recordId)
+                if(sent!=null && clock()-sent<RESEND_MS) continue
+                store.put(CallInbox.INBOX+"/"+CallInbox.fileName(record.recordId),CallInbox.job(record.recordId,db.request(record),clock()))
+                db.markSent(record.recordId,clock())
+            }
+            for((name,sha) in store.list(CallInbox.RESULTS)) {
+                val path=CallInbox.RESULTS+"/"+name
+                val parsed=runCatching { CallInbox.parseResult(store.get(path)) }.getOrNull()
+                val record=parsed?.let { db.record(it.first) }
+                if(parsed!=null && record!=null && record.state!=CallRecordStore.ANALYZED) {
+                    db.applyAnalysis(record.recordId,analyzer.filter(parsed.second,db.request(record)))
+                    runCatching { SecureSettings(context).update { it.put(PipelineSettingsKeys.LAST_ANALYZED_MS,clock()) } }
+                }
+                store.delete(path,sha)
+            }
+        }
+        true
+    } catch(e:java.io.IOException) { false }
+
+    private fun runApi():Boolean {
         var allDone=true
         val pending=CallRecordStore(context,clock).use { it.pending() }
         for(record in pending) {
@@ -44,6 +76,13 @@ internal class CallRecordAnalysisRunner(
         return allDone
     }
 }
+
+internal object CallInboxConfig {
+    fun store():CallInboxStore? = kr.callbrief.BuildConfig.IEUM_INBOX_TOKEN.takeIf { it.isNotBlank() }
+        ?.let { GitHubInboxStore(kr.callbrief.BuildConfig.IEUM_INBOX_REPO,it) }
+    val enabled get()=kr.callbrief.BuildConfig.IEUM_INBOX_TOKEN.isNotBlank()
+}
+internal const val RESEND_MS=6*3_600_000L
 
 internal class CallAnalysisWork(context:Context,params:WorkerParameters):CoroutineWorker(context,params) {
     override suspend fun doWork():Result=withContext(Dispatchers.IO) {

@@ -142,7 +142,7 @@ internal class ClaudeCallAnalyzer(private val http:ClaudeCallHttp=OkHttpClaudeCa
     }
 
     /** Keeps only items whose quote really is in the transcript and whose taskId was offered. */
-    private fun filter(a:ClaudeCallAnalysis,r:ClaudeCallRequest):ClaudeCallAnalysis {
+    internal fun filter(a:ClaudeCallAnalysis,r:ClaudeCallRequest):ClaudeCallAnalysis {
         val known=r.openTasks.map { it.id }.toSet()
         fun quoted(q:String)=q.isNotEmpty() && r.transcript.contains(q)
         return a.copy(

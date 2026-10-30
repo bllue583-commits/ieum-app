@@ -1,0 +1,75 @@
+name: release-apk
+
+# Every push builds the phone APK (Whisper native code, inbox token, stable signing key derived from the
+# same secret) and publishes it to the private inbox repo, where the installed app finds it and offers
+# a one-tap update. Needs the repository secret IEUM_INBOX_TOKEN.
+on:
+  push:
+    branches: ['feature/lean-calls', 'main']
+    paths: ['android/**', 'tools/**', '.github/workflows/release-apk.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: release-apk
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      INBOX: bllue583-commits/ieum-inbox
+      TINY_MODEL_URL: https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: '17'}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-36 build-tools;35.0.0 ndk;28.2.13676358 cmake;3.22.1'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            gradle-user/caches
+            gradle-user/wrapper
+            models
+          key: device-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+      - name: Build signed APK
+        env:
+          IEUM_INBOX_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
+        run: |
+          [ -n "$IEUM_INBOX_TOKEN" ] || { echo "::error title=release::IEUM_INBOX_TOKEN secret is not set"; exit 1; }
+          pip install --quiet 'cryptography>=44'
+          IEUM_SIGNING_SEED="$IEUM_INBOX_TOKEN" python3 tools/derive_signing_key.py "$RUNNER_TEMP/ieum.p12"
+          mkdir -p models
+          [ -f models/ggml-tiny-q5_1.bin ] || curl -fsSL "$TINY_MODEL_URL" -o models/ggml-tiny-q5_1.bin
+          export ANDROID_SDK_ROOT="$ANDROID_HOME" IEUM_NODE_BINARY="$(command -v node)" \
+            IEUM_ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/28.2.13676358" IEUM_CMAKE_BINARY="$ANDROID_HOME/cmake/3.22.1/bin/cmake" \
+            IEUM_ANDROID_WHISPER_MODEL="$PWD/models/ggml-tiny-q5_1.bin" \
+            IEUM_SIGNING_KEYSTORE="$RUNNER_TEMP/ieum.p12" IEUM_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))
+          python3 run_gradle.py --log release-build.log :app:assembleDebug
+          cp android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/ieum.apk"
+      - name: Publish to the inbox repo
+        env:
+          GH_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
+        run: |
+          code=$((1000 + GITHUB_RUN_NUMBER)); tag="v$code"
+          sha=$(sha256sum "$RUNNER_TEMP/ieum.apk" | cut -d' ' -f1)
+          notes=$(git log -1 --format=%s | cut -c1-120)
+          gh release create "$tag" "$RUNNER_TEMP/ieum.apk#ieum.apk" --repo "$INBOX" --title "이음 $tag" --notes "$notes"
+          asset=$(gh api "repos/$INBOX/releases/tags/$tag" --jq '.assets[] | select(.name=="ieum.apk") | .id')
+          python3 - "$code" "$asset" "$sha" "$notes" > version.json <<'EOF'
+          import json, sys
+          code, asset, sha, notes = sys.argv[1:]
+          print(json.dumps({"versionCode": int(code), "versionName": "v" + code, "apk": "releases/assets/" + asset, "sha256": sha, "notes": notes}, ensure_ascii=False))
+          EOF
+          old=$(gh api "repos/$INBOX/contents/app/version.json" --jq .sha 2>/dev/null || true)
+          gh api -X PUT "repos/$INBOX/contents/app/version.json" -f message="app $tag" -f content="$(base64 -w0 version.json)" ${old:+-f sha="$old"} > /dev/null
+          # Keep the three newest releases.
+          gh release list --repo "$INBOX" --limit 50 --json tagName --jq '.[3:][].tagName' | while read -r t; do gh release delete "$t" --repo "$INBOX" --yes --cleanup-tag; done
+          echo "::notice title=release::$tag published ($sha)"

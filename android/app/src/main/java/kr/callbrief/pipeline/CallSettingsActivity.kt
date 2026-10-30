@@ -54,9 +54,11 @@ class CallSettingsActivity:ComponentActivity() {
         body.removeAllViews()
         body.addView(CallUi.title(this,"설정"))
 
-        body.addView(CallUi.heading(this,"1. Claude 키"))
+        body.addView(CallUi.heading(this,"1. 통화 정리 방식"))
         val hasKey=s.optString(PipelineSettingsKeys.CLAUDE_API_KEY).isNotBlank()
-        if(hasKey) {
+        if(CallInboxConfig.enabled) {
+            body.addView(CallUi.text(this,"자동 정리 ✓  Claude 구독으로 매시간 정리해요. 따로 넣을 키가 없어요.",CallUi.BODY,true,CallUi.OK).apply { tag="api_key_state" })
+        } else if(hasKey) {
             body.addView(CallUi.text(this,"저장됨 ✓  (보안을 위해 다시 보여주지 않아요)",CallUi.BODY,true,CallUi.OK).apply { tag="api_key_state" })
             body.addView(button("키 지우기") { save { it.remove(PipelineSettingsKeys.CLAUDE_API_KEY) } }.apply { tag="api_key_delete" })
         } else {
