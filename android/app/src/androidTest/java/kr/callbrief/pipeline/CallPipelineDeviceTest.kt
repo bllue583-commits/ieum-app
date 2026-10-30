@@ -123,7 +123,6 @@ class CallPipelineDeviceTest {
     }
 
     @Test fun t4_screensRenderAndCapture() {
-        CallUi.allowCaptureForTests=true
         val shots=JSONObject()
         fun <A:Activity> shot(name:String,cls:Class<A>,ready:(A)->Boolean) {
             ActivityScenario.launch(cls).use { s ->

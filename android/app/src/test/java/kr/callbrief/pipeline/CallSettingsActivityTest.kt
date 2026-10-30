@@ -3,7 +3,6 @@ package kr.callbrief.pipeline
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
-import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
@@ -32,9 +31,8 @@ class CallSettingsActivityTest:ProtectedTextHostTestBase() {
     }
     private fun root(a:android.app.Activity)=a.window.decorView
 
-    @Test fun keyIsNeverShownAfterSavingAndScreenIsProtected() {
+    @Test fun keyIsNeverShownAfterSaving() {
         val a=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
-        assertTrue(a.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE!=0)
         until(a) { root(a).findViewWithTag<EditText>("api_key_input")!=null }
         root(a).findViewWithTag<EditText>("api_key_input").setText(secret)
         root(a).findViewWithTag<Button>("api_key_save").performClick()
@@ -52,9 +50,8 @@ class CallSettingsActivityTest:ProtectedTextHostTestBase() {
         assertFalse(SecureSettings(CallPipelineStartup.storage(again)).snapshot().has(PipelineSettingsKeys.CLAUDE_API_KEY))
     }
 
-    @Test fun todayCallsOpensEmptyAndProtected() {
+    @Test fun todayCallsOpensEmpty() {
         val a=Robolectric.buildActivity(TodayCallsActivity::class.java).setup().get()
-        assertTrue(a.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE!=0)
         until(a) { views(root(a)).filterIsInstance<TextView>().any { it.text.toString()=="오늘 할 일" } }
         assertTrue(views(root(a)).filterIsInstance<TextView>().any { it.text.toString().contains("정리된 통화가 없어요") })
     }

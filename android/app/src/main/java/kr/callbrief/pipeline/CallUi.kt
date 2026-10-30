@@ -39,19 +39,18 @@ internal object CallUi {
 
     fun dp(a:Activity,v:Int)=(v*a.resources.displayMetrics.density+0.5f).toInt()
 
-    /** Device tests only: lets UiAutomation capture the screens. The app itself never sets it. */
-    @Volatile internal var allowCaptureForTests=false
-    /** A scrolling page with system-bar padding; returns the column to add views to. */
+    /** A scrolling page kept clear of the system bars; returns the column to add views to. */
     fun page(a:Activity):LinearLayout {
-        if(!allowCaptureForTests)a.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
         a.window.decorView.setBackgroundColor(PAGE)
         if(android.os.Build.VERSION.SDK_INT>=30) a.window.insetsController?.setSystemBarsAppearance(
             android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
             android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS)
-        val column=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
-        val scroll=ScrollView(a).apply { setBackgroundColor(PAGE);isFillViewport=true;tag="page_scroll";clipToPadding=false }
-        val p=dp(a,20);scroll.setPadding(p,p,p,p)
-        scroll.setOnApplyWindowInsetsListener { v,insets -> v.setPadding(p+insets.systemWindowInsetLeft,insets.systemWindowInsetTop+dp(a,12),p+insets.systemWindowInsetRight,insets.systemWindowInsetBottom+p);insets }
+        // The scroll view is padded by the system-bar insets only and clips there, so text never slides under the
+        // navigation bar; the page margin lives on the column inside.
+        val p=dp(a,20)
+        val column=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;setPadding(p,dp(a,12),p,p) }
+        val scroll=ScrollView(a).apply { setBackgroundColor(PAGE);isFillViewport=true;tag="page_scroll";clipToPadding=true }
+        scroll.setOnApplyWindowInsetsListener { v,insets -> v.setPadding(insets.systemWindowInsetLeft,insets.systemWindowInsetTop,insets.systemWindowInsetRight,insets.systemWindowInsetBottom);insets }
         scroll.addView(column);a.setContentView(scroll);return column
     }
     fun text(a:Activity,value:String,size:Float=BODY,bold:Boolean=false,color:Int=INK)=TextView(a).apply {

@@ -56,7 +56,12 @@
 | `claude-live.yml` | API 방식 실분석 시험 | — |
 - 같은 브랜치에 새 push가 오면 진행 중인 device-test는 취소됨(동시 실행 제한).
 
-### 이 PC(Windows) 로컬 도구 (10/30 설치)
+### 여러 컴퓨터에서 이어 하기 (Windows 회사 PC ↔ 집 Mac)
+- **GitHub가 유일한 원본.** 작업 단위가 끝날 때마다 `feature/lean-calls`에 커밋·push하고, 세션을 마칠 때는 이 파일의 "다음 할 일"을 갱신해 push. 다른 컴퓨터에서는 `git pull` 후 이 파일부터 읽기.
+- 로컬에만 있는 것(빌드 산출물, `robolectric-jar/`, `gradle-user/`, 에뮬레이터)은 컴퓨터마다 따로 준비. 코드·문서는 전부 저장소에 있음.
+- Mac 준비(처음 한 번): Homebrew로 `git gh python@3.12`, JDK 17(`brew install --cask temurin@17`), Android cmdline-tools(`brew install --cask android-commandlinetools`) → `sdkmanager`로 아래 Windows와 같은 패키지(시스템 이미지는 Apple Silicon이면 `arm64-v8a`) → `gh auth login` → `git clone -b feature/lean-calls https://github.com/bllue583-commits/ieum-app.git`. Mac에는 `make`가 있어 Whisper 네이티브 빌드와 Robolectric 단위 테스트도 로컬에서 될 가능성이 높음(미확인).
+
+### 이 PC(Windows) 로컬 도구 (10/30 저녁 다시 설치: Git·gh·Python 3.12는 winget, `gh auth login` 완료, 저장소는 `C:\Users\bllue\ieum-app`)
 - Android SDK: `C:\Users\bllue\Android\Sdk` (platform 36, build-tools 35, NDK 28.2.13676358, cmake 3.22.1, emulator, `system-images;android-34;google_apis;x86_64`), 에뮬레이터 이름 `ieum34`
 - JDK 17: `C:\Users\bllue\tools\jdk-17` (Gradle 툴체인이 17을 요구)
 - Robolectric 런타임: 저장소의 `robolectric-jar/` (git 제외), `python tools/prepare_host_tests.py robolectric-jar/android-all.jar`로 준비
