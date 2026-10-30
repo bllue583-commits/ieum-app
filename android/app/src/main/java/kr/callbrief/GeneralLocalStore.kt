@@ -16,7 +16,7 @@ import java.nio.file.Path
 import java.security.MessageDigest
 import java.util.UUID
 
-/** Normal UI's NEW local store. No migration, analysis claim or outgoing bytes. */
+/** The app's protected local store: encrypted recording vault plus the canonical call database. No outgoing bytes. */
 class GeneralLocalStore(private val context: Context,
     factory: (Context)->VaultAccess = ::androidVault,
     private val now: ()->Long = { System.currentTimeMillis() },
@@ -39,10 +39,6 @@ CREATE TABLE IF NOT EXISTS local_intakes(event_id TEXT PRIMARY KEY,root_uri TEXT
             return VaultAccess(vault,context.noBackupFilesDir.toPath().resolve("audio-vault-v2"),keys::createNewKey)
         }
         internal fun overlay(port: AndroidSqlPort) = port.transaction { OVERLAY.split(';').filter { it.isNotBlank() }.forEach { port.execute(it) } }
-        fun catalog(context: Context): LocalRecordingCatalog {
-            AndroidSqlPort(context,DATABASE,context.assets.open("call_core_schema.sql")).use { overlay(it) }
-            return LocalRecordingCatalog(context,DATABASE,OWNER,true)
-        }
         private fun id(prefix: String)=prefix+"_"+UUID.randomUUID().toString().replace("-","")
         private fun signature(d: SourceDocument)=JsonCanonical.digest(SqlCallRepository.map("document_id",d.documentId,"uri",d.uri,"name",d.name,"size",d.size,"mime",d.mime,"modified",d.modified))
     }
@@ -57,7 +53,7 @@ CREATE TABLE IF NOT EXISTS local_intakes(event_id TEXT PRIMARY KEY,root_uri TEXT
         val privateContext=object:ContextWrapper(context) { override fun getNoBackupFilesDir()=File(super.getNoBackupFilesDir(),"local-recordings-v2").apply { mkdirs() } }
         try {
             val v=factory(privateContext)
-            encrypted=EncryptedRecordingStore(port,repository,OWNER,v.vault,v.root,if(context is AccountStorageContext) "callsummary.audio.v2.google_" + context.scope else ALIAS,v.provision,token,
+            encrypted=EncryptedRecordingStore(port,repository,OWNER,v.vault,v.root,ALIAS,v.provision,token,
                 context.assets.open("vault2_ledger.sql").bufferedReader().use { it.readText() },now,fault) { recording ->
                 val row=port.query("SELECT * FROM local_visibility WHERE recording_id=?",recording).singleOrNull()
                 if((row?.get("archived") as? Number)?.toInt()==1) null else (row?.get("revision") as? Number)?.toLong() ?: 0L

@@ -35,7 +35,7 @@ class GeneralLocalStoreTest : ProtectedTextHostTestBase() {
             putInt(8000);putInt(16000);putShort(2);putShort(16);put("data".toByteArray());putInt(8)
             repeat(4) { putShort((if(alternate) 100 else 0).toShort()) }
         }.array()
-        fun host(context:Context,keys:SyntheticPilotIntegrationTest.HostKeys,fault:(String)->Unit={})=
+        fun host(context:Context,keys:HostVaultKeys,fault:(String)->Unit={})=
             GeneralLocalStore(context,{ privateContext ->
                 val root=privateContext.noBackupFilesDir.toPath().resolve("audio-vault-v2")
                 GeneralLocalStore.VaultAccess(EncryptedAudioVault(root,keys,{ directory ->
@@ -67,12 +67,12 @@ class GeneralLocalStoreTest : ProtectedTextHostTestBase() {
         }
     }
     private lateinit var context:Context
-    private lateinit var keys:SyntheticPilotIntegrationTest.HostKeys
+    private lateinit var keys:HostVaultKeys
     private val worker=Executors.newSingleThreadExecutor()
     private fun <T> io(action:()->T):T=try { worker.submit<T> { action() }.get(30,TimeUnit.SECONDS) }
         catch(e:java.util.concurrent.ExecutionException) { throw e.cause!! }
     @Before fun fresh() {
-        context=RuntimeEnvironment.getApplication();keys=SyntheticPilotIntegrationTest.HostKeys()
+        context=RuntimeEnvironment.getApplication();keys=HostVaultKeys()
         context.deleteDatabase(GeneralLocalStore.DATABASE)
         File(context.noBackupFilesDir,"local-recordings-v2").deleteRecursively() // Generated test sandbox ONLY.
     }
@@ -97,7 +97,7 @@ class GeneralLocalStoreTest : ProtectedTextHostTestBase() {
     @Test fun revokedGrantHasZeroOpensAndRows()=ready { s,source ->
         source.granted=false;reject("READ_GRANT_REQUIRED") { s.importSelected(source) };assertEquals(0,source.opens);assertEquals(0,s.snapshot().length())
     }
-    @Test fun reproV2ActualCanonicalReceiptBeforeAliasFaultRemainsPendingInDailyInventory()=io {
+    @Test fun reproV2ActualCanonicalReceiptBeforeAliasFaultLeavesCanonicalRowWithoutAlias()=io {
         var injected=false
         val source=Source().apply { put(name="통화 녹음 합성업무_01000000001_20261010_100000.wav") }
         host(context,keys,{ point ->if(point=="AFTER_CANONICAL_RECEIPT_BEFORE_ALIAS" && !injected) {
@@ -105,11 +105,6 @@ class GeneralLocalStoreTest : ProtectedTextHostTestBase() {
         } }).use { s ->
             s.initializeEmpty();assertEquals(1,s.importSelected(source).held);assertTrue(injected)
             assertEquals(1,rows("SELECT * FROM recordings").size);assertEquals(0,rows("SELECT * FROM local_files").size)
-            val input=CanonicalReviewedDailySource(context) { JSONObject() }.snapshot(
-                ReportWindow(java.time.LocalDate.parse("2026-10-10"),java.time.ZoneId.of("Asia/Seoul")))
-            assertEquals("reachable canonical row cannot disappear",1,input.expectedCount)
-            assertEquals(1,input.pendingCount);assertFalse(input.fullyReviewed)
-            assertEquals(ReportReadiness.WAITING_ANALYSIS,input.readiness)
         }
     }
     @Test fun validEncryptedImportLeavesTimeAndPeopleUnknownAndNoSummary()=ready { s,source ->

@@ -1,21 +1,9 @@
 package kr.callbrief.core
 
-import java.net.URI
 import java.time.*
 import java.util.Locale
 
-object SeoulTime {
-    val zone: ZoneId = ZoneId.of("Asia/Seoul")
-    fun yesterday(now: Instant): LocalDate = now.atZone(zone).toLocalDate().minusDays(1)
-    fun startOfDay(date: LocalDate): Instant = date.atStartOfDay(zone).toInstant()
-    fun nextReport(now: Instant): Instant {
-        val local = now.atZone(zone)
-        val today = local.toLocalDate().atTime(6, 0).atZone(zone)
-        return (if (today.toInstant().isAfter(now)) today else today.plusDays(1)).toInstant()
-    }
-    fun eligible(startedAt: Instant, firstAllowedDate: LocalDate, now: Instant): Boolean =
-        !startedAt.isBefore(startOfDay(firstAllowedDate)) && !startedAt.isAfter(now.minusSeconds(60))
-}
+object SeoulTime { val zone: ZoneId = ZoneId.of("Asia/Seoul") }
 
 object RecordingNames {
     // Samsung/recorder filenames vary. Explicit calendar timestamp only; NEVER modified-time fallback.
@@ -59,34 +47,4 @@ object AudioPolicy {
     fun extension(name: String): String = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
     fun mime(name: String): String? = types[extension(name)]
     fun safeSize(size: Long): Boolean = size in 1..MAX_BYTES
-}
-
-object ServiceEndpoint {
-    fun normalize(input: String): String {
-        require(input.length <= 2048) { "서비스 주소가 너무 길어요." }
-        val u = URI(input.trim())
-        require(u.scheme == "https" && !u.host.isNullOrBlank() && u.userInfo == null &&
-            u.rawQuery == null && u.rawFragment == null && (u.port == -1 || u.port in 1..65535)) {
-            "사용자 정보·쿼리·조각이 없는 HTTPS 서비스 주소를 입력해 주세요."
-        }
-        require(u.path.orEmpty().split('/').none { it == ".." || it == "." }) { "단순한 서비스 주소를 입력해 주세요." }
-        return u.toASCIIString().trimEnd('/')
-    }
-    fun kakaoAuthorization(endpoint:String, returned:String):String {
-        val saved=URI(normalize(endpoint));val url=URI(returned)
-        fun port(value:URI)=if(value.port==-1) 443 else value.port
-        require(url.scheme=="https" && url.host?.lowercase(Locale.ROOT)==saved.host.lowercase(Locale.ROOT) &&
-            port(url)==port(saved) && url.userInfo==null && url.fragment==null &&
-            url.path==saved.path.orEmpty().trimEnd('/')+"/v1/kakao/authorize" &&
-            Regex("state=[A-Za-z0-9_-]{24,256}").matches(url.rawQuery.orEmpty())) {
-            "서버가 반환한 본인 로그인 주소를 확인할 수 없어요."
-        }
-        return url.toASCIIString()
-    }
-}
-
-enum class TaskStatus(val wire: String, val label: String) {
-    OPEN("open", "해야 할 일"), IN_PROGRESS("in_progress", "진행 중"), WAITING("waiting", "상대방 답변 대기"),
-    NEEDS_CONFIRMATION("needs_confirmation", "확인 필요"), DONE("done", "완료");
-    companion object { fun fromWire(value: String): TaskStatus = entries.firstOrNull { it.wire == value } ?: NEEDS_CONFIRMATION }
 }

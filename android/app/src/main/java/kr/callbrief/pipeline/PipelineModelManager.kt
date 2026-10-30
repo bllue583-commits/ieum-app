@@ -66,7 +66,7 @@ internal class PipelineModelManager(
     override val runtimeSha256:String get()=runtimePin() ?: ""
 
     /** Device-level (not per account): one copy of the 574 MB model for the whole app. */
-    val directory:File get()=File(kr.callbrief.AutomationConnectionBindings.base(context).noBackupFilesDir,"pipeline-stt")
+    val directory:File get()=File(context.noBackupFilesDir,"pipeline-stt")
     val modelFile:File get()=File(directory,spec.fileName)
     val partFile:File get()=File(directory,spec.fileName+".part")
     private val markerFile:File get()=File(directory,spec.fileName+".verified")

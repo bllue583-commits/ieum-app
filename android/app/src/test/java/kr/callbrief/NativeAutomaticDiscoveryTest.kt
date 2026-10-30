@@ -138,12 +138,6 @@ class NativeAutomaticDiscoveryTest {
             try{s.recoverDiscoveryReceipt(Selection("other_owner",src.rootUri,1),event);fail("wrong owner scope")}catch(e:IllegalStateException){assertTrue(e.message.orEmpty().contains("SCOPE_MISMATCH"))}
         }}
     }
-    @Test fun N18DefaultLauncherCallsDiscoveryBeforeUnavailableNetworkGate() {
-        class HookActivity:MainActivity(){var calls=0;override fun startAutomaticDiscovery(){calls++}}
-        val activity=org.robolectric.Robolectric.buildActivity(HookActivity::class.java).create().start().resume().get()
-        assertTrue(activity.calls>0);activity.finish()
-    }
-
     @Test fun N19CancelledInventoryWritesNoProtectedDocumentCacheOrQueue()=worker {
         store().use{s->s.initializeEmpty();val src=Source().apply{put(modified=now-300000)}
             session(s,src,Time()).use{n->src.onInventory={n.engine.cancelRun()};assertEquals(0,n.engine.scanPage());assertEquals(0,n.engine.rows().size);assertEquals(0,rows("SELECT name FROM sqlite_master WHERE type='table' AND name='discovery_documents'").size);assertEquals(0,src.opens)}

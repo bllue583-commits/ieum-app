@@ -5,61 +5,19 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-    <!-- Declaration only. This app never requests or grants READ_SMS at runtime. -->
-    <uses-permission android:name="android.permission.READ_SMS" />
-    <uses-feature android:name="android.hardware.telephony" android:required="false" />
     <application android:allowBackup="false" android:fullBackupContent="@xml/vault_full_backup_rules"
         android:dataExtractionRules="@xml/vault_data_extraction_rules"
         android:usesCleartextTraffic="false" android:networkSecurityConfig="@xml/network_security_config"
         android:label="이음" android:icon="@drawable/ic_callbrief" android:theme="@style/Theme.CallBrief">
-        <activity android:name=".SyntheticPilotActivity" android:exported="false" />
-        <activity android:name=".AndroidLocalSttActivity" android:exported="false" />
-        <activity android:name=".DailyReportActivity" android:exported="false" />
-        <activity android:name=".pipeline.TodayCallsActivity" android:exported="false" />
-        <activity android:name=".pipeline.CallSettingsActivity" android:exported="false" />
-        <activity android:name=".RecordingWorkflowActivity" android:exported="false" />
-        <activity android:name=".RelatedReadOnlyActivity" android:exported="false" />
-        <activity android:name=".NaverMailReviewActivity" android:exported="false" />
-        <receiver android:name=".DailyReportClockReceiver" android:exported="false">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
-                <action android:name="android.intent.action.TIME_SET" />
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
-            </intent-filter>
-        </receiver>
-        <activity android:name=".ReadOnlyProposalActivity" android:exported="false" />
-        <activity android:name=".AutomationConnectionSetupActivity" android:exported="false" />
-        <activity android:name=".ConnectionCenterActivity" android:exported="false" />
-        <activity android:name=".SyntheticTextConnectionActivity" android:exported="false" />
-        <activity android:name=".DriveAForegroundActivity" android:exported="false" />
-        <activity android:name=".ScopedNaverMailSettingsActivity" android:exported="false" />
-        <activity android:name=".ScopedKakaoSettingsActivity" android:exported="false" />
-        <activity android:name=".NativeGoogleTrialActivity" android:exported="false" />
-        <activity android:name=".KakaoDigestEntryActivity" android:exported="true" android:enabled="@bool/kakao_connection_enabled">
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="kakao${kakaoNativeAppKey}" android:host="kakaolink" />
-            </intent-filter>
-        </activity>
         <activity android:name=".pipeline.HomeActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <receiver android:name=".pipeline.UpdateStatusReceiver" android:exported="false" />
+        <activity android:name=".pipeline.TodayCallsActivity" android:exported="false" />
         <activity android:name=".pipeline.CallTasksActivity" android:exported="false" />
-        <activity android:name=".MainActivity" android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="callbrief" android:host="digest" />
-                <data android:scheme="callbrief" android:host="kakao-connected" />
-            </intent-filter>
-        </activity>
+        <activity android:name=".pipeline.CallSettingsActivity" android:exported="false" />
+        <receiver android:name=".pipeline.UpdateStatusReceiver" android:exported="false" />
     </application>
 </manifest>

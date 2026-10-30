@@ -11,9 +11,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
-import kr.callbrief.AccountStorageContext
 import kr.callbrief.AndroidWhisperEngine
-import kr.callbrief.AutomationConnectionBindings
 import kr.callbrief.GeneralLocalStore
 import kr.callbrief.LocalPrivacy
 import kr.callbrief.RecordingRef
@@ -112,7 +110,7 @@ internal class CallTranscriptionRunner(
 /** WorkManager entry: runs soon after new recordings are imported, and hourly as a safety net. */
 class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(context,params) {
     override fun doWork():Result {
-        val storage=AccountStorageContext.selected(applicationContext)
+        val storage=applicationContext
         val thermal=(applicationContext.getSystemService(Context.POWER_SERVICE) as? PowerManager)
         val tooHot={ android.os.Build.VERSION.SDK_INT>=29 && thermal!=null && thermal.currentThermalStatus>=PowerManager.THERMAL_STATUS_SEVERE }
         if(tooHot())return Result.retry()
@@ -152,12 +150,12 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
         private val constraints get()=Constraints.Builder().setRequiresBatteryNotLow(true).build()
         /** After new recordings arrive. A pass already running is followed by one more. */
         fun enqueue(context:Context) {
-            WorkManager.getInstance(AutomationConnectionBindings.base(context)).enqueueUniqueWork(ONCE,ExistingWorkPolicy.APPEND_OR_REPLACE,
+            WorkManager.getInstance(context).enqueueUniqueWork(ONCE,ExistingWorkPolicy.APPEND_OR_REPLACE,
                 OneTimeWorkRequestBuilder<CallTranscriptionWork>().setConstraints(constraints).build())
         }
         /** App start: hourly safety net, one pass now, and the model download if it is missing. */
         fun schedule(context:Context) {
-            WorkManager.getInstance(AutomationConnectionBindings.base(context)).enqueueUniquePeriodicWork(PERIODIC,ExistingPeriodicWorkPolicy.KEEP,
+            WorkManager.getInstance(context).enqueueUniquePeriodicWork(PERIODIC,ExistingPeriodicWorkPolicy.KEEP,
                 PeriodicWorkRequestBuilder<CallTranscriptionWork>(1,TimeUnit.HOURS).setConstraints(constraints).build())
             enqueue(context)
         }

@@ -10,7 +10,7 @@ import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.util.UUID
 
-/** New-store adapter, used only by the debug synthetic pilot for now.
+/** Encrypted recording vault adapter.
  * No plaintext disk fallback, v1 migration, real recording opener or outgoing transport.
  * File commit precedes DB CAS. An interrupted intake remains recoverable in its own ledger.
  */
@@ -114,7 +114,6 @@ class EncryptedRecordingStore(
         mark(ref, if (status == EncryptedAudioVault.Status.ENCRYPTED_REFERENCE_PRESENT) "PRESENT_UNVERIFIED" else status.name)
         return status
     }
-    internal fun readOnlyAvailability(ref:VaultReference):EncryptedAudioVault.Status { requireIo();return vault.status(ref,token) }
     fun verify(ref: VaultReference) {
         requireIo()
         try {
@@ -235,73 +234,6 @@ class EncryptedRecordingStore(
         remember(event, ref)
         return attach(pending, observation, excluded, ref)
     }
-    fun claim(recording: String): AnalysisBinding {
-        requireIo()
-        if (processingVisibilityRevision(recording) == null) fail("ARCHIVED_PROCESSING_HELD")
-        val r = repository.recording(recording); val ref = reference(recording, number(r, "source_version")); verify(ref)
-        port.transaction {
-            val current = repository.recording(recording)
-            if (current["audio_sha256"] != ref.source.plaintextSha256 || number(current, "source_version") != ref.source.sourceVersion ||
-                current["head_revision"] != r["head_revision"] || current["user_revision"] != r["user_revision"] || current["lock_revision"] != r["lock_revision"]) fail("STALE_RELEASE_BINDING")
-            repository.claim(id("vault2_claim"), recording, id("vault2_processing"), "synthetic_no_stt_v2", now())
-            val binding = repository.binding(recording)
-            val visibility = processingVisibilityRevision(recording) ?: fail("ARCHIVED_PROCESSING_HELD")
-            port.execute("INSERT INTO vault2_dispatch_reservations(processing_id,recording_id,owner_key,source_version,lease_epoch,visibility_revision) VALUES(?,?,?,?,?,?)",
-                binding.text("processing_id"), recording, owner, binding.number("source_version"), binding.number("lease_epoch"), visibility)
-        }
-        return repository.binding(recording)
-    }
-    private fun authorized(b: AnalysisBinding, audio: AudioBinding, preservingCandidate: Boolean = false): Boolean = port.transaction {
-        val reservation = port.query("SELECT * FROM vault2_dispatch_reservations WHERE processing_id=? AND recording_id=? AND owner_key=? AND source_version=? AND lease_epoch=?",
-            b.text("processing_id"), b.text("recording_id"), owner, b.number("source_version"), b.number("lease_epoch")).singleOrNull() ?: return@transaction false
-        if (processingVisibilityRevision(b.text("recording_id")) != number(reservation, "visibility_revision")) return@transaction false
-        val r = port.query("""SELECT r.*,v.audio_sha256,p.state,p.processing_id,p.lease_epoch,p.lease_until_ms,
-            t.case_id,t.task_revision,b.revision AS board_revision FROM recordings r
-            JOIN source_versions v ON v.recording_id=r.recording_id AND v.source_version=r.source_version
-            JOIN processing p ON p.recording_id=r.recording_id AND p.source_version=r.source_version
-            JOIN tasks t ON t.task_id=r.task_id JOIN board_state b ON b.owner_key=r.owner_key
-            JOIN folder_grants g ON g.grant_id=r.grant_id AND g.active=1
-            WHERE r.recording_id=? AND r.owner_key=?""".trimIndent(), b.text("recording_id"), owner).singleOrNull() ?: return@transaction false
-        audio.localProfileId == owner && audio.recordingId == b.text("recording_id") && audio.sourceVersion == number(r, "source_version") &&
-            audio.plaintextSha256 == r["audio_sha256"] && audio.plaintextSha256 == b.text("audio_sha256") &&
-            audio.sourceVersion == b.number("source_version") && r["state"] == "TRANSCRIBING" &&
-            r["processing_id"] == b.text("processing_id") && number(r, "lease_epoch") == b.number("lease_epoch") && number(r, "lease_until_ms") > now() &&
-            (preservingCandidate || (number(r, "user_revision") == b.number("base_user_revision") && number(r, "lock_revision") == b.number("base_lock_revision") &&
-            number(r, "task_revision") == b.number("base_task_revision") && number(r, "board_revision") == b.number("base_board_revision"))) &&
-            r["task_id"] == b.text("base_task_id") && r["case_id"] == b.text("base_case_id") &&
-            r["person_id"] == b.text("base_person_id") && r["company_id"] == b.text("base_company_id") &&
-            r["original_started_at_ms"] == b.values["base_original_started_at_ms"]
-    }
-    fun withSyntheticAnalysisAudio(b: AnalysisBinding, consumer: (InputStream) -> Unit) {
-        requireIo(); check(BuildConfig.SYNTHETIC_TOOLS_ENABLED) { "SYNTHETIC_TOOLS_DISABLED" }
-        val ref = reference(b.text("recording_id"), b.number("source_version"))
-        try {
-            vault.withVerifiedAudio(ref, token, { source -> authorized(b, source) }) { verified ->
-                verified.openStream().use { input ->
-                    val fenced = object : InputStream() {
-                        private fun checkFence() { token.check(); if (!authorized(b, verified.source)) fail("STALE_RELEASE_BINDING") }
-                        override fun read(): Int { checkFence(); return input.read() }
-                        override fun read(bytes: ByteArray, offset: Int, length: Int): Int { checkFence(); return input.read(bytes, offset, length) }
-                    }
-                    consumer(fenced)
-                    if (!authorized(b, verified.source)) fail("STALE_RELEASE_BINDING")
-                }
-            }
-        } catch (error: VaultException) { if (error.code != "STALE_RELEASE_BINDING" && error.code != "CANCELLED") mark(ref, error.code); throw error }
-    }
-    fun storeCandidate(b: AnalysisBinding, packet: Map<String, Any?>, candidate: Map<String, Any?>): Map<String, Any?> {
-        requireIo()
-        val ref = reference(b.text("recording_id"), b.number("source_version"))
-        verify(ref)
-        fault("BEFORE_CANDIDATE_DB_COMMIT")
-        return port.transaction {
-            // No outgoing bytes here. Preserve an already returned, valid result as REVIEW when
-            // only user/lock/task/board revisions changed. The shared SQL keeps effective/manual
-            // state unchanged; source identity, visibility, processing ID and live lease stay strict.
-            if (!authorized(b, ref.source, preservingCandidate = true)) fail("STALE_RELEASE_BINDING")
-            repository.storeWorkerCandidate(id("vault2_result"), b, packet, candidate, "synthetic_mock_no_stt_v2", now())
-        }
-    }
     /** Real external auth is checked BEFORE any key, read, claim, or decrypted release. */
     internal fun withReadOnlySourceAudio(recording:String,version:Long,gate:(AudioBinding)->Boolean,consumer:(InputStream)->Unit) {
         requireIo();token.check()
@@ -314,25 +246,6 @@ class EncryptedRecordingStore(
                 })
                 token.check();check(gate(verified.source)) { "NATIVE_READ_ONLY_LEASE_BLOCKED" }
             }
-        }
-    }
-    fun requestNativeAnalysis(recording: String): Nothing {
-        requireIo(); if (!NativeAnalysisAvailability.canTransfer()) fail("NATIVE_AUTH_NOT_CONNECTED")
-        throw VaultException("TRANSPORT_DISCONNECTED")
-    }
-    fun accept(recording: String, version: Long, reviewed: Map<String, Any?>, historical: Boolean) {
-        requireIo()
-        val s = port.query("SELECT source_version FROM summary_versions WHERE recording_id=? AND summary_version=?", recording, version).singleOrNull() ?: fail("SUMMARY_NOT_ACCEPTABLE")
-        val ref = reference(recording, number(s, "source_version")); verify(ref)
-        port.transaction {
-            token.check(); val r = repository.recording(recording)
-            val visibility = processingVisibilityRevision(recording) ?: fail("ARCHIVED_PROCESSING_HELD")
-            if (reviewed.containsKey("local_visibility_revision") && visibility != reviewed["local_visibility_revision"]) fail("ACCEPT_REVISION_CONFLICT")
-            if (r["source_version"] != reviewed["source_version"] || r["head_revision"] != reviewed["head_revision"]) fail("ACCEPT_REVISION_CONFLICT")
-            repository.userCommand("ACCEPT", SqlCallRepository.map("event_id", id("vault2_accept"), "recording_id", recording,
-                "summary_version", version, "expected_user_revision", reviewed["user_revision"], "expected_lock_revision", reviewed["lock_revision"],
-                "expected_task_revision", reviewed["task_revision"], "expected_board_revision", reviewed["board_revision"],
-                "semantic_review_confirmed", 1, "restore_historical", if (historical) 1 else 0, "now_ms", now()))
         }
     }
     fun cancel() = token.cancel()

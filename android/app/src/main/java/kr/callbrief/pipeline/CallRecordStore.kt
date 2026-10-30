@@ -47,7 +47,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         const val TRANSCRIPT_KEEP_DAYS=14L
         private val ISO_DATE=Regex("^\\d{4}-\\d{2}-\\d{2}$")
         private val SCHEMA=listOf(
-            // Same definitions as RecordingWorkflowStore so either side may create them first.
+            
             "CREATE TABLE IF NOT EXISTS workflow_links(recording_id TEXT PRIMARY KEY REFERENCES recordings(recording_id),revision INTEGER NOT NULL,person_id TEXT,company_id TEXT,case_id TEXT NOT NULL,task_id TEXT NOT NULL,phone_normalized TEXT NOT NULL)",
             "CREATE TABLE IF NOT EXISTS workflow_items(id TEXT PRIMARY KEY,recording_id TEXT NOT NULL REFERENCES recordings(recording_id),case_id TEXT,kind TEXT NOT NULL CHECK(kind IN ('TODO','DOCUMENT')),title TEXT NOT NULL,edition TEXT NOT NULL,due_text TEXT NOT NULL,status TEXT NOT NULL,revision INTEGER NOT NULL,source_key TEXT,evidence_quote TEXT NOT NULL,created_ms INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS workflow_item_history(event_id TEXT PRIMARY KEY,item_id TEXT NOT NULL,revision INTEGER NOT NULL,before_json TEXT NOT NULL)",
@@ -167,6 +167,15 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         (SELECT c.counterpart FROM call_records c WHERE c.recording_id=i.recording_id ORDER BY c.created_ms DESC LIMIT 1) AS counterpart
         FROM workflow_items i WHERE i.status!='done' AND i.kind='TODO' ORDER BY i.created_ms DESC LIMIT 300""")
         .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),it.str("counterpart")) }
+    /** The user's "완료했어요": marks one item done and records the edit so analysis never touches it again. */
+    fun completeItem(item:String,revision:Long)=port.transaction {
+        val old=rows("SELECT * FROM workflow_items WHERE id=?",item).single()
+        require(old.long("revision")==revision) { "ITEM_REVISION_CONFLICT" }
+        port.execute("UPDATE workflow_items SET status='done',revision=revision+1 WHERE id=?",item)
+        val before=JSONObject().apply { old.forEach { (k,v)->put(k,v ?: JSONObject.NULL) } }
+        port.execute("INSERT INTO workflow_item_history VALUES(?,?,?,?)","wf_"+UUID.randomUUID().toString().replace("-",""),item,revision+1,before.toString())
+        port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER);null
+    }
     /** AI-created items created during one KST day. */
     fun newTaskCount(day:LocalDate):Int=(rows("SELECT COUNT(*) AS n FROM call_task_bindings WHERE created_ms>=CAST(? AS INTEGER) AND created_ms<CAST(? AS INTEGER)",startOf(day),startOf(day.plusDays(1))).single().long("n") ?: 0).toInt()
 }

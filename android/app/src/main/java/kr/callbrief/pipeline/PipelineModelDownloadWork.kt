@@ -15,7 +15,7 @@ import java.util.concurrent.TimeUnit
  * a verified hash mismatch ends as FAILED (the user can schedule again). */
 class PipelineModelDownloadWork(context:Context,params:WorkerParameters):Worker(context,params) {
     override fun doWork():Result {
-        val manager=PipelineModelManager(kr.callbrief.AccountStorageContext.selected(applicationContext))
+        val manager=PipelineModelManager(applicationContext)
         return when(manager.download{isStopped}) {
             PipelineModelManager.Result.READY -> {CallTranscriptionWork.enqueue(applicationContext);Result.success()}
             PipelineModelManager.Result.UNSUPPORTED -> Result.success()
@@ -32,7 +32,7 @@ class PipelineModelDownloadWork(context:Context,params:WorkerParameters):Worker(
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).setRequiresStorageNotLow(true).build())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL,1,TimeUnit.MINUTES)
                 .build()
-            WorkManager.getInstance(kr.callbrief.AutomationConnectionBindings.base(context)).enqueueUniqueWork(UNIQUE_NAME,ExistingWorkPolicy.KEEP,request)
+            WorkManager.getInstance(context).enqueueUniqueWork(UNIQUE_NAME,ExistingWorkPolicy.KEEP,request)
         }
     }
 }

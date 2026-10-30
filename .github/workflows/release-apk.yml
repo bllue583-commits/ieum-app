@@ -22,7 +22,6 @@ jobs:
     timeout-minutes: 60
     env:
       INBOX: bllue583-commits/ieum-inbox
-      TINY_MODEL_URL: https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -37,7 +36,6 @@ jobs:
           path: |
             gradle-user/caches
             gradle-user/wrapper
-            models
           key: device-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties') }}
       - name: Build signed APK
         env:
@@ -46,11 +44,8 @@ jobs:
           [ -n "$IEUM_INBOX_TOKEN" ] || { echo "::error title=release::IEUM_INBOX_TOKEN secret is not set"; exit 1; }
           pip install --quiet 'cryptography>=44'
           IEUM_SIGNING_SEED="$IEUM_INBOX_TOKEN" python3 tools/derive_signing_key.py "$RUNNER_TEMP/ieum.p12"
-          mkdir -p models
-          [ -f models/ggml-tiny-q5_1.bin ] || curl -fsSL "$TINY_MODEL_URL" -o models/ggml-tiny-q5_1.bin
           export ANDROID_SDK_ROOT="$ANDROID_HOME" IEUM_NODE_BINARY="$(command -v node)" \
             IEUM_ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/28.2.13676358" IEUM_CMAKE_BINARY="$ANDROID_HOME/cmake/3.22.1/bin/cmake" \
-            IEUM_ANDROID_WHISPER_MODEL="$PWD/models/ggml-tiny-q5_1.bin" \
             IEUM_SIGNING_KEYSTORE="$RUNNER_TEMP/ieum.p12" IEUM_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))
           python3 run_gradle.py --log release-build.log :app:assembleDebug
           cp android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/ieum.apk"
