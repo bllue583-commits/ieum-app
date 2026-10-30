@@ -64,6 +64,7 @@ class CompaniesActivity:ComponentActivity() {
             c.trade?.let { card.addView(CallUi.pill(this,it,CallUi.ACCENT)) }
             card.addView(CallUi.text(this,"열린 할 일 ${c.openTasks}개",CallUi.BODY,c.openTasks>0,if(c.openTasks>0) CallUi.INK else CallUi.SUBTLE))
             card.addView(CallUi.text(this,"마지막 통화 "+(c.lastCallMs?.let { CallUi.date(CallRecordStore.kstDay(it)) } ?: "아직 없음"),CallUi.SMALL,color=CallUi.SUBTLE))
+            card.addView(CallUi.text(this,"사람·메모 자세히 보기 ›",CallUi.BODY,true,CallUi.ACCENT))
             card.setOnClickListener { detailId=c.id;load() }
             body.addView(card)
         }
