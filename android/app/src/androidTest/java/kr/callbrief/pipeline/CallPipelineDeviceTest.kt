@@ -138,7 +138,7 @@ class CallPipelineDeviceTest {
         shot("1_home",HomeActivity::class.java){has(it,"home_calls_button")&&has(it,"home_today")}
         shot("2_today",TodayCallsActivity::class.java){text(it,"김민수")}
         shot("3_tasks",CallTasksActivity::class.java){text(it,"견적서 보내기")}
-        shot("4_settings",CallSettingsActivity::class.java){text(it,"Claude 키")}
+        shot("4_settings",CallSettingsActivity::class.java){text(it,"통화 정리 방식")}
         report("t4_screens",shots)
     }
 

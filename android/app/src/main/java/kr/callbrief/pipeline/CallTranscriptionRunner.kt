@@ -26,7 +26,7 @@ internal fun interface CallTranscriber { fun transcribe(model:File,pcm:FloatArra
 /** Production transcriber: the pinned JNI runtime with the verified large model, Korean. */
 internal class WhisperCallTranscriber(private val engine:AndroidWhisperEngine,private val model:PipelineSttModel,private val threadCount:Int?=null):CallTranscriber {
     override fun transcribe(model:File,pcm:FloatArray,stopped:()->Boolean):List<CallTranscript.Segment> {
-        val threads=threadCount ?: (Runtime.getRuntime().availableProcessors()-1).coerceIn(1,6)
+        val threads=threadCount ?: (Runtime.getRuntime().availableProcessors()-1).coerceIn(1,6) // S26: 6 threads 85 s/min, 8 threads ~3x slower
         val raw=engine.transcribeVerifiedModel(model,{this.model.verifiedModelFile()!=null},pcm,"ko",threads,1800,stopped)
         val output=runCatching{AndroidWhisperEngine.decodeOutput(raw)}.getOrNull() ?: return emptyList() // silence: no segments
         return (0 until output.segments.length()).map { i -> val s=output.segments.getJSONObject(i)
