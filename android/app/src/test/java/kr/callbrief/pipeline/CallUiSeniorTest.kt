@@ -82,6 +82,6 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
     @Test fun nextReportTimeIsPlainKorean() {
         val z=java.time.ZoneId.of("Asia/Seoul")
         assertEquals("오늘 저녁 7시 (통화 정리)",CallUi.nextReport(19,6,java.time.ZonedDateTime.of(2026,10,30,9,0,0,0,z)))
-        assertEquals("내일 아침 6시 (할 일)",CallUi.nextReport(19,6,java.time.ZonedDateTime.of(2026,10,30,20,0,0,0,z)))
+        assertEquals("내일 아침 6시 (체크할 일)",CallUi.nextReport(19,6,java.time.ZonedDateTime.of(2026,10,30,20,0,0,0,z)))
     }
 }

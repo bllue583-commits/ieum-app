@@ -46,6 +46,8 @@ internal data class ClaudeCallRequest(
     val todayCalls:List<PastCall> =emptyList(),
     val companyNames:List<String> =emptyList(),
     val personNames:List<String> =emptyList(),
+    /** "통화", "문자" or "메일": what the text between the transcript tags is. */
+    val kind:String="통화",
 ) {
     data class OpenTask(val id:String,val title:String,val due:String,val status:String,val company:String?=null)
     data class PersonCard(val name:String,val role:String?,val staff:Boolean,val company:String?)
@@ -133,7 +135,7 @@ internal class ClaudeCallAnalyzer(private val http:ClaudeCallHttp=OkHttpClaudeCa
 5. promises와 tasks의 quote에는 자막에 실제로 있는 부분을 한 글자도 바꾸지 말고 그대로 복사하세요. 근거가 되는 자막 원문이 없으면 그 항목은 만들지 마세요.
 6. 아래에 주어진 열린 할 일과 같은 일이면 새로 만들지 말고 op "update"와 그 taskId를 쓰세요. 새 일일 때만 "create"(taskId null)를 씁니다.
 7. 일이 끝났다고 스스로 결정하지 마세요. 끝난 것으로 보이면 op "done_suggested"로 제안만 합니다.
-8. 날짜는 통화 시각을 기준으로 계산해 YYYY-MM-DD로 쓰고, 알 수 없으면 null로 둡니다.
+8. 날짜는 통화(문자, 메일) 시각을 기준으로 계산해 YYYY-MM-DD로 쓰고, 알 수 없으면 null로 둡니다.
 9. promises의 owner는 사용자가 할 일이면 "me", 상대가 할 일이면 "them", 모르면 "unknown"입니다.
 10. tasks는 사용자가 나중에 "됐는지 확인할 일" 목록입니다. 사용자는 부장이라 상대에게 일을 시키는 경우가 많습니다. 상대가 하기로 한 약속(owner "them")과 사용자가 하기로 한 약속(owner "me") 모두 tasks에 create 또는 update로 넣으세요. 상대가 할 일의 title은 "김민수 과장 견적서 회신 확인"처럼 누가 무엇을 했는지 확인하는 말로 짧게 쓰세요.
 11. 사용자는 건설 현장 한 곳의 업무를 맡고 있고, 통화 상대는 협력업체(철근, 타설, 전기 등) 사람이거나 같은 회사 직원입니다. 메시지 위쪽의 [현장 상황 메모], [상대], [업체], [최근 통화], [열린 할 일]을 읽고 맥락을 이어서 판단하세요. 다른 업체의 열린 할 일과 같은 일이면 그 taskId로 "update"하세요. taskId는 메시지에 있는 것만 쓸 수 있습니다.
@@ -142,6 +144,7 @@ internal class ClaudeCallAnalyzer(private val http:ClaudeCallHttp=OkHttpClaudeCa
 14. siteMemo는 현장의 지금 상황을 짧게 요약한 전체 새 글입니다(600자 이내). 기존 메모에 덧붙이지 말고, 아직 유효한 내용과 이번 통화에서 새로 알게 된 내용을 합쳐 다시 쓰세요. 바꿀 것이 없으면 null입니다.
 15. companyMemo는 상대 업체에 대한 지금 상태를 짧게 요약한 전체 새 글입니다(400자 이내, 덧붙이지 말고 다시 쓰기). 바꿀 것이 없거나 상대 업체를 모르면 null입니다. companyTrade는 통화에서 알 수 있는 공종(철근, 타설, 전기 등) 한두 단어이며 모르면 null입니다.
 16. tasks의 company에는 그 일이 속한 업체 이름을 [이름 목록]의 표기로 쓰고, 모르면 null로 두세요.
+17. 메시지 맨 위 "종류"가 문자나 메일이면 <transcript> 안의 글은 음성 자막이 아니라 업무 문자(시각과 보낸 문자/받은 문자 표시가 붙음) 또는 메일(제목, 보낸 사람, 본문)입니다. "자막"이라고 한 규칙은 그 글에 똑같이 적용하고, quote도 그 글에서 그대로 복사하세요. summary는 "누구에게서 무슨 문자(메일)가 왔고 무엇을 하기로 했는지"를 씁니다. 보낸 문자의 약속은 사용자의 약속(owner "me")입니다.
 """.trim()
         private fun durationText(ms:Long)=if(ms<=0) "미상" else "${ms/60000}분 ${(ms/1000)%60}초"
         private fun clip(t:String,n:Int)=t.replace(Regex("\\s+")," ").trim().let { if(it.length>n) it.take(n-1)+"…" else it }
@@ -151,9 +154,10 @@ internal class ClaudeCallAnalyzer(private val http:ClaudeCallHttp=OkHttpClaudeCa
             val head=listOfNotNull(c.date.takeIf { it.isNotBlank() },c.who?.takeIf { it.isNotBlank() }).joinToString(" ")
             "\n- "+(if(head.isEmpty()) "" else "$head: ")+clip(c.summary,240) }
         fun userMessage(r:ClaudeCallRequest):String=buildString {
-            append("통화 시각: ").append(r.callTimeKst).append('\n')
-            append("전화부 이름/번호: ").append(r.counterpart?.takeIf { it.isNotBlank() } ?: "미상").append('\n')
-            append("통화 길이: ").append(durationText(r.durationMs)).append('\n')
+            append("종류: ").append(r.kind).append('\n')
+            append(r.kind).append(" 시각: ").append(r.callTimeKst).append('\n')
+            append(if(r.kind=="메일") "보낸 사람: " else "전화부 이름/번호: ").append(r.counterpart?.takeIf { it.isNotBlank() } ?: "미상").append('\n')
+            if(r.kind=="통화") append("통화 길이: ").append(durationText(r.durationMs)).append('\n')
             append("\n[현장 상황 메모] ").append(r.siteMemo?.takeIf { it.isNotBlank() }?.let { clip(it,600) } ?: "아직 없음").append('\n')
             val p=r.person;val c=r.company
             if(p==null && c==null) append("[상대] 아직 모르는 상대예요. 자막에서 이름과 업체를 찾아 주세요.\n")

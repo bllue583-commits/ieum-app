@@ -50,7 +50,8 @@ class TodayCallsActivity:ComponentActivity() {
         val record=detail?.let { id -> calls.firstOrNull { it.recordId==id } }
         if(record!=null) { renderDetail(record);return }
         detail=null
-        CallUi.band(body,"${CallUi.dayWord(day)}의 통화","통화 ${calls.size}건")
+        CallUi.band(body,"${CallUi.dayWord(day)}의 통화",calls.groupingBy { it.kind }.eachCount().entries.sortedBy { listOf("통화","문자","메일").indexOf(it.key) }
+            .joinToString(", ") { "${it.key} ${it.value}건" }.ifEmpty { "통화 0건" })
         // Day switcher: ‹ date › in one sheet; "오늘로 돌아가기" only when away from today.
         val nav=CallUi.card(this).apply { orientation=LinearLayout.HORIZONTAL;gravity=android.view.Gravity.CENTER_VERTICAL;setPadding(CallUi.dp(this@TodayCallsActivity,4),CallUi.dp(this@TodayCallsActivity,4),CallUi.dp(this@TodayCallsActivity,4),CallUi.dp(this@TodayCallsActivity,4)) }
         fun arrow(kind:String,label:String,enabled:Boolean,action:()->Unit)=Button(this).apply {
@@ -68,7 +69,7 @@ class TodayCallsActivity:ComponentActivity() {
         if(calls.isEmpty()) body.addView(CallUi.card(this).apply { addView(CallUi.text(this@TodayCallsActivity,"이 날짜에 정리된 통화가 없어요.",CallUi.BODY,color=CallUi.SUBTLE)) })
         else body.addView(CallUi.list(this,calls.sortedByDescending { it.startedMs ?: 0 }.map { c ->
             // One call: who and when, the first sentence of the summary (or its state). Tap for details.
-            CallUi.memoRow(this,CallUi.time(c.startedMs),c.displayName,c.summary?.let(CallUi::firstSentence) ?: CallUi.state(c.state),c.summary==null) { detail=c.recordId;render() }
+            CallUi.memoRow(this,CallUi.whenLabel(c),c.displayName,c.summary?.let(CallUi::firstSentence) ?: CallUi.state(c.state),c.summary==null) { detail=c.recordId;render() }
                 .apply { tag="call_${c.recordId}" }
         }))
     }
@@ -77,7 +78,8 @@ class TodayCallsActivity:ComponentActivity() {
     private fun promiseLine(p:ClaudeCallAnalysis.Promise)=when(p.owner) { "me" -> "제가 할 일, ";"them" -> "상대가 할 일, ";else -> "" }+p.text+(p.due?.let { " (${CallUi.dueWords(it)})" } ?: "")
 
     private fun renderDetail(c:CallRecord) {
-        CallUi.band(body,c.displayName,"${CallUi.date(CallRecordStore.kstDay(c.dayMs))} ${CallUi.time(c.startedMs)}, ${CallUi.duration(c.durationMs)} 통화",back={ detail=null;render() })
+        CallUi.band(body,c.displayName,"${CallUi.date(CallRecordStore.kstDay(c.dayMs))} ${CallUi.time(c.startedMs)}, "+
+            (if(c.kind=="통화") "${CallUi.duration(c.durationMs)} 통화" else c.kind),back={ detail=null;render() })
         if(c.state!=CallRecordStore.ANALYZED) {
             val s=CallUi.card(this,warn=c.state==CallRecordStore.FAILED)
             s.addView(CallUi.text(this,CallUi.state(c.state),CallUi.SUMMARY,true,if(c.state==CallRecordStore.FAILED) CallUi.WARN else CallUi.INK))
@@ -109,7 +111,7 @@ class TodayCallsActivity:ComponentActivity() {
         }
         if(c.transcript.isNotBlank()) {
             val full=CallUi.card(this).apply { addView(CallUi.text(this@TodayCallsActivity,c.transcript,CallUi.BODY));visibility=View.GONE }
-            body.addView(CallUi.button(this,"통화 내용 전체 보기") { full.visibility=if(full.visibility==View.GONE) View.VISIBLE else View.GONE }.apply { tag="toggle_transcript" })
+            body.addView(CallUi.button(this,if(c.kind=="통화") "통화 내용 전체 보기" else "${c.kind} 전체 보기") { full.visibility=if(full.visibility==View.GONE) View.VISIBLE else View.GONE }.apply { tag="toggle_transcript" })
             body.addView(full)
         }
     }

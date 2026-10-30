@@ -78,7 +78,7 @@ class CallSettingsActivity:ComponentActivity() {
         if(!sms) body.addView(button("문자 읽기 허용") { askSms.launch(android.Manifest.permission.READ_SMS) }.apply { tag="sms_allow" })
 
         group(CallUi.heading(this,"메일"))
-        body.addView(CallUi.text(this,"업무 메일 연결은 곧 여기서 할 수 있어요. 연결하면 메일도 업체와 사람별로 함께 정리해요.",CallUi.BODY,color=CallUi.SUBTLE).apply { tag="mail_state" })
+        mailGroup(s)
 
         group(CallUi.heading(this,"2. 통화 정리 방식"))
         val hasKey=s.optString(PipelineSettingsKeys.CLAUDE_API_KEY).isNotBlank()
@@ -102,7 +102,7 @@ class CallSettingsActivity:ComponentActivity() {
         }
 
         group(CallUi.heading(this,"3. 정리 동의"))
-        body.addView(CallUi.text(this,"통화 녹음 파일은 휴대폰 밖으로 나가지 않아요. 휴대폰에서 글자로 바꾼 통화 내용만 Claude로 보내 요약하고, 결과는 이 휴대폰에만 저장해요. 언제든 끌 수 있어요."))
+        body.addView(CallUi.text(this,"통화 녹음 파일은 휴대폰 밖으로 나가지 않아요. 휴대폰에서 글자로 바꾼 통화 내용과 업무 문자, 메일의 글만 Claude로 보내 요약하고, 결과는 이 휴대폰에만 저장해요. 언제든 끌 수 있어요."))
         val consent=s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false)
         body.addView(Switch(this).apply {
             text=if(consent) "켜짐: 통화 내용을 정리해요" else "꺼짐: 정리하지 않아요";textSize=CallUi.SUMMARY;isChecked=consent
@@ -172,6 +172,57 @@ class CallSettingsActivity:ComponentActivity() {
             }.onFailure { Toast.makeText(this@CallSettingsActivity,if(it.message=="MODEL_NOT_READY") "먼저 음성 인식 모델을 받아주세요." else "측정하지 못했어요.",Toast.LENGTH_LONG).show() }
             refresh()
         }
+    }
+
+    /** Work mailbox: which service, address, app password, then one [연결하기] that checks before saving. */
+    private var mailService="네이버"
+    private fun mailGroup(s:JSONObject) {
+        val user=s.optString(PipelineSettingsKeys.MAIL_USER)
+        if(user.isNotBlank() && s.optString(PipelineSettingsKeys.MAIL_PASSWORD).isNotBlank()) {
+            val error=s.optString(PipelineSettingsKeys.MAIL_ERROR)
+            body.addView(CallUi.text(this,if(error.isBlank()) "연결됨 ✓  $user" else error,CallUi.BODY,true,if(error.isBlank()) CallUi.OK else CallUi.WARN).apply { tag="mail_state" })
+            body.addView(CallUi.text(this,"받은 메일 중 업무 메일을 30분마다 가져와 통화와 함께 정리해요.",CallUi.SMALL,color=CallUi.SUBTLE))
+            body.addView(button("메일 연결 끊기") { save { it.remove(PipelineSettingsKeys.MAIL_HOST);it.remove(PipelineSettingsKeys.MAIL_USER);it.remove(PipelineSettingsKeys.MAIL_PASSWORD);it.remove(PipelineSettingsKeys.MAIL_ERROR) } }.apply { tag="mail_disconnect" })
+            return
+        }
+        body.addView(CallUi.text(this,"업무 메일을 연결하면 메일도 업체와 사람별로 함께 정리해요. 메일 서비스 설정에서 IMAP을 켜고 앱 비밀번호를 만들어 아래에 넣어 주세요.",CallUi.BODY).apply { tag="mail_state" })
+        val choices=MessageIntake.MAIL_HOSTS.keys.toList()+"직접 입력"
+        val row=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
+        fun field(hint:String,password:Boolean=false)=EditText(this).apply {
+            this.hint=hint;textSize=CallUi.BODY;isSingleLine=true;minHeight=CallUi.dp(this@CallSettingsActivity,56);importantForAutofill=android.view.View.IMPORTANT_FOR_AUTOFILL_NO
+            inputType=if(password) InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD else InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+            typeface=CallUi.font(this@CallSettingsActivity,CallUi.Weight.REGULAR)
+        }
+        val host=field("IMAP 서버 (예: imap.회사.com)").apply { tag="mail_host";visibility=if(mailService=="직접 입력") android.view.View.VISIBLE else android.view.View.GONE }
+        choices.forEach { name ->
+            val on=name==mailService
+            row.addView(Button(this).apply {
+                text=name;textSize=16f;isAllCaps=false;stateListAnimator=null;minHeight=CallUi.dp(this@CallSettingsActivity,48);minimumHeight=minHeight;setPadding(0,0,0,0)
+                typeface=CallUi.font(this@CallSettingsActivity,if(on) CallUi.Weight.SEMIBOLD else CallUi.Weight.MEDIUM)
+                setTextColor(if(on) android.graphics.Color.WHITE else CallUi.SUBTLE);background=CallUi.sheet(this@CallSettingsActivity,if(on) CallUi.ACCENT else android.graphics.Color.parseColor("#F2F4F6"),radius=12)
+                setOnClickListener { mailService=name;refresh() }
+            },LinearLayout.LayoutParams(0,-2,1f).apply { marginEnd=CallUi.dp(this@CallSettingsActivity,6) })
+        }
+        body.addView(row,LinearLayout.LayoutParams(-1,-2).apply { topMargin=CallUi.dp(this@CallSettingsActivity,10) })
+        body.addView(host)
+        val address=field("메일 주소").apply { tag="mail_user" }
+        val password=field("앱 비밀번호",true).apply { tag="mail_password" }
+        body.addView(address);body.addView(password)
+        body.addView(CallUi.bigButton(this,"","연결하기") {
+            if(busy)return@bigButton
+            val h=if(mailService=="직접 입력") host.text.toString().trim() else MessageIntake.MAIL_HOSTS.getValue(mailService)
+            val u=address.text.toString().trim();val p=password.text.toString()
+            if(h.isEmpty()||u.isEmpty()||p.isEmpty()) { Toast.makeText(this,"서버, 메일 주소, 앱 비밀번호를 모두 넣어 주세요.",Toast.LENGTH_LONG).show();return@bigButton }
+            busy=true;Toast.makeText(this,"메일함에 연결해 보는 중이에요.",Toast.LENGTH_SHORT).show()
+            lifecycleScope.launch {
+                val problem=withContext(Dispatchers.IO) { MessageIntake.checkMail(h,u,p) }
+                busy=false
+                if(problem!=null) { Toast.makeText(this@CallSettingsActivity,problem,Toast.LENGTH_LONG).show();return@launch }
+                password.text.clear()
+                save { it.put(PipelineSettingsKeys.MAIL_HOST,h).put(PipelineSettingsKeys.MAIL_USER,u).put(PipelineSettingsKeys.MAIL_PASSWORD,p).remove(PipelineSettingsKeys.MAIL_ERROR) }
+                Toast.makeText(this@CallSettingsActivity,"메일을 연결했어요.",Toast.LENGTH_SHORT).show()
+            }
+        }.apply { tag="mail_connect" })
     }
 
     private fun hourWords(h:Int)=when { h==0 -> "밤 12시";h<12 -> "오전 ${h}시";h==12 -> "낮 12시";else -> "오후 ${h-12}시" }

@@ -14,7 +14,8 @@ function tap($text){
     & $adb shell input tap $x $y
 }
 function scroll { & $adb shell input swipe 540 1800 540 600 400 }
-& $adb shell monkey -p kr.callbrief -c android.intent.category.LAUNCHER 1 2>&1 | Out-Null; foreach($ms in 1500,2300){ Start-Sleep -Milliseconds 700; cmd /c "`"$adb`" exec-out screencap -p > `"$out\${prefix}_0_intro_$ms.png`"" }
+# first launch: let the preview data finish before anything is stopped
+& $adb shell monkey -p kr.callbrief -c android.intent.category.LAUNCHER 1 2>&1 | Out-Null; Start-Sleep 12; & $adb shell am force-stop kr.callbrief; & $adb shell monkey -p kr.callbrief -c android.intent.category.LAUNCHER 1 2>&1 | Out-Null; foreach($ms in 1500,2300){ Start-Sleep -Milliseconds 700; cmd /c "`"$adb`" exec-out screencap -p > `"$out\${prefix}_0_intro_$ms.png`"" }
 home; cap "1_home"; scroll; cap "1_home_b"
 home; tap "통화"; cap "2_today"; scroll; cap "2_today_b"
 home; tap "체크"; cap "3_tasks"; scroll; cap "3_tasks_b"

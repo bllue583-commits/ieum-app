@@ -30,10 +30,16 @@ internal data class CallRecord(
     /** The ledger person this call is linked to; carries the user's name corrections. */
     val linkedPerson:String?=null,
 ) {
-    /** Name for display: ledger/analysis name and company first, then the recording's counterpart. */
-    /** "△△철강 김민수": company then person, the way it is said aloud. */
+    /** "△△철강 김민수": company then person, the way it is said aloud; else the recording's counterpart. */
     val displayName:String get()=listOfNotNull(analysis?.counterpartCompany,linkedPerson ?: analysis?.counterpartName).joinToString(" ").ifBlank { counterpart?.takeIf { it.isNotBlank() } ?: "상대 미상" }
     val dayMs:Long get()=startedMs ?: createdMs
+    /** "통화", "문자" or "메일": messages are stored like calls under a "sms:" or "mail:" recording id. */
+    val kind:String get()=MessageKind.of(recordingId)
+}
+
+internal object MessageKind {
+    const val SMS="sms:";const val MAIL="mail:"
+    fun of(recordingId:String)=when { recordingId.startsWith(SMS) -> "문자";recordingId.startsWith(MAIL) -> "메일";else -> "통화" }
 }
 
 /** An open workflow item shown in "오늘 할 일". */
@@ -105,6 +111,23 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         port.execute("UPDATE call_records SET transcript='',segments_json='[]' WHERE state='ANALYZED' AND created_ms<CAST(? AS INTEGER) AND transcript!=''",now-TRANSCRIPT_KEEP_DAYS*86_400_000L)
         true
     }
+
+    /** Stores one text-message thread or mail as a record the analysis treats like a call. A pseudo recording row
+     * (no audio, no source version, so transcription never sees it) lets its check items attach as for calls.
+     * Idempotent per [id] and text. Returns true when it was new. */
+    fun insertMessage(id:String,atMs:Long,counterpart:String?,text:String):Boolean {
+        port.transaction {
+            port.execute("INSERT OR IGNORE INTO board_state(owner_key,revision) VALUES(?,0)",GeneralLocalStore.OWNER)
+            port.execute("INSERT OR IGNORE INTO folder_grants VALUES('messages',?,'content://messages',1,1,1)",GeneralLocalStore.OWNER)
+            port.execute("INSERT OR IGNORE INTO recordings(recording_id,owner_key,grant_id,document_id,display_name,mime_type,byte_count,first_seen_ms,last_seen_ms,source_seq,source_version,head_revision) VALUES(?,?,'messages',?,?,'text/plain',?,?,?,1,1,1)",
+                id,GeneralLocalStore.OWNER,id,MessageKind.of(id),text.length,atMs,atMs);null
+        }
+        val sha=java.security.MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
+        return insert(CallTranscript(id,1,sha,atMs,0,counterpart,text,listOf(CallTranscript.Segment(0,0,text)),"text","0".repeat(64),false))
+    }
+    /** Phone numbers (digits only) of business contacts: everyone the ledger has a number for, and every caller. */
+    fun knownPhones():Set<String> =(rows("SELECT phone_key AS k FROM people WHERE phone_key IS NOT NULL")+rows("SELECT DISTINCT counterpart_key AS k FROM call_records WHERE counterpart_key IS NOT NULL"))
+        .mapNotNull { it.str("k") }.filter { k -> k.length>=8 && k.all { it.isDigit() } }.toSet()
 
     private fun map(r:Map<String,Any?>):CallRecord {
         val json=r.str("analysis_json")?.let { JSONObject(it) }
@@ -236,7 +259,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
             person = person?.let { ClaudeCallRequest.PersonCard(it.str("name")!!,it.str("role"),it.long("is_staff")==1L,company?.str("name")) },
             company = company?.let { ClaudeCallRequest.CompanyCard(it.str("name")!!,trade,it.str("memo").orEmpty()) },
             companyCalls = companyCalls,tradeTasks = tradeTasks.map { it.task },otherTasks = others.map { it.task },todayCalls = todayCalls,
-            companyNames = companyNames,personNames = personNames)
+            companyNames = companyNames,personNames = personNames,kind = r.kind)
     }
 
     /** Stores the result and applies tasks in one transaction. User-edited and finished items are never changed. */

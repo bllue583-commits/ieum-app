@@ -360,6 +360,8 @@ internal object CallUi {
     // ---- plain Korean formatting -------------------------------------------------
     private val TIME=DateTimeFormatter.ofPattern("a h:mm",Locale.KOREAN)
     private val DATE=DateTimeFormatter.ofPattern("M월 d일 (E)",Locale.KOREAN)
+    /** "오후 2:05" for a call, "문자 오후 2:05" / "메일 오후 2:05" for messages. */
+    fun whenLabel(r:CallRecord)=(if(r.kind=="통화") "" else r.kind+" ")+time(r.startedMs)
     fun time(ms:Long?)=ms?.let { TIME.format(Instant.ofEpochMilli(it).atZone(CallRecordStore.KST)) } ?: "시각 모름"
     fun date(d:LocalDate)=DATE.format(d)
     fun dateTime(ms:Long?)=ms?.takeIf{it>0}?.let { date(CallRecordStore.kstDay(it))+" "+time(it) } ?: "아직 없음"
@@ -396,7 +398,7 @@ internal object CallUi {
         val e=at(eveningHour);val m=at(morningHour);val next=if(e.isBefore(m)) e else m
         val day=if(next.toLocalDate()==now.toLocalDate()) "오늘" else "내일"
         val h=next.hour;val word=when { h<12 -> "아침 ${if(h==0) 12 else h}시";h==12 -> "낮 12시";h<18 -> "오후 ${h-12}시";else -> "저녁 ${h-12}시" }
-        return "$day $word"+if(next==e) " (통화 정리)" else " (할 일)"
+        return "$day $word"+if(next==e) " (통화 정리)" else " (체크할 일)"
     }
     fun taskStatus(status:String)=when(status) { "needs_confirmation" -> "확인 필요";"in_progress" -> "진행 중";"waiting" -> "기다리는 중";"done" -> "완료";else -> "" }
 }

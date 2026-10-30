@@ -27,6 +27,7 @@ internal object CallPipelineStartup {
             runCatching { CallDigestSchedule.ensure(app) }
             runCatching { enqueueAnalysis(app) }
             runCatching { CallUpdate.schedule(app) }
+            runCatching { MessageWork.schedule(app) }
             if(CallInboxConfig.enabled) runCatching {
                 // Collect the scheduled task's results every hour even when no new call arrives.
                 WorkManager.getInstance(app).enqueueUniquePeriodicWork("ieum.calls.inbox",ExistingPeriodicWorkPolicy.KEEP,
@@ -46,6 +47,7 @@ internal object CallPipelineStartup {
         val app=context.applicationContext
         executor.execute {
             runCatching { enqueueAnalysis(app) }
+            runCatching { MessageWork.now(app) }
             if(hoursChanged) runCatching { CallDigestSchedule.reschedule(app) }
         }
     }

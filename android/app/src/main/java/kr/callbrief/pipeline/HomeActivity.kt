@@ -93,7 +93,7 @@ class HomeActivity:ComponentActivity() {
         // Today at a glance: three big numbers, then when the next report comes.
         val today=CallUi.card(this).apply { tag="home_today" }
         val left=s.byCompany.sumOf { it.second }
-        today.addView(CallUi.stats(this,listOf(Triple("${s.calls}","오늘 통화",CallUi.INK),Triple("${s.newTasks}","새 체크",CallUi.INK),
+        today.addView(CallUi.stats(this,listOf(Triple("${s.calls}","오늘 연락",CallUi.INK),Triple("${s.newTasks}","새 체크",CallUi.INK),
             Triple("$left","체크할 일",CallUi.ACCENT)),listOf("건","개","개")).apply { tag="home_calls" })
         today.addView(CallUi.divider(this))
         today.addView(CallUi.text(this,s.nextReport.takeIf{it.isNotBlank()}?.let{"다음 알림 $it"} ?: "마지막 정리 "+CallUi.dateTime(s.lastAnalyzedMs),CallUi.SMALL,color=CallUi.SUBTLE).apply { tag="home_next_report" })
@@ -145,7 +145,7 @@ class HomeActivity:ComponentActivity() {
         if(s.memos.isEmpty()) memo.addView(CallUi.text(this,"오늘은 아직 정리된 통화가 없어요",CallUi.BODY,color=CallUi.SUBTLE).apply { setPadding(CallUi.dp(this@HomeActivity,16),CallUi.dp(this@HomeActivity,10),CallUi.dp(this@HomeActivity,16),CallUi.dp(this@HomeActivity,10)) })
         s.memos.forEachIndexed { i,c ->
             if(i>0) memo.addView(android.view.View(this).apply { setBackgroundColor(CallUi.LINE) },LinearLayout.LayoutParams(-1,CallUi.dp(this,1)).apply { marginStart=CallUi.dp(this@HomeActivity,78);marginEnd=CallUi.dp(this@HomeActivity,20) })
-            memo.addView(CallUi.memoRow(this,CallUi.time(c.startedMs),c.displayName,c.summary?.let(CallUi::firstSentence) ?: CallUi.state(c.state),c.summary==null) {
+            memo.addView(CallUi.memoRow(this,CallUi.whenLabel(c),c.displayName,c.summary?.let(CallUi::firstSentence) ?: CallUi.state(c.state),c.summary==null) {
                 startActivity(Intent(this,TodayCallsActivity::class.java).putExtra(TodayCallsActivity.EXTRA_CALL,c.recordId))
             }.apply { tag="home_memo_${c.recordId}" })
         }

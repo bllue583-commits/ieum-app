@@ -44,6 +44,14 @@ object PipelineSettingsKeys {
     /** Digest hours (Asia/Seoul). Defaults 19 and 6. */
     const val EVENING_HOUR="callsEveningHour"
     const val MORNING_HOUR="callsMorningHour"
+    /** Text messages: received/sent time of the newest message already taken in. */
+    const val LAST_SMS_MS="messagesLastSmsMs"
+    /** Work mailbox (IMAP). The password is entered by the user only, stored encrypted, never shown again. */
+    const val MAIL_HOST="mailImapHost"
+    const val MAIL_USER="mailUser"
+    const val MAIL_PASSWORD="mailAppPassword"
+    const val LAST_MAIL_MS="messagesLastMailMs"
+    const val MAIL_ERROR="mailLastError"
 }
 
 /** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets

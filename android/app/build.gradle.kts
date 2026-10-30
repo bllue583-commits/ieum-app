@@ -35,7 +35,11 @@ android {
     }
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/ieum-whisper/assets"))
     sourceSets.getByName("main").jniLibs.srcDir(layout.buildDirectory.dir("generated/ieum-whisper/jniLibs"))
-    packaging { jniLibs { useLegacyPackaging = true; keepDebugSymbols += "**/libieum_whisper.so" } }
+    packaging {
+        jniLibs { useLegacyPackaging = true; keepDebugSymbols += "**/libieum_whisper.so" }
+        // The two JavaMail jars ship the same notice files.
+        resources { excludes += setOf("META-INF/NOTICE.md","META-INF/LICENSE.md") }
+    }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     testOptions { unitTests { isIncludeAndroidResources = true; isReturnDefaultValues = true } }
@@ -43,6 +47,9 @@ android {
 }
 dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Reading the user's work mailbox over IMAP (MIME and Korean charsets handled by the library).
+    implementation("com.sun.mail:android-mail:1.6.7")
+    implementation("com.sun.mail:android-activation:1.6.7")
     implementation(project(":core"))
     implementation(project(":recording-discovery-android"))
     implementation(project(":call-core-android"))
