@@ -37,7 +37,7 @@ class ClaudeCallAnalyzerTest {
         assertEquals("claude-sonnet-5-5",body.getString("model"));assertEquals(4000,body.getInt("max_tokens"))
         val format=body.getJSONObject("output_config").getJSONObject("format");assertEquals("json_schema",format.getString("type"))
         val schema=format.getJSONObject("schema");assertFalse(schema.getBoolean("additionalProperties"))
-        assertEquals(setOf("summary","keyPoints","counterpartName","counterpartCompany","promises","tasks"),
+        assertEquals(setOf("summary","keyPoints","counterpartName","counterpartCompany","counterpart","siteMemo","companyMemo","companyTrade","promises","tasks"),
             (0 until schema.getJSONArray("required").length()).map { schema.getJSONArray("required").getString(it) }.toSet())
         assertFalse(fake.bodies.single().contains("maxItems"))
         val content=body.getJSONArray("messages").getJSONObject(0).getString("content")

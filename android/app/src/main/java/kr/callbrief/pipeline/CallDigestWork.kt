@@ -35,7 +35,7 @@ internal object CallDigestText {
     }
     fun morning(items:List<CallTodoItem>,today:LocalDate):Message {
         val overdue=items.count { it.due<today.toString() }
-        val lines=items.sortedBy { it.due }.map { "• ${it.title} — ${CallUi.dueWords(it.due)}"+(if(it.status=="needs_confirmation") " (확인 필요)" else "") }
+        val lines=items.sortedBy { it.due }.map { "• ${it.company?.let { c -> "[$c] " } ?: ""}${it.title} — ${CallUi.dueWords(it.due)}"+(if(it.status=="needs_confirmation") " (확인 필요)" else "") }
         return Message("오늘 할 일 ${items.size}개"+(if(overdue>0) " (지난 기한 ${overdue}개)" else ""),
             if(items.isEmpty()) "오늘까지 할 일이 없어요" else lines.first().removePrefix("• "),more(lines))
     }
