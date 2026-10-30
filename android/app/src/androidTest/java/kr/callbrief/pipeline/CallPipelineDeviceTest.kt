@@ -55,13 +55,16 @@ class CallPipelineDeviceTest {
         val audioMs=pcm.size*1000L/16000
         val result=JSONObject().put("audioSeconds",audioMs/1000.0).put("cores",Runtime.getRuntime().availableProcessors()).put("device",android.os.Build.MODEL)
         var text=""
-        for(threads in listOf(6,8)) {
+        val args=InstrumentationRegistry.getArguments()
+        val variants=(args.getString("threads") ?: "6,8").split(',').mapNotNull{it.trim().toIntOrNull()}
+        for(threads in variants) {
             val started=System.currentTimeMillis()
             val segments=WhisperCallTranscriber(AndroidWhisperEngine(storage),model,threads).transcribe(file,pcm){false}
             val elapsed=System.currentTimeMillis()-started
             text=segments.joinToString(""){it.text}.trim()
             result.put("secondsPerAudioMinute_threads$threads",elapsed*60.0/audioMs)
         }
+        if(args.getString("callLike")=="false") { report("t2_speed",result.put("text",text.take(200)));assertTrue(text.any{it in '가'..'힣'});return }
         // Call-like: each sentence followed by 4 s of near silence.
         val pause=FloatArray(16000*4){ ((it*7919)%200-100)/100000f }
         val call=(0 until repeat).flatMap{one.asList()+pause.asList()}.toFloatArray()

@@ -7,7 +7,7 @@ adb wait-for-device
 adb install -r -g android/app/build/outputs/apk/debug/app-debug.apk
 adb install -r -g android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 adb logcat -c
-adb shell am instrument -w -r -e class kr.callbrief.pipeline.CallPipelineDeviceTest -e repeat "${IEUM_REPEAT:-3}" \
+adb shell am instrument -w -r -e class kr.callbrief.pipeline.CallPipelineDeviceTest -e repeat "${IEUM_REPEAT:-3}" -e threads "${IEUM_THREADS:-6,8}" -e callLike "${IEUM_CALL_LIKE:-true}" \
   kr.callbrief.test/androidx.test.runner.AndroidJUnitRunner > "$out/instrument.txt" 2>&1
 adb logcat -d -s IEUM_RESULT:I > "$out/results.txt"
 adb logcat -d '*:E' | tail -300 > "$out/errors.txt"
