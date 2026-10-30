@@ -90,11 +90,19 @@ internal object CallUi {
     fun duration(ms:Long)=if(ms<60_000) "${ms/1000}초" else "${ms/60000}분"+((ms/1000)%60).let { if(it>0) " ${it}초" else "" }
     /** Record state in plain words; no English codes ever reach the screen. */
     fun state(state:String)=when(state) {
-        CallRecordStore.TRANSCRIBED -> "정리 중이에요"
+        CallRecordStore.TRANSCRIBED -> if(CallInboxConfig.enabled) "정리 중이에요 (보통 1시간 안에 끝나요)" else "정리 중이에요"
         CallRecordStore.WAITING_KEY -> "설정에서 Claude 키를 넣어주세요"
         CallRecordStore.WAITING_CONSENT -> "설정에서 정리 동의를 켜주세요"
         CallRecordStore.FAILED -> "정리하지 못했어요"
         else -> ""
+    }
+    /** "오늘 저녁 7시" / "내일 아침 6시": when the next report notification comes. */
+    fun nextReport(eveningHour:Int,morningHour:Int,now:java.time.ZonedDateTime=java.time.ZonedDateTime.now(java.time.ZoneId.of("Asia/Seoul"))):String {
+        fun at(h:Int)=now.toLocalDate().atTime(h,0).atZone(now.zone).let { if(it.isAfter(now)) it else it.plusDays(1) }
+        val e=at(eveningHour);val m=at(morningHour);val next=if(e.isBefore(m)) e else m
+        val day=if(next.toLocalDate()==now.toLocalDate()) "오늘" else "내일"
+        val h=next.hour;val word=when { h<12 -> "아침 ${if(h==0) 12 else h}시";h==12 -> "낮 12시";h<18 -> "오후 ${h-12}시";else -> "저녁 ${h-12}시" }
+        return "$day $word"+if(next==e) " (통화 정리)" else " (할 일)"
     }
     fun taskStatus(status:String)=when(status) { "needs_confirmation" -> "확인 필요";"in_progress" -> "진행 중";"waiting" -> "기다리는 중";"done" -> "완료";else -> "" }
 }

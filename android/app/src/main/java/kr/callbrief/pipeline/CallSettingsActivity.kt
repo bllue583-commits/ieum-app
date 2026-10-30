@@ -16,6 +16,10 @@ import org.json.JSONObject
 class CallSettingsActivity:ComponentActivity() {
     private lateinit var body:LinearLayout
     private var busy=false
+    private val pickFolder=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { r ->
+        if(r.resultCode==RESULT_OK) CallFolder.save(this,r.data)?.let { Toast.makeText(this,it,Toast.LENGTH_LONG).show() }
+        refresh()
+    }
     private fun settings()=SecureSettings(CallPipelineStartup.storage(this))
 
     override fun onCreate(savedInstanceState:Bundle?) {
@@ -54,7 +58,12 @@ class CallSettingsActivity:ComponentActivity() {
         body.removeAllViews()
         body.addView(CallUi.title(this,"설정"))
 
-        body.addView(CallUi.heading(this,"1. 통화 정리 방식"))
+        body.addView(CallUi.heading(this,"1. 녹음 폴더"))
+        val folder=s.optString("treeUri").isNotBlank()
+        body.addView(CallUi.text(this,if(folder) "연결됨 ✓  새 통화를 자동으로 가져와요." else "아직 연결하지 않았어요. 통화 녹음 폴더를 골라 주세요.",CallUi.BODY,true,if(folder) CallUi.OK else CallUi.WARN).apply { tag="folder_state" })
+        body.addView(button(if(folder) "폴더 바꾸기" else "녹음 폴더 고르기") { pickFolder.launch(CallFolder.pickIntent()) }.apply { tag="folder_pick" })
+
+        body.addView(CallUi.heading(this,"2. 통화 정리 방식"))
         val hasKey=s.optString(PipelineSettingsKeys.CLAUDE_API_KEY).isNotBlank()
         if(CallInboxConfig.enabled) {
             body.addView(CallUi.text(this,"자동 정리 ✓  Claude 구독으로 매시간 정리해요. 따로 넣을 키가 없어요.",CallUi.BODY,true,CallUi.OK).apply { tag="api_key_state" })
@@ -75,7 +84,7 @@ class CallSettingsActivity:ComponentActivity() {
             }.apply { tag="api_key_save" })
         }
 
-        body.addView(CallUi.heading(this,"2. 정리 동의"))
+        body.addView(CallUi.heading(this,"3. 정리 동의"))
         body.addView(CallUi.text(this,"통화 녹음 파일은 휴대폰 밖으로 나가지 않아요. 휴대폰에서 글자로 바꾼 통화 내용만 Claude로 보내 요약하고, 결과는 이 휴대폰에만 저장해요. 언제든 끌 수 있어요."))
         val consent=s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false)
         body.addView(Switch(this).apply {
@@ -84,7 +93,7 @@ class CallSettingsActivity:ComponentActivity() {
             setOnCheckedChangeListener { _,checked -> if(checked!=consent) save { it.put(PipelineSettingsKeys.CONSENT_GRANTED,checked) } }
         })
 
-        body.addView(CallUi.heading(this,"3. 음성 인식 모델"))
+        body.addView(CallUi.heading(this,"4. 음성 인식 모델"))
         val modelState=s.optString(PipelineSettingsKeys.MODEL_STATE)
         body.addView(CallUi.text(this,when(modelState) {
             "READY" -> "준비됨 ✓";"DOWNLOADING" -> "받는 중이에요 (Wi-Fi 연결 필요, 약 570MB)";"FAILED" -> "받지 못했어요. 다시 받아주세요."
@@ -94,9 +103,9 @@ class CallSettingsActivity:ComponentActivity() {
             PipelineModelDownloadWork.enqueue(this);Toast.makeText(this,"Wi-Fi에 연결되면 받기 시작해요.",Toast.LENGTH_LONG).show()
         })
 
-        if(kr.callbrief.BuildConfig.SYNTHETIC_TOOLS_ENABLED&&modelState=="READY") body.addView(button("속도 측정 (시험용)") { benchmark() }.apply { tag="benchmark" })
+        if(kr.callbrief.BuildConfig.SYNTHETIC_TOOLS_ENABLED&&!CallInboxConfig.enabled&&modelState=="READY") body.addView(button("속도 측정 (시험용)") { benchmark() }.apply { tag="benchmark" })
 
-        body.addView(CallUi.heading(this,"4. 알림 시각"))
+        body.addView(CallUi.heading(this,"5. 알림 시각"))
         hourRow("저녁 정리 알림",PipelineSettingsKeys.EVENING_HOUR,s.optInt(PipelineSettingsKeys.EVENING_HOUR,19))
         hourRow("아침 할 일 알림",PipelineSettingsKeys.MORNING_HOUR,s.optInt(PipelineSettingsKeys.MORNING_HOUR,6))
 

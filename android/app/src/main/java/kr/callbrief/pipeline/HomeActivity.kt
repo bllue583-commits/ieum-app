@@ -9,7 +9,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kr.callbrief.AutomaticRecordingDiscovery
-import kr.callbrief.MainActivity
 import kr.callbrief.SecureSettings
 
 /** App home: what happened today at a glance, the first-run checklist until setup is done,
@@ -17,8 +16,12 @@ import kr.callbrief.SecureSettings
 class HomeActivity:ComponentActivity() {
     internal data class Snapshot(val folder:Boolean,val key:Boolean,val consent:Boolean,val model:String,
                                  val calls:Int,val working:Int,val newTasks:Int,val due:Int,val overdue:Int,val lastAnalyzedMs:Long,
-                                 val notify:Boolean=true,val battery:Boolean=true)
+                                 val notify:Boolean=true,val battery:Boolean=true,val modelPercent:Int=-1,val nextReport:String="")
     private lateinit var body:LinearLayout
+    private val pickFolder=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { r ->
+        if(r.resultCode==RESULT_OK) CallFolder.save(this,r.data)?.let { android.widget.Toast.makeText(this,it,android.widget.Toast.LENGTH_LONG).show() }
+        load()
+    }
     private val askNotify=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { load() }
     private fun notifyAllowed()=android.os.Build.VERSION.SDK_INT<33||checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)==android.content.pm.PackageManager.PERMISSION_GRANTED
     private fun batteryFree()=getSystemService(android.os.PowerManager::class.java)?.isIgnoringBatteryOptimizations(packageName)==true
@@ -50,9 +53,12 @@ class HomeActivity:ComponentActivity() {
         }
         val today=CallUi.today()
         val (calls,due,newTasks)=CallRecordStore(storage).use { Triple(it.day(today),it.dueItems(today),it.newTaskCount(today)) }
+        val mm=PipelineModelManager(storage)
+        val percent=if(mm.partFile.isFile) (mm.partFile.length()*100/574041195L).toInt().coerceIn(0,99) else -1
+        val next=CallUi.nextReport(s.optInt(PipelineSettingsKeys.EVENING_HOUR,19),s.optInt(PipelineSettingsKeys.MORNING_HOUR,6))
         return Snapshot(folder,s.optString(PipelineSettingsKeys.CLAUDE_API_KEY).isNotBlank(),s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false),
             s.optString(PipelineSettingsKeys.MODEL_STATE),calls.size,calls.count{it.state!=CallRecordStore.ANALYZED},newTasks,
-            due.size,due.count{CallUi.overdue(it.due)},s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),batteryFree())
+            due.size,due.count{CallUi.overdue(it.due)},s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),batteryFree(),percent,next)
     }
 
     private fun open(target:Class<*>,setup:Intent.()->Unit={}) = startActivity(Intent(this,target).apply(setup))
@@ -79,11 +85,11 @@ class HomeActivity:ComponentActivity() {
                 c.addView(CallUi.text(this,(if(done) "✓ " else "$n. ")+label,CallUi.BODY,true,if(done) CallUi.OK else CallUi.INK))
                 if(!done) { c.addView(CallUi.text(this,detail,CallUi.SMALL,color=CallUi.SUBTLE));c.addView(CallUi.button(this,"$label 하기",action)) }
             }
-            step(1,s.folder,"녹음 폴더 연결","휴대폰의 통화 녹음 폴더를 한 번 골라주세요.") { open(MainActivity::class.java){ putExtra("open_settings",true) } }
+            step(1,s.folder,"녹음 폴더 연결","통화 녹음 폴더(보통 Recordings › Call)가 열리면 아래 [이 폴더 사용]을 누르세요.") { pickFolder.launch(CallFolder.pickIntent()) }
             if(!CallInboxConfig.enabled) step(2,s.key,"Claude 키 넣기","통화를 요약하는 데 쓰는 키예요. 설정 화면에 붙여 넣으면 돼요.") { open(CallSettingsActivity::class.java) }
             step(3,s.consent,"정리 동의","녹음은 휴대폰에 그대로 두고, 글자로 바꾼 내용만 보내 정리해요.") { open(CallSettingsActivity::class.java) }
             step(4,s.model=="READY","음성 인식 모델 받기",
-                if(s.model=="DOWNLOADING") "받는 중이에요. Wi-Fi에 연결해 두세요. (약 570MB)" else "Wi-Fi에서 한 번만 받아요. (약 570MB)") {
+                if(s.model=="DOWNLOADING") "받는 중이에요"+(if(s.modelPercent>=0) " ${s.modelPercent}%" else "")+". Wi-Fi에 연결해 두세요. (약 570MB)" else "Wi-Fi에서 한 번만 받아요. (약 570MB)") {
                 PipelineModelDownloadWork.enqueue(this);android.widget.Toast.makeText(this,"Wi-Fi에 연결되면 받기 시작해요.",android.widget.Toast.LENGTH_LONG).show();load()
             }
             step(5,s.notify,"알림 허용","아침 6시 할 일, 저녁 7시 통화 정리를 알림으로 보내드려요.") {
@@ -101,6 +107,7 @@ class HomeActivity:ComponentActivity() {
         today.addView(CallUi.text(this,"통화 ${s.calls}건"+(if(s.working>0) " (정리 중 ${s.working}건)" else ""),CallUi.SUMMARY,true).apply { tag="home_calls" })
         today.addView(CallUi.text(this,"새로 생긴 할 일 ${s.newTasks}개",CallUi.SUMMARY))
         today.addView(CallUi.text(this,"오늘까지 할 일 ${s.due}개"+(if(s.overdue>0) " · 기한 지난 일 ${s.overdue}개" else ""),CallUi.SUMMARY,color=if(s.overdue>0) CallUi.WARN else CallUi.INK))
+        if(s.nextReport.isNotBlank()) today.addView(CallUi.text(this,"다음 알림: "+s.nextReport,CallUi.BODY,color=CallUi.ACCENT).apply { tag="home_next_report" })
         today.addView(CallUi.text(this,"마지막 정리: "+CallUi.dateTime(s.lastAnalyzedMs),CallUi.SMALL,color=CallUi.SUBTLE))
         body.addView(today)
         doors()
@@ -110,7 +117,6 @@ class HomeActivity:ComponentActivity() {
         body.addView(CallUi.bigButton(this,"📞","오늘의 통화") { open(TodayCallsActivity::class.java) }.apply { tag="home_calls_button" })
         body.addView(CallUi.bigButton(this,"✅","할 일") { open(CallTasksActivity::class.java) }.apply { tag="home_tasks_button" })
         body.addView(CallUi.bigButton(this,"⚙️","설정") { open(CallSettingsActivity::class.java) }.apply { tag="home_settings_button" })
-        body.addView(CallUi.gap(this,16))
-        body.addView(CallUi.button(this,"기타 기능 (예전 화면)") { open(MainActivity::class.java) }.apply { tag="home_more_button" })
+
     }
 }

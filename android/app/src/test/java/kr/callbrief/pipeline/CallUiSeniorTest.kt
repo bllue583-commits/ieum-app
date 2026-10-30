@@ -38,7 +38,7 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
     @Test fun homeShowsTodayCardThreeDoorsAndSetupUntilDone() {
         val a=home(HomeActivity.Snapshot(folder=true,key=false,consent=false,model="DOWNLOADING",calls=3,working=1,newTasks=2,due=4,overdue=1,lastAnalyzedMs=0))
         val root=a.window.decorView
-        for(tag in listOf("home_today","home_calls_button","home_tasks_button","home_settings_button","home_more_button","home_setup"))assertNotNull(tag,root.findViewWithTag<View>(tag))
+        for(tag in listOf("home_today","home_calls_button","home_tasks_button","home_settings_button","home_setup"))assertNotNull(tag,root.findViewWithTag<View>(tag))
         val all=texts(a).joinToString("\n"){it.text.toString()}
         assertTrue(all,all.contains("통화 3건 (정리 중 1건)"));assertTrue(all.contains("기한 지난 일 1개"));assertTrue(all.contains("처음 설정 3/6"))
         assertFalse(all,english.containsMatchIn(all))
@@ -76,5 +76,11 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
         val a=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get()
         val groups=a.groups(listOf(item("later",t.plusDays(3).toString()),item("none",""),item("late",t.minusDays(1).toString()),item("now",t.toString()),item("check","","needs_confirmation")))
         assertEquals(listOf("기한 지난 일","오늘까지","끝났는지 확인해 주세요","다가오는 일","기한 없는 일"),groups.map{it.first})
+    }
+
+    @Test fun nextReportTimeIsPlainKorean() {
+        val z=java.time.ZoneId.of("Asia/Seoul")
+        assertEquals("오늘 저녁 7시 (통화 정리)",CallUi.nextReport(19,6,java.time.ZonedDateTime.of(2026,10,30,9,0,0,0,z)))
+        assertEquals("내일 아침 6시 (할 일)",CallUi.nextReport(19,6,java.time.ZonedDateTime.of(2026,10,30,20,0,0,0,z)))
     }
 }
