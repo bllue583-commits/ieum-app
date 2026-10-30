@@ -86,6 +86,19 @@ class CallRecordStoreTest:ProtectedTextHostTestBase() {
         store().use { s -> s.insert(transcript());assertEquals(1,port().use { it.query("SELECT COUNT(*) AS n FROM workflow_items").single()["n"] as Number }.toInt()) }
     }
 
+    @Test fun completingAnItemMarksItDoneOnceAndProtectsItFromLaterAnalysis() {
+        store().use { it.insert(transcript()) }
+        runner(Fake { reply(ClaudeCallAnalyzerTest.task("create",null,"견적서 보내기",quote)) }).runPending()
+        val a=store().use { it.day(LocalDate.of(2026,10,29)).single().applied.single().itemId }
+        val before=board()
+        store().use { it.completeItem(a,1) }
+        assertEquals("done",item(a)["status"]);assertEquals(2L,item(a)["revision"]);assertEquals(before+1,board())
+        assertEquals(1,port().use { it.query("SELECT * FROM workflow_item_history WHERE item_id=?",a).size })
+        assertTrue(store().use { it.openItems() }.none { it.id==a })
+        try { store().use { it.completeItem(a,1) };fail("stale revision must be rejected") } catch(e:IllegalArgumentException) { assertEquals("ITEM_REVISION_CONFLICT",e.message) }
+        assertEquals(2L,item(a)["revision"])
+    }
+
     @Test fun updateOfAiOwnedItemAppliesButUserEditedAndDoneItemsAreUntouched() {
         store().use { it.insert(transcript()) }
         runner(Fake { reply(ClaudeCallAnalyzerTest.task("create",null,"견적서 보내기",quote),ClaudeCallAnalyzerTest.task("create",null,"계약서 받기","계약서 초안은")) }).runPending()

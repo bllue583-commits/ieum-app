@@ -1,5 +1,7 @@
 # 이음 (IEUM)
 
+> 현재 제품 흐름은 `android/app/src/main/java/kr/callbrief/pipeline/` 하나입니다(통화 폴더 → 기기 내 Whisper → Claude 분석 → 오늘 통화·할 일). Google/Drive, 네이버 메일, 카카오 보고, 일일 보고, 합성 시험(Dot) 기능과 해당 모듈은 `chore/remove-legacy`에서 제거했습니다. 아래 설명 중 이들을 다루는 부분은 과거 기록입니다.
+
 이음은 허용된 통화 기록·녹음과 관련 문자·메일의 근거를 연결해 업무 기억, 진행 상황, 필요한 서류와 할 일을 돕는 Android 앱입니다. 현재 버전은 `kr.callbrief`, versionCode 34, `0.13.4-android-local-whisper-dev`입니다. 이 저장소는 code34 v2의 검증된 맥북 소스를 Git 개발용으로 이관한 것입니다. 이번 이관에서 앱 기능·권한·계약·의존성 버전은 변경하지 않았습니다.
 
 ## 구현 경계
@@ -14,7 +16,7 @@
 
 | 경로 | 내용 |
 | --- | --- |
-| `android/` | Kotlin/Java 앱, 저장·Drive·메일·카카오 모듈, JVM/기기 시험, Gradle wrapper |
+| `android/` | Kotlin/Java 앱(`kr.callbrief.pipeline` 통화 흐름), 저장·발견 모듈, JVM/기기 시험, Gradle wrapper |
 | `worker/` | 기존 Node 처리·검증 코드와 공개 합성 시험. 새 Cloudflare worker 생성/배포 없음 |
 | `local_stt/` | 이전 Linux x86_64 고정 실행 bridge. Mac/Windows 일반 STT 실행기로 확장하지 않음 |
 | `tools/`, `run_gradle.py` | 명시적 로컬 도구경로를 받는 빌드/시험 도구 |
@@ -25,7 +27,7 @@
 
 macOS와 Windows 공통: Git, JDK 17, Python 3.10+, Node 22.13 이상(`node:sqlite` 사용), Android SDK platform 36, Build Tools 35.0.0. Gradle 8.13 wrapper, AGP 8.11.1, Kotlin 2.1.21은 소스에 고정되어 있습니다. 도구/라이선스는 본인이 준비하고 동의하며 스크립트는 SDK를 자동 설치하지 않습니다.
 
-Android JNI 자산 생성: NDK r28c `28.2.13676358`, CMake 3.22 이상, make, 공개 tiny-q5_1 모델. Mac은 기존 준비된 도구를 사용합니다. Windows native 빌드는 CMake의 Unix Makefiles generator와 `IEUM_MAKE_BINARY`로 지정한 make가 필요합니다. 이 경로의 Windows 실빌드는 아직 검증하지 않았습니다. 필요하면 기존 승인된 Mac에서 JNI를 생성해 로컬 빌드 산출물로만 전달합니다. 생성 자산을 Git에 커밋하지 않습니다.
+Android JNI 자산 생성: NDK r28c `28.2.13676358`, CMake 3.22 이상, make. (번들 tiny 모델은 더 이상 쓰지 않습니다. 모델은 앱이 내려받아 검증합니다.) Mac은 기존 준비된 도구를 사용합니다. Windows native 빌드는 CMake의 Unix Makefiles generator와 `IEUM_MAKE_BINARY`로 지정한 make가 필요합니다. 이 경로의 Windows 실빌드는 아직 검증하지 않았습니다. 필요하면 기존 승인된 Mac에서 JNI를 생성해 로컬 빌드 산출물로만 전달합니다. 생성 자산을 Git에 커밋하지 않습니다.
 
 ## 최초 준비와 빌드
 
@@ -41,9 +43,8 @@ export ANDROID_SDK_ROOT="/path/to/android-sdk"
 export IEUM_NODE_BINARY="$(command -v node)"
 export IEUM_ANDROID_NDK_ROOT="/path/to/android-ndk-r28c"
 export IEUM_CMAKE_BINARY="/path/to/cmake"
-export IEUM_ANDROID_WHISPER_MODEL="/path/to/ggml-tiny-q5_1.bin"
 python3 tools/prepare_host_tests.py /path/to/android-all-instrumented-15-robolectric-13954326-i7.jar
-python3 run_gradle.py --log first-build.log :core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleValidation
+python3 run_gradle.py --log first-build.log :core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
 
 Windows PowerShell:
@@ -57,9 +58,8 @@ $env:IEUM_NODE_BINARY = (Get-Command node).Source
 $env:IEUM_ANDROID_NDK_ROOT = 'C:\Tools\android-ndk-r28c'
 $env:IEUM_CMAKE_BINARY = 'C:\Tools\cmake\bin\cmake.exe'
 $env:IEUM_MAKE_BINARY = 'C:\Tools\make\bin\make.exe'
-$env:IEUM_ANDROID_WHISPER_MODEL = 'C:\Models\ggml-tiny-q5_1.bin'
 py -3 tools\prepare_host_tests.py C:\Tools\android-all-instrumented-15-robolectric-13954326-i7.jar
-py -3 run_gradle.py --log first-build.log :core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleValidation
+py -3 run_gradle.py --log first-build.log :core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
 
 첫 빌드에는 온라인 의존성 준비가 필요합니다. 캐시가 준비되어 있으면 `run_gradle.py --offline --log ...`를 사용합니다.

@@ -12,7 +12,7 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /** Encrypts settings in this class. Other stores need their own verified storage policy. No audio is copied here. */
-class SecureSettings(context: Context, private val keyAccess: KeyAccess = AndroidKeys(if(context is AccountStorageContext) ALIAS + "." + context.scope else ALIAS)) {
+class SecureSettings(context: Context, private val keyAccess: KeyAccess = AndroidKeys(ALIAS)) {
     private val prefs = context.getSharedPreferences("private_settings", Context.MODE_PRIVATE)
     companion object { private val lock = Any(); private const val ALIAS = "callbrief.client.v1" }
     interface KeyAccess { fun existing(): SecretKey?; fun createForFirstEmptyStore(): SecretKey }

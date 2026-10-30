@@ -1,4 +1,0 @@
-<resources>
-    <!-- Populate only after owner-approved Kakao Developers registration. No credential/grant in this handoff. -->
-    <!-- All config resources are generated from kakao.* Gradle properties, with empty/0/false defaults. -->
-</resources>

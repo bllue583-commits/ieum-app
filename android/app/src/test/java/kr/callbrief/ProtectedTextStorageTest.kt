@@ -89,12 +89,6 @@ class ProtectedTextStorageTest : ProtectedTextHostTestBase() {
             assertEquals("TEXT_STORE_LEGACY_REVIEW_REQUIRED",blocked{port().close()});assertEquals(0,ShadowTextKeys.CREATES.get());assertFalse(ProtectedDatabase.file(context,name).exists());assertEquals(before,ProtectedDatabase.legacyFiles(context,name).filter {f->f.isFile}.associate {f->f.path to sha(f)})
         };evidence("T09","auto_migration" to false,"old_files_deleted" to 0)
     }
-    @Test fun T10AccountScopeAndAadPreventCrossAccountCipherUse()=io{
-        val a=AccountStorageContext(context,"SYNTHETIC_ACCOUNT_A");val b=AccountStorageContext(context,"SYNTHETIC_ACCOUNT_B")
-        port(a).use {seed(it)};port(b).use {it.execute("INSERT INTO notes VALUES(2,'other',NULL,1,0)")}
-        val fa=ProtectedDatabase.file(a,name);val fb=ProtectedDatabase.file(b,name);assertNotEquals(fa.path,fb.path);fb.writeBytes(fa.readBytes());val prior=sha(fb)
-        assertEquals("TEXT_STORE_AUTHENTICATION_FAILED",blocked{port(b).close()});assertEquals(prior,sha(fb));evidence("T10","cross_owner_read" to 0)
-    }
     @Test fun T11NestedFailureEvenWhenCaughtCannotCommitPartialState()=io{
         port().use {p->seed(p);val before=sha(ProtectedDatabase.file(context,name));assertEquals("TEXT_STORE_TRANSACTION_ROLLED_BACK",blocked{p.transaction{
             p.execute("UPDATE notes SET revision=2");try{p.transaction<Unit>{p.execute("UPDATE notes SET note=?",canaries[3]);throw IllegalStateException("SYNTHETIC_PRIVATE_ERROR_CANARY")}}catch(_:IllegalStateException){};Unit
@@ -104,13 +98,12 @@ class ProtectedTextStorageTest : ProtectedTextHostTestBase() {
         port().use {a->seed(a);port().use {b->b.execute("UPDATE notes SET note=?,revision=2 WHERE revision=1",canaries[3]);a.execute("UPDATE notes SET note=? WHERE revision=1",canaries[1]);assertEquals(canaries[3],row(a)["note"]);assertEquals(1L,row(b)["done"])}}
         port().use {assertEquals(2L,row(it)["revision"]);assertEquals(1,it.query("SELECT * FROM history").size)};evidence("T12","manual_done_preserved" to true,"stale_overwrite" to false)
     }
-    @Test fun T13ErrorCanariesNeverBecomeDiagnosticNoticeOrLog(){val e=IllegalStateException(canaries.joinToString());val report=PrivacyDiagnostics.record(e,1,"a".repeat(64));canaries.forEach{assertFalse(report.toString().contains(it));assertFalse(PrivacyDiagnostics.userMessage(e).contains(it))};assertTrue(ShadowLog.getLogs().none{canaries.any{c->it.msg.orEmpty().contains(c)}});evidence("T13","content_in_diagnostics" to 0)}
     @Test fun T14NativeMetadataAndManualDoneRoundTripHasZeroDiskCanaries()=io{
-        val keys=SyntheticPilotIntegrationTest.HostKeys();GeneralLocalStoreTest.host(context,keys).use {s->s.initializeEmpty();val source=GeneralLocalStoreTest.Source().apply{put(name=canaries[1]+".wav")};s.importSelected(source);var row=s.snapshot().getJSONObject(0);s.edit(row.getString("file_id"),row,canaries[0],"done");row=s.snapshot().getJSONObject(0);s.edit(row.getString("file_id"),row,canaries[3],"done")}
+        val keys=HostVaultKeys();GeneralLocalStoreTest.host(context,keys).use {s->s.initializeEmpty();val source=GeneralLocalStoreTest.Source().apply{put(name=canaries[1]+".wav")};s.importSelected(source);var row=s.snapshot().getJSONObject(0);s.edit(row.getString("file_id"),row,canaries[0],"done");row=s.snapshot().getJSONObject(0);s.edit(row.getString("file_id"),row,canaries[3],"done")}
         checkDisk();GeneralLocalStoreTest.host(context,keys).use {s->val row=s.snapshot().getJSONObject(0);assertEquals(canaries[1]+".wav",row.getString("display_name"));assertEquals(canaries[3],row.getString("manual_note"));assertEquals("done",row.getString("manual_status"));assertEquals(2L,row.getLong("user_revision"))};checkDisk();evidence("T14","native_note_filename_disk_canaries" to 0,"done_preserved" to true)
     }
     @Test fun T15UnacceptedSourceScopeIsHeldBeforeOpening()=io {
-        val keys=SyntheticPilotIntegrationTest.HostKeys();val generated=GeneralLocalStoreTest.Source().apply {put()}
+        val keys=HostVaultKeys();val generated=GeneralLocalStoreTest.Source().apply {put()}
         val unaccepted=object:SelectedRecordingSource by generated {override val explicitlySyntheticScope=false}
         GeneralLocalStoreTest.host(context,keys).use {s->s.initializeEmpty();val r=s.importSelected(unaccepted);assertEquals(1,r.held);assertEquals(0,generated.opens);assertEquals(0,s.snapshot().length())}
         evidence("T15","unaccepted_audio_opens" to 0)
@@ -126,11 +119,6 @@ class ProtectedTextStorageTest : ProtectedTextHostTestBase() {
             ProtectedDatabase.open(context,name,null).use {h->val result=ProtectedDatabase.conditionalTransaction(h.database(),{h.database().execSQL("UPDATE notes SET revision=2");"REJECTED"},{false});assertEquals("REJECTED",result)}
             assertEquals(1L,row(p)["revision"]);assertEquals(prior,sha(file))
         };evidence("T17","rejected_receipt_committed" to false)
-    }
-    @Test fun T18LegacyAccountPathIsNotSilentlyReplacedByNewNoBackupStore()=io {
-        val scoped=AccountStorageContext(context,"SYNTHETIC_LEGACY_OWNER");val legacy=context.getDatabasePath("eum_"+scoped.scope+"_"+name).apply {parentFile!!.mkdirs()};legacy.writeText("synthetic retained legacy bytes");val prior=sha(legacy)
-        assertEquals("TEXT_STORE_LEGACY_REVIEW_REQUIRED",blocked{port(scoped).close()});assertEquals(0,ShadowTextKeys.CREATES.get());assertEquals(prior,sha(legacy));assertFalse(ProtectedDatabase.file(scoped,name).exists())
-        assertTrue(scoped.getDatabasePath(name).canonicalPath.startsWith(scoped.noBackupFilesDir.canonicalPath+File.separator));evidence("T18","account_old_data_preserved" to true)
     }
     @Test fun T19AtomicBackupWithLostKeyCannotGenerateOrReset()=io {
         port().use {seed(it)};val file=ProtectedDatabase.file(context,name);val backup=File(file.path+".bak");backup.writeBytes(file.readBytes());val prior=sha(backup);val count=ShadowTextKeys.CREATES.get();ShadowTextKeys.KEYS.clear()

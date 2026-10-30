@@ -2,7 +2,6 @@ package kr.callbrief.pipeline
 
 import android.content.Context
 import androidx.work.*
-import kr.callbrief.AccountStorageContext
 import java.util.concurrent.Executors
 
 /** Receives finished transcripts from the transcription side, stores them and queues the analysis. */
@@ -19,7 +18,7 @@ internal object CallPipelineStartup {
     private val executor=Executors.newSingleThreadExecutor()
     const val ANALYSIS_WORK="ieum.calls.analysis"
     /** Same account scope as the main screen's local store. */
-    fun storage(context:Context):Context=AccountStorageContext.selected(context.applicationContext)
+    fun storage(context:Context):Context=context.applicationContext
 
     fun init(context:Context) {
         CallTranscriptSinks.factory={ ctx -> CallSinkImpl(ctx) }

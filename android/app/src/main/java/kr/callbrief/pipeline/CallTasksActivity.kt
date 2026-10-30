@@ -8,7 +8,6 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kr.callbrief.RecordingWorkflowStore
 
 /** "할 일": every open to-do, the urgent ones first, each with one big "완료" button.
  * Completion is always the user's explicit action (the AI only ever marks "확인 필요"). */
@@ -64,7 +63,7 @@ class CallTasksActivity:ComponentActivity() {
     private fun complete(item:OpenItem) {
         lifecycleScope.launch {
             val ok=withContext(Dispatchers.IO) { runCatching {
-                RecordingWorkflowStore(CallPipelineStartup.storage(this@CallTasksActivity)).use { it.editItem(item.id,item.revision,item.title,"done",item.due,item.edition) }
+                CallRecordStore(CallPipelineStartup.storage(this@CallTasksActivity)).use { it.completeItem(item.id,item.revision) }
             }.isSuccess }
             Toast.makeText(this@CallTasksActivity,if(ok) "완료로 바꿨어요." else "바꾸지 못했어요. 다시 시도해 주세요.",Toast.LENGTH_SHORT).show();load()
         }

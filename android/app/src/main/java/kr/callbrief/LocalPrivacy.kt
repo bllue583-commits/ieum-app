@@ -13,8 +13,6 @@ object LocalPrivacy {
     // Hashes are low-entropy matching values; never describe them as anonymous or encrypted.
     const val PERSONAL_PHONE_HASH = "382e6bfad716a41aa161688852be0777cae22b3bea2ebebe3b635fd1b32eaead"
     const val PERSONAL_ALIAS_HASH = "1684ce349a07988c9ac5bd3572cccf2b7208da08820864b3bcda1c5c7401a4fc"
-    const val PERSONAL_PHONE_LABEL = "요청한 제외 번호"
-    const val PERSONAL_ALIAS_LABEL = "요청한 제외 이름 · 이모티콘·문장부호 변형 포함"
     fun rules(state: JSONObject): PrivacyRules {
         val phones = mutableSetOf<String>(); val aliases = mutableListOf<ExcludedAlias>()
         if (!state.optBoolean("personalPhoneDisabled")) phones.add(PERSONAL_PHONE_HASH)
