@@ -64,7 +64,7 @@ jobs:
           status=0
           for n in ${{ steps.look.outputs.results }}; do
             gh api "repos/$INBOX/contents/results/$n" -H 'Accept: application/vnd.github.raw+json' > "e2e/$n"
-            if IEUM_SELFTEST_RESULT="$PWD/e2e/$n" python3 run_gradle.py --log e2e-check.log :app:testDebugUnitTest --tests 'kr.callbrief.pipeline.InboxSelfTest'; then
+            if IEUM_SELFTEST_RESULT="$PWD/e2e/$n" python3 run_gradle.py --log "e2e-check-$n.log" :app:testDebugUnitTest --tests 'kr.callbrief.pipeline.InboxSelfTest'; then
               echo "::notice title=inbox-e2e::PASS $n $(tr -d '\n' < e2e/$n.report.json | cut -c1-1200)"
             else
               status=1; echo "::error title=inbox-e2e::FAIL $n $(grep -ho 'message="[^"]*"' android/app/build/test-results/testDebugUnitTest/*InboxSelfTest*.xml | head -3)"
