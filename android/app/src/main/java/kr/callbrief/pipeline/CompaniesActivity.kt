@@ -57,31 +57,26 @@ class CompaniesActivity:ComponentActivity() {
         detailId=null
         CallUi.band(body,"업체와 사람",if(rows.isEmpty()) null else "업체 ${rows.size}곳, 최근에 통화한 순서예요")
         if(rows.isEmpty()) body.addView(CallUi.card(this).apply { addView(CallUi.text(this@CompaniesActivity,"아직 업체가 없어요. 통화가 정리되면 자동으로 채워져요.",CallUi.BODY,color=CallUi.SUBTLE)) })
-        rows.forEach { c ->
-            val card=CallUi.card(this).apply { isClickable=true;tag="company_${c.id}";contentDescription="${c.name}, 사람과 메모 자세히 보기" }
-            val top=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL;gravity=android.view.Gravity.CENTER_VERTICAL }
-            top.addView(CallUi.text(this,c.name,CallUi.HEADING,true),LinearLayout.LayoutParams(0,-2,1f))
-            c.trade?.let { top.addView(CallUi.pill(this,it,CallUi.ACCENT).apply { layoutParams=LinearLayout.LayoutParams(-2,-2).apply { marginEnd=CallUi.dp(this@CompaniesActivity,8) } }) }
-            top.addView(android.widget.ImageView(this).apply { setImageDrawable(CallUi.icon(this@CompaniesActivity,"chevron",CallUi.SUBTLE,20)) })
-            card.addView(top)
-            card.addView(CallUi.text(this,(if(c.openTasks>0) "체크할 일 ${c.openTasks}개" else "체크할 일 없음")+", "+
-                (c.lastCallMs?.let { "${CallUi.dayWord(CallRecordStore.kstDay(it))} 마지막 통화" } ?: "통화 기록 없음"),CallUi.SMALL,color=if(c.openTasks>0) CallUi.INK else CallUi.SUBTLE))
-            card.setOnClickListener { detailId=c.id;load() }
-            body.addView(card)
-        }
-        if(loose.isNotEmpty()) { body.addView(CallUi.section(this,"업체 없는 사람 (우리 직원 등)"));loose.forEach(::personCard) }
+        // One grouped list: badge, name, trade on the right, check items and last call below.
+        if(rows.isNotEmpty()) body.addView(CallUi.list(this,rows.map { c ->
+            CallUi.memoRow(this,c.trade.orEmpty(),c.name,(if(c.openTasks>0) "체크할 일 ${c.openTasks}개" else "체크할 일 없음")+", "+
+                (c.lastCallMs?.let { "${CallUi.dayWord(CallRecordStore.kstDay(it))} 마지막 통화" } ?: "통화 기록 없음")) { detailId=c.id;load() }
+                .apply { tag="company_${c.id}";contentDescription="${c.name}, 사람과 메모 자세히 보기" }
+        }))
+        if(loose.isNotEmpty()) { body.addView(CallUi.section(this,"업체 없는 사람 (우리 직원 등)"));body.addView(CallUi.list(this,loose.map(::personRow))) }
     }
 
-    /** One person: name, role, and a quiet [이름 고치기] for misheard names. */
-    private fun personCard(p:PersonRow) {
-        val card=CallUi.card(this).apply { tag="person_${p.id}";orientation=LinearLayout.HORIZONTAL;gravity=android.view.Gravity.CENTER_VERTICAL }
-        val words=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
-        words.addView(CallUi.text(this,p.name,CallUi.HEADING,true))
+    /** One person: badge, name, role, and a quiet [이름 고치기] for misheard names. */
+    private fun personRow(p:PersonRow)=LinearLayout(this).apply {
+        tag="person_${p.id}";orientation=LinearLayout.HORIZONTAL;gravity=android.view.Gravity.CENTER_VERTICAL
+        setPadding(CallUi.dp(this@CompaniesActivity,20),CallUi.dp(this@CompaniesActivity,10),CallUi.dp(this@CompaniesActivity,8),CallUi.dp(this@CompaniesActivity,10))
+        addView(CallUi.avatar(this@CompaniesActivity,p.name))
+        val words=LinearLayout(this@CompaniesActivity).apply { orientation=LinearLayout.VERTICAL }
+        words.addView(CallUi.text(this@CompaniesActivity,p.name,CallUi.BODY,true).apply { setPadding(0,0,0,0) })
         listOfNotNull(p.role,"우리 직원".takeIf { p.isStaff }).joinToString(", ").takeIf { it.isNotEmpty() }
-            ?.let { words.addView(CallUi.text(this,it,CallUi.SMALL,color=CallUi.SUBTLE)) }
-        card.addView(words,LinearLayout.LayoutParams(0,-2,1f))
-        card.addView(CallUi.linkButton(this,"이름 고치기") { rename(p) }.apply { tag="person_rename_${p.id}";contentDescription="${p.name} 이름 고치기" })
-        body.addView(card)
+            ?.let { words.addView(CallUi.text(this@CompaniesActivity,it,CallUi.SMALL,color=CallUi.SUBTLE).apply { setPadding(0,0,0,0) }) }
+        addView(words,LinearLayout.LayoutParams(0,-2,1f))
+        addView(CallUi.linkButton(this@CompaniesActivity,"이름 고치기") { rename(p) }.apply { tag="person_rename_${p.id}";contentDescription="${p.name} 이름 고치기" })
     }
 
     /** Speech recognition mishears names; the fix shows everywhere and the old spelling keeps finding this person. */
@@ -110,7 +105,7 @@ class CompaniesActivity:ComponentActivity() {
         body.addView(CallUi.card(this).apply { addView(CallUi.text(this@CompaniesActivity,d.memo.ifBlank { "아직 메모가 없어요. 통화가 쌓이면 자동으로 채워져요." },CallUi.BODY,color=if(d.memo.isBlank()) CallUi.SUBTLE else CallUi.INK)) })
         body.addView(CallUi.section(this,"사람 (${d.people.size})"))
         if(d.people.isEmpty()) body.addView(CallUi.text(this,"아직 알게 된 사람이 없어요.",CallUi.BODY,color=CallUi.SUBTLE))
-        d.people.forEach(::personCard)
+        if(d.people.isNotEmpty()) body.addView(CallUi.list(this,d.people.map(::personRow)))
         body.addView(CallUi.section(this,"체크할 일 (${d.tasks.size})"))
         if(d.tasks.isEmpty()) body.addView(CallUi.text(this,"체크할 일이 없어요.",CallUi.BODY,color=CallUi.SUBTLE))
         d.tasks.forEach { t -> body.addView(CallUi.taskRow(this,t.title,t.createdMs,null,t.counterpart,t.status).apply { tag="company_task_${t.id}" }) }

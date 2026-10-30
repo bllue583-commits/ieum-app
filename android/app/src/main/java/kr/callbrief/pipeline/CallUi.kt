@@ -26,8 +26,9 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-/** One look for every call screen ("도면" design, 10/30): a deep blueprint-navy title band, white sheets on a cool
- * grey page, big numerals for what matters, line icons, and a bottom bar of five icon buttons that is the whole app.
+/** One look for every call screen (10/30 evening, after Apple- and Toss-class references): one typeface (Pretendard),
+ * ink and greys for hierarchy, one blue accent, white rounded sheets with no edges on a light grey page, big numbers
+ * with small units, round initial badges in lists, line icons, and a bottom bar of five icon buttons that is the whole app.
  * Sized for a reader in his 50s: text 18sp and up (buttons excepted), touch targets 56dp and up, plain Korean. */
 internal object CallUi {
     const val TITLE=28f
@@ -35,25 +36,32 @@ internal object CallUi {
     const val SUMMARY=19f
     const val BODY=19f
     const val SMALL=18f
-    const val NUMBER=36f
-    val NAVY=Color.parseColor("#14324F")
-    val INK=Color.parseColor("#14202B")
-    val SUBTLE=Color.parseColor("#5A6672")
-    val ACCENT=Color.parseColor("#1F5C99")
-    val ACCENT_SOFT=Color.parseColor("#E8EFF7")
-    val AMBER=Color.parseColor("#8A5A00")
-    val AMBER_SOFT=Color.parseColor("#FBF0D9")
-    val AMBER_RAIL=Color.parseColor("#E3A21A")
-    val WARN=Color.parseColor("#B23A2B")
-    val WARN_SOFT=Color.parseColor("#F6E3E0")
-    val OK=Color.parseColor("#2E7656")
-    val PAGE=Color.parseColor("#F4F5F7")
+    const val NUMBER=34f
+    // Quiet palette: ink and greys carry the hierarchy, one blue accent, colour only where it means something.
+    val INK=Color.parseColor("#191F28")
+    val SUBTLE=Color.parseColor("#6B7684")
+    val FAINT=Color.parseColor("#B0B8C1")
+    val ACCENT=Color.parseColor("#3268F0")
+    val ACCENT_SOFT=Color.parseColor("#EDF2FE")
+    val NAVY=INK
+    val AMBER=Color.parseColor("#B26B00")
+    val AMBER_SOFT=Color.parseColor("#FFF4E0")
+    val AMBER_RAIL=Color.parseColor("#F5A524")
+    val WARN=Color.parseColor("#D63B3B")
+    val WARN_SOFT=Color.parseColor("#FDECEC")
+    val OK=Color.parseColor("#0E9F6E")
+    val PAGE=Color.parseColor("#F2F4F6")
     val CARD=Color.parseColor("#FFFFFF")
-    val LINE=Color.parseColor("#E1E5EA")
-    val MUTED_BAR=Color.parseColor("#C9D6E3")
-    private val ON_NAVY_SOFT=Color.parseColor("#B8C7D6")
+    val LINE=Color.parseColor("#EEF0F2")
+    val MUTED_BAR=Color.parseColor("#D9E3FC")
 
     fun dp(a:Activity,v:Int)=(v*a.resources.displayMetrics.density+0.5f).toInt()
+
+    /** Pretendard (SIL OFL), bundled: one typeface family everywhere, weight for hierarchy. */
+    enum class Weight(val res:Int) { REGULAR(kr.callbrief.R.font.pretendard_regular),MEDIUM(kr.callbrief.R.font.pretendard_medium),
+        SEMIBOLD(kr.callbrief.R.font.pretendard_semibold),BOLD(kr.callbrief.R.font.pretendard_bold) }
+    private val faces=HashMap<Weight,Typeface>()
+    fun font(a:android.content.Context,w:Weight):Typeface=faces.getOrPut(w) { runCatching { a.resources.getFont(w.res) }.getOrDefault(Typeface.DEFAULT) }
 
     // ---- page frame: navy status strip, scrolling band + content, bottom bar ---------------------------------------
     /** The five places of the app. The bottom bar shows all of them on every main screen. */
@@ -67,9 +75,9 @@ internal object CallUi {
     /** Builds the frame and returns the content column. Call [band] at the top of every render. */
     fun page(a:Activity,tab:Tab?=null):LinearLayout {
         a.window.decorView.setBackgroundColor(PAGE)
-        (a as? ComponentActivity)?.enableEdgeToEdge(SystemBarStyle.dark(NAVY),SystemBarStyle.light(CARD,CARD))
+        (a as? ComponentActivity)?.enableEdgeToEdge(SystemBarStyle.light(PAGE,PAGE),SystemBarStyle.light(CARD,CARD))
         val root=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;setBackgroundColor(PAGE) }
-        val strip=View(a).apply { setBackgroundColor(NAVY) }
+        val strip=View(a).apply { setBackgroundColor(PAGE) }
         root.addView(strip,LinearLayout.LayoutParams(-1,0))
         val holder=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;tag="page_holder" }
         holder.addView(LinearLayout(a).apply { tag="page_band" })
@@ -90,38 +98,34 @@ internal object CallUi {
         a.setContentView(root);return column
     }
 
-    /** Navy title band above the content. [overlap] lifts the first content card into the band (home). */
-    fun band(content:LinearLayout,title:String,subtitle:String?=null,back:(()->Unit)?=null,eyebrow:String?=null,overlap:Boolean=false) {
+    /** Page header on the page itself, no coloured block: a back arrow when needed, a small grey line above
+     * ([eyebrow]), a large title, a grey line below. ([overlap] is kept for call sites; the header never overlaps.) */
+    fun band(content:LinearLayout,title:String,subtitle:String?=null,back:(()->Unit)?=null,eyebrow:String?=null,
+             @Suppress("UNUSED_PARAMETER") overlap:Boolean=false) {
         val a=content.context as Activity
         val holder=content.parent as LinearLayout
-        val band=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;setBackgroundColor(NAVY);tag="page_band"
-            setPadding(dp(a,if(back!=null) 8 else 20),dp(a,12),dp(a,20),dp(a,if(overlap) 72 else 22)) }
-        val row=LinearLayout(a).apply { orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL }
-        if(back!=null) row.addView(Button(a).apply {
+        val band=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;tag="page_band";setPadding(dp(a,22),dp(a,if(back!=null) 4 else 20),dp(a,22),dp(a,8)) }
+        if(back!=null) band.addView(Button(a).apply {
             text="";contentDescription="뒤로";tag="page_back";stateListAnimator=null;background=null
-            setCompoundDrawablesWithIntrinsicBounds(icon(a,"back",Color.WHITE,28),null,null,null)
-            minWidth=dp(a,56);minimumWidth=dp(a,56);minHeight=dp(a,56);minimumHeight=dp(a,56);setPadding(dp(a,12),0,dp(a,4),0)
+            setCompoundDrawablesWithIntrinsicBounds(icon(a,"back",INK,28),null,null,null)
+            minWidth=dp(a,56);minimumWidth=dp(a,56);minHeight=dp(a,56);minimumHeight=dp(a,56);setPadding(0,0,dp(a,8),0)
             setOnClickListener { back() }
-        },LinearLayout.LayoutParams(-2,-2))
-        val words=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
-        eyebrow?.let { words.addView(text(a,it,SMALL,color=ON_NAVY_SOFT).apply { setPadding(0,0,0,0) }) }
-        words.addView(text(a,title,TITLE,true,Color.WHITE).apply { tag="page_title";letterSpacing=-0.02f;setPadding(0,0,0,0) })
-        subtitle?.let { words.addView(text(a,it,SMALL,color=ON_NAVY_SOFT).apply { tag="page_subtitle";setPadding(0,dp(a,2),0,0) }) }
-        row.addView(words,LinearLayout.LayoutParams(0,-2,1f))
-        band.addView(row)
+        },LinearLayout.LayoutParams(-2,-2).apply { marginStart=-dp(a,6) })
+        eyebrow?.let { band.addView(text(a,it,SMALL,color=SUBTLE).apply { setPadding(0,0,0,dp(a,2)) }) }
+        band.addView(text(a,title,TITLE,true).apply { tag="page_title";letterSpacing=-0.02f;setPadding(0,0,0,0) })
+        subtitle?.let { band.addView(text(a,it,SMALL,color=SUBTLE).apply { tag="page_subtitle";setPadding(0,dp(a,4),0,0) }) }
         holder.removeViewAt(0);holder.addView(band,0)
-        content.layoutParams=(content.layoutParams as LinearLayout.LayoutParams).apply { topMargin=if(overlap) -dp(a,60) else 0 }
     }
 
     private fun tabBar(a:Activity,current:Tab)=LinearLayout(a).apply {
         orientation=LinearLayout.HORIZONTAL;tag="bottom_bar"
         val wrap=this
         Tab.entries.forEach { t ->
-            val on=t==current;val color=if(on) NAVY else SUBTLE
+            val on=t==current;val color=if(on) INK else FAINT
             wrap.addView(Button(a).apply {
-                text=t.label;textSize=15f;isAllCaps=false;stateListAnimator=null;background=null;setTextColor(color);tag=t.tag
-                if(on) setTypeface(Typeface.create(Typeface.DEFAULT,Typeface.BOLD))
-                setCompoundDrawablesWithIntrinsicBounds(null,icon(a,t.icon,color,26),null,null);compoundDrawablePadding=dp(a,2)
+                text=t.label;textSize=14f;isAllCaps=false;stateListAnimator=null;background=null;setTextColor(color);tag=t.tag
+                typeface=font(a,if(on) Weight.SEMIBOLD else Weight.MEDIUM)
+                setCompoundDrawablesWithIntrinsicBounds(null,icon(a,t.icon,color,26,if(on) 2.1f else 1.8f),null,null);compoundDrawablePadding=dp(a,3)
                 minHeight=dp(a,60);minimumHeight=dp(a,60);minWidth=0;minimumWidth=0;setPadding(0,dp(a,4),0,dp(a,2))
                 contentDescription=if(on) "${t.label}, 지금 보는 화면" else t.label
                 setOnClickListener { if(!on) go(a,t) }
@@ -138,16 +142,17 @@ internal object CallUi {
 
     // ---- text and sheets ------------------------------------------------------------------------------------------
     fun text(a:Activity,value:String,size:Float=BODY,bold:Boolean=false,color:Int=INK)=TextView(a).apply {
-        text=value;textSize=size;setTextColor(color);setLineSpacing(0f,1.18f);setPadding(0,dp(a,2),0,dp(a,2))
+        text=value;textSize=size;setTextColor(color);setLineSpacing(0f,if(size>=24f) 1.15f else 1.24f);setPadding(0,dp(a,2),0,dp(a,2))
         textLocale=Locale.KOREAN // phrase-based line breaking needs the text's language
         if(android.os.Build.VERSION.SDK_INT>=33)lineBreakWordStyle=android.graphics.text.LineBreakConfig.LINE_BREAK_WORD_STYLE_PHRASE // wrap Korean at word boundaries
-        if(bold)setTypeface(Typeface.create(Typeface.DEFAULT,Typeface.BOLD))
+        typeface=font(a,when { !bold -> Weight.REGULAR;size>=24f -> Weight.BOLD;else -> Weight.SEMIBOLD })
+        letterSpacing=-0.01f
     }
     fun title(a:Activity,value:String)=text(a,value,TITLE,true).apply { letterSpacing=-0.02f;setPadding(0,dp(a,8),0,dp(a,2)) }
     fun heading(a:Activity,value:String)=text(a,value,HEADING,true).apply { setPadding(dp(a,4),dp(a,22),0,dp(a,8)) }
     /** Section heading with a text link on the right ("전체 보기 ›"). */
     fun section(a:Activity,value:String,link:String?=null,action:(()->Unit)?=null)=LinearLayout(a).apply {
-        orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setPadding(dp(a,4),dp(a,18),0,dp(a,4))
+        orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setPadding(dp(a,6),dp(a,22),0,dp(a,6))
         addView(text(a,value,HEADING,true),LinearLayout.LayoutParams(0,-2,1f))
         if(link!=null) addView(if(action!=null) linkButton(a,link,action) else text(a,link,SMALL,true,SUBTLE).apply { setPadding(0,0,dp(a,4),0) })
     }
@@ -155,37 +160,34 @@ internal object CallUi {
     internal fun sheet(a:Activity,fill:Int,stroke:Int?=null,radius:Int=14)=GradientDrawable().apply {
         setColor(fill);cornerRadius=dp(a,radius).toFloat();if(stroke!=null)setStroke(dp(a,1),stroke) }
     private fun Button.base(a:Activity,label:String,action:()->Unit) {
-        text=label;isAllCaps=false;stateListAnimator=null;textSize=18f;setTypeface(Typeface.create(Typeface.DEFAULT,Typeface.BOLD))
+        text=label;isAllCaps=false;stateListAnimator=null;textSize=18f;typeface=font(a,Weight.SEMIBOLD)
         minHeight=dp(a,56);minimumHeight=dp(a,56);setPadding(dp(a,16),0,dp(a,16),0);setOnClickListener { action() }
     }
     /** Primary action (at most one per screen): solid blue. [icon] is kept for call sites; words carry the meaning. */
     fun bigButton(a:Activity,@Suppress("UNUSED_PARAMETER") icon:String,label:String,action:()->Unit)=Button(a).apply {
-        base(a,label,action);setTextColor(Color.WHITE);background=sheet(a,ACCENT,radius=12)
-        layoutParams=LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,10);bottomMargin=dp(a,4) }
+        base(a,label,action);setTextColor(Color.WHITE);background=sheet(a,ACCENT,radius=16)
+        layoutParams=LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,12);bottomMargin=dp(a,2) }
     }
-    /** Secondary action: white with a blue outline. */
+    /** Secondary action: soft blue fill, no outline. */
     fun button(a:Activity,label:String,action:()->Unit)=Button(a).apply {
-        base(a,label,action);setTextColor(ACCENT);background=sheet(a,CARD,Color.parseColor("#B9CCE0"),radius=12)
-        layoutParams=LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,8);bottomMargin=dp(a,4) }
+        base(a,label,action);setTextColor(ACCENT);background=sheet(a,ACCENT_SOFT,radius=16)
+        layoutParams=LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,10);bottomMargin=dp(a,2) }
     }
     /** Text link button ("전체 보기 ›"), 48dp tall. */
     fun linkButton(a:Activity,label:String,action:()->Unit)=Button(a).apply {
         base(a,label,action);setTextColor(ACCENT);background=null;textSize=17f;minHeight=dp(a,48);minimumHeight=dp(a,48);setPadding(dp(a,8),0,dp(a,4),0)
     }
-    /** A white sheet with a hairline edge. [rail] draws a schedule-bar stripe on the left (urgency). */
+    /** A white sheet: rounded, no edge, no shadow. [rail] tints the sheet instead of drawing a stripe (rarely used). */
     fun card(a:Activity,warn:Boolean=false,rail:Int?=if(warn) WARN else null)=LinearLayout(a).apply {
         orientation=LinearLayout.VERTICAL
-        val base=sheet(a,CARD,LINE)
-        background=if(rail==null) base else android.graphics.drawable.LayerDrawable(arrayOf(base,sheet(a,rail,radius=14).apply {
-            cornerRadii=floatArrayOf(dp(a,14).toFloat(),dp(a,14).toFloat(),0f,0f,0f,0f,dp(a,14).toFloat(),dp(a,14).toFloat()) })).apply {
-            setLayerWidth(1,dp(a,5));setLayerGravity(1,Gravity.START or Gravity.FILL_VERTICAL) }
-        val p=dp(a,16);setPadding(p+(if(rail!=null) dp(a,5) else 0),dp(a,14),p,dp(a,14))
-        layoutParams=LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,5);bottomMargin=dp(a,5) }
+        background=sheet(a,when(rail) { null -> CARD;WARN -> WARN_SOFT;AMBER_RAIL,AMBER -> AMBER_SOFT;else -> ACCENT_SOFT },radius=22)
+        val p=dp(a,20);setPadding(p,dp(a,18),p,dp(a,18))
+        layoutParams=LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,6);bottomMargin=dp(a,6) }
     }
-    /** Small status word on a soft fill (e.g. "오늘까지" in amber). */
+    /** Small status word on a soft fill (e.g. "정리 중 1건"). */
     fun pill(a:Activity,value:String,color:Int)=text(a,value,SMALL,true,color).apply {
-        val fill=when(color) { WARN -> WARN_SOFT;AMBER -> AMBER_SOFT;ACCENT -> ACCENT_SOFT;else -> Color.parseColor("#EEF0F3") }
-        background=sheet(a,fill,radius=8);setPadding(dp(a,10),dp(a,2),dp(a,10),dp(a,2));gravity=Gravity.CENTER
+        val fill=when(color) { WARN -> WARN_SOFT;AMBER -> AMBER_SOFT;ACCENT -> ACCENT_SOFT;else -> Color.parseColor("#F2F4F6") }
+        background=sheet(a,fill,radius=10);setPadding(dp(a,10),dp(a,3),dp(a,10),dp(a,3));gravity=Gravity.CENTER
         layoutParams=LinearLayout.LayoutParams(-2,-2).apply { topMargin=dp(a,6) }
     }
     fun gap(a:Activity,h:Int=12)=View(a).apply { layoutParams=LinearLayout.LayoutParams(-1,dp(a,h)) }
@@ -205,48 +207,66 @@ internal object CallUi {
         val c=card(a)
         val row=LinearLayout(a).apply { orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL }
         val words=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
-        listOfNotNull(company,person?.let { "$it 님" }).joinToString(" ").takeIf { it.isNotEmpty() }
-            ?.let { words.addView(text(a,it,SMALL,true,ACCENT).apply { setPadding(0,0,0,0) }) }
-        words.addView(text(a,title,SUMMARY,true))
-        val chips=LinearLayout(a).apply { orientation=LinearLayout.HORIZONTAL }
-        requested(requestedMs).takeIf { it.isNotEmpty() }?.let { chips.addView(pill(a,it,SUBTLE).apply { layoutParams=LinearLayout.LayoutParams(-2,-2).apply { topMargin=dp(a,6);marginEnd=dp(a,6) } }) }
-        taskStatus(status).takeIf { it.isNotEmpty() }?.let { chips.addView(pill(a,it,ACCENT)) }
-        if(chips.childCount>0) words.addView(chips)
+        words.addView(text(a,title,SUMMARY,true).apply { setPadding(0,0,0,dp(a,2)) })
+        // One quiet grey line: who, and when it was asked for.
+        listOfNotNull(listOfNotNull(company,person?.let { "$it 님" }).joinToString(" ").takeIf { it.isNotEmpty() },requested(requestedMs).takeIf { it.isNotEmpty() })
+            .joinToString(", ").takeIf { it.isNotEmpty() }?.let { words.addView(text(a,it,SMALL,color=SUBTLE).apply { setPadding(0,0,0,0) }) }
+        taskStatus(status).takeIf { it.isNotEmpty() }?.let { words.addView(pill(a,it,ACCENT)) }
         row.addView(words,LinearLayout.LayoutParams(0,-2,1f))
         if(onDone!=null) row.addView(Button(a).apply {
-            base(a,"확인",onDone);setTextColor(ACCENT);background=sheet(a,CARD,Color.parseColor("#B9CCE0"),radius=12)
-            setCompoundDrawablesWithIntrinsicBounds(icon(a,"check",ACCENT,20),null,null,null);compoundDrawablePadding=dp(a,4)
-            setPadding(dp(a,12),0,dp(a,14),0);contentDescription="$title 확인했어요"
-        },LinearLayout.LayoutParams(-2,-2).apply { marginStart=dp(a,10) })
+            base(a,"확인",onDone);setTextColor(ACCENT);background=sheet(a,ACCENT_SOFT,radius=14)
+            setCompoundDrawablesWithIntrinsicBounds(icon(a,"check",ACCENT,20,2.2f),null,null,null);compoundDrawablePadding=dp(a,4)
+            setPadding(dp(a,14),0,dp(a,16),0);contentDescription="$title 확인했어요"
+        },LinearLayout.LayoutParams(-2,-2).apply { marginStart=dp(a,12) })
         c.addView(row);return c
+    }
+
+    /** Rows grouped in one sheet with hairlines between them, inset past the badge (iOS-style grouped list). */
+    fun list(a:Activity,rows:List<View>)=card(a).apply {
+        setPadding(0,dp(a,6),0,dp(a,6))
+        rows.forEachIndexed { i,r ->
+            if(i>0) addView(View(a).apply { setBackgroundColor(LINE) },LinearLayout.LayoutParams(-1,dp(a,1)).apply { marginStart=dp(a,78);marginEnd=dp(a,20) })
+            addView(r)
+        }
+    }
+
+    /** Round initial badge for a person or company: the first letter on a soft tint picked from the name. */
+    fun avatar(a:Activity,name:String,sizeDp:Int=44)=TextView(a).apply {
+        val tints=listOf("#EDF2FE" to "#3268F0","#E8F7F0" to "#0E9F6E","#FFF4E0" to "#B26B00","#F3EEFD" to "#7B4FD6","#FDEEF0" to "#D0455C")
+        val clean=name.filter { it.isLetter() };val (bg,fg)=tints[(clean.hashCode() and 0x7fffffff)%tints.size].let { Color.parseColor(it.first) to Color.parseColor(it.second) }
+        text=clean.firstOrNull()?.toString() ?: "";textSize=18f;setTextColor(fg);typeface=font(a,Weight.SEMIBOLD);gravity=Gravity.CENTER
+        if(clean.isEmpty()) foreground=android.graphics.drawable.InsetDrawable(icon(a,"call",fg,20),dp(a,(sizeDp-22)/2)) // a number only: phone glyph
+        background=GradientDrawable().apply { shape=GradientDrawable.OVAL;setColor(bg) };importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        layoutParams=LinearLayout.LayoutParams(dp(a,sizeDp),dp(a,sizeDp)).apply { marginEnd=dp(a,14) }
     }
 
     /** One call memo inside a list sheet: time and who on top, one sentence below, chevron. The whole row is the button. */
     fun memoRow(a:Activity,time:String,who:String,memo:String,quiet:Boolean=false,onOpen:()->Unit)=LinearLayout(a).apply {
         orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;isClickable=true;isFocusable=true
-        setPadding(dp(a,16),dp(a,12),dp(a,12),dp(a,12));minimumHeight=dp(a,64);contentDescription="$time $who, $memo. 눌러서 자세히 보기"
+        gravity=Gravity.TOP;setPadding(dp(a,20),dp(a,16),dp(a,20),dp(a,16));minimumHeight=dp(a,72);contentDescription="$time $who, $memo. 눌러서 자세히 보기"
         val tv=android.util.TypedValue();a.theme.resolveAttribute(android.R.attr.selectableItemBackground,tv,true);setBackgroundResource(tv.resourceId)
+        addView(avatar(a,who.split(' ').last()))
         val words=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
         val head=LinearLayout(a).apply { orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL }
-        head.addView(text(a,time,SMALL,true,ACCENT).apply { setPadding(0,0,dp(a,10),0) })
-        head.addView(text(a,who,BODY,true).apply { setPadding(0,0,0,0) })
+        head.addView(text(a,who,BODY,true).apply { setPadding(0,0,0,0) },LinearLayout.LayoutParams(0,-2,1f))
+        head.addView(text(a,time,SMALL,color=FAINT).apply { setPadding(dp(a,8),0,0,0) })
         words.addView(head)
-        words.addView(text(a,memo,BODY,color=if(quiet) SUBTLE else INK))
+        words.addView(text(a,memo,SMALL,color=if(quiet) FAINT else SUBTLE).apply { setPadding(0,dp(a,2),0,0) })
         addView(words,LinearLayout.LayoutParams(0,-2,1f))
-        addView(android.widget.ImageView(a).apply { setImageDrawable(icon(a,"chevron",SUBTLE,20)) },LinearLayout.LayoutParams(-2,-2).apply { marginStart=dp(a,8) })
         setOnClickListener { onOpen() }
     }
 
     // ---- numbers and charts ---------------------------------------------------------------------------------------
-    /** Big-number tiles in one sheet, separated by hairlines. */
-    fun stats(a:Activity,items:List<Triple<String,String,Int>>)=LinearLayout(a).apply {
+    /** Big numbers in one sheet: grey label on top, the number large with its unit small ("5건"). */
+    fun stats(a:Activity,items:List<Triple<String,String,Int>>,units:List<String> =emptyList())=LinearLayout(a).apply {
         orientation=LinearLayout.HORIZONTAL
         items.forEachIndexed { i,(number,label,color) ->
-            if(i>0) addView(View(a).apply { setBackgroundColor(LINE) },LinearLayout.LayoutParams(dp(a,1),-1).apply { topMargin=dp(a,4);bottomMargin=dp(a,4) })
-            val col=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;setPadding(dp(a,if(i==0) 0 else 14),0,dp(a,4),0)
-                contentDescription="$label $number" }
-            col.addView(text(a,number,NUMBER,true,color).apply { letterSpacing=-0.03f;fontFeatureSettings="tnum";setPadding(0,0,0,0);includeFontPadding=false })
-            col.addView(text(a,label,SMALL,color=SUBTLE).apply { setPadding(0,dp(a,4),0,0) })
+            val unit=units.getOrElse(i) { "" }
+            val col=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;contentDescription="$label $number$unit" }
+            col.addView(text(a,label,SMALL,color=SUBTLE).apply { setPadding(0,0,0,dp(a,4)) })
+            val big=android.text.SpannableString(number+unit).apply {
+                if(unit.isNotEmpty()) { setSpan(android.text.style.AbsoluteSizeSpan(19,true),number.length,length,0);setSpan(android.text.style.ForegroundColorSpan(SUBTLE),number.length,length,0) } }
+            col.addView(text(a,"",NUMBER,true,color).apply { text=big;letterSpacing=-0.02f;fontFeatureSettings="tnum";setPadding(0,0,0,0);includeFontPadding=false })
             addView(col,LinearLayout.LayoutParams(0,-2,1f))
         }
     }
@@ -255,8 +275,9 @@ internal object CallUi {
     class BarChart(a:Activity,private val values:List<Int>,private val labels:List<String>):View(a) {
         private val d=a.resources.displayMetrics.density
         private val bar=Paint(Paint.ANTI_ALIAS_FLAG)
-        private val label=Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign=Paint.Align.CENTER;textSize=16*a.resources.displayMetrics.scaledDensity;color=SUBTLE }
-        private val count=Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign=Paint.Align.CENTER;textSize=16*a.resources.displayMetrics.scaledDensity;color=INK;typeface=Typeface.DEFAULT_BOLD }
+        private val regular=font(a,Weight.MEDIUM);private val strong=font(a,Weight.BOLD)
+        private val label=Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign=Paint.Align.CENTER;textSize=16*a.resources.displayMetrics.scaledDensity;color=SUBTLE;typeface=regular }
+        private val count=Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign=Paint.Align.CENTER;textSize=16*a.resources.displayMetrics.scaledDensity;color=INK;typeface=strong }
         init { minimumHeight=(150*d).toInt();contentDescription=labels.zip(values).joinToString(", ") { (l,v) -> "$l ${v}건" } }
         override fun onDraw(c:Canvas) {
             if(values.isEmpty())return
@@ -266,10 +287,10 @@ internal object CallUi {
             values.forEachIndexed { i,v ->
                 val cx=slot*i+slot/2;val h=if(v==0) 3*d else chartH*v/max
                 val today=i==values.lastIndex
-                bar.color=if(today) NAVY else MUTED_BAR
-                c.drawRoundRect(RectF(cx-w/2,topText+chartH-h,cx+w/2,topText+chartH),6*d,6*d,bar)
-                if(v>0) { count.color=if(today) NAVY else SUBTLE;c.drawText(v.toString(),cx,topText+chartH-h-5*d,count) }
-                label.color=if(today) NAVY else SUBTLE;label.typeface=if(today) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+                bar.color=if(today) ACCENT else MUTED_BAR
+                c.drawRoundRect(RectF(cx-w/2,topText+chartH-h,cx+w/2,topText+chartH),8*d,8*d,bar)
+                if(v>0) { count.color=if(today) ACCENT else SUBTLE;c.drawText(v.toString(),cx,topText+chartH-h-5*d,count) }
+                label.color=if(today) INK else FAINT;label.typeface=if(today) strong else regular
                 c.drawText(labels[i],cx,height-4*d,label)
             }
         }
@@ -310,8 +331,8 @@ internal object CallUi {
     }
 
     // ---- line icons (drawn, no image files) -----------------------------------------------------------------------
-    fun icon(a:Activity,kind:String,color:Int,sizeDp:Int=24):Drawable = object:Drawable() {
-        private val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply { style=Paint.Style.STROKE;strokeWidth=1.8f;strokeCap=Paint.Cap.ROUND;strokeJoin=Paint.Join.ROUND;this.color=color }
+    fun icon(a:Activity,kind:String,color:Int,sizeDp:Int=24,stroke:Float=1.8f):Drawable = object:Drawable() {
+        private val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply { style=Paint.Style.STROKE;strokeWidth=stroke;strokeCap=Paint.Cap.ROUND;strokeJoin=Paint.Join.ROUND;this.color=color }
         override fun draw(c:Canvas) {
             val save=c.save();c.translate(bounds.left.toFloat(),bounds.top.toFloat());c.scale(bounds.width()/24f,bounds.height()/24f)
             when(kind) {
@@ -363,7 +384,7 @@ internal object CallUi {
     fun duration(ms:Long)=if(ms<60_000) "${ms/1000}초" else "${ms/60000}분"+((ms/1000)%60).let { if(it>0) " ${it}초" else "" }
     /** Record state in plain words; no English codes ever reach the screen. */
     fun state(state:String)=when(state) {
-        CallRecordStore.TRANSCRIBED -> if(CallInboxConfig.enabled) "정리 중이에요 (보통 1시간 안에 끝나요)" else "정리 중이에요"
+        CallRecordStore.TRANSCRIBED -> if(CallInboxConfig.enabled) "정리하고 있어요, 1시간 안에 끝나요" else "정리하고 있어요"
         CallRecordStore.WAITING_KEY -> "설정에서 Claude 키를 넣어주세요"
         CallRecordStore.WAITING_CONSENT -> "설정에서 정리 동의를 켜주세요"
         CallRecordStore.FAILED -> "정리하지 못했어요"

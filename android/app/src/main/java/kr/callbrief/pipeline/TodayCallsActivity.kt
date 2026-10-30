@@ -66,21 +66,11 @@ class TodayCallsActivity:ComponentActivity() {
 
         body.addView(CallUi.section(this,"통화 기록"))
         if(calls.isEmpty()) body.addView(CallUi.card(this).apply { addView(CallUi.text(this@TodayCallsActivity,"이 날짜에 정리된 통화가 없어요.",CallUi.BODY,color=CallUi.SUBTLE)) })
-        calls.forEach { c -> body.addView(callCard(c)) }
-    }
-
-    /** One call: time and who on top, the first sentence of the summary (or its state). Tap for details. */
-    private fun callCard(c:CallRecord)=CallUi.card(this,warn=c.state==CallRecordStore.FAILED).apply {
-        isClickable=true;tag="call_${c.recordId}";contentDescription="${c.displayName} 통화 자세히 보기"
-        val top=LinearLayout(this@TodayCallsActivity).apply { orientation=LinearLayout.HORIZONTAL;gravity=android.view.Gravity.CENTER_VERTICAL }
-        top.addView(CallUi.text(this@TodayCallsActivity,CallUi.time(c.startedMs),CallUi.SMALL,true,CallUi.ACCENT).apply { setPadding(0,0,CallUi.dp(this@TodayCallsActivity,10),0) })
-        top.addView(CallUi.text(this@TodayCallsActivity,c.displayName,CallUi.HEADING,true),LinearLayout.LayoutParams(0,-2,1f))
-        top.addView(android.widget.ImageView(this@TodayCallsActivity).apply { setImageDrawable(CallUi.icon(this@TodayCallsActivity,"chevron",CallUi.SUBTLE,20)) })
-        addView(top)
-        if(c.summary!=null) addView(CallUi.text(this@TodayCallsActivity,CallUi.firstSentence(c.summary),CallUi.BODY))
-        else addView(CallUi.pill(this@TodayCallsActivity,CallUi.state(c.state),if(c.state==CallRecordStore.FAILED) CallUi.WARN else CallUi.ACCENT))
-        c.analysis?.promises?.size?.takeIf { it>0 }?.let { addView(CallUi.text(this@TodayCallsActivity,"약속 ${it}개가 있어요",CallUi.SMALL,color=CallUi.SUBTLE)) }
-        setOnClickListener { detail=c.recordId;render() }
+        else body.addView(CallUi.list(this,calls.sortedByDescending { it.startedMs ?: 0 }.map { c ->
+            // One call: who and when, the first sentence of the summary (or its state). Tap for details.
+            CallUi.memoRow(this,CallUi.time(c.startedMs),c.displayName,c.summary?.let(CallUi::firstSentence) ?: CallUi.state(c.state),c.summary==null) { detail=c.recordId;render() }
+                .apply { tag="call_${c.recordId}" }
+        }))
     }
 
     /** "제가 할 일, 수정 견적서 보내기 (오늘까지)" */

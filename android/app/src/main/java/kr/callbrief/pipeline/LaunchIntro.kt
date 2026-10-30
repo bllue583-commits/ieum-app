@@ -24,14 +24,16 @@ internal object LaunchIntro {
         if(!motionAllowed(a))return
         val root=a.window.decorView as ViewGroup
         fun column()=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;gravity=Gravity.CENTER;alpha=0f }
-        val greeting=column().apply { addView(CallUi.text(a,CallUi.greeting(),26f,true,Color.WHITE).apply { gravity=Gravity.CENTER }) }
+        val greeting=column().apply { addView(CallUi.text(a,CallUi.greeting(),24f,true,CallUi.SUBTLE).apply { gravity=Gravity.CENTER }) }
         val brand=column().apply {
-            addView(CallUi.text(a,"당신의 통화 에이전트",20f,color=Color.parseColor("#B8C7D6")).apply { gravity=Gravity.CENTER;tag="launch_introduction" })
-            addView(CallUi.text(a,"이음",56f,true,Color.WHITE).apply { gravity=Gravity.CENTER;letterSpacing=-0.02f;tag="launch_name" })
+            addView(CallUi.text(a,"당신의 통화 에이전트",19f,color=CallUi.SUBTLE).apply { gravity=Gravity.CENTER;tag="launch_introduction" })
+            addView(CallUi.text(a,"이음",60f,true,CallUi.INK).apply { gravity=Gravity.CENTER;letterSpacing=-0.03f;tag="launch_name";setPadding(0,CallUi.dp(a,4),0,0) })
+            addView(android.view.View(a).apply { background=android.graphics.drawable.GradientDrawable().apply { setColor(CallUi.ACCENT);cornerRadius=CallUi.dp(a,2).toFloat() } },
+                LinearLayout.LayoutParams(CallUi.dp(a,28),CallUi.dp(a,4)).apply { topMargin=CallUi.dp(a,14) })
             translationY=CallUi.dp(a,16).toFloat()
         }
         val overlay=FrameLayout(a).apply {
-            tag="launch_intro";setBackgroundColor(CallUi.NAVY);isClickable=true;contentDescription="이음 시작 화면, 누르면 넘어가요"
+            tag="launch_intro";setBackgroundColor(CallUi.PAGE);isClickable=true;contentDescription="이음 시작 화면, 누르면 넘어가요"
             addView(greeting,FrameLayout.LayoutParams(-1,-1));addView(brand,FrameLayout.LayoutParams(-1,-1))
         }
         val content=root.getChildAt(0)

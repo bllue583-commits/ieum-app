@@ -84,14 +84,14 @@ class HomeActivity:ComponentActivity() {
 
     internal fun render(s:Snapshot?) {
         body.removeAllViews()
-        CallUi.band(body,"이음",CallUi.date(CallUi.today()),eyebrow=CallUi.greeting(),overlap=true)
+        CallUi.band(body,CallUi.greeting(),eyebrow=CallUi.date(CallUi.today()))
         if(s==null) { body.addView(CallUi.card(this).apply { addView(CallUi.text(this@HomeActivity,"정보를 읽지 못했어요. 잠시 후 다시 열어주세요.")) });return }
 
         // Today at a glance: three big numbers, then when the next report comes.
-        val today=CallUi.card(this).apply { tag="home_today";setPadding(CallUi.dp(this@HomeActivity,18),CallUi.dp(this@HomeActivity,16),CallUi.dp(this@HomeActivity,16),CallUi.dp(this@HomeActivity,12)) }
+        val today=CallUi.card(this).apply { tag="home_today" }
         val left=s.byCompany.sumOf { it.second }
         today.addView(CallUi.stats(this,listOf(Triple("${s.calls}","오늘 통화",CallUi.INK),Triple("${s.newTasks}","새 체크",CallUi.INK),
-            Triple("$left","체크할 일",CallUi.INK))).apply { tag="home_calls" })
+            Triple("$left","체크할 일",CallUi.ACCENT)),listOf("건","개","개")).apply { tag="home_calls" })
         today.addView(CallUi.divider(this))
         today.addView(CallUi.text(this,s.nextReport.takeIf{it.isNotBlank()}?.let{"다음 알림 $it"} ?: "마지막 정리 "+CallUi.dateTime(s.lastAnalyzedMs),CallUi.SMALL,color=CallUi.SUBTLE).apply { tag="home_next_report" })
         if(s.working>0) today.addView(CallUi.pill(this,"정리 중 ${s.working}건",CallUi.ACCENT))
@@ -137,10 +137,10 @@ class HomeActivity:ComponentActivity() {
 
         // Today's call memos: who, when, one sentence. Tap a memo for the whole call.
         body.addView(CallUi.section(this,"오늘 통화 메모",if(s.calls>0) "전체 보기 ›" else null) { CallUi.go(this,CallUi.Tab.CALLS) })
-        val memo=CallUi.card(this).apply { tag="home_memos";setPadding(0,CallUi.dp(this@HomeActivity,4),0,CallUi.dp(this@HomeActivity,4)) }
+        val memo=CallUi.card(this).apply { tag="home_memos";setPadding(0,CallUi.dp(this@HomeActivity,6),0,CallUi.dp(this@HomeActivity,6)) }
         if(s.memos.isEmpty()) memo.addView(CallUi.text(this,"오늘은 아직 정리된 통화가 없어요",CallUi.BODY,color=CallUi.SUBTLE).apply { setPadding(CallUi.dp(this@HomeActivity,16),CallUi.dp(this@HomeActivity,10),CallUi.dp(this@HomeActivity,16),CallUi.dp(this@HomeActivity,10)) })
         s.memos.forEachIndexed { i,c ->
-            if(i>0) memo.addView(android.view.View(this).apply { setBackgroundColor(CallUi.LINE) },LinearLayout.LayoutParams(-1,CallUi.dp(this,1)).apply { marginStart=CallUi.dp(this@HomeActivity,16) })
+            if(i>0) memo.addView(android.view.View(this).apply { setBackgroundColor(CallUi.LINE) },LinearLayout.LayoutParams(-1,CallUi.dp(this,1)).apply { marginStart=CallUi.dp(this@HomeActivity,78);marginEnd=CallUi.dp(this@HomeActivity,20) })
             memo.addView(CallUi.memoRow(this,CallUi.time(c.startedMs),c.displayName,c.summary?.let(CallUi::firstSentence) ?: CallUi.state(c.state),c.summary==null) {
                 startActivity(Intent(this,TodayCallsActivity::class.java).putExtra(TodayCallsActivity.EXTRA_CALL,c.recordId))
             }.apply { tag="home_memo_${c.recordId}" })
