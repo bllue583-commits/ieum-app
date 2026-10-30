@@ -35,8 +35,12 @@ class CallPipelineDeviceTest {
         val model=PipelineModelManager(storage)
         val started=System.currentTimeMillis()
         var result=PipelineModelManager.Result.RETRY
-        repeat(5){ if(result==PipelineModelManager.Result.RETRY)result=model.download() }
-        report("t1_model",JSONObject().put("result",result.name).put("seconds",(System.currentTimeMillis()-started)/1000).put("state",model.state())
+        repeat(6){ i -> if(result==PipelineModelManager.Result.RETRY){ if(i>0)Thread.sleep(15_000L*i);result=model.download() } }
+        // Why a download did not finish (HTTP code or network error), for the report.
+        val probe=if(result==PipelineModelManager.Result.READY) "" else runCatching {
+            okhttp3.OkHttpClient().newCall(okhttp3.Request.Builder().url(PipelineModelManager.Spec.DEFAULT.url).head().build()).execute().use { "HTTP ${it.code}" }
+        }.getOrElse { it.javaClass.simpleName+": "+it.message }
+        report("t1_model",JSONObject().put("result",result.name).put("probe",probe).put("seconds",(System.currentTimeMillis()-started)/1000).put("state",model.state())
             .put("abi",android.os.Build.SUPPORTED_ABIS.first()).put("device",android.os.Build.MODEL).put("sdk",android.os.Build.VERSION.SDK_INT))
         assertEquals(PipelineModelManager.Result.READY,result)
         assertNotNull(model.verifiedModelFile())
