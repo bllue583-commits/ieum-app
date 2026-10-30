@@ -2,12 +2,8 @@ name: claude-live
 
 # Real Claude call with a public synthetic transcript (ClaudeLiveTest). Needs the repository secret
 # ANTHROPIC_API_KEY; without it the test is skipped. The key is never printed.
+# Subscription mode is the default now; this API check runs only on demand.
 on:
-  push:
-    branches: ['feature/**']
-    paths: ['android/app/src/main/java/kr/callbrief/pipeline/ClaudeCallAnalyzer.kt', 'android/app/src/test/java/kr/callbrief/pipeline/ClaudeLiveTest.kt', '.github/workflows/claude-live.yml']
-  schedule:
-    - cron: '17 21 * * *' # daily 06:17 KST: catches model or API changes
   workflow_dispatch:
 
 permissions:
