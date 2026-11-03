@@ -35,8 +35,8 @@ class FirstPassTest:ProtectedTextHostTestBase() {
     @Before fun setup() { context=RuntimeEnvironment.getApplication() }
     private fun transcript(id:String,startedMs:Long,counterpart:String?="김과장")=
         CallTranscript(id,1,"a".repeat(64),startedMs,60_000,counterpart,ClaudeCallAnalyzerTest.TRANSCRIPT,emptyList(),"m","b".repeat(64),true)
-    private fun runner(inbox:FakeInbox,s:JSONObject,log:List<FirstPass.LogEntry> =emptyList())=CallRecordAnalysisRunner(context,
-        ClaudeCallAnalyzer({ _,_ -> error("API must not be used") }) {},{ s },{ now },inbox,save={ edit -> edit(s) },callLog={ log },smsAllowed={ false })
+    private fun runner(inbox:FakeInbox,s:JSONObject,log:List<FirstPass.LogEntry> =emptyList(),at:Long=now)=CallRecordAnalysisRunner(context,
+        ClaudeCallAnalyzer({ _,_ -> error("API must not be used") }) {},{ s },{ at },inbox,save={ edit -> edit(s) },callLog={ log },smsAllowed={ false })
     /** The scheduled task answers every request in the inbox. */
     private fun answer(inbox:FakeInbox,analysis:(String)->JSONObject={ ClaudeCallAnalyzerTest.analysis() }) {
         inbox.files.keys.filter { it.startsWith("inbox/") }.toList().forEach { k ->
@@ -59,7 +59,7 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         assertTrue(first.getString("id").startsWith(FirstPass.BATCH_PREFIX));assertTrue(first.has("schema"))
         val items=first.getJSONArray("items");assertEquals(15,items.length());assertEquals(7,second.getJSONArray("items").length())
         // Time order: oldest first inside a batch and across batch names.
-        assertEquals(CallRecordStore.recordId(transcript("old22",0)),items.getJSONObject(0).getString("id"))
+        assertEquals(CallInbox.recordKey(CallRecordStore.recordId(transcript("old22",0))),items.getJSONObject(0).getString("id"))
         assertTrue(items.getJSONObject(0).getString("message").startsWith("[처음 정리]"))
         assertTrue(items.getJSONObject(0).getString("counterpartId").startsWith("p_"))
         val single=JSONObject(inbox.files.entries.first { !it.key.startsWith("inbox/b-") }.value)
@@ -79,7 +79,10 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         runner(inbox,s).runPending()
         assertTrue(inbox.files.isEmpty())
         assertEquals(23,CallRecordStore(context).use { it.counts()[CallRecordStore.ANALYZED] })
-        assertTrue("all old records summarised: the first pass is over",s.getBoolean(PipelineSettingsKeys.FIRST_PASS_DONE))
+        assertFalse("not over at the first quiet moment",s.optBoolean(PipelineSettingsKeys.FIRST_PASS_DONE))
+        runner(inbox,s,at=now+6*3_600_000L).runPending();assertFalse(s.optBoolean(PipelineSettingsKeys.FIRST_PASS_DONE))
+        runner(inbox,s,at=now+12*3_600_000L).runPending()
+        assertTrue("12 quiet hours: the first pass is over",s.getBoolean(PipelineSettingsKeys.FIRST_PASS_DONE))
     }
 
     @Test fun theRepositoryLedgerIsTakenInAndCorrectionsGoUp() {

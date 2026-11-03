@@ -38,17 +38,24 @@ internal class CallRecordAnalysisRunner(
         CallRecordStore(context,clock).use { db ->
             runCatching { db.reconcileCallLog(callLog()) }
             for((id,json) in db.pendingEdits()) { store.put(CallInbox.EDITS+"/"+id+".json",json);db.editSent(id) }
+            // Requests and results name a record by its key (a hash), never by its id, which may hold a phone number.
+            val byKey=db.pending().associateBy { CallInbox.recordKey(it.recordId) }
             for((name,sha) in store.list(CallInbox.RESULTS)) {
                 if(name.startsWith("selftest-")) continue // CI end-to-end check, not a call of this phone
                 val path=CallInbox.RESULTS+"/"+name
-                for((id,analysis) in runCatching { CallInbox.parseResults(store.get(path)) }.getOrDefault(emptyList())) {
-                    val record=db.record(id) ?: continue
-                    if(record.state==CallRecordStore.ANALYZED) continue
+                val text=store.get(path)
+                val results=runCatching { CallInbox.parseResults(text) }.getOrNull()
+                if(results==null) { store.put(CallInbox.BAD+"/"+name,text);store.delete(path,sha);continue } // broken: kept aside, the next file goes on
+                for((id,analysis) in results) runCatching {
+                    val record=(byKey[id] ?: db.record(id)) ?: return@runCatching
+                    if(record.state==CallRecordStore.ANALYZED) return@runCatching
                     val isOld=FirstPass.isOld(record.dayMs,s)
+                    val request=db.request(record,isOld)
                     // Memos come from the repository ledger, which the task keeps in time order.
-                    val a=analyzer.filter(analysis,db.request(record,isOld)).copy(siteMemo=null,companyMemo=null,companyTrade=null)
+                    val a=analyzer.filter(analysis,request).copy(siteMemo=null,companyMemo=null,companyTrade=null)
+                    val dropped=analysis.tasks.size+analysis.promises.size-a.tasks.size-a.promises.size
                     db.applyAnalysis(record.recordId,if(isOld) FirstPass.restrict(a,record.dayMs,clock()) else a)
-                    save { it.put(PipelineSettingsKeys.LAST_ANALYZED_MS,clock()) }
+                    save { it.put(PipelineSettingsKeys.LAST_ANALYZED_MS,clock()).put(PipelineSettingsKeys.DROPPED_ITEMS,it.optLong(PipelineSettingsKeys.DROPPED_ITEMS,0)+dropped) }
                 }
                 store.delete(path,sha)
             }
@@ -64,7 +71,7 @@ internal class CallRecordAnalysisRunner(
             val (old,live)=db.pending().partition { FirstPass.isOld(it.dayMs,s) }
             for(record in live.filter(::due)) {
                 db.ledgerIdFor(record)
-                store.put(CallInbox.INBOX+"/"+CallInbox.fileName(record.recordId),CallInbox.job(record.recordId,db.request(record),clock()))
+                store.put(CallInbox.INBOX+"/"+CallInbox.fileName(record.recordId),CallInbox.job(CallInbox.recordKey(record.recordId),db.request(record),clock()))
                 db.markSent(record.recordId,clock())
             }
             val start=FirstPass.start(s)
@@ -75,16 +82,37 @@ internal class CallRecordAnalysisRunner(
                 var slots=FirstPass.BATCHES_IN_FLIGHT-(inFlight+FirstPass.BATCH-1)/FirstPass.BATCH
                 for(chunk in old.filter(::due).filter { bound==null || it.dayMs<bound }.sortedBy { it.dayMs }.chunked(FirstPass.BATCH)) {
                     if(slots<=0 || (chunk.size<FirstPass.BATCH && bound!=null)) break
-                    val items=chunk.map { r -> db.ledgerIdFor(r);r.recordId to db.request(r,true) }
+                    val items=chunk.map { r -> db.ledgerIdFor(r);CallInbox.recordKey(r.recordId) to db.request(r,true) }
                     store.put(CallInbox.INBOX+"/"+CallInbox.batchName(chunk.first().dayMs,items.map { it.first }),CallInbox.batch(items,clock()))
                     chunk.forEach { db.markSent(it.recordId,clock()) }
                     slots--
                 }
-                if(consent && old.isEmpty() && bound==null) save { it.put(PipelineSettingsKeys.FIRST_PASS_DONE,true) }
+                // Over only after 12 quiet hours: discovery brings recordings a few at a time, so the queue empties briefly.
+                val quiet=consent && old.isEmpty() && bound==null
+                val since=s.optLong(PipelineSettingsKeys.FIRST_PASS_QUIET_SINCE,0)
+                when {
+                    !quiet -> if(since>0) save { it.put(PipelineSettingsKeys.FIRST_PASS_QUIET_SINCE,0) }
+                    since==0L -> save { it.put(PipelineSettingsKeys.FIRST_PASS_QUIET_SINCE,clock()) }
+                    clock()-since>=12*3_600_000L -> save { it.put(PipelineSettingsKeys.FIRST_PASS_DONE,true) }
+                }
             }
+            if(consent) warnIfStalled(db)
         }
         true
     } catch(e:java.io.IOException) { false }
+
+    /** Once a day, in working hours: records wait and no result came for 6 hours. The analysis may be stopped (the
+     * subscription limit held it for three days, 11/1 to 11/3, and nobody knew). */
+    private fun warnIfStalled(db:CallRecordStore) {
+        val s=settings();val now=clock()
+        val at=java.time.Instant.ofEpochMilli(now).atZone(CallRecordStore.KST)
+        // When the oldest waiting record was stored: sending time would not do, a resend every 6 hours renews it.
+        val waiting=db.pending().filter { db.sentMs(it.recordId)!=null }.minOfOrNull { it.createdMs } ?: return
+        val last=maxOf(s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),waiting)
+        if(at.hour !in 9..20 || now-last<6*3_600_000L || s.optString(PipelineSettingsKeys.STALL_WARNED_DAY)==at.toLocalDate().toString()) return
+        runCatching { CallDigestNotifier.post(context,"stall",CallDigestText.Message("정리가 멈췄어요","통화가 6시간 넘게 정리되지 않고 있어요. 앱을 관리하는 분께 알려 주세요.")) }
+        save { it.put(PipelineSettingsKeys.STALL_WARNED_DAY,at.toLocalDate().toString()) }
+    }
 
     /** Takes the repository ledger when its rev moved on. A missing ledger (nothing analysed yet) is fine. */
     private fun takeLedger(store:CallInboxStore,db:CallRecordStore) {

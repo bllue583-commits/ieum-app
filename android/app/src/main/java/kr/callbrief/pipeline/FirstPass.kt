@@ -41,7 +41,8 @@ internal object FirstPass {
     }
 
     // ---- call log --------------------------------------------------------------------------------------------------
-    data class LogEntry(val id:Long,val numberKey:String?,val name:String?,val startMs:Long,val durationMs:Long,val type:Int) {
+    /** [personal]: a number excluded as personal (일상 통화 상대). Kept only to recognise its recordings, never stored. */
+    data class LogEntry(val id:Long,val numberKey:String?,val name:String?,val startMs:Long,val durationMs:Long,val type:Int,val personal:Boolean=false) {
         val direction:String? get()=when(type) { CallLog.Calls.INCOMING_TYPE -> "받은 전화";CallLog.Calls.OUTGOING_TYPE -> "건 전화";else -> null }
     }
     data class RecordForMatch(val recordId:String,val startedMs:Long,val counterpart:String?,val counterpartKey:String?,val durationMs:Long=0)
@@ -70,7 +71,7 @@ internal object FirstPass {
         return out
     }
 
-    /** The phone's call log since [FROM_MS], without numbers the user excluded as personal. Stays on the phone. */
+    /** The phone's call log since [FROM_MS]; numbers excluded as personal are marked. Stays on the phone. */
     fun readCallLog(context:Context,excluded:(String)->Boolean):List<LogEntry> {
         if(context.checkSelfPermission(Manifest.permission.READ_CALL_LOG)!=PackageManager.PERMISSION_GRANTED) return emptyList()
         val out=mutableListOf<LogEntry>()
@@ -79,8 +80,8 @@ internal object FirstPass {
             "${CallLog.Calls.DATE}>=?",arrayOf(FROM_MS.toString()),"${CallLog.Calls.DATE} ASC")?.use { c ->
             while(c.moveToNext() && out.size<20_000) {
                 val number=c.getString(1).orEmpty()
-                if(number.isNotBlank() && excluded(number)) continue
-                out+=LogEntry(c.getLong(0),MessageIntake.phoneKey(number),c.getString(2)?.trim()?.takeIf { it.isNotEmpty() },c.getLong(3),c.getLong(4)*1000,c.getInt(5))
+                out+=LogEntry(c.getLong(0),MessageIntake.phoneKey(number),c.getString(2)?.trim()?.takeIf { it.isNotEmpty() },c.getLong(3),c.getLong(4)*1000,c.getInt(5),
+                    number.isNotBlank() && excluded(number))
             }
         }
         return out

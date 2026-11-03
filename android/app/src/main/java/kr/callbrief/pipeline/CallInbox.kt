@@ -32,7 +32,8 @@ internal class GitHubInboxStore(private val repo:String,private val token:String
     private fun request(path:String)=Request.Builder().url("https://api.github.com/repos/$repo/contents/$path")
         .header("Authorization","Bearer $token").header("X-GitHub-Api-Version","2022-11-28")
     private fun call(r:Request):Pair<Int,String> = client.newCall(r).execute().use { it.code to (it.body?.string() ?: "") }
-    private fun ok(code:Int,body:String) { if(code !in 200..299) throw if(code>=500||code==429||code==403&&body.contains("rate limit")) IOException("INBOX_HTTP_$code") else ClaudeCallException("INBOX_HTTP_$code") }
+    // 409: the repository moved on between read and write (the task pushed): try again next run.
+    private fun ok(code:Int,body:String) { if(code !in 200..299) throw if(code>=500||code==429||code==409||code==403&&body.contains("rate limit")) IOException("INBOX_HTTP_$code") else ClaudeCallException("INBOX_HTTP_$code") }
 
     override fun put(path:String,json:String) {
         val body=JSONObject().put("message","inbox").put("content",Base64.encodeToString(json.toByteArray(),Base64.NO_WRAP))
@@ -77,7 +78,7 @@ internal class GitHubInboxStore(private val repo:String,private val token:String
 }
 
 internal object CallInbox {
-    const val INBOX="inbox";const val RESULTS="results"
+    const val INBOX="inbox";const val RESULTS="results";const val BAD="bad"
     /** First-pass batches (처음 정리): "b-<time of the first record>-<hash>.json", so name order is time order. */
     const val OLD="b-"
     /** The repository ledger the task keeps, and the user's corrections waiting for it (design: 장부의 원본). */
@@ -90,14 +91,15 @@ internal object CallInbox {
     /** Repository-safe file name for a record id (no phone numbers or names in paths). */
     fun fileName(recordId:String)=MessageDigest.getInstance("SHA-256").digest(recordId.toByteArray()).joinToString(""){"%02x".format(it)}.take(32)+".json"
     /** Self-contained job: the scheduled task follows `system`, reads `message`, answers with JSON matching `schema`. */
-    fun job(recordId:String,request:ClaudeCallRequest,now:Long):String=JSONObject().put("id",recordId).put("createdMs",now)
-        .put("counterpartId",request.counterpartId ?: JSONObject.NULL).put("recordKey",recordKey(recordId))
+    /** [key] is the record key ([recordKey]); the task answers with the same id. */
+    fun job(key:String,request:ClaudeCallRequest,now:Long):String=JSONObject().put("id",key).put("createdMs",now)
+        .put("counterpartId",request.counterpartId ?: JSONObject.NULL).put("recordKey",key)
         .put("system",ClaudeCallAnalyzer.SYSTEM).put("message",ClaudeCallAnalyzer.userMessage(request)).put("schema",ClaudeCallAnalyzer.SCHEMA).toString()
     /** Several old records in time order; the task analyses them one after another, carrying the ledger along, and
      * answers with {"id": ..., "results": [{"id": record, "analysis": {...}}]}. */
     fun batch(items:List<Pair<String,ClaudeCallRequest>>,now:Long):String=JSONObject().put("id",FirstPass.BATCH_PREFIX+fileName(items.joinToString("|") { it.first }).removeSuffix(".json"))
         .put("createdMs",now).put("system",ClaudeCallAnalyzer.SYSTEM).put("schema",ClaudeCallAnalyzer.SCHEMA)
-        .put("items",JSONArray().apply { items.forEach { (id,r) -> put(JSONObject().put("id",id).put("counterpartId",r.counterpartId ?: JSONObject.NULL).put("recordKey",recordKey(id)).put("message",ClaudeCallAnalyzer.userMessage(r))) } }).toString()
+        .put("items",JSONArray().apply { items.forEach { (id,r) -> put(JSONObject().put("id",id).put("counterpartId",r.counterpartId ?: JSONObject.NULL).put("recordKey",id).put("message",ClaudeCallAnalyzer.userMessage(r))) } }).toString()
     /** Result file: {"id": ..., "analysis": {...}} where analysis matches the schema. */
     fun parseResult(text:String):Pair<String,ClaudeCallAnalysis> { val o=JSONObject(text);return o.getString("id") to ClaudeCallAnalysis.parse(o.getJSONObject("analysis")) }
     /** One result file: a single record, or a batch's list. Broken entries are left out. */

@@ -26,7 +26,7 @@ class HomeActivity:ComponentActivity() {
                                  val sms:Boolean=true,val callLog:Boolean=true,
                                  /** 처음 정리 while it runs, else null. */
                                  val firstPass:FirstPassView?=null)
-    internal data class FirstPassView(val toTranscribe:Int,val hoursLeft:Double?,val waiting:Int,val unrecorded:Int)
+    internal data class FirstPassView(val toTranscribe:Int,val hoursLeft:Double?,val waiting:Int,val unrecorded:Int,val mailConnected:Boolean=true)
     private lateinit var body:LinearLayout
     private val pickFolder=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { r ->
         if(r.resultCode==RESULT_OK) CallFolder.save(this,r.data)?.let { android.widget.Toast.makeText(this,it,android.widget.Toast.LENGTH_LONG).show() }
@@ -98,7 +98,7 @@ class HomeActivity:ComponentActivity() {
         val p=runCatching { CallRecordStore(storage).use { it.firstPassProgress(start) } }.getOrNull() ?: return null
         val msPerMinute=s.optLong(PipelineSettingsKeys.LAST_MS_PER_AUDIO_MINUTE,72_000L)
         val hours=p.bytesPerMinute?.takeIf { it>0 && p.bytesLeft>0 }?.let { p.bytesLeft.toDouble()/it*msPerMinute/3_600_000.0 }
-        return FirstPassView(p.toTranscribe,hours,p.waiting,p.unrecorded)
+        return FirstPassView(p.toTranscribe,hours,p.waiting,p.unrecorded,s.optString(PipelineSettingsKeys.MAIL_HOST).isNotBlank())
     }
 
     private fun agree() {
@@ -181,6 +181,7 @@ class HomeActivity:ComponentActivity() {
             }
             lines.forEach { c.addView(CallUi.text(this,it,CallUi.BODY,true)) }
             if(f.toTranscribe>0) c.addView(CallUi.text(this,"지난 녹음은 충전 중이거나 배터리가 절반 넘게 남았을 때 바꿔요.",CallUi.SMALL,color=CallUi.SUBTLE))
+            if(!f.mailConnected) c.addView(CallUi.text(this,"메일을 연결하면 메일도 함께 정리해요. 설정의 메일에서 연결할 수 있어요.",CallUi.SMALL,color=CallUi.SUBTLE).apply { tag="home_first_pass_mail" })
             body.addView(c)
         }
 

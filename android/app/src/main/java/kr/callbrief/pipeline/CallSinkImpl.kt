@@ -32,8 +32,10 @@ internal object CallPipelineStartup {
             runCatching { MessageWork.schedule(app) }
             if(CallInboxConfig.enabled) runCatching {
                 // Collect the scheduled task's results every hour even when no new call arrives.
-                WorkManager.getInstance(app).enqueueUniquePeriodicWork("ieum.calls.inbox",ExistingPeriodicWorkPolicy.KEEP,
-                    PeriodicWorkRequestBuilder<CallAnalysisWork>(1,java.util.concurrent.TimeUnit.HOURS)
+                // The hourly tick only queues the one analysis work, so two passes never apply results side by side.
+                // (Replacing, not keeping: phones from before v1026 have the old periodic analysis registered here.)
+                WorkManager.getInstance(app).enqueueUniquePeriodicWork("ieum.calls.inbox",ExistingPeriodicWorkPolicy.CANCEL_AND_REENQUEUE,
+                    PeriodicWorkRequestBuilder<CallAnalysisTick>(1,java.util.concurrent.TimeUnit.HOURS)
                         .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build())
             }
         }
@@ -53,4 +55,9 @@ internal object CallPipelineStartup {
             if(hoursChanged) runCatching { CallDigestSchedule.reschedule(app) }
         }
     }
+}
+
+/** Hourly: queues [CallAnalysisWork] under its one unique name. */
+internal class CallAnalysisTick(context:Context,params:WorkerParameters):Worker(context,params) {
+    override fun doWork():Result { CallPipelineStartup.enqueueAnalysis(applicationContext);return Result.success() }
 }

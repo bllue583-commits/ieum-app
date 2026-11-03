@@ -137,9 +137,11 @@ class TidyTest:ProtectedTextHostTestBase() {
 
     @Test fun requestsCarryTheRecordKey() {
         val r=ClaudeCallAnalyzerTest.request()
-        val job=JSONObject(CallInbox.job("rec|1|x",r,now))
-        assertEquals(CallInbox.recordKey("rec|1|x"),job.getString("recordKey"));assertTrue(job.getString("recordKey").startsWith("r_"))
-        val batch=JSONObject(CallInbox.batch(listOf("rec|1|x" to r),now))
+        val key=CallInbox.recordKey("sms:01012345678:7")
+        val job=JSONObject(CallInbox.job(key,r,now))
+        assertEquals(key,job.getString("id"));assertEquals(key,job.getString("recordKey"));assertTrue(key.startsWith("r_"))
+        assertFalse(job.toString().contains("01012345678"))
+        val batch=JSONObject(CallInbox.batch(listOf(key to r),now))
         assertEquals(job.getString("recordKey"),batch.getJSONArray("items").getJSONObject(0).getString("recordKey"))
     }
 }

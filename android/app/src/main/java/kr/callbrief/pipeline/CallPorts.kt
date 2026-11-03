@@ -60,6 +60,12 @@ object PipelineSettingsKeys {
     /** Morning tidy (design: 새벽 정리): when the nightly state last went up, and the rev of the last proposal applied. */
     const val TIDY_SENT_MS="tidySentMs"
     const val TIDY_REV="tidyRev"
+    /** First pass: since when nothing old was left (it ends after 12 quiet hours). */
+    const val FIRST_PASS_QUIET_SINCE="firstPassQuietSince"
+    /** Check items and promises the phone dropped (quote not found, unknown task): a running count for checking. */
+    const val DROPPED_ITEMS="droppedItems"
+    /** Day (yyyy-MM-dd) the "정리가 멈췄어요" notice was last shown. */
+    const val STALL_WARNED_DAY="stallWarnedDay"
     /** Reading old texts and mail from 10/1 up to where the regular intake began: progress and end. */
     const val SMS_BACKFILL_CURSOR="firstPassSmsCursor"
     const val SMS_BACKFILL_UNTIL="firstPassSmsUntil"

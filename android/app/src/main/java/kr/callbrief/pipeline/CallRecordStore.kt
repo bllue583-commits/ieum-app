@@ -102,6 +102,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         /** A phone number (digits) or a mail address: what identifies a person. Anything else is a name. */
         fun isContact(key:String?)=key!=null && (key.all { it.isDigit() } || key.contains('@'))
         const val SITE_MEMO_MAX=600;const val COMPANY_MEMO_MAX=400
+        /** Raw texts and mail sent with one request for cross-checking. */
+        const val RECENT_TEXT_CHARS=3000
         fun kstDay(ms:Long):LocalDate=Instant.ofEpochMilli(ms).atZone(KST).toLocalDate()
         fun kstTime(ms:Long?):String=ms?.let { DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm (E)",java.util.Locale.KOREAN).format(Instant.ofEpochMilli(it).atZone(KST)) } ?: "시각 미상"
         private fun startOf(day:LocalDate)=day.atStartOfDay(KST).toInstant().toEpochMilli()
@@ -112,10 +114,14 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
             val have=rows("PRAGMA table_info(people)").mapNotNull { it.str("name") }.toSet()
             PEOPLE_COLUMNS.filter { it.first !in have }.forEach { (c,t) -> port.execute("ALTER TABLE people ADD COLUMN $c $t") }
             port.execute("CREATE UNIQUE INDEX IF NOT EXISTS people_ledger_id ON people(ledger_id)")
-            // Calls stored before v1024 have no start time although the filename had one: fill it in.
-            if(rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_files'").isNotEmpty())
+            // Calls stored before v1026 have no start time although the filename had one: fill it in, first on the
+            // file rows automatic discovery left empty, then on the calls.
+            if(rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_files'").isNotEmpty()) {
+                rows("SELECT l.recording_id,r.display_name FROM local_files l JOIN recordings r ON r.recording_id=l.recording_id WHERE l.filename_time_candidate_ms IS NULL")
+                    .forEach { f -> kr.callbrief.core.RecordingNames.startedAt(f.str("display_name").orEmpty())?.toEpochMilli()?.let { port.execute("UPDATE local_files SET filename_time_candidate_ms=? WHERE recording_id=?",it,f.str("recording_id")) } }
                 port.execute("""UPDATE call_records SET started_ms=(SELECT l.filename_time_candidate_ms FROM local_files l WHERE l.recording_id=call_records.recording_id)
                     WHERE started_ms IS NULL AND recording_id IN (SELECT recording_id FROM local_files WHERE filename_time_candidate_ms IS NOT NULL)""")
+            }
             null } } catch(e:Exception) { port.close();throw e }
     }
     override fun close()=port.close()
@@ -290,12 +296,38 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
             companyCalls = companyCalls,tradeTasks = tradeTasks.map { it.task },otherTasks = others.map { it.task },todayCalls = todayCalls,
             companyNames = companyNames,personNames = personNames,kind = r.kind,
             direction = rows("SELECT direction FROM call_record_log WHERE record_id=?",r.recordId).firstOrNull()?.str("direction"),firstPass = old,
-            counterpartId = person?.str("ledger_id"))
+            counterpartId = person?.str("ledger_id"),
+            callLog = rows("SELECT x.direction,l.name,l.start_ms,l.duration_ms FROM call_record_log x JOIN call_log l ON l.log_id=x.log_id WHERE x.record_id=?",r.recordId).firstOrNull()
+                ?.let { ClaudeCallRequest.CallLogView(it.str("name"),it.str("direction"),kstTime(it.long("start_ms")),it.long("duration_ms") ?: 0) },
+            recentTexts = recentTexts(r,listOfNotNull(key,person?.str("phone_key")).distinct()),
+            sameDayCompany = if(companyId==null) emptyList() else rows("""SELECT c.started_ms,c.created_ms,c.summary,p.name AS person FROM call_links l JOIN call_records c ON c.record_id=l.record_id
+                LEFT JOIN people p ON p.id=l.person_id WHERE l.company_id=? AND c.record_id!=? AND c.state='ANALYZED' AND c.summary IS NOT NULL
+                AND COALESCE(c.started_ms,c.created_ms)>=CAST(? AS INTEGER) AND COALESCE(c.started_ms,c.created_ms)<CAST(? AS INTEGER) AND (l.person_id IS NULL OR l.person_id!=?)
+                ORDER BY COALESCE(c.started_ms,c.created_ms) DESC LIMIT 5""",companyId,r.recordId,startOf(kstDay(r.dayMs)),startOf(kstDay(r.dayMs).plusDays(1)),person?.str("id") ?: "")
+                .map { ClaudeCallRequest.PastCall(CallUi.time(it.long("started_ms") ?: it.long("created_ms")),it.str("person"),it.str("summary").orEmpty()) })
+    }
+
+    /** Work texts and mail with the same person in the 7 days before this record (and the day after), newest first, raw,
+     * up to [RECENT_TEXT_CHARS]: what the analysis cross-checks a call against. Personal ones were deleted already. */
+    private fun recentTexts(r:CallRecord,keys:List<String>):String {
+        if(keys.isEmpty()) return ""
+        val marks=keys.joinToString(",") { "?" }
+        val out=StringBuilder()
+        for(t in rows("""SELECT recording_id,COALESCE(started_ms,created_ms) AS at,transcript,analysis_json FROM call_records WHERE counterpart_key IN ($marks) AND record_id!=?
+            AND (recording_id LIKE 'sms:%' OR recording_id LIKE 'mail:%') AND state='ANALYZED' AND transcript!='' AND COALESCE(started_ms,created_ms)>=CAST(? AS INTEGER)
+            AND COALESCE(started_ms,created_ms)<CAST(? AS INTEGER) ORDER BY COALESCE(started_ms,created_ms) DESC""",*keys.toTypedArray(),r.recordId,r.dayMs-7*86_400_000L,r.dayMs+86_400_000L)) {
+            if(t.str("analysis_json")?.let { JSONObject(it).optJSONObject("analysis")?.optBoolean("business",true) }==false) continue
+            val head="[${DateTimeFormatter.ofPattern("M/d").format(Instant.ofEpochMilli(t.long("at") ?: 0).atZone(KST))} ${MessageKind.of(t.str("recording_id")!!)}]\n"
+            val room=RECENT_TEXT_CHARS-out.length-head.length;if(room<=40) break
+            out.append(head).append(t.str("transcript")!!.take(room)).append("\n")
+        }
+        return out.toString().trim()
     }
 
     /** Stores the result and applies tasks in one transaction. User-edited and finished items are never changed. */
     fun applyAnalysis(id:String,a:ClaudeCallAnalysis):List<Applied> =port.transaction {
-        val record=rows("SELECT recording_id,counterpart_key FROM call_records WHERE record_id=?",id).single()
+        val record=rows("SELECT recording_id,counterpart_key,state FROM call_records WHERE record_id=?",id).singleOrNull() ?: return@transaction emptyList()
+        if(record.str("state")==ANALYZED) return@transaction emptyList() // applied already: never twice
         val recording=record.str("recording_id")!!
         // Personal, not work: a text or mail is deleted outright; a call keeps only a bare "done" mark (so it is not
         // transcribed again) with its words wiped. Neither reaches the ledger, the lists or the check items.
@@ -479,7 +511,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
             ORDER BY COALESCE(c.started_ms,c.created_ms)""",FirstPass.FROM_MS).map(::map).filter { it.analysis?.business!=false }.forEach { c ->
             val lid=rows("SELECT p.ledger_id FROM call_links l JOIN people p ON p.id=l.person_id WHERE l.record_id=?",c.recordId).firstOrNull()?.str("ledger_id")
             records.put(JSONObject().put("key",CallInbox.recordKey(c.recordId)).put("atMs",c.dayMs).put("kind",c.kind)
-                .put("counterpartId",lid ?: JSONObject.NULL).put("company",c.analysis?.counterpartCompany ?: JSONObject.NULL).put("summary",c.summary)) }
+                .put("counterpartId",lid ?: JSONObject.NULL).put("company",c.analysis?.counterpartCompany ?: JSONObject.NULL).put("summary",c.summary)
+                .put("keyPoints",JSONArray(c.analysis?.keyPoints.orEmpty()))) }
         return JSONObject().put("generatedMs",now).put("firstPassDone",firstPassDone).put("tasks",tasks).put("records",records)
     }
     /** Applies the morning tidy's proposal to check items the AI still owns (never one the user changed or finished):
@@ -490,11 +523,28 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         fun bump(id:String,rev:Long) { port.execute("UPDATE call_task_bindings SET last_revision=? WHERE item_id=?",rev+1,id) }
         var n=0
         val ops=o.optJSONArray("tasks") ?: JSONArray()
+        // Follow-ups the tidy found (a promise with no sign it was kept, a question never answered): new check items.
+        for(k in 0 until ops.length()) { val t=ops.optJSONObject(k)?.takeIf { it.optString("op")=="create" } ?: continue
+            val title=t.optString("title").trim().take(240);if(title.isEmpty()) continue
+            if(rows("SELECT 1 FROM workflow_items WHERE title=? AND status NOT IN ('done','merged')",title).isNotEmpty()) continue
+            val due=t.optString("due").trim().takeIf { ISO_DATE.matches(it) }.orEmpty()
+            port.execute("INSERT OR IGNORE INTO folder_grants VALUES('messages',?,'content://messages',1,1,1)",GeneralLocalStore.OWNER)
+            port.execute("INSERT OR IGNORE INTO recordings(recording_id,owner_key,grant_id,document_id,display_name,mime_type,byte_count,first_seen_ms,last_seen_ms,source_seq,source_version,head_revision) VALUES('tidy:followups',?,'messages','tidy:followups','새벽 정리','text/plain',0,?,?,1,1,1)",
+                GeneralLocalStore.OWNER,clock(),clock())
+            val item="wf_item_"+UUID.randomUUID().toString().replace("-","")
+            port.execute("INSERT INTO workflow_items VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",item,"tidy:followups",null,"TODO",title,"",due,"open",1,null,t.optString("basis").take(240),clock())
+            t.optString("company").trim().takeIf { it.isNotEmpty() }?.let { c -> rows("SELECT id FROM companies WHERE REPLACE(name,' ','')=?",noSpace(c)).firstOrNull()?.str("id")
+                ?.let { port.execute("INSERT OR REPLACE INTO task_companies VALUES(?,?)",item,it) } }
+            n++
+        }
         for(k in 0 until ops.length()) { val t=ops.optJSONObject(k) ?: continue
+            if(t.optString("op")=="create") continue
             val id=t.optString("id");val rev=owned(id) ?: continue
             when(t.optString("op")) {
                 "rewrite" -> { val title=t.optString("title").trim().take(240);if(title.isEmpty()) continue
-                    val due=t.optString("due").trim().takeIf { d -> d.isEmpty() || ISO_DATE.matches(d) } ?: continue
+                    // No "due" in the proposal keeps the date (an omission must not drop it from the morning report).
+                    val due=if(!t.has("due") || t.isNull("due")) rows("SELECT due_text FROM workflow_items WHERE id=?",id).single().str("due_text").orEmpty()
+                        else t.optString("due").trim().takeIf { d -> d.isEmpty() || ISO_DATE.matches(d) } ?: continue
                     port.execute("UPDATE workflow_items SET title=?,due_text=?,revision=? WHERE id=?",title,due,rev+1,id) }
                 "merge" -> { val into=t.optString("into")
                     if(into==id || rows("SELECT 1 FROM workflow_items WHERE id=? AND status NOT IN ('done','merged')",into).isEmpty()) continue
@@ -512,12 +562,14 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
     /** Stores the call log and ties each recorded call to its entry. A call known only by a phone-book name gets
      * the entry's number as its key, so it reaches the same person as calls named by number. */
     fun reconcileCallLog(log:List<FirstPass.LogEntry>)=port.transaction {
-        log.forEach { port.execute("INSERT OR REPLACE INTO call_log VALUES(?,?,?,?,?,?)",it.id,it.numberKey,it.name,it.startMs,it.durationMs,it.type) }
+        log.filterNot { it.personal }.forEach { port.execute("INSERT OR REPLACE INTO call_log VALUES(?,?,?,?,?,?)",it.id,it.numberKey,it.name,it.startMs,it.durationMs,it.type) }
         val open=rows("""SELECT record_id,started_ms,duration_ms,counterpart,counterpart_key FROM call_records WHERE started_ms IS NOT NULL AND recording_id NOT LIKE 'sms:%' AND recording_id NOT LIKE 'mail:%'
             AND record_id NOT IN (SELECT record_id FROM call_record_log)""").map { FirstPass.RecordForMatch(it.str("record_id")!!,it.long("started_ms")!!,it.str("counterpart"),it.str("counterpart_key"),it.long("duration_ms") ?: 0) }
         val free=rows("SELECT * FROM call_log WHERE log_id NOT IN (SELECT log_id FROM call_record_log)")
-            .map { FirstPass.LogEntry(it.long("log_id")!!,it.str("number_key"),it.str("name"),it.long("start_ms")!!,it.long("duration_ms")!!,(it.long("type") ?: 0).toInt()) }
+            .map { FirstPass.LogEntry(it.long("log_id")!!,it.str("number_key"),it.str("name"),it.long("start_ms")!!,it.long("duration_ms")!!,(it.long("type") ?: 0).toInt()) }+log.filter { it.personal }
         for((recordId,e) in FirstPass.match(open,free)) {
+            // A call with the personal number: its words are wiped here and nothing about it goes anywhere.
+            if(e.personal) { forgetCall(recordId);continue }
             port.execute("INSERT OR IGNORE INTO call_record_log VALUES(?,?,?)",recordId,e.id,e.direction)
             val number=e.numberKey ?: continue
             port.execute("UPDATE call_records SET counterpart_key=? WHERE record_id=? AND (counterpart_key IS NULL OR counterpart_key GLOB '*[^0-9]*')",number,recordId)
@@ -533,6 +585,12 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         return rows("""SELECT MIN(COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)) AS m FROM call_transcription_jobs j
             JOIN recordings r ON r.recording_id=j.recording_id LEFT JOIN local_files l ON l.recording_id=j.recording_id
             WHERE j.state IN ('QUEUED','RUNNING') AND COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)<CAST(? AS INTEGER)""",old).single().long("m")
+    }
+    /** A recording found to be with the personal number: the record, its words and anything sent or linked go. The
+     * transcription job stays done, so it is not transcribed again. */
+    private fun forgetCall(recordId:String) {
+        listOf("call_inbox_sent","call_links","call_record_log").forEach { port.execute("DELETE FROM $it WHERE record_id=?",recordId) }
+        port.execute("DELETE FROM call_records WHERE record_id=?",recordId)
     }
     /** Answered calls in the log since 10/1 with no recording (missed and rejected calls are not counted). */
     fun unrecordedCalls():Int=(rows("SELECT COUNT(*) AS n FROM call_log WHERE duration_ms>0 AND type IN (1,2) AND log_id NOT IN (SELECT log_id FROM call_record_log)").single().long("n") ?: 0).toInt()

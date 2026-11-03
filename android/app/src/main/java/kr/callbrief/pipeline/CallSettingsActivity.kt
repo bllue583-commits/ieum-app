@@ -119,6 +119,8 @@ class CallSettingsActivity:ComponentActivity() {
         body.addView(CallUi.text(this,siteMemo ?: "첫 통화들에서 자동으로 채워져요",CallUi.BODY,color=if(siteMemo==null) CallUi.SUBTLE else CallUi.INK).apply { tag="site_memo" })
 
         group(CallUi.heading(this,"지금 상태"))
+        // Installed version, and the next one when it is downloaded and waiting (design: 보고와 화면).
+        body.addView(CallUi.text(this,"앱 버전 v${kr.callbrief.BuildConfig.VERSION_CODE}"+(CallUpdate.ready(this)?.let { ", 새 버전 v${it.versionCode} 준비됨" } ?: ""),CallUi.BODY,true).apply { tag="app_version" })
         val speed=s.optLong(PipelineSettingsKeys.LAST_MS_PER_AUDIO_MINUTE,0)
         body.addView(CallUi.text(this,"녹음 1분을 글자로 바꾸는 데: "+if(speed>0) "약 %.0f초".format(speed/1000.0) else "아직 기록 없음"))
         body.addView(CallUi.text(this,"마지막으로 글자로 바꾼 때: ${CallUi.dateTime(s.optLong(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,0))}"))

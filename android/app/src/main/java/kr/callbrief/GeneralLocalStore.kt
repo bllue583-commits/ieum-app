@@ -236,10 +236,12 @@ CREATE TABLE IF NOT EXISTS local_intakes(event_id TEXT PRIMARY KEY,root_uri TEXT
         val current=repository.recording(c.recordingId)
         check(number(current,"source_version")==c.sourceVersion && current["audio_sha256"]==c.audioSha256) { "NATIVE_RECEIPT_SUPERSEDED" }
         val d=discoveryDocument(c.selection,c.metadata);val sig=signature(d)
+        // The call time from the recorder's filename: automatic discovery is how every real recording arrives (review 11/4, bug 1).
+        val candidate=kr.callbrief.core.RecordingNames.startedAt(d.name)?.toEpochMilli()
         if(port.query("SELECT recording_id FROM local_files WHERE recording_id=?",c.recordingId).isEmpty()) {
-            port.execute("INSERT INTO local_files VALUES(?,?,?,?,?,?,NULL)",c.recordingId,c.selection.treeUri,d.documentId,d.uri,sig,c.audioSha256)
+            port.execute("INSERT INTO local_files VALUES(?,?,?,?,?,?,?)",c.recordingId,c.selection.treeUri,d.documentId,d.uri,sig,c.audioSha256,candidate)
             port.execute("INSERT OR IGNORE INTO local_visibility(recording_id) VALUES(?)",c.recordingId)
-        } else port.execute("UPDATE local_files SET actual_document_id=?,actual_uri=?,source_signature=?,plaintext_sha256=? WHERE recording_id=?",d.documentId,d.uri,sig,c.audioSha256,c.recordingId)
+        } else port.execute("UPDATE local_files SET actual_document_id=?,actual_uri=?,source_signature=?,plaintext_sha256=?,filename_time_candidate_ms=COALESCE(?,filename_time_candidate_ms) WHERE recording_id=?",d.documentId,d.uri,sig,c.audioSha256,candidate,c.recordingId)
     }
     internal fun collectDiscovery(c:kr.co.ieum.discovery.DiscoveryTypes.Commit,bytes:ByteArray,permit:()->Unit,hook:kr.co.ieum.discovery.DiscoveryTypes.FaultHook):kr.co.ieum.discovery.DiscoveryTypes.Receipt {
         permit();check(encrypted.initializedKeyReady()) { "LOCAL_STORE_NOT_READY" }
