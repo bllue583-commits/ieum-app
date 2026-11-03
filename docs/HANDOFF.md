@@ -107,6 +107,7 @@ python run_gradle.py --log local-$(date +%H%M%S).log :app:compileDebugKotlin
 - 통화기록(READ_CALL_LOG)·문자(장문·사진 문자 MMS 포함, 개인 제외 번호 적용) 권한은 앱을 열 때 한 번 요청 + 처음 설정 카드 + 설정 화면. 요청 메시지에 전화번호는 넣지 않음("전화부에 없는 번호" + 상대 id).
 - **예약 작업 지시(11/4 갱신):** pull → 장부 읽기 → edits 반영·잠금 → 새 기록 먼저, b- 묶음 2개까지, 시간순 → 기록마다 분석 후 장부 갱신 → 결과·장부(rev+1) 한 커밋 → 충돌 시 rebase 후 재적용. 옛 형식(상대 id 없음)도 처리. 스크립트 일괄 생성과 파일 내용 출력 금지 명시(11/3 실행이 15건을 스크립트 하나로 49초 만에 만들고 자막을 로그에 찍었음).
 - **문자 점검 결과(사용자 요청):** 10/30 구현은 SMS만 읽어 장문(LMS)·사진 문자(MMS)를 통째로 놓쳤음 → 추가. 설계도의 주기(15분)를 실제(30분)에 맞춤.
+- **업데이트 안내 문구:** 폰의 "새 버전" 알림 문구는 `release-apk.yml`이 커밋 메시지 첫 줄(영어)을 그대로 씀. v1024는 `ieum-inbox/app/version.json`의 notes를 한국어로 직접 고침. 근본 수정(한국어 안내 파일 `docs/UPDATE_NOTE.txt`에서 읽기)은 Mac의 gh 토큰에 `workflow` 권한이 없어 push 거절됨 → 사용자가 `gh auth refresh -s workflow` 하거나 Windows PC에서 반영할 것. 그 전까지는 배포마다 version.json notes를 한국어로 고칠 것.
 - Mac에는 JDK·Android SDK가 아직 없음 → 판정은 GitHub ci/device-test로. 작업 브랜치에서 CI 확인 후 `feature/lean-calls`에 합쳐야 폰 자동 업데이트(release-apk는 lean-calls·main에서만).
 
 ## 5. 현재 UI 상태와 문제점 (S26 스크린샷 기준, 다음 작업의 출발점)
