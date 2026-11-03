@@ -93,7 +93,12 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
     }
     private val port=AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql"))
     init {
-        try { port.transaction { SCHEMA.forEach { port.execute(it) };null } } catch(e:Exception) { port.close();throw e }
+        try { port.transaction { SCHEMA.forEach { port.execute(it) }
+            // Calls stored before v1024 have no start time although the filename had one: fill it in.
+            if(rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_files'").isNotEmpty())
+                port.execute("""UPDATE call_records SET started_ms=(SELECT l.filename_time_candidate_ms FROM local_files l WHERE l.recording_id=call_records.recording_id)
+                    WHERE started_ms IS NULL AND recording_id IN (SELECT recording_id FROM local_files WHERE filename_time_candidate_ms IS NOT NULL)""")
+            null } } catch(e:Exception) { port.close();throw e }
     }
     override fun close()=port.close()
     private fun rows(sql:String,vararg args:Any?)=port.query(sql,*args)

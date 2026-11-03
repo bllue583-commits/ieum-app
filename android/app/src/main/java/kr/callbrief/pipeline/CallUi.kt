@@ -392,6 +392,13 @@ internal object CallUi {
         CallRecordStore.FAILED -> "정리하지 못했어요"
         else -> ""
     }
+    /** Like [state], but a call still waiting hours after it was stored says so instead of promising an hour
+     * (the hourly analysis stops while the Claude subscription limit is reached). Nights do not count: it runs 07-23. */
+    fun state(c:CallRecord,now:Long=System.currentTimeMillis()):String {
+        val hour=Instant.ofEpochMilli(now).atZone(CallRecordStore.KST).hour
+        return if(c.state==CallRecordStore.TRANSCRIBED && CallInboxConfig.enabled && now-c.createdMs>3*3_600_000L && hour in 9..23)
+            "정리가 늦어지고 있어요, 순서대로 정리해요" else state(c.state)
+    }
     /** "오늘 저녁 7시" / "내일 아침 6시": when the next report notification comes. */
     fun nextReport(eveningHour:Int,morningHour:Int,now:java.time.ZonedDateTime=java.time.ZonedDateTime.now(java.time.ZoneId.of("Asia/Seoul"))):String {
         fun at(h:Int)=now.toLocalDate().atTime(h,0).atZone(now.zone).let { if(it.isAfter(now)) it else it.plusDays(1) }

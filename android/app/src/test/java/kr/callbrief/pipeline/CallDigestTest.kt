@@ -35,17 +35,44 @@ class CallDigestTest:ProtectedTextHostTestBase() {
             assertEquals(listOf("late"),s.day(LocalDate.of(2026,10,28)).map { it.recordingId })
             assertEquals(listOf("unknown","noon","early"),s.day(LocalDate.of(2026,10,29)).map { it.recordingId })
             val m=CallDigestText.evening(s,LocalDate.of(2026,10,29))
-            assertEquals("오늘 통화 3건, 새 할 일 0개",m.title)
+            assertEquals("오늘 통화 3건, 새 체크할 일 0개",m.title)
             assertTrue(m.text.contains("010-1111-2222"));assertTrue(m.text.contains("홍길동"));assertFalse(m.text.contains("통화 내용"))
         }
         assertEquals(LocalDate.of(2026,10,28),CallRecordStore.kstDay(kst("2026-10-28T23:59:00")))
         assertEquals(LocalDate.of(2026,10,29),CallRecordStore.kstDay(kst("2026-10-29T00:01:00")))
     }
 
+    @Test fun callsStoredWithoutTimeTakeItFromTheFilename() {
+        val context:Context=RuntimeEnvironment.getApplication()
+        CallRecordStore(context) { kst("2026-10-30T10:00:00") }.use { s ->
+            s.insert(transcript("r1",null,"010-1111-2222"))
+            s.insert(transcript("r2",null,"홍길동"))
+        }
+        AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql")).use { p -> p.transaction {
+            p.execute("CREATE TABLE IF NOT EXISTS local_files(recording_id TEXT PRIMARY KEY,filename_time_candidate_ms INTEGER)")
+            p.execute("INSERT INTO local_files VALUES('r1',?)",kst("2026-10-29T09:30:00"))
+            p.execute("INSERT INTO local_files VALUES('r2',NULL)");null
+        } }
+        CallRecordStore(context) { kst("2026-10-30T10:00:00") }.use { s ->
+            assertEquals(listOf(kst("2026-10-29T09:30:00")),s.day(LocalDate.of(2026,10,29)).map { it.startedMs })
+            assertEquals(listOf("r2"),s.day(LocalDate.of(2026,10,30)).map { it.recordingId })
+        }
+    }
+
     @Test fun eveningTextNamesAtMostTwo() {
         fun rec(name:String?)=CallRecord(name ?: "x",name ?: "x",0,0,name,null,"","TRANSCRIBED",null,null,emptyList(),null,0,null)
         val m=CallDigestText.evening(listOf(rec("가"),rec("나"),rec("다"),rec(null)),2)
-        assertEquals("오늘 통화 4건, 새 할 일 2개",m.title);assertTrue(m.text.contains("가, 나 등"));assertFalse(m.text.contains("다"))
+        assertEquals("오늘 통화 4건, 새 체크할 일 2개",m.title);assertTrue(m.text.contains("가, 나 등"));assertFalse(m.text.contains("다"))
+        assertTrue(m.text.endsWith("아직 정리 중인 통화가 4건 있어요"))
+    }
+
+    @Test fun aCallWaitingForHoursSaysItIsLate() {
+        val now=kst("2026-10-29T15:00:00")
+        fun rec(createdMs:Long,state:String="TRANSCRIBED")=CallRecord("x","x",null,0,null,null,"",state,null,null,emptyList(),null,createdMs,null)
+        assertEquals(CallUi.state("TRANSCRIBED"),CallUi.state(rec(now-3_600_000L),now))
+        assertEquals(if(CallInboxConfig.enabled) "정리가 늦어지고 있어요, 순서대로 정리해요" else CallUi.state("TRANSCRIBED"),CallUi.state(rec(now-5*3_600_000L),now))
+        assertEquals(CallUi.state("TRANSCRIBED"),CallUi.state(rec(kst("2026-10-28T23:30:00")),kst("2026-10-29T07:30:00")))
+        assertEquals(CallUi.state("FAILED"),CallUi.state(rec(0,"FAILED"),now))
     }
 
     @Test fun morningCountsDueTodayAndOverdue() {
@@ -60,8 +87,8 @@ class CallDigestTest:ProtectedTextHostTestBase() {
         } }
         CallRecordStore(context).use { s ->
             assertEquals(listOf("i2","i1"),s.dueItems(LocalDate.of(2026,10,29)).map { it.id })
-            assertEquals("오늘 할 일 2개 (지난 기한 1개)",CallDigestText.morning(s,LocalDate.of(2026,10,29)).title)
-            assertEquals("오늘 할 일 0개",CallDigestText.morning(s,LocalDate.of(2026,10,26)).title)
+            assertEquals("오늘 체크할 일 2개 (지난 기한 1개)",CallDigestText.morning(s,LocalDate.of(2026,10,29)).title)
+            assertEquals("오늘 체크할 일 0개",CallDigestText.morning(s,LocalDate.of(2026,10,26)).title)
         }
     }
 

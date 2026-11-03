@@ -145,7 +145,7 @@ class HomeActivity:ComponentActivity() {
         if(s.memos.isEmpty()) memo.addView(CallUi.text(this,"오늘은 아직 정리된 통화가 없어요",CallUi.BODY,color=CallUi.SUBTLE).apply { setPadding(CallUi.dp(this@HomeActivity,16),CallUi.dp(this@HomeActivity,10),CallUi.dp(this@HomeActivity,16),CallUi.dp(this@HomeActivity,10)) })
         s.memos.forEachIndexed { i,c ->
             if(i>0) memo.addView(android.view.View(this).apply { setBackgroundColor(CallUi.LINE) },LinearLayout.LayoutParams(-1,CallUi.dp(this,1)).apply { marginStart=CallUi.dp(this@HomeActivity,78);marginEnd=CallUi.dp(this@HomeActivity,20) })
-            memo.addView(CallUi.memoRow(this,CallUi.whenLabel(c),c.displayName,c.summary?.let(CallUi::firstSentence) ?: CallUi.state(c.state),c.summary==null) {
+            memo.addView(CallUi.memoRow(this,CallUi.whenLabel(c),c.displayName,c.summary?.let(CallUi::firstSentence) ?: CallUi.state(c),c.summary==null) {
                 startActivity(Intent(this,TodayCallsActivity::class.java).putExtra(TodayCallsActivity.EXTRA_CALL,c.recordId))
             }.apply { tag="home_memo_${c.recordId}" })
         }

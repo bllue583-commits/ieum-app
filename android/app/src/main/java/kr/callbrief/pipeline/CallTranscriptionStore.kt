@@ -28,7 +28,9 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         } catch(e:Exception){db.close();throw e}
     }
 
-    private val select="""SELECT r.recording_id,r.source_version,v.audio_sha256,r.display_name,r.mime_type,r.original_started_at_ms,
+    // The call time comes from the recorder's filename (Samsung: "..._yyMMdd_HHmmss"); intake keeps it on local_files.
+    private val select="""SELECT r.recording_id,r.source_version,v.audio_sha256,r.display_name,r.mime_type,
+        coalesce(r.original_started_at_ms,l.filename_time_candidate_ms) AS original_started_at_ms,
         r.byte_count,r.modified_at_ms,l.actual_uri,a.archived,g.active AS grant_active
         FROM recordings r JOIN source_versions v ON v.recording_id=r.recording_id AND v.source_version=r.source_version
         JOIN local_files l ON l.recording_id=r.recording_id JOIN local_visibility a ON a.recording_id=r.recording_id
@@ -40,7 +42,7 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         (r["byte_count"] as Number?)?.toLong() ?: 0,(r["modified_at_ms"] as Number?)?.toLong() ?: 0)
 
     /** The owner's current recording versions with encrypted audio, newest first. */
-    fun candidates():List<Candidate> = db.query("$select WHERE r.owner_key=? AND r.presence='PRESENT' ORDER BY coalesce(r.original_started_at_ms,r.modified_at_ms,0) DESC",
+    fun candidates():List<Candidate> = db.query("$select WHERE r.owner_key=? AND r.presence='PRESENT' ORDER BY coalesce(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0) DESC",
         GeneralLocalStore.OWNER).map(::candidate)
 
     /** Idempotent: new versions are inserted; rows that have not started or finished follow the current eligibility. */

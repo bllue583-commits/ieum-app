@@ -69,7 +69,7 @@ class TodayCallsActivity:ComponentActivity() {
         if(calls.isEmpty()) body.addView(CallUi.card(this).apply { addView(CallUi.text(this@TodayCallsActivity,"이 날짜에 정리된 통화가 없어요.",CallUi.BODY,color=CallUi.SUBTLE)) })
         else body.addView(CallUi.list(this,calls.sortedByDescending { it.startedMs ?: 0 }.map { c ->
             // One call: who and when, the first sentence of the summary (or its state). Tap for details.
-            CallUi.memoRow(this,CallUi.whenLabel(c),c.displayName,c.summary?.let(CallUi::firstSentence) ?: CallUi.state(c.state),c.summary==null) { detail=c.recordId;render() }
+            CallUi.memoRow(this,CallUi.whenLabel(c),c.displayName,c.summary?.let(CallUi::firstSentence) ?: CallUi.state(c),c.summary==null) { detail=c.recordId;render() }
                 .apply { tag="call_${c.recordId}" }
         }))
     }
@@ -82,7 +82,7 @@ class TodayCallsActivity:ComponentActivity() {
             (if(c.kind=="통화") "${CallUi.duration(c.durationMs)} 통화" else c.kind),back={ detail=null;render() })
         if(c.state!=CallRecordStore.ANALYZED) {
             val s=CallUi.card(this,warn=c.state==CallRecordStore.FAILED)
-            s.addView(CallUi.text(this,CallUi.state(c.state),CallUi.SUMMARY,true,if(c.state==CallRecordStore.FAILED) CallUi.WARN else CallUi.INK))
+            s.addView(CallUi.text(this,CallUi.state(c),CallUi.SUMMARY,true,if(c.state==CallRecordStore.FAILED) CallUi.WARN else CallUi.INK))
             when(c.state) {
                 CallRecordStore.FAILED -> s.addView(CallUi.bigButton(this,"","다시 정리하기") { retry(c.recordId) })
                 CallRecordStore.WAITING_KEY,CallRecordStore.WAITING_CONSENT -> s.addView(CallUi.bigButton(this,"","설정 열기") { CallUi.go(this,CallUi.Tab.SETTINGS) })
