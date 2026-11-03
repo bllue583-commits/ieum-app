@@ -3,8 +3,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Text messages are read on the phone, to be summarised with the calls (business contacts only). -->
+    <!-- Text messages are read on the phone; the analysis keeps work ones and drops personal ones. -->
     <uses-permission android:name="android.permission.READ_SMS" />
+    <!-- The call log is matched with the recordings on the phone (number, direction, calls without a recording). -->
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />

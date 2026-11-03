@@ -28,28 +28,79 @@ internal object MessageIntake {
     private val MACHINE=Regex("\\(광고\\)|무료\\s*수신\\s*거부|인증\\s*번호|인증코드|승인\\s*[0-9,]+\\s*원|[0-9,]+원\\s*승인|입금\\s*[0-9,]+원|출금\\s*[0-9,]+원|배송\\s*(완료|출발|예정)")
     internal fun automated(body:String)=MACHINE.containsMatchIn(body)
 
-    /** One record per number with the texts that arrived since the last look, oldest first. */
+    /** One record per number with the texts that arrived since the last look, oldest first; [byDay] splits the
+     * first pass's batches (weeks of texts) into one record per number and day. */
     internal data class Sms(val id:Long,val atMs:Long,val sent:Boolean,val phone:String,val body:String)
-    internal fun threads(messages:List<Sms>):List<Pair<String,List<Sms>>> =
-        messages.filter { it.body.isNotBlank() && !automated(it.body) }.groupBy { it.phone }.map { (p,l) -> p to l.sortedBy { it.atMs } }
+    internal fun threads(messages:List<Sms>,byDay:Boolean=false):List<Pair<String,List<Sms>>> =
+        messages.filter { it.body.isNotBlank() && !automated(it.body) }
+            .groupBy { if(byDay) it.phone+"@"+CallRecordStore.kstDay(it.atMs) else it.phone }.map { (k,l) -> k.substringBefore('@') to l.sortedBy { it.atMs } }
     internal fun threadText(list:List<Sms>)=list.joinToString("\n") { "[${hhmm(it.atMs)} ${if(it.sent) "보낸 문자" else "받은 문자"}] ${it.body.trim().take(2000)}" }
 
-    fun takeSms(context:Context,store:CallRecordStore,settings:SecureSettings):Int {
-        if(context.checkSelfPermission(Manifest.permission.READ_SMS)!=PackageManager.PERMISSION_GRANTED)return 0
-        val since=settings.snapshot().optLong(PipelineSettingsKeys.LAST_SMS_MS,0).takeIf { it>0 } ?: (System.currentTimeMillis()-FIRST_LOOK_MS)
-        val found=mutableListOf<Sms>()
+    private const val LIMIT=500
+    /** Texts with after < time < before: SMS and, as negative ids, MMS (long texts over 80 bytes and picture texts
+     * arrive as MMS in Korea). Group MMS sent to several people are left out. [Batch.upTo] is set when a source was
+     * cut at [LIMIT]: only messages up to it are returned, the rest come next time. */
+    internal data class Batch(val messages:List<Sms>,val upTo:Long?)
+    private fun read(context:Context,after:Long,before:Long,excluded:(String)->Boolean):Batch {
+        val sms=mutableListOf<Sms>()
         context.contentResolver.query(Telephony.Sms.CONTENT_URI,arrayOf("_id","address","date","type","body"),
-            "date>? AND type IN (1,2)",arrayOf(since.toString()),"date ASC")?.use { c ->
-            while(c.moveToNext() && found.size<500) {
-                val phone=phoneKey(c.getString(1)) ?: continue
-                found+=Sms(c.getLong(0),c.getLong(2),c.getInt(3)==2,phone,c.getString(4).orEmpty())
+            "date>? AND date<? AND type IN (1,2)",arrayOf(after.toString(),before.toString()),"date ASC")?.use { c ->
+            while(c.moveToNext() && sms.size<LIMIT) {
+                val address=c.getString(1).orEmpty();val phone=phoneKey(address) ?: continue
+                if(excluded(address)) continue
+                sms+=Sms(c.getLong(0),c.getLong(2),c.getInt(3)==2,phone,c.getString(4).orEmpty())
             }
         }
-        if(found.isEmpty())return 0
+        val mms=readMms(context,after,before,excluded)
+        val upTo=listOfNotNull(sms.takeIf { it.size>=LIMIT }?.last()?.atMs,mms.takeIf { it.size>=LIMIT }?.last()?.atMs).minOrNull()
+        return Batch((sms+mms).filter { upTo==null || it.atMs<=upTo }.sortedBy { it.atMs },upTo)
+    }
+    private fun readMms(context:Context,after:Long,before:Long,excluded:(String)->Boolean):List<Sms> {
+        val out=mutableListOf<Sms>();val resolver=context.contentResolver
+        resolver.query(android.net.Uri.parse("content://mms"),arrayOf("_id","date","msg_box"),"date>? AND date<? AND msg_box IN (1,2)",
+            arrayOf((after/1000).toString(),((before+999)/1000).toString()),"date ASC")?.use { c ->
+            while(c.moveToNext() && out.size<LIMIT) {
+                val id=c.getLong(0);val at=c.getLong(1)*1000;val sent=c.getInt(2)==2
+                if(at<=after || at>=before) continue
+                // 137 = from, 151 = to
+                val addresses=resolver.query(android.net.Uri.parse("content://mms/$id/addr"),arrayOf("address","type"),"type=?",arrayOf(if(sent) "151" else "137"),null)
+                    ?.use { a -> buildList { while(a.moveToNext()) a.getString(0)?.let { add(it) } } }.orEmpty()
+                val address=addresses.singleOrNull() ?: continue
+                val phone=phoneKey(address) ?: continue
+                if(excluded(address)) continue
+                val body=resolver.query(android.net.Uri.parse("content://mms/part"),arrayOf("ct","text"),"mid=?",arrayOf(id.toString()),null)
+                    ?.use { p -> buildList { while(p.moveToNext()) if(p.getString(0)=="text/plain") p.getString(1)?.let { add(it) } } }.orEmpty().joinToString("\n")
+                if(body.isNotBlank()) out+=Sms(-id,at,sent,phone,body)
+            }
+        }
+        return out
+    }
+
+    /** New texts since the last look, then one batch of the first pass (10/1 up to where the regular intake began). */
+    fun takeSms(context:Context,store:CallRecordStore,settings:SecureSettings):Int {
+        if(context.checkSelfPermission(Manifest.permission.READ_SMS)!=PackageManager.PERMISSION_GRANTED)return 0
+        val s=settings.snapshot();val now=System.currentTimeMillis()
+        val rules=kr.callbrief.LocalPrivacy.rules(s);val excluded={ a:String -> rules.excluded(a,a) }
+        val last=s.optLong(PipelineSettingsKeys.LAST_SMS_MS,0)
+        if(s.optLong(PipelineSettingsKeys.SMS_BACKFILL_UNTIL,0)==0L) {
+            val until=listOfNotNull(store.earliestMessage(MessageKind.SMS),last.takeIf { it>0 }).minOrNull() ?: (now-FIRST_LOOK_MS)
+            settings.update { it.put(PipelineSettingsKeys.SMS_BACKFILL_UNTIL,until).put(PipelineSettingsKeys.SMS_BACKFILL_CURSOR,FirstPass.FROM_MS-1) }
+        }
         var added=0
-        for((phone,list) in threads(found))
-            if(store.insertMessage("${MessageKind.SMS}$phone:${list.last().id}",list.first().atMs,phone,threadText(list))) added++
-        settings.update { it.put(PipelineSettingsKeys.LAST_SMS_MS,found.maxOf { m -> m.atMs }) }
+        val fresh=read(context,last.takeIf { it>0 } ?: (now-FIRST_LOOK_MS),Long.MAX_VALUE,excluded)
+        if(fresh.messages.isNotEmpty()) {
+            for((phone,list) in threads(fresh.messages))
+                if(store.insertMessage("${MessageKind.SMS}$phone:${list.last().id}",list.first().atMs,phone,threadText(list))) added++
+            settings.update { it.put(PipelineSettingsKeys.LAST_SMS_MS,fresh.upTo ?: fresh.messages.maxOf { m -> m.atMs }) }
+        }
+        val s2=settings.snapshot()
+        val cursor=s2.optLong(PipelineSettingsKeys.SMS_BACKFILL_CURSOR,0);val until=s2.optLong(PipelineSettingsKeys.SMS_BACKFILL_UNTIL,0)
+        if(cursor in 1 until until) {
+            val old=read(context,cursor,until,excluded)
+            for((phone,list) in threads(old.messages,byDay=true))
+                if(store.insertMessage("${MessageKind.SMS}$phone:${list.last().id}",list.first().atMs,phone,threadText(list))) added++
+            settings.update { it.put(PipelineSettingsKeys.SMS_BACKFILL_CURSOR,old.upTo ?: until) }
+        }
         return added
     }
 
@@ -95,16 +146,24 @@ internal object MessageIntake {
         val host=s.optString(PipelineSettingsKeys.MAIL_HOST);val user=s.optString(PipelineSettingsKeys.MAIL_USER);val pass=s.optString(PipelineSettingsKeys.MAIL_PASSWORD)
         if(host.isBlank() || user.isBlank() || pass.isBlank())return 0
         val since=s.optLong(PipelineSettingsKeys.LAST_MAIL_MS,0).takeIf { it>0 } ?: (System.currentTimeMillis()-FIRST_LOOK_MS)
+        if(s.optLong(PipelineSettingsKeys.MAIL_BACKFILL_UNTIL,0)==0L) {
+            val until=listOfNotNull(store.earliestMessage(MessageKind.MAIL),since).minOrNull()!!
+            settings.update { it.put(PipelineSettingsKeys.MAIL_BACKFILL_UNTIL,until).put(PipelineSettingsKeys.MAIL_BACKFILL_CURSOR,FirstPass.FROM_MS) }
+        }
         var added=0;var newest=since
         try {
             connect(host,user,pass).use { box ->
                 val inbox=box.getFolder("INBOX");inbox.open(javax.mail.Folder.READ_ONLY)
                 try {
                     val uidFolder=inbox as? javax.mail.UIDFolder
-                    val recent=inbox.search(javax.mail.search.ReceivedDateTerm(javax.mail.search.ComparisonTerm.GE,java.util.Date(since-86_400_000L)))
-                        .filter { (it.receivedDate?.time ?: 0)>since }.sortedBy { it.receivedDate.time }.take(30)
-                    for(m in recent) {
-                        val at=m.receivedDate.time;newest=maxOf(newest,at)
+                    fun between(from:Long,until:Long)=inbox.search(javax.mail.search.ReceivedDateTerm(javax.mail.search.ComparisonTerm.GE,java.util.Date(from-86_400_000L)))
+                        .filter { (it.receivedDate?.time ?: 0) in from until until }.sortedBy { it.receivedDate.time }.take(30)
+                    val recent=between(since+1,Long.MAX_VALUE)
+                    // First pass: one batch of mail from 10/1 up to where the regular intake began.
+                    val cursor=settings.snapshot().optLong(PipelineSettingsKeys.MAIL_BACKFILL_CURSOR,0);val until=settings.snapshot().optLong(PipelineSettingsKeys.MAIL_BACKFILL_UNTIL,0)
+                    val old=if(cursor in 1 until until) between(cursor,until) else emptyList()
+                    for(m in recent+old) {
+                        val at=m.receivedDate.time;if(m in recent) newest=maxOf(newest,at)
                         val from=(m.from?.firstOrNull() as? javax.mail.internet.InternetAddress)
                         if(isBulk(m.getHeader("List-Unsubscribe")!=null,m.getHeader("Precedence")?.firstOrNull(),from?.address))continue
                         val body=newPart(runCatching { text(m) }.getOrNull().orEmpty()).take(3000)
@@ -113,6 +172,7 @@ internal object MessageIntake {
                         val id=MessageKind.MAIL+(uidFolder?.let { "${it.uidValidity}:${it.getUID(m)}" } ?: "${m.messageNumber}:$at")
                         if(store.insertMessage(id,at,who,content)) added++
                     }
+                    if(cursor in 1 until until) settings.update { it.put(PipelineSettingsKeys.MAIL_BACKFILL_CURSOR,if(old.size>=30) old.last().receivedDate.time+1 else until) }
                 } finally { runCatching { inbox.close(false) } }
             }
             settings.update { it.put(PipelineSettingsKeys.LAST_MAIL_MS,newest).remove(PipelineSettingsKeys.MAIL_ERROR) }

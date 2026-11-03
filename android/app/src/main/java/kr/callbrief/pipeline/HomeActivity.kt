@@ -23,7 +23,10 @@ class HomeActivity:ComponentActivity() {
                                  val byCompany:List<Pair<String,Int>> =emptyList(),
                                  /** Today's calls, latest first, for the memo list. */
                                  val memos:List<CallRecord> =emptyList(),
-                                 val sms:Boolean=true)
+                                 val sms:Boolean=true,val callLog:Boolean=true,
+                                 /** 처음 정리 while it runs, else null. */
+                                 val firstPass:FirstPassView?=null)
+    internal data class FirstPassView(val toTranscribe:Int,val hoursLeft:Double?,val waiting:Int,val unrecorded:Int)
     private lateinit var body:LinearLayout
     private val pickFolder=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { r ->
         if(r.resultCode==RESULT_OK) CallFolder.save(this,r.data)?.let { android.widget.Toast.makeText(this,it,android.widget.Toast.LENGTH_LONG).show() }
@@ -31,6 +34,18 @@ class HomeActivity:ComponentActivity() {
     }
     private val askNotify=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { load() }
     private val askSms=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { load() }
+    private val askCallLog=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { load() }
+    /** Texts and the call log are needed for the first pass: asked once when the app opens, then from the setup card. */
+    private val askReading=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()) {
+        CallPipelineStartup.settingsChanged(this);load() }
+    private fun granted(p:String)=checkSelfPermission(p)==android.content.pm.PackageManager.PERMISSION_GRANTED
+    private fun askReadingOnce() {
+        val prefs=getSharedPreferences("ieum_ui",MODE_PRIVATE)
+        val missing=listOf(android.Manifest.permission.READ_SMS,android.Manifest.permission.READ_CALL_LOG).filterNot(::granted)
+        if(missing.isEmpty() || prefs.getBoolean("asked_reading_v1",false) || kr.callbrief.BuildConfig.LOCAL_PREVIEW) return
+        prefs.edit().putBoolean("asked_reading_v1",true).apply()
+        askReading.launch(missing.toTypedArray())
+    }
     private fun notifyAllowed()=android.os.Build.VERSION.SDK_INT<33||checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)==android.content.pm.PackageManager.PERMISSION_GRANTED
     private fun batteryFree()=getSystemService(android.os.PowerManager::class.java)?.isIgnoringBatteryOptimizations(packageName)==true
 
@@ -40,7 +55,7 @@ class HomeActivity:ComponentActivity() {
         CallPipelineStartup.init(this)
         if(LaunchIntro.claim(intent?.action==Intent.ACTION_MAIN,savedInstanceState!=null)) LaunchIntro.show(this)
     }
-    override fun onResume() { super.onResume();load()
+    override fun onResume() { super.onResume();load();askReadingOnce()
         if(intent?.getBooleanExtra("install_update",false)==true) { intent.removeExtra("install_update");CallUpdate.install(this) } }
     override fun onNewIntent(intent:Intent) { super.onNewIntent(intent);setIntent(intent) }
 
@@ -74,7 +89,15 @@ class HomeActivity:ComponentActivity() {
             s.optString(PipelineSettingsKeys.MODEL_STATE),calls.size,calls.count{it.state!=CallRecordStore.ANALYZED},newTasks,
             due.size,due.count{CallUi.overdue(it.due)},s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),batteryFree(),percent,next,companies,
             week,byCompany,calls.sortedByDescending { it.startedMs ?: 0 }.take(4),
-            checkSelfPermission(android.Manifest.permission.READ_SMS)==android.content.pm.PackageManager.PERMISSION_GRANTED)
+            granted(android.Manifest.permission.READ_SMS),granted(android.Manifest.permission.READ_CALL_LOG),firstPass(storage,s))
+    }
+    private fun firstPass(storage:android.content.Context,s:org.json.JSONObject):FirstPassView? {
+        val start=FirstPass.start(s) ?: return null
+        if(FirstPass.done(s) || !s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false)) return null
+        val p=runCatching { CallRecordStore(storage).use { it.firstPassProgress(start) } }.getOrNull() ?: return null
+        val msPerMinute=s.optLong(PipelineSettingsKeys.LAST_MS_PER_AUDIO_MINUTE,72_000L)
+        val hours=p.bytesPerMinute?.takeIf { it>0 && p.bytesLeft>0 }?.let { p.bytesLeft.toDouble()/it*msPerMinute/3_600_000.0 }
+        return FirstPassView(p.toTranscribe,hours,p.waiting,p.unrecorded)
     }
 
     private fun agree() {
@@ -113,6 +136,7 @@ class HomeActivity:ComponentActivity() {
         val steps=listOfNotNull(
             Step(s.folder,"녹음 폴더 연결","통화 녹음 폴더(보통 Recordings › Call)가 열리면 아래 [이 폴더 사용]을 누르세요.","녹음 폴더 고르기") { pickFolder.launch(CallFolder.pickIntent()) },
             Step(s.sms,"문자 읽기 허용","업무 문자도 통화와 함께 정리해요. 문자는 휴대폰 안에서 읽어요.","문자 읽기 허용") { askSms.launch(android.Manifest.permission.READ_SMS) },
+            Step(s.callLog,"통화기록 읽기 허용","녹음과 통화기록을 맞춰서 상대 번호를 찾아요. 통화기록은 휴대폰 밖으로 나가지 않아요.","통화기록 읽기 허용") { askCallLog.launch(android.Manifest.permission.READ_CALL_LOG) },
             if(CallInboxConfig.enabled) null else Step(s.key,"Claude 키 넣기","통화를 요약하는 데 쓰는 키예요. 설정 화면에 붙여 넣으면 돼요.","설정에서 키 넣기") { open(CallSettingsActivity::class.java) },
             Step(s.consent,"정리 동의","녹음 파일은 휴대폰에 그대로 두고, 글자로 바꾼 통화 내용만 보내 정리해요. 설정에서 언제든 끌 수 있어요.","동의하고 켜기") { agree() },
             Step(s.model=="READY","음성 인식 모델 받기",
@@ -136,6 +160,22 @@ class HomeActivity:ComponentActivity() {
                 c.addView(CallUi.text(this,(if(st.done) "✓  " else "${i+1}.  ")+st.label,CallUi.BODY,i==next,color))
                 if(i==next) { c.addView(CallUi.text(this,st.detail,CallUi.SMALL,color=CallUi.SUBTLE));c.addView(CallUi.bigButton(this,"",st.button,st.action).apply { tag="home_setup_next" }) }
             }
+            body.addView(c)
+        }
+
+        // 처음 정리: what is left before the calls since 10/1 become the context of the next ones.
+        s.firstPass?.let { f ->
+            val c=CallUi.card(this,rail=CallUi.ACCENT).apply { tag="home_first_pass" }
+            c.addView(CallUi.text(this,"처음 정리 중이에요",CallUi.HEADING,true))
+            c.addView(CallUi.text(this,"10월 1일부터의 통화와 문자를 먼저 정리하고 있어요. 끝나면 다음 통화부터 지난 맥락까지 함께 보고 정리해요.",CallUi.BODY))
+            val lines=buildList {
+                if(f.toTranscribe>0) add("글자로 바꿀 녹음 ${f.toTranscribe}개"+(f.hoursLeft?.let { h -> ", 약 ${if(h<1) "1시간 안" else "${Math.round(h)}시간"}" } ?: ""))
+                if(f.waiting>0) add("요약을 기다리는 기록 ${f.waiting}건")
+                if(f.toTranscribe==0 && f.waiting==0) add("모은 기록으로 업체와 사람을 정리하고 있어요")
+                if(f.unrecorded>0) add("녹음 없는 통화 ${f.unrecorded}건 (통화기록 기준)")
+            }
+            lines.forEach { c.addView(CallUi.text(this,it,CallUi.BODY,true)) }
+            if(f.toTranscribe>0) c.addView(CallUi.text(this,"지난 녹음은 충전 중이거나 배터리가 절반 넘게 남았을 때 바꿔요.",CallUi.SMALL,color=CallUi.SUBTLE))
             body.addView(c)
         }
 

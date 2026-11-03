@@ -24,6 +24,8 @@ internal object CallPipelineStartup {
         CallTranscriptSinks.factory={ ctx -> CallSinkImpl(ctx) }
         val app=context.applicationContext
         executor.execute {
+            // 처음 정리 starts with the first run of this version; records older than this are summarised first.
+            runCatching { kr.callbrief.SecureSettings(app).update { if(FirstPass.start(it)==null) it.put(PipelineSettingsKeys.FIRST_PASS_START_MS,System.currentTimeMillis()) } }
             runCatching { CallDigestSchedule.ensure(app) }
             runCatching { enqueueAnalysis(app) }
             runCatching { CallUpdate.schedule(app) }

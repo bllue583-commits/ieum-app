@@ -52,6 +52,15 @@ object PipelineSettingsKeys {
     const val MAIL_PASSWORD="mailAppPassword"
     const val LAST_MAIL_MS="messagesLastMailMs"
     const val MAIL_ERROR="mailLastError"
+    /** 처음 정리: when it started (records before are "old"), whether the consolidation is applied, when it was sent. */
+    const val FIRST_PASS_START_MS="firstPassStartMs"
+    const val FIRST_PASS_DONE="firstPassDone"
+    const val FIRST_PASS_CONTEXT_SENT_MS="firstPassContextSentMs"
+    /** Reading old texts and mail from 10/1 up to where the regular intake began: progress and end. */
+    const val SMS_BACKFILL_CURSOR="firstPassSmsCursor"
+    const val SMS_BACKFILL_UNTIL="firstPassSmsUntil"
+    const val MAIL_BACKFILL_CURSOR="firstPassMailCursor"
+    const val MAIL_BACKFILL_UNTIL="firstPassMailUntil"
 }
 
 /** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets

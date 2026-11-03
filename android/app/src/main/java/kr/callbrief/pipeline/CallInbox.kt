@@ -68,6 +68,8 @@ internal class GitHubInboxStore(private val repo:String,private val token:String
 
 internal object CallInbox {
     const val INBOX="inbox";const val RESULTS="results"
+    /** File-name prefixes the scheduled task orders by: new records first, then old ones (처음 정리), then the consolidation. */
+    const val OLD="b-";const val CONTEXT="ctx-"
     /** Repository-safe file name for a record id (no phone numbers or names in paths). */
     fun fileName(recordId:String)=MessageDigest.getInstance("SHA-256").digest(recordId.toByteArray()).joinToString(""){"%02x".format(it)}.take(32)+".json"
     /** Self-contained job: the scheduled task follows `system`, reads `message`, answers with JSON matching `schema`. */

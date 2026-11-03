@@ -47,6 +47,8 @@ internal class CallTranscriptionRunner(
     private val stopped:()->Boolean={false},
     private val now:()->Long=System::currentTimeMillis,
     private val speed:(Long)->Unit={},
+    /** True for an old recording (처음 정리) that has to wait for the charger or more battery. */
+    private val holdOld:(CallTranscriptionStore.Candidate)->Boolean={false},
 ) {
     data class Pass(val state:String,val done:Int,val failed:Int)
     private class Stopped:RuntimeException()
@@ -61,6 +63,7 @@ internal class CallTranscriptionRunner(
             if(stopped())return Pass("STOPPED",done,failed)
             val job=store.nextQueued() ?: return Pass("IDLE",done,failed)
             val c=job.candidate
+            if(holdOld(c))return Pass("WAIT_POWER",done,failed) // newest first: everything after this is old too
             if(!store.claim(c.key))return@repeat
             try {
                 val started=now()
@@ -124,7 +127,8 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                     skipReason={ c -> skipReason(c,settings) },
                     sink={ CallTranscriptSinks.factory?.invoke(applicationContext) },
                     stopped={ isStopped || tooHot() },
-                    speed={ ms -> settings.update{ it.put(PipelineSettingsKeys.LAST_MS_PER_AUDIO_MINUTE,ms).put(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,System.currentTimeMillis()) } }
+                    speed={ ms -> settings.update{ it.put(PipelineSettingsKeys.LAST_MS_PER_AUDIO_MINUTE,ms).put(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,System.currentTimeMillis()) } },
+                    holdOld={ c -> FirstPass.isOld(c.startedAtMs ?: c.modifiedMs,settings.snapshot()) && !FirstPass.powerOk(applicationContext) }
                 ).run()
                 if(pass.state=="MORE")enqueue(applicationContext)
                 Result.success()
@@ -139,6 +143,7 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
     }
     private fun skipReason(c:CallTranscriptionStore.Candidate,settings:SecureSettings):String? = when {
         c.archived -> "ARCHIVED"
+        FirstPass.beforeRange(c.startedAtMs ?: c.modifiedMs) -> "BEFORE_START" // 처음 정리 reaches back to 10/1 only
         !c.grantActive -> "FOLDER_ACCESS_REMOVED"
         LocalPrivacy.blocked(RecordingRef(Uri.parse(c.uri),c.displayName,c.bytes,c.mime,c.startedAtMs?.let(Instant::ofEpochMilli),c.modifiedMs),settings.snapshot()) -> "EXCLUDED"
         else -> null

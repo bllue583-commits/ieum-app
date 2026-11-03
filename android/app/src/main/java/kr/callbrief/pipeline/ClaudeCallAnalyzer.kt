@@ -48,6 +48,10 @@ internal data class ClaudeCallRequest(
     val personNames:List<String> =emptyList(),
     /** "통화", "문자" or "메일": what the text between the transcript tags is. */
     val kind:String="통화",
+    /** "받은 전화" or "건 전화", from the call log. */
+    val direction:String?=null,
+    /** An old record of the first pass (처음 정리): summary and names only. */
+    val firstPass:Boolean=false,
 ) {
     data class OpenTask(val id:String,val title:String,val due:String,val status:String,val company:String?=null)
     data class PersonCard(val name:String,val role:String?,val staff:Boolean,val company:String?)
@@ -150,6 +154,7 @@ internal class ClaudeCallAnalyzer(private val http:ClaudeCallHttp=OkHttpClaudeCa
 16. tasks의 company에는 그 일이 속한 업체 이름을 [이름 목록]의 표기로 쓰고, 모르면 null로 두세요.
 17. 메시지 맨 위 "종류"가 문자나 메일이면 <transcript> 안의 글은 음성 자막이 아니라 업무 문자(시각과 보낸 문자/받은 문자 표시가 붙음) 또는 메일(제목, 보낸 사람, 본문)입니다. "자막"이라고 한 규칙은 그 글에 똑같이 적용하고, quote도 그 글에서 그대로 복사하세요. summary는 "누구에게서 무슨 문자(메일)가 왔고 무엇을 하기로 했는지"를 씁니다. 보낸 문자의 약속은 사용자의 약속(owner "me")입니다.
 18. business는 이 통화·문자·메일이 사용자의 일(현장, 협력업체, 회사 업무)과 관련 있으면 true입니다. 문자와 메일은 업무 상대만 골라 오지 않으므로 가족, 지인, 쇼핑, 택배, 광고, 금융 알림 같은 개인적인 것도 옵니다. 그런 것이면 business를 false로 하고, summary는 "개인 내용"이라고만 쓰고 나머지 목록은 비우며 이름, 메모, 업체도 모두 null로 두세요. 개인 내용은 요약하거나 옮겨 적지 마세요. 통화는 거의 업무지만, 분명히 개인 통화면 false로 하세요.
+19. 메시지 맨 위에 [처음 정리]가 있으면 지난 기록을 처음으로 정리하는 중입니다. summary, keyPoints, counterpart, business는 똑같이 쓰되 siteMemo와 companyMemo는 null로 두세요. 현장과 업체 메모는 모든 기록을 본 뒤 따로 정리합니다.
 """.trim()
         private fun durationText(ms:Long)=if(ms<=0) "미상" else "${ms/60000}분 ${(ms/1000)%60}초"
         private fun clip(t:String,n:Int)=t.replace(Regex("\\s+")," ").trim().let { if(it.length>n) it.take(n-1)+"…" else it }
@@ -159,10 +164,12 @@ internal class ClaudeCallAnalyzer(private val http:ClaudeCallHttp=OkHttpClaudeCa
             val head=listOfNotNull(c.date.takeIf { it.isNotBlank() },c.who?.takeIf { it.isNotBlank() }).joinToString(" ")
             "\n- "+(if(head.isEmpty()) "" else "$head: ")+clip(c.summary,240) }
         fun userMessage(r:ClaudeCallRequest):String=buildString {
+            if(r.firstPass) append("[처음 정리] 지난 기록이에요.\n")
             append("종류: ").append(r.kind).append('\n')
             append(r.kind).append(" 시각: ").append(r.callTimeKst).append('\n')
             append(if(r.kind=="메일") "보낸 사람: " else "전화부 이름/번호: ").append(r.counterpart?.takeIf { it.isNotBlank() } ?: "미상").append('\n')
             if(r.kind=="통화") append("통화 길이: ").append(durationText(r.durationMs)).append('\n')
+            r.direction?.let { append("통화 방향: ").append(it).append('\n') }
             append("\n[현장 상황 메모] ").append(r.siteMemo?.takeIf { it.isNotBlank() }?.let { clip(it,600) } ?: "아직 없음").append('\n')
             val p=r.person;val c=r.company
             if(p==null && c==null) append("[상대] 아직 모르는 상대예요. 자막에서 이름과 업체를 찾아 주세요.\n")
