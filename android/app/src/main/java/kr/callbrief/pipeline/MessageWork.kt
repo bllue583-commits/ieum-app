@@ -94,12 +94,12 @@ internal object MessageIntake {
             settings.update { it.put(PipelineSettingsKeys.LAST_SMS_MS,fresh.upTo ?: fresh.messages.maxOf { m -> m.atMs }) }
         }
         val s2=settings.snapshot()
-        val cursor=s2.optLong(PipelineSettingsKeys.SMS_BACKFILL_CURSOR,0);val until=s2.optLong(PipelineSettingsKeys.SMS_BACKFILL_UNTIL,0)
-        if(cursor in 1 until until) {
-            val old=read(context,cursor,until,excluded)
+        val cursor=s2.optLong(PipelineSettingsKeys.SMS_BACKFILL_CURSOR,0);val end=s2.optLong(PipelineSettingsKeys.SMS_BACKFILL_UNTIL,0)
+        if(cursor>0 && cursor<end) {
+            val old=read(context,cursor,end,excluded)
             for((phone,list) in threads(old.messages,byDay=true))
                 if(store.insertMessage("${MessageKind.SMS}$phone:${list.last().id}",list.first().atMs,phone,threadText(list))) added++
-            settings.update { it.put(PipelineSettingsKeys.SMS_BACKFILL_CURSOR,old.upTo ?: until) }
+            settings.update { it.put(PipelineSettingsKeys.SMS_BACKFILL_CURSOR,old.upTo ?: end) }
         }
         return added
     }
@@ -156,12 +156,12 @@ internal object MessageIntake {
                 val inbox=box.getFolder("INBOX");inbox.open(javax.mail.Folder.READ_ONLY)
                 try {
                     val uidFolder=inbox as? javax.mail.UIDFolder
-                    fun between(from:Long,until:Long)=inbox.search(javax.mail.search.ReceivedDateTerm(javax.mail.search.ComparisonTerm.GE,java.util.Date(from-86_400_000L)))
-                        .filter { (it.receivedDate?.time ?: 0) in from until until }.sortedBy { it.receivedDate.time }.take(30)
+                    fun between(from:Long,end:Long)=inbox.search(javax.mail.search.ReceivedDateTerm(javax.mail.search.ComparisonTerm.GE,java.util.Date(from-86_400_000L)))
+                        .filter { val t=it.receivedDate?.time ?: 0L;t>=from && t<end }.sortedBy { it.receivedDate.time }.take(30)
                     val recent=between(since+1,Long.MAX_VALUE)
                     // First pass: one batch of mail from 10/1 up to where the regular intake began.
-                    val cursor=settings.snapshot().optLong(PipelineSettingsKeys.MAIL_BACKFILL_CURSOR,0);val until=settings.snapshot().optLong(PipelineSettingsKeys.MAIL_BACKFILL_UNTIL,0)
-                    val old=if(cursor in 1 until until) between(cursor,until) else emptyList()
+                    val cursor=settings.snapshot().optLong(PipelineSettingsKeys.MAIL_BACKFILL_CURSOR,0);val end=settings.snapshot().optLong(PipelineSettingsKeys.MAIL_BACKFILL_UNTIL,0)
+                    val old=if(cursor>0 && cursor<end) between(cursor,end) else emptyList()
                     for(m in recent+old) {
                         val at=m.receivedDate.time;if(m in recent) newest=maxOf(newest,at)
                         val from=(m.from?.firstOrNull() as? javax.mail.internet.InternetAddress)
@@ -172,7 +172,7 @@ internal object MessageIntake {
                         val id=MessageKind.MAIL+(uidFolder?.let { "${it.uidValidity}:${it.getUID(m)}" } ?: "${m.messageNumber}:$at")
                         if(store.insertMessage(id,at,who,content)) added++
                     }
-                    if(cursor in 1 until until) settings.update { it.put(PipelineSettingsKeys.MAIL_BACKFILL_CURSOR,if(old.size>=30) old.last().receivedDate.time+1 else until) }
+                    if(cursor>0 && cursor<end) settings.update { it.put(PipelineSettingsKeys.MAIL_BACKFILL_CURSOR,if(old.size>=30) old.last().receivedDate.time+1 else end) }
                 } finally { runCatching { inbox.close(false) } }
             }
             settings.update { it.put(PipelineSettingsKeys.LAST_MAIL_MS,newest).remove(PipelineSettingsKeys.MAIL_ERROR) }
