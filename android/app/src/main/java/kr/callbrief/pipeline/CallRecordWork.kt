@@ -28,7 +28,7 @@ internal class CallRecordAnalysisRunner(
         else -> runApi()
     }
 
-    /** Sends waiting transcripts (once; again after [RESEND_MS] without an answer), then applies any results.
+    /** Applies any results, then sends waiting transcripts (once; again after [RESEND_MS] without an answer).
      * During the first pass, old records go as "b-" files, [FirstPass.OLD_IN_FLIGHT] at a time, oldest first, after
      * the new ones; when none is left the one consolidation ("ctx-") goes up, and its answer rewrites the ledger. */
     private fun runInbox(store:CallInboxStore):Boolean = try {
@@ -36,20 +36,7 @@ internal class CallRecordAnalysisRunner(
         val consent=s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false)
         CallRecordStore(context,clock).use { db ->
             runCatching { db.reconcileCallLog(callLog()) }
-            val (old,live)=db.pending().partition { FirstPass.isOld(it.dayMs,s) }
-            var inFlight=old.count { r -> db.sentMs(r.recordId)?.let { clock()-it<RESEND_MS }==true }
-            for(record in live+old.sortedBy { it.dayMs }) {
-                if(!consent) { db.setState(record.recordId,CallRecordStore.WAITING_CONSENT);continue }
-                if(record.state!=CallRecordStore.TRANSCRIBED) db.setState(record.recordId,CallRecordStore.TRANSCRIBED)
-                if(record.transcript.isBlank()) { db.setState(record.recordId,CallRecordStore.FAILED,"EMPTY_TRANSCRIPT");continue }
-                val sent=db.sentMs(record.recordId)
-                if(sent!=null && clock()-sent<RESEND_MS) continue
-                val isOld=record in old
-                if(isOld && inFlight>=FirstPass.OLD_IN_FLIGHT) continue
-                store.put(CallInbox.INBOX+"/"+(if(isOld) CallInbox.OLD else "")+CallInbox.fileName(record.recordId),CallInbox.job(record.recordId,db.request(record,isOld),clock()))
-                db.markSent(record.recordId,clock())
-                if(isOld) inFlight++
-            }
+            // Results first: answered records leave the queue and give the next uploads fresher context.
             for((name,sha) in store.list(CallInbox.RESULTS)) {
                 if(name.startsWith("selftest-")) continue // CI end-to-end check, not a call of this phone
                 val path=CallInbox.RESULTS+"/"+name
@@ -69,6 +56,20 @@ internal class CallRecordAnalysisRunner(
                     }
                 }
                 store.delete(path,sha)
+            }
+            val (old,live)=db.pending().partition { FirstPass.isOld(it.dayMs,s) }
+            var inFlight=old.count { r -> db.sentMs(r.recordId)?.let { clock()-it<RESEND_MS }==true }
+            for(record in live+old.sortedBy { it.dayMs }) {
+                if(!consent) { db.setState(record.recordId,CallRecordStore.WAITING_CONSENT);continue }
+                if(record.state!=CallRecordStore.TRANSCRIBED) db.setState(record.recordId,CallRecordStore.TRANSCRIBED)
+                if(record.transcript.isBlank()) { db.setState(record.recordId,CallRecordStore.FAILED,"EMPTY_TRANSCRIPT");continue }
+                val sent=db.sentMs(record.recordId)
+                if(sent!=null && clock()-sent<RESEND_MS) continue
+                val isOld=record in old
+                if(isOld && inFlight>=FirstPass.OLD_IN_FLIGHT) continue
+                store.put(CallInbox.INBOX+"/"+(if(isOld) CallInbox.OLD else "")+CallInbox.fileName(record.recordId),CallInbox.job(record.recordId,db.request(record,isOld),clock()))
+                db.markSent(record.recordId,clock())
+                if(isOld) inFlight++
             }
             if(consent) sendDigest(store,db)
         }
