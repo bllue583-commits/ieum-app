@@ -38,7 +38,7 @@
 |---|---|
 | 앱 저장소 | `github.com/bllue583-commits/ieum-app` (비공개), 작업 브랜치 `feature/lean-calls` |
 | 우편함 저장소 | `github.com/bllue583-commits/ieum-inbox` (비공개) — `inbox/`, `results/`, `app/version.json`, 릴리스 APK |
-| 예약 분석 루틴 | `trig_01F9MoxFQsQrBHKsx1uhQNtd` "이음 통화 분석 (매시간)", cron `CRON_TZ=Asia/Seoul 0 7-23 * * *`, 소스: ieum-app + **ieum-inbox**(10/30 추가) |
+| 예약 작업(루틴) | ① `trig_01F9MoxFQsQrBHKsx1uhQNtd` "이음 통화 분석 (매시간)", `CRON_TZ=Asia/Seoul 0 7-23 * * *`, Sonnet 5.5 ② `trig_012D6jrChQcsxgDG5GEhVgHR` "이음 새벽 정리 (매일)", `CRON_TZ=Asia/Seoul 0 5 * * *`(11/4 생성, 첫 실행 11/4 05:07), Sonnet 5.5. 둘 다 소스 ieum-app + ieum-inbox. 루틴 추가·수정은 사용자 승인됨(11/4), 바꿀 때마다 이름, 실행 시각, 링크를 사용자에게 알리고 이 표와 설계도 "새벽 정리" 절의 표를 고칠 것 |
 | 안드로이드 코드 | `android/app/src/main/java/kr/callbrief/` (패키지 `kr.callbrief`), 파이프라인은 `pipeline/` |
 | 장부(DB) | `pipeline/CallRecordStore.kt` — `companies`, `people`, `person_aliases`, `call_links`, `task_companies`, `site_memo` |
 | 분석 요청/결과 | `pipeline/ClaudeCallAnalyzer.kt` (요청 구성, 결과 검증·필터) |
@@ -108,6 +108,10 @@ python run_gradle.py --log local-$(date +%H%M%S).log :app:compileDebugKotlin
 - **처음 정리(10월 1일부터, 묶음 시간순):** 코드 `FirstPass.kt`, `CallRecordAnalysisRunner.runInbox`. 시작 시각은 앱 시작 때 `FIRST_PASS_START_MS`에 한 번 기록. 10/1 이전 녹음은 `BEFORE_START`로 건너뜀(그 전에는 녹음 폴더 전체를 최신부터 거꾸로 자막 만들고 있었음). 지난 녹음은 오래된 것부터 자막(`nextQueued(oldBefore)`), 충전 중이나 배터리 50% 이상일 때만. 지난 기록은 15건씩 `inbox/b-<첫 시각>-<해시>.json` 묶음으로, 앞선 기록이 다 준비된 만큼만(`oldestOldJobMs`, 문자·메일 읽기 위치), 2묶음까지. 결과는 묶음마다 `{"id","results":[…]}`. 체크할 일은 최근 7일 기록만. 남은 지난 기록이 없으면 `FIRST_PASS_DONE`. 처음에 만든 "맥락 정리(ctx-) 한 번" 방식은 같은 날 사용자 결정으로 폐기.
 - 통화기록(READ_CALL_LOG)·문자(장문·사진 문자 MMS 포함, 개인 제외 번호 적용) 권한은 앱을 열 때 한 번 요청 + 처음 설정 카드 + 설정 화면. 요청 메시지에 전화번호는 넣지 않음("전화부에 없는 번호" + 상대 id).
 - **예약 작업 지시(11/4 갱신):** pull → 장부 읽기 → edits 반영·잠금 → 새 기록 먼저, b- 묶음 2개까지, 시간순 → 기록마다 분석 후 장부 갱신 → 결과·장부(rev+1) 한 커밋 → 충돌 시 rebase 후 재적용. 옛 형식(상대 id 없음)도 처리. 스크립트 일괄 생성과 파일 내용 출력 금지 명시(11/3 실행이 15건을 스크립트 하나로 49초 만에 만들고 자막을 로그에 찍었음).
+- **11/4 새벽 추가(같은 날 사용자 결정):**
+  - 통화기록 대조 규칙: 녹음 시각이 통화기록 시각의 1분 전~2분 후, 길이 차이 20% 또는 15초 이내, 파일 이름의 번호나 이름이 맞아야 함, 후보가 둘 이상이면 연결 안 함(`FirstPass.match`). 녹음 없는 통화는 수신·발신이고 길이 있는 것만 셈.
+  - 제한된 설정: 문자·통화기록 권한을 한 번 요청한 뒤에도 없으면 처음 설정 카드와 설정 화면이 "앱 정보 → ⋮ → 제한된 설정 허용" 안내와 [앱 정보 열기]를 보여 줌(`ReadingPermission`). **실기기 확인 전.**
+  - 새벽 정리(설계도 "새벽 정리" 절): 처음 정리가 끝난 뒤 밤(21~05시)에 폰이 `tidy/state.json`(열린 체크할 일과 사용자 수정 잠금, 기록 요약을 해시 키로)을 하루 한 번 올리고, 05시 루틴이 장부 `issues`(진행 중인 일)와 업체·사람 합치기(`mergedInto`)를 장부에 쓰고 체크할 일은 `tidy/proposal.json`(rewrite, merge, done_suggested)으로 제안. 폰은 AI가 만든 그대로인 항목에만 적용(`applyTidy`), 합친 항목은 상태 `merged`로 모든 목록에서 빠짐. 진행 중인 일은 업체 상세와 아침 보고(최대 3줄)에 표시. 요청 파일에 `recordKey`(기록 id 해시) 추가, 매시간 루틴은 기존 이슈에 붙이고 새 이슈는 `issueSuggestions`로 제안만.
 - **문자 점검 결과(사용자 요청):** 10/30 구현은 SMS만 읽어 장문(LMS)·사진 문자(MMS)를 통째로 놓쳤음 → 추가. 설계도의 주기(15분)를 실제(30분)에 맞춤.
 - **업데이트 안내 문구:** 폰의 "새 버전" 알림 문구는 `release-apk.yml`이 커밋 메시지 첫 줄(영어)을 그대로 씀. v1024는 `ieum-inbox/app/version.json`의 notes를 한국어로 직접 고침. 근본 수정(한국어 안내 파일 `docs/UPDATE_NOTE.txt`에서 읽기)은 Mac의 gh 토큰에 `workflow` 권한이 없어 push 거절됨 → 사용자가 `gh auth refresh -s workflow` 하거나 Windows PC에서 반영할 것. 그 전까지는 배포마다 version.json notes를 한국어로 고칠 것.
 - Mac에는 JDK·Android SDK가 아직 없음 → 판정은 GitHub ci/device-test로. 작업 브랜치에서 CI 확인 후 `feature/lean-calls`에 합쳐야 폰 자동 업데이트(release-apk는 lean-calls·main에서만).
@@ -154,7 +158,7 @@ python run_gradle.py --log local-$(date +%H%M%S).log :app:compileDebugKotlin
 
 ## 6. 다음 할 일 (순서대로, 11/4 갱신)
 1. **실기기 확인** — 업데이트 후 아내 폰 홈의 "처음 정리 중이에요" 카드, `ieum-inbox`의 `b-` 묶음과 `ledger/ledger.json` rev 증가, 폰 장부(업체·사람·현장 메모)가 채워지는지 확인. 통화 내용은 열어 보지 말고 파일 이름·건수·형식·rev만 볼 것. 첫 예약 실행(새 지시) 로그에서 장부를 실제로 고쳤는지, 스크립트 일괄 생성이 없는지 확인.
-2. **예약 분석 한도** — 루틴 프롬프트는 11/4에 장부 방식으로 갱신. 처음 정리 동안 분석 양이 늘어 주간 한도에 다시 걸릴 수 있음(11/1~11/3 실제 발생). 루틴 실행 기록(`RemoteTrigger list_runs`→`get_run_log`)으로 실패 원인 확인. effort는 claude.ai/code/routines 에서 사용자가 medium으로(안내만).
+2. **예약 분석 한도** — 11/4 사용자가 요금제를 **Max**로 올림(한도가 늘었지만 개발 세션과 루틴이 같은 한도를 씀, 주간 한도가 차면 11/1~11/3처럼 매시간 분석이 멈춤, 큰 작업 중 한도가 가까워지면 사용자에게 알릴 것). 루틴 프롬프트는 11/4에 장부 방식으로 갱신. 처음 정리 동안 분석 양이 늘어 주간 한도에 다시 걸릴 수 있음(11/1~11/3 실제 발생). 루틴 실행 기록(`RemoteTrigger list_runs`→`get_run_log`)으로 실패 원인 확인. effort는 claude.ai/code/routines 에서 사용자가 medium으로(안내만).
 3. **문자·메일 실제 확인** — MMS(장문·사진) 읽기는 실제 삼성 메시지 앱 데이터로 아직 확인 안 함. RCS(채팅+) 메시지는 일반 문자 저장소에 없을 수 있음(미확인).
 4. **inbox-e2e 정기 점검이 돌지 않음** — `schedule`은 기본 브랜치(`main`) 워크플로만 실행. `feature/lean-calls`를 `main`에 합치는 시점에 함께 정리.
 5. 토큰 만료 전 서명용 비밀 따로 고정 (설계도 남은 일).
