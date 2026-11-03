@@ -95,7 +95,7 @@ internal class CallRecordAnalysisRunner(
         save { it.put(PipelineSettingsKeys.LEDGER_REV,rev) }
     }
     /** The morning tidy's side: its proposal is applied once (by rev), and once a night (21:00 to 05:00) the open check
-     * items and record summaries go up for it, with whether the first pass is over (it waits until then). */
+     * items and record summaries go up for it, from the end of the first pass on. */
     private fun takeTidy(store:CallInboxStore,db:CallRecordStore,consent:Boolean) {
         runCatching { JSONObject(store.get(CallInbox.TIDY_PROPOSAL)) }.getOrNull()?.let { o ->
             val rev=o.optLong("rev",0)
@@ -103,8 +103,8 @@ internal class CallRecordAnalysisRunner(
         }
         val s=settings();val now=clock()
         val hour=java.time.Instant.ofEpochMilli(now).atZone(CallRecordStore.KST).hour
-        if(!consent || hour in 5..20 || now-s.optLong(PipelineSettingsKeys.TIDY_SENT_MS,0)<12*3_600_000L) return
-        store.replace(CallInbox.TIDY_STATE,db.tidyState(FirstPass.done(s),now).toString())
+        if(!consent || !FirstPass.done(s) || hour in 5..20 || now-s.optLong(PipelineSettingsKeys.TIDY_SENT_MS,0)<12*3_600_000L) return
+        store.replace(CallInbox.TIDY_STATE,db.tidyState(true,now).toString())
         save { it.put(PipelineSettingsKeys.TIDY_SENT_MS,now) }
     }
     /** From when old texts or mail may still come in (their first-pass reading goes forward from 10/1), or null when

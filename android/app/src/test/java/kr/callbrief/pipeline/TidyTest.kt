@@ -113,6 +113,28 @@ class TidyTest:ProtectedTextHostTestBase() {
         assertFalse(m.lines.any { it.contains("·") })
     }
 
+    @Test fun theNightlyStateGoesUpOnceTheFirstPassIsOver() {
+        seed()
+        val files=LinkedHashMap<String,String>()
+        val inbox=object:CallInboxStore {
+            override fun put(path:String,json:String){ files.putIfAbsent(path,json) }
+            override fun replace(path:String,json:String){ files[path]=json }
+            override fun list(dir:String)=files.keys.filter{it.startsWith("$dir/")}.map{it.removePrefix("$dir/") to "sha"}
+            override fun get(path:String)=files[path] ?: throw ClaudeCallException("INBOX_HTTP_404")
+            override fun delete(path:String,sha:String){ files.remove(path) }
+        }
+        val night=java.time.LocalDate.of(2026,10,28).atTime(22,0).atZone(CallRecordStore.KST).toInstant().toEpochMilli()
+        val s=JSONObject().put(PipelineSettingsKeys.CONSENT_GRANTED,true).put(PipelineSettingsKeys.FIRST_PASS_START_MS,now-86_400_000L)
+        fun run(at:Long)=CallRecordAnalysisRunner(context,ClaudeCallAnalyzer({ _,_ -> error("no API") }) {},{ s },{ at },inbox,save={ e -> e(s) },callLog={ emptyList() },smsAllowed={ false }).runPending()
+        run(night);assertFalse("not before the first pass ends",files.containsKey(CallInbox.TIDY_STATE))
+        s.put(PipelineSettingsKeys.FIRST_PASS_DONE,true)
+        run(night-10*3_600_000L);assertFalse("daytime",files.containsKey(CallInbox.TIDY_STATE))
+        run(night);assertTrue(files.containsKey(CallInbox.TIDY_STATE))
+        files[CallInbox.TIDY_PROPOSAL]=JSONObject().put("rev",1).put("tasks",JSONArray().put(JSONObject().put("op","done_suggested").put("id",item("견적서 보내기").id))).toString()
+        run(night+3_600_000L)
+        assertEquals("needs_confirmation",item("견적서 보내기").status);assertEquals(1L,s.getLong(PipelineSettingsKeys.TIDY_REV))
+    }
+
     @Test fun requestsCarryTheRecordKey() {
         val r=ClaudeCallAnalyzerTest.request()
         val job=JSONObject(CallInbox.job("rec|1|x",r,now))
