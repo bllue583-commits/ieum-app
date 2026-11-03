@@ -123,7 +123,7 @@ internal object CallUi {
         Tab.entries.forEach { t ->
             val on=t==current;val color=if(on) INK else FAINT
             wrap.addView(Button(a).apply {
-                text=t.label;textSize=14f;isAllCaps=false;stateListAnimator=null;background=null;setTextColor(color);tag=t.tag
+                text=t.label;textSize=SMALL;isAllCaps=false;stateListAnimator=null;background=null;setTextColor(color);tag=t.tag
                 typeface=font(a,if(on) Weight.SEMIBOLD else Weight.MEDIUM)
                 setCompoundDrawablesWithIntrinsicBounds(null,icon(a,t.icon,color,26,if(on) 2.1f else 1.8f),null,null);compoundDrawablePadding=dp(a,3)
                 minHeight=dp(a,60);minimumHeight=dp(a,60);minWidth=0;minimumWidth=0;setPadding(0,dp(a,4),0,dp(a,2))
@@ -142,7 +142,8 @@ internal object CallUi {
 
     // ---- text and sheets ------------------------------------------------------------------------------------------
     fun text(a:Activity,value:String,size:Float=BODY,bold:Boolean=false,color:Int=INK)=TextView(a).apply {
-        text=value;textSize=size;setTextColor(color);setLineSpacing(0f,if(size>=24f) 1.15f else 1.24f);setPadding(0,dp(a,2),0,dp(a,2))
+        // Text the analysis wrote is shown as is; the screen rules still hold (no middle dot, no ellipsis).
+        text=clean(value);textSize=size;setTextColor(color);setLineSpacing(0f,if(size>=24f) 1.15f else 1.24f);setPadding(0,dp(a,2),0,dp(a,2))
         textLocale=Locale.KOREAN // phrase-based line breaking needs the text's language
         if(android.os.Build.VERSION.SDK_INT>=33)lineBreakWordStyle=android.graphics.text.LineBreakConfig.LINE_BREAK_WORD_STYLE_PHRASE // wrap Korean at word boundaries
         typeface=font(a,when { !bold -> Weight.REGULAR;size>=24f -> Weight.BOLD;else -> Weight.SEMIBOLD })
@@ -174,8 +175,9 @@ internal object CallUi {
         layoutParams=LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,10);bottomMargin=dp(a,2) }
     }
     /** Text link button ("전체 보기 ›"), 48dp tall. */
+    fun clean(t:String)=t.replace(" · ",", ").replace("·",", ").replace("…","").replace("...","")
     fun linkButton(a:Activity,label:String,action:()->Unit)=Button(a).apply {
-        base(a,label,action);setTextColor(ACCENT);background=null;textSize=17f;minHeight=dp(a,48);minimumHeight=dp(a,48);setPadding(dp(a,8),0,dp(a,4),0)
+        base(a,label,action);setTextColor(ACCENT);background=null;textSize=BODY;minHeight=dp(a,56);minimumHeight=dp(a,56);setPadding(dp(a,8),0,dp(a,4),0)
     }
     /** A white sheet: rounded, no edge, no shadow. [rail] tints the sheet instead of drawing a stripe (rarely used). */
     fun card(a:Activity,warn:Boolean=false,rail:Int?=if(warn) WARN else null)=LinearLayout(a).apply {
@@ -245,11 +247,11 @@ internal object CallUi {
         orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;isClickable=true;isFocusable=true
         gravity=Gravity.TOP;setPadding(dp(a,20),dp(a,16),dp(a,20),dp(a,16));minimumHeight=dp(a,72);contentDescription="$time $who, $memo. 눌러서 자세히 보기"
         val tv=android.util.TypedValue();a.theme.resolveAttribute(android.R.attr.selectableItemBackground,tv,true);setBackgroundResource(tv.resourceId)
-        addView(avatar(a,who.split(' ').last()))
+        addView(avatar(a,who.removePrefix("(주)").trim().split(' ').first()))
         val words=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
         val head=LinearLayout(a).apply { orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL }
         head.addView(text(a,who,BODY,true).apply { setPadding(0,0,0,0) },LinearLayout.LayoutParams(0,-2,1f))
-        head.addView(text(a,time,SMALL,color=FAINT).apply { setPadding(dp(a,8),0,0,0) })
+        head.addView(text(a,time,SMALL,color=SUBTLE).apply { setPadding(dp(a,8),0,0,0) })
         words.addView(head)
         words.addView(text(a,memo,SMALL,color=if(quiet) FAINT else SUBTLE).apply { setPadding(0,dp(a,2),0,0) })
         addView(words,LinearLayout.LayoutParams(0,-2,1f))

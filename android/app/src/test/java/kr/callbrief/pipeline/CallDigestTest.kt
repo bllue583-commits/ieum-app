@@ -87,8 +87,11 @@ class CallDigestTest:ProtectedTextHostTestBase() {
         } }
         CallRecordStore(context).use { s ->
             assertEquals(listOf("i2","i1"),s.dueItems(LocalDate.of(2026,10,29)).map { it.id })
-            assertEquals("오늘 체크할 일 2개 (지난 기한 1개)",CallDigestText.morning(s,LocalDate.of(2026,10,29)).title)
-            assertEquals("오늘 체크할 일 0개",CallDigestText.morning(s,LocalDate.of(2026,10,26)).title)
+            // The morning report lists every open item (round 2), not only those with a date.
+            val m=CallDigestText.morning(s,LocalDate.of(2026,10,29))
+            assertEquals("체크할 일 4개",m.title);assertEquals(4,m.lines.size)
+            assertTrue(m.lines.none { it.contains("지남") || it.contains("까지") || it.contains("—") })
+            assertTrue(m.lines.any { it.endsWith("끝났는지 확인") })
         }
     }
 

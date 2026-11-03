@@ -108,8 +108,8 @@ class TidyTest:ProtectedTextHostTestBase() {
             assertEquals(2,db.issues().size)
         }
         val m=CallDigestText.morning(emptyList(),LocalDate.of(2026,10,29),store().use { it.issues() })
-        assertEquals("▸ 철근 단가 재견적: 업체 회신 대기, 금요일 계약 예정",m.lines.first());assertEquals("▸ 분전반 점검",m.lines[1])
-        assertEquals("오늘까지 체크할 일이 없어요",m.text)
+        assertEquals("진행 중, 철근 단가 재견적: 업체 회신 대기, 금요일 계약 예정",m.lines.first());assertEquals("진행 중, 분전반 점검",m.lines[1])
+        assertEquals("체크할 일이 없어요",m.text)
         assertFalse(m.lines.any { it.contains("·") })
     }
 

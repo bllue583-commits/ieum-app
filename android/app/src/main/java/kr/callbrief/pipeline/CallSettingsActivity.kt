@@ -22,8 +22,8 @@ class CallSettingsActivity:ComponentActivity() {
         if(r.resultCode==RESULT_OK) CallFolder.save(this,r.data)?.let { Toast.makeText(this,it,Toast.LENGTH_LONG).show() }
         refresh()
     }
-    private val askSms=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { refresh() }
-    private val askCallLog=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { refresh() }
+    private val askSms=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok -> ReadingPermission.noteResult(this,android.Manifest.permission.READ_SMS,ok);refresh() }
+    private val askCallLog=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok -> ReadingPermission.noteResult(this,android.Manifest.permission.READ_CALL_LOG,ok);refresh() }
     private fun settings()=SecureSettings(CallPipelineStartup.storage(this))
 
     override fun onCreate(savedInstanceState:Bundle?) {
@@ -189,7 +189,7 @@ class CallSettingsActivity:ComponentActivity() {
 
     /** Ask; once asked and still refused, explain the restricted setting and open App info instead. */
     private fun readingButton(permission:String,what:String,ask:androidx.activity.result.ActivityResultLauncher<String>,tag:String) {
-        if(ReadingPermission.asked(this,permission)) {
+        if(ReadingPermission.blocked(this,permission)) {
             body.addView(CallUi.text(this,ReadingPermission.restrictedHelp(what),CallUi.SMALL,color=CallUi.SUBTLE))
             body.addView(button("앱 정보 열기") { ReadingPermission.openAppInfo(this) }.apply { this.tag=tag })
         } else body.addView(button("$what 읽기 허용") { ReadingPermission.markAsked(this,permission);ask.launch(permission) }.apply { this.tag=tag })

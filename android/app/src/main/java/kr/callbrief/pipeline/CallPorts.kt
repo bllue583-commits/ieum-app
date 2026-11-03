@@ -66,6 +66,13 @@ object PipelineSettingsKeys {
     const val DROPPED_ITEMS="droppedItems"
     /** Day (yyyy-MM-dd) the "정리가 멈췄어요" notice was last shown. */
     const val STALL_WARNED_DAY="stallWarnedDay"
+    /** Result files that failed to apply, by name: tries so far (round 2). */
+    const val RESULT_FAILS="resultFails"
+    /** The inbox refused this phone (401/403/404): day told, and the code. */
+    const val DISCONNECT_WARNED_DAY="disconnectWarnedDay"
+    const val LAST_INBOX_ERROR="lastInboxError"
+    /** Mirrors the repository ledger's tidiedOnce: the morning tidy has read everything once. */
+    const val TIDIED_ONCE="tidiedOnce"
     /** Reading old texts and mail from 10/1 up to where the regular intake began: progress and end. */
     const val SMS_BACKFILL_CURSOR="firstPassSmsCursor"
     const val SMS_BACKFILL_UNTIL="firstPassSmsUntil"

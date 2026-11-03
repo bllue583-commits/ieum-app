@@ -33,20 +33,11 @@ class HomeActivity:ComponentActivity() {
         load()
     }
     private val askNotify=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { load() }
-    private val askSms=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { load() }
-    private val askCallLog=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { load() }
-    /** Texts and the call log are needed for the first pass: asked once when the app opens, then from the setup card. */
-    private val askReading=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()) {
-        CallPipelineStartup.settingsChanged(this);load() }
+    private val askSms=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok ->
+        ReadingPermission.noteResult(this,android.Manifest.permission.READ_SMS,ok);CallPipelineStartup.settingsChanged(this);load() }
+    private val askCallLog=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok ->
+        ReadingPermission.noteResult(this,android.Manifest.permission.READ_CALL_LOG,ok);CallPipelineStartup.settingsChanged(this);load() }
     private fun granted(p:String)=checkSelfPermission(p)==android.content.pm.PackageManager.PERMISSION_GRANTED
-    private fun askReadingOnce() {
-        val prefs=getSharedPreferences("ieum_ui",MODE_PRIVATE)
-        val missing=listOf(android.Manifest.permission.READ_SMS,android.Manifest.permission.READ_CALL_LOG).filterNot(::granted)
-        if(missing.isEmpty() || prefs.getBoolean("asked_reading_v1",false) || kr.callbrief.BuildConfig.LOCAL_PREVIEW) return
-        prefs.edit().putBoolean("asked_reading_v1",true).apply()
-        missing.forEach { ReadingPermission.markAsked(this,it) }
-        askReading.launch(missing.toTypedArray())
-    }
     private fun notifyAllowed()=android.os.Build.VERSION.SDK_INT<33||checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)==android.content.pm.PackageManager.PERMISSION_GRANTED
     private fun batteryFree()=getSystemService(android.os.PowerManager::class.java)?.isIgnoringBatteryOptimizations(packageName)==true
 
@@ -56,7 +47,8 @@ class HomeActivity:ComponentActivity() {
         CallPipelineStartup.init(this)
         if(LaunchIntro.claim(intent?.action==Intent.ACTION_MAIN,savedInstanceState!=null)) LaunchIntro.show(this)
     }
-    override fun onResume() { super.onResume();load();askReadingOnce()
+    // Text and call-log access are asked from the setup card, after it says why (round 2), not as the app opens.
+    override fun onResume() { super.onResume();load()
         if(intent?.getBooleanExtra("install_update",false)==true) { intent.removeExtra("install_update");CallUpdate.install(this) } }
     override fun onNewIntent(intent:Intent) { super.onNewIntent(intent);setIntent(intent) }
 
@@ -136,7 +128,7 @@ class HomeActivity:ComponentActivity() {
         class Step(val done:Boolean,val label:String,val detail:String,val button:String,val action:()->Unit)
         /** Asked once and still not allowed: Android may be holding it as a restricted setting for a sideloaded app. */
         fun readingStep(done:Boolean,permission:String,what:String,detail:String,ask:androidx.activity.result.ActivityResultLauncher<String>)=
-            if(!done && ReadingPermission.asked(this,permission)) Step(false,"$what 읽기 허용",ReadingPermission.restrictedHelp(what),"앱 정보 열기") { ReadingPermission.openAppInfo(this) }
+            if(!done && ReadingPermission.blocked(this,permission)) Step(false,"$what 읽기 허용",ReadingPermission.restrictedHelp(what),"앱 정보 열기") { ReadingPermission.openAppInfo(this) }
             else Step(done,"$what 읽기 허용",detail,"$what 읽기 허용") { ReadingPermission.markAsked(this,permission);ask.launch(permission) }
         val steps=listOfNotNull(
             Step(s.folder,"녹음 폴더 연결","통화 녹음 폴더(보통 Recordings › Call)가 열리면 아래 [이 폴더 사용]을 누르세요.","녹음 폴더 고르기") { pickFolder.launch(CallFolder.pickIntent()) },
@@ -171,8 +163,8 @@ class HomeActivity:ComponentActivity() {
         // 처음 정리: what is left before the calls since 10/1 become the context of the next ones.
         s.firstPass?.let { f ->
             val c=CallUi.card(this,rail=CallUi.ACCENT).apply { tag="home_first_pass" }
-            c.addView(CallUi.text(this,"처음 정리 중이에요",CallUi.HEADING,true))
-            c.addView(CallUi.text(this,"10월 1일부터의 통화와 문자를 시간 순서대로 정리하고 있어요. 정리할수록 업체와 사람 장부가 채워져 다음 통화를 더 정확하게 정리해요.",CallUi.BODY))
+            c.addView(CallUi.text(this,"지난 통화를 정리하고 있어요",CallUi.HEADING,true))
+            c.addView(CallUi.text(this,"10월 1일부터의 통화와 문자를 시간 순서대로 정리하고 있어요. 오늘 통화는 지금처럼 바로 정리돼요. 충전해 두면 더 빨리 끝나요.",CallUi.BODY))
             val lines=buildList {
                 if(f.toTranscribe>0) add("글자로 바꿀 녹음 ${f.toTranscribe}개"+(f.hoursLeft?.let { h -> ", 약 ${if(h<1) "1시간 안" else "${Math.round(h)}시간"}" } ?: ""))
                 if(f.waiting>0) add("요약을 기다리는 기록 ${f.waiting}건")
@@ -223,6 +215,11 @@ internal object ReadingPermission {
     private fun prefs(c:android.content.Context)=c.getSharedPreferences("ieum_ui",android.content.Context.MODE_PRIVATE)
     fun asked(c:android.content.Context,permission:String)=prefs(c).getBoolean("asked_$permission",false)
     fun markAsked(c:android.content.Context,permission:String)=prefs(c).edit().putBoolean("asked_$permission",true).apply()
+    /** Refused and the system will not ask again (or never showed the dialog: a restricted setting). */
+    fun blocked(c:android.content.Context,permission:String)=prefs(c).getBoolean("blocked_$permission",false)
+    fun noteResult(a:android.app.Activity,permission:String,granted:Boolean) {
+        prefs(a).edit().putBoolean("blocked_$permission",!granted && !a.shouldShowRequestPermissionRationale(permission)).apply()
+    }
     fun restrictedHelp(what:String)="허용 창이 뜨지 않았다면 앱 정보에서 오른쪽 위 메뉴(⋮)를 눌러 제한된 설정을 허용한 뒤, 권한에서 $what 항목을 허용해 주세요."
     fun openAppInfo(a:android.app.Activity) {
         runCatching { a.startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.parse("package:${a.packageName}"))) }

@@ -27,9 +27,10 @@ internal object CallDigestText {
     private fun more(lines:List<String>)=if(lines.size>MAX_LINES) lines.take(MAX_LINES-1)+"외 ${lines.size-MAX_LINES+1}개" else lines
     fun evening(calls:List<CallRecord>,newTasks:Int):Message {
         val names=calls.map { it.displayName }.filter { it!="상대 미상" }.distinct().take(2)
-        val who=if(names.isEmpty()) "" else names.joinToString(", ")+(if(calls.size>names.size) " 등" else "")+"과 통화했어요. "
+        // Names listed without a particle after them (와/과 depends on the last sound): no wrong grammar.
+        val who=if(names.isEmpty()) "" else "연락한 사람 "+names.joinToString(", ")+(if(calls.size>names.size) " 등. " else ". ")
         val lines=calls.sortedBy { it.startedMs ?: 0 }.map { c ->
-            "${CallUi.time(c.startedMs)} ${c.displayName} — "+(c.summary?.let(CallUi::firstSentence) ?: CallUi.state(c))
+            "${CallUi.time(c.startedMs)} ${c.displayName}, "+(c.summary?.let(CallUi::firstSentence) ?: CallUi.state(c))
         }
         val waiting=calls.count { it.summary==null && it.state!=CallRecordStore.FAILED }
         val text=if(calls.isEmpty()) "오늘 정리된 통화가 없어요" else "${who}펼치면 통화별 요약이 보여요"+(if(waiting>0) ", 아직 정리 중인 통화가 ${waiting}건 있어요" else "")
@@ -37,15 +38,16 @@ internal object CallDigestText {
     }
     /** Up to [ISSUE_LINES] "진행 중인 일" lead the morning lines (design: 새벽 정리). */
     const val ISSUE_LINES=3
+    /** Every open check item, oldest request first, with when it was asked for. No deadlines, no "지남" (user rule;
+     * round 2: before, items without a date never reached this report). */
     fun morning(items:List<CallTodoItem>,today:LocalDate,issues:List<Issue> =emptyList()):Message {
-        val overdue=items.count { it.due<today.toString() }
-        val lines=issues.take(ISSUE_LINES).map { "▸ ${it.title}"+(if(it.status.isBlank()) "" else ": ${it.status}") }+
-            items.sortedBy { it.due }.map { "• ${it.company?.let { c -> "[$c] " } ?: ""}${it.title} — ${CallUi.dueWords(it.due)}"+(if(it.status=="needs_confirmation") " (확인 필요)" else "") }
-        return Message("오늘 체크할 일 ${items.size}개"+(if(overdue>0) " (지난 기한 ${overdue}개)" else ""),
-            if(items.isEmpty()) "오늘까지 체크할 일이 없어요" else lines.first { it.startsWith("• ") }.removePrefix("• "),more(lines))
+        val lines=issues.take(ISSUE_LINES).map { "진행 중, ${it.title}"+(if(it.status.isBlank()) "" else ": ${it.status}") }+
+            items.sortedBy { it.createdMs }.map { "${it.company?.let { c -> "[$c] " } ?: ""}${it.title}"+CallUi.requested(it.createdMs).let { r -> if(r.isEmpty()) "" else ", $r" }+
+                (if(it.status=="needs_confirmation") ", 끝났는지 확인" else "") }
+        return Message("체크할 일 ${items.size}개",if(items.isEmpty()) "체크할 일이 없어요" else lines[minOf(issues.take(ISSUE_LINES).size,lines.size-1)],more(lines))
     }
     fun evening(store:CallRecordStore,day:LocalDate)=evening(store.day(day),store.newTaskCount(day))
-    fun morning(store:CallRecordStore,day:LocalDate)=morning(store.dueItems(day),day,store.issues())
+    fun morning(store:CallRecordStore,day:LocalDate)=morning(store.openTodos(),day,store.issues())
 }
 
 /** Next KST run time for a given hour. */
@@ -106,7 +108,8 @@ internal object CallDigestNotifier {
         val pending=PendingIntent.getActivity(context,kind.hashCode(),intent,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val notification=Notification.Builder(context,CallDigestWork.CHANNEL).setSmallIcon(R.drawable.ic_callbrief)
             .setContentTitle(m.title).setContentText(m.text).setContentIntent(pending).setAutoCancel(true).setLocalOnly(true)
-            .setStyle(Notification.InboxStyle().setBigContentTitle(m.title).also { st -> m.lines.forEach { st.addLine(it) } })
+            // Whole lines, wrapped: an inbox style cuts each line with "…" (user rule: nothing cut off).
+            .setStyle(Notification.BigTextStyle().setBigContentTitle(m.title).bigText(m.lines.joinToString("\n").ifEmpty { m.text }))
             .setVisibility(Notification.VISIBILITY_PRIVATE)
             // Lock screen shows only the counts; the list appears once unlocked.
             .setPublicVersion(Notification.Builder(context,CallDigestWork.CHANNEL).setSmallIcon(R.drawable.ic_callbrief).setContentTitle(m.title).setContentText("잠금을 풀면 내용이 보여요").build())

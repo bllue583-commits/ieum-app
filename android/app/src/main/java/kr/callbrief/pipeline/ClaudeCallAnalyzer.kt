@@ -60,6 +60,8 @@ internal data class ClaudeCallRequest(
     val recentTexts:String="",
     /** Same day, same company, other people. */
     val sameDayCompany:List<PastCall> =emptyList(),
+    /** Check items finished or merged lately: not to be made again unless asked anew. */
+    val recentlyDone:List<String> =emptyList(),
 ) {
     data class CallLogView(val phoneBookName:String?,val direction:String?,val startTime:String,val durationMs:Long)
     data class OpenTask(val id:String,val title:String,val due:String,val status:String,val company:String?=null)
@@ -150,7 +152,7 @@ internal class ClaudeCallAnalyzer(private val http:ClaudeCallHttp=OkHttpClaudeCa
 3. summary는 한국어 2~3문장으로, 누구와 무슨 일로 통화했고 무엇이 정해졌는지 씁니다.
 4. keyPoints는 짧은 한국어 문장으로 최대 6개입니다.
 5. promises와 tasks의 quote에는 자막에 실제로 있는 부분을 한 글자도 바꾸지 말고 그대로 복사하세요. 근거가 되는 자막 원문이 없으면 그 항목은 만들지 마세요.
-6. 아래에 주어진 열린 할 일과 같은 일이면 새로 만들지 말고 op "update"와 그 taskId를 쓰세요. 새 일일 때만 "create"(taskId null)를 씁니다.
+6. 아래에 주어진 열린 할 일과 같은 일이면 새로 만들지 말고 op "update"와 그 taskId를 쓰세요. 새 일일 때만 "create"(taskId null)를 씁니다. "같은 일"은 같은 업체의 같은 대상이고 날짜만 분명히 바뀐 경우입니다. 회차나 날짜가 다른 일(11/5 타설과 11/12 타설)은 새 일입니다. update에 새 기한이 없으면 due는 null로 두세요(기존 기한이 유지됩니다). 기록 하나에서 tasks는 5개까지만 만드세요. [최근 끝낸 체크할 일]에 있는 일은 새로 요청받지 않는 한 다시 만들지 마세요.
 7. 일이 끝났다고 스스로 결정하지 마세요. 끝난 것으로 보이면 op "done_suggested"로 제안만 합니다.
 8. 날짜는 통화(문자, 메일) 시각을 기준으로 계산해 YYYY-MM-DD로 쓰고, 알 수 없으면 null로 둡니다.
 9. promises의 owner는 사용자가 할 일이면 "me", 상대가 할 일이면 "them", 모르면 "unknown"입니다.
@@ -162,10 +164,11 @@ internal class ClaudeCallAnalyzer(private val http:ClaudeCallHttp=OkHttpClaudeCa
 15. companyMemo는 상대 업체에 대한 지금 상태를 짧게 요약한 전체 새 글입니다(400자 이내, 덧붙이지 말고 다시 쓰기). 바꿀 것이 없거나 상대 업체를 모르면 null입니다. companyTrade는 통화에서 알 수 있는 공종(철근, 타설, 전기 등) 한두 단어이며 모르면 null입니다.
 16. tasks의 company에는 그 일이 속한 업체 이름을 [이름 목록]의 표기로 쓰고, 모르면 null로 두세요.
 17. 메시지 맨 위 "종류"가 문자나 메일이면 <transcript> 안의 글은 음성 자막이 아니라 업무 문자(시각과 보낸 문자/받은 문자 표시가 붙음) 또는 메일(제목, 보낸 사람, 본문)입니다. "자막"이라고 한 규칙은 그 글에 똑같이 적용하고, quote도 그 글에서 그대로 복사하세요. summary는 "누구에게서 무슨 문자(메일)가 왔고 무엇을 하기로 했는지"를 씁니다. 보낸 문자의 약속은 사용자의 약속(owner "me")입니다.
-18. business는 이 통화·문자·메일이 사용자의 일(현장, 협력업체, 회사 업무)과 관련 있으면 true입니다. 문자와 메일은 업무 상대만 골라 오지 않으므로 가족, 지인, 쇼핑, 택배, 광고, 금융 알림 같은 개인적인 것도 옵니다. 그런 것이면 business를 false로 하고, summary는 "개인 내용"이라고만 쓰고 나머지 목록은 비우며 이름, 메모, 업체도 모두 null로 두세요. 개인 내용은 요약하거나 옮겨 적지 마세요. 통화는 거의 업무지만, 분명히 개인 통화면 false로 하세요.
+18. business는 이 통화·문자·메일이 사용자의 일(현장, 협력업체, 회사 업무)과 관련 있으면 true입니다. 문자와 메일은 업무 상대만 골라 오지 않으므로 가족, 지인, 쇼핑, 택배, 광고, 금융 알림 같은 개인적인 것도 옵니다. 그런 것이면 business를 false로 하고, summary는 "개인 내용"이라고만 쓰고 나머지 목록은 비우며 이름, 메모, 업체도 모두 null로 두세요. 개인 내용은 요약하거나 옮겨 적지 마세요. 통화는 거의 업무지만, 분명히 개인 통화면 false로 하세요. [상대]에 업체가 있는 통화는 분명히 개인적인 내용일 때만 false로 하세요.
 19. 메시지 맨 위에 [처음 정리]가 있으면 이미 정리한 새 기록보다 오래된 지난 기록입니다. summary, keyPoints, counterpart, business는 똑같이 쓰되, siteMemo와 companyMemo에는 아직 모르던 사실만 보태고 더 최신 내용을 지우거나 되돌리지 마세요.
-20. "상대 id"가 있으면 그 상대는 전화번호(메일은 주소)로 확인된 사람입니다. 자막의 이름이 [상대]의 이름과 다르게 들려도 같은 사람이니 [상대]의 이름을 쓰세요.
-21. [통화기록]이 있으면 이름은 전화부 이름과 [상대], [이름 목록]으로 정하고, 날짜 계산은 통화기록의 실제 통화 시각을 기준으로 하세요. <texts>는 같은 상대와 최근 7일 동안 주고받은 업무 문자와 메일 원문입니다. 통화와 문자, 메일에서 오간 내용을 한 흐름으로 이어서 요약하고, 이미 문자로 끝난 일은 새 할 일로 만들지 마세요. promises와 tasks의 quote는 자막이나 <texts>의 원문에서 그대로 복사하고, from에 근거가 자막이면 "transcript", 문자나 메일이면 "texts"를 쓰세요.
+20. "상대 id"가 있으면 그 상대는 전화번호(메일은 주소)로 확인된 사람입니다. 자막의 이름이 [상대]의 이름과 다르게 들려도 같은 사람이니 [상대]의 이름을 쓰세요. 다만 자막에서 상대가 자기 이름을 분명히 다르게 말하면(사무실 번호를 여러 사람이 쓰는 경우) 그 이름을 쓰세요.
+21. [통화기록]이 있으면 이름은 전화부 이름과 [상대], [이름 목록]으로 정하고, 날짜 계산은 통화기록의 실제 통화 시각을 기준으로 하세요. <texts>는 같은 상대와 최근 7일 동안 주고받은 업무 문자와 메일 원문입니다. 통화와 문자, 메일에서 오간 내용을 한 흐름으로 이어서 요약하고, 이미 문자로 끝난 일은 새 할 일로 만들지 마세요. promises와 tasks의 quote는 자막이나 <texts>의 원문에서 그대로 복사하고, from에 근거가 자막이면 "transcript", 문자나 메일이면 "texts"를 쓰세요. 전화부 이름에 업체나 직책이 붙어 있으면(김과장 △△철강) 이름, 업체, 직책으로 나눠 쓰세요. 날짜 계산의 기준은 통화기록의 실제 시각 하나입니다. <texts>의 "아직 정리 전" 표시는 아직 분석되지 않은 문자라는 뜻입니다.
+22. summary, keyPoints, tasks의 title, 메모는 사용자 화면에 그대로 보입니다. 가운데 점, 말줄임표, 영어, "기한", "마감", "급함" 같은 말을 쓰지 마세요. summary의 첫 문장은 40자 안팎으로 무엇에 관한 통화인지 완결되게 쓰고, title은 "김민수 과장 견적서 회신 확인"처럼 누가 무엇을 했는지 확인하는 꼴로 짧게 쓰세요.
 """.trim()
         private fun durationText(ms:Long)=if(ms<=0) "미상" else "${ms/60000}분 ${(ms/1000)%60}초"
         private fun clip(t:String,n:Int)=t.replace(Regex("\\s+")," ").trim().let { if(it.length>n) it.take(n-1)+"…" else it }
@@ -179,7 +182,7 @@ internal class ClaudeCallAnalyzer(private val http:ClaudeCallHttp=OkHttpClaudeCa
             append("종류: ").append(r.kind).append('\n')
             append(r.kind).append(" 시각: ").append(r.callTimeKst).append('\n')
             // A bare phone number is not sent: the person is known by id (design: 장부의 원본).
-            val shown=r.counterpart?.takeIf { it.isNotBlank() }?.let { c -> if(r.kind!="메일" && CallRecordStore.isContact(CallRecordStore.counterpartKey(c))) "전화부에 없는 번호" else c }
+            val shown=r.counterpart?.takeIf { it.isNotBlank() }?.let { c -> if(r.kind!="메일" && CallRecordStore.isContact(CallRecordStore.counterpartKey(c))) "전화부에 없는 번호" else CallRecordStore.noNumber(c) ?: "전화부에 없는 번호" }
             append(if(r.kind=="메일") "보낸 사람: " else "전화부 이름: ").append(shown ?: "미상").append('\n')
             r.counterpartId?.let { append("상대 id: ").append(it).append('\n') }
             r.callLog?.let { l -> append("[통화기록] ").append(listOfNotNull(l.phoneBookName?.let { "전화부 이름 $it" },l.direction,"실제 시각 ${l.startTime}",
@@ -213,6 +216,7 @@ internal class ClaudeCallAnalyzer(private val http:ClaudeCallHttp=OkHttpClaudeCa
             val companies=r.companyNames.take(120);val people=r.personNames.take((120-companies.size).coerceAtLeast(0))
             append("[이름 목록] 업체: ").append(companies.joinToString(", ").ifEmpty { "없음" }).append(" / 사람: ").append(people.joinToString(", ").ifEmpty { "없음" })
             if(r.sameDayCompany.isNotEmpty()) append("\n[같은 날 같은 업체의 다른 기록]").append(pastCalls(r.sameDayCompany,5))
+            if(r.recentlyDone.isNotEmpty()) append("\n[최근 끝낸 체크할 일] ").append(r.recentlyDone.take(15).joinToString(", ") { clip(it,60) })
             if(r.recentTexts.isNotBlank()) append("\n\n[이 상대와 최근 7일 업무 문자와 메일]\n<texts>\n").append(r.recentTexts).append("\n</texts>")
             append("\n\n<transcript>\n").append(r.transcript).append("\n</transcript>")
         }
@@ -247,8 +251,9 @@ internal class ClaudeCallAnalyzer(private val http:ClaudeCallHttp=OkHttpClaudeCa
 
     /** Keeps only items whose quote really is in the transcript and whose taskId was offered. Names the model
      * could not have read anywhere (transcript, phone-book name, name list) are dropped; memos are length-limited. */
-    internal fun filter(a:ClaudeCallAnalysis,r:ClaudeCallRequest):ClaudeCallAnalysis {
-        val known=r.knownTaskIds
+    /** [stillOpen]: task ids open now, besides those the request offered (a result may arrive after the list changed). */
+    internal fun filter(a:ClaudeCallAnalysis,r:ClaudeCallRequest,stillOpen:Set<String> =emptySet()):ClaudeCallAnalysis {
+        val known=r.knownTaskIds+stillOpen
         // Spaces and punctuation are ignored: segments are joined without spaces and the model tidies them when copying.
         fun bare(t:String)=t.filter { it.isLetterOrDigit() }
         val sources=bare(r.transcript+"\n"+r.recentTexts)

@@ -125,7 +125,7 @@ class CompaniesActivity:ComponentActivity() {
         d.calls.forEach { call ->
             val c=CallUi.card(this).apply { tag="company_call_${call.recordId}" }
             c.addView(CallUi.text(this,CallUi.dayWord(CallRecordStore.kstDay(call.dayMs))+(call.person?.let { ", $it 님과 통화" } ?: ""),CallUi.SMALL,true,CallUi.ACCENT))
-            c.addView(CallUi.text(this,call.summary ?: "아직 정리 중이에요",CallUi.BODY,color=if(call.summary==null) CallUi.SUBTLE else CallUi.INK).apply { maxLines=3;ellipsize=android.text.TextUtils.TruncateAt.END })
+            c.addView(CallUi.text(this,call.summary ?: "아직 정리 중이에요",CallUi.BODY,color=if(call.summary==null) CallUi.SUBTLE else CallUi.INK))
             body.addView(c)
         }
     }

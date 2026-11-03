@@ -51,7 +51,7 @@ internal object MessageIntake {
                 sms+=Sms(c.getLong(0),c.getLong(2),c.getInt(3)==2,phone,c.getString(4).orEmpty())
             }
         }
-        val mms=readMms(context,after,before,excluded)
+        val mms=runCatching { readMms(context,after,before,excluded) }.getOrDefault(emptyList()) // a picture-text reader that fails must not stop the plain texts
         val upTo=listOfNotNull(sms.takeIf { it.size>=LIMIT }?.last()?.atMs,mms.takeIf { it.size>=LIMIT }?.last()?.atMs).minOrNull()
         return Batch((sms+mms).filter { upTo==null || it.atMs<=upTo }.sortedBy { it.atMs },upTo)
     }

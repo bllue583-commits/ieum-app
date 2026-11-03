@@ -92,14 +92,14 @@ internal object CallInbox {
     fun fileName(recordId:String)=MessageDigest.getInstance("SHA-256").digest(recordId.toByteArray()).joinToString(""){"%02x".format(it)}.take(32)+".json"
     /** Self-contained job: the scheduled task follows `system`, reads `message`, answers with JSON matching `schema`. */
     /** [key] is the record key ([recordKey]); the task answers with the same id. */
-    fun job(key:String,request:ClaudeCallRequest,now:Long):String=JSONObject().put("id",key).put("createdMs",now)
+    fun job(key:String,request:ClaudeCallRequest,now:Long,atMs:Long=0):String=JSONObject().put("id",key).put("createdMs",now).put("atMs",atMs)
         .put("counterpartId",request.counterpartId ?: JSONObject.NULL).put("recordKey",key)
         .put("system",ClaudeCallAnalyzer.SYSTEM).put("message",ClaudeCallAnalyzer.userMessage(request)).put("schema",ClaudeCallAnalyzer.SCHEMA).toString()
     /** Several old records in time order; the task analyses them one after another, carrying the ledger along, and
      * answers with {"id": ..., "results": [{"id": record, "analysis": {...}}]}. */
-    fun batch(items:List<Pair<String,ClaudeCallRequest>>,now:Long):String=JSONObject().put("id",FirstPass.BATCH_PREFIX+fileName(items.joinToString("|") { it.first }).removeSuffix(".json"))
+    fun batch(items:List<Pair<String,ClaudeCallRequest>>,now:Long,atMs:List<Long> =emptyList()):String=JSONObject().put("id",FirstPass.BATCH_PREFIX+fileName(items.joinToString("|") { it.first }).removeSuffix(".json"))
         .put("createdMs",now).put("system",ClaudeCallAnalyzer.SYSTEM).put("schema",ClaudeCallAnalyzer.SCHEMA)
-        .put("items",JSONArray().apply { items.forEach { (id,r) -> put(JSONObject().put("id",id).put("counterpartId",r.counterpartId ?: JSONObject.NULL).put("recordKey",id).put("message",ClaudeCallAnalyzer.userMessage(r))) } }).toString()
+        .put("items",JSONArray().apply { items.forEachIndexed { n,(id,r) -> put(JSONObject().put("id",id).put("atMs",atMs.getOrElse(n) { 0L }).put("counterpartId",r.counterpartId ?: JSONObject.NULL).put("recordKey",id).put("message",ClaudeCallAnalyzer.userMessage(r))) } }).toString()
     /** Result file: {"id": ..., "analysis": {...}} where analysis matches the schema. */
     fun parseResult(text:String):Pair<String,ClaudeCallAnalysis> { val o=JSONObject(text);return o.getString("id") to ClaudeCallAnalysis.parse(o.getJSONObject("analysis")) }
     /** One result file: a single record, or a batch's list. Broken entries are left out. */

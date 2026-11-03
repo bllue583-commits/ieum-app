@@ -74,8 +74,8 @@ class TodayCallsActivity:ComponentActivity() {
         }))
     }
 
-    /** "제가 할 일, 수정 견적서 보내기 (오늘까지)" */
-    private fun promiseLine(p:ClaudeCallAnalysis.Promise)=when(p.owner) { "me" -> "제가 할 일, ";"them" -> "상대가 할 일, ";else -> "" }+p.text+(p.due?.let { " (${CallUi.dueWords(it)})" } ?: "")
+    /** "제가 하기로 함, 수정 견적서 보내기": who promised; no deadline words (user rule). */
+    private fun promiseLine(p:ClaudeCallAnalysis.Promise)=when(p.owner) { "me" -> "제가 하기로 함, ";"them" -> "상대가 하기로 함, ";else -> "" }+p.text
 
     private fun renderDetail(c:CallRecord) {
         CallUi.band(body,c.displayName,"${CallUi.date(CallRecordStore.kstDay(c.dayMs))} ${CallUi.time(c.startedMs)}, "+

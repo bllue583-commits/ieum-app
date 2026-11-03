@@ -20,6 +20,8 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
             val ledger=context.assets.open("vault2_ledger.sql").bufferedReader().use{it.readText()}
             db.transaction{
                 ledger.split("\n-- statement-break\n").forEach{db.execute(it)}
+                // Finished 5-minute pieces of a transcript, so a long call survives the worker's time limit (review 11/4, round 2).
+                db.execute("CREATE TABLE IF NOT EXISTS call_transcription_parts(recording_id TEXT NOT NULL,source_version INTEGER NOT NULL,audio_sha TEXT NOT NULL,chunk INTEGER NOT NULL,segments_json TEXT NOT NULL,PRIMARY KEY(recording_id,source_version,audio_sha,chunk))")
                 db.execute("""CREATE TABLE IF NOT EXISTS call_transcription_jobs(recording_id TEXT NOT NULL,source_version INTEGER NOT NULL,
                     audio_sha TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('QUEUED','RUNNING','DONE','FAILED','SKIPPED')),
                     reason TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,updated_ms INTEGER NOT NULL,
@@ -73,6 +75,13 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         CASE WHEN coalesce(x.original_started_at_ms,x.modified_at_ms,0)<CAST(? AS INTEGER) THEN coalesce(x.original_started_at_ms,x.modified_at_ms,0) ELSE -coalesce(x.original_started_at_ms,0) END,
         j.updated_ms LIMIT 1""".trimIndent(),GeneralLocalStore.OWNER,oldBefore ?: Long.MIN_VALUE,oldBefore ?: Long.MIN_VALUE)
         .singleOrNull()?.let{Job(candidate(it),it["state"].toString(),it["reason"].toString(),(it["attempts"] as Number).toInt())}
+
+    fun parts(k:Key):Map<Int,List<CallTranscript.Segment>> =db.query("SELECT chunk,segments_json FROM call_transcription_parts WHERE recording_id=? AND source_version=? AND audio_sha=?",
+        k.recordingId,k.sourceVersion,k.audioSha).associate { r -> (r["chunk"] as Number).toInt() to org.json.JSONArray(r["segments_json"].toString()).let { a ->
+            (0 until a.length()).map { val x=a.getJSONArray(it);CallTranscript.Segment(x.getLong(0),x.getLong(1),x.getString(2)) } } }
+    fun savePart(k:Key,chunk:Int,segments:List<CallTranscript.Segment>)=db.execute("INSERT OR REPLACE INTO call_transcription_parts VALUES(?,?,?,?,?)",
+        k.recordingId,k.sourceVersion,k.audioSha,chunk,org.json.JSONArray().apply { segments.forEach { put(org.json.JSONArray().put(it.startMs).put(it.endMs).put(it.text)) } }.toString())
+    fun clearParts(k:Key)=db.execute("DELETE FROM call_transcription_parts WHERE recording_id=? AND source_version=? AND audio_sha=?",k.recordingId,k.sourceVersion,k.audioSha)
 
     /** QUEUED -> RUNNING, counting the attempt. False when the row is no longer queued. */
     fun claim(k:Key):Boolean = db.transaction {

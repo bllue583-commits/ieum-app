@@ -42,7 +42,7 @@ class CallTasksActivity:ComponentActivity() {
 
     private fun render(ok:Boolean) {
         body.removeAllViews()
-        CallUi.band(body,"체크할 일",if(ok) "확인할 일이 ${items.size}개 남았어요" else null)
+        CallUi.band(body,"체크할 일",if(ok) "체크할 일이 ${items.size}개 남았어요" else null)
         if(!ok) { body.addView(CallUi.text(this,"체크할 일을 읽지 못했어요. 잠시 후 다시 열어주세요."));return }
         if(items.isEmpty()) { body.addView(CallUi.card(this).apply { addView(CallUi.text(this@CallTasksActivity,"체크할 일이 없어요.",CallUi.SUMMARY,color=CallUi.OK)) });return }
         for((name,list) in groups(items)) {

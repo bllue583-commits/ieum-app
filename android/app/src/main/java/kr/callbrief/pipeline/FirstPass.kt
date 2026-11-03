@@ -27,6 +27,9 @@ internal object FirstPass {
     /** Old = before the first pass started, while it is still running. */
     fun isOld(dayMs:Long,s:JSONObject):Boolean = !done(s) && start(s)?.let { dayMs<it } ?: false
     fun beforeRange(ms:Long?)=ms!=null && ms>0 && ms<FROM_MS
+    /** Before the first pass started, whether or not it is over: a late old recording still follows the old-record
+     * rules (work only from the last 7 days, the ledger only gains facts). Sending mode is [isOld]. */
+    fun beforeStart(dayMs:Long,s:JSONObject)=start(s)?.let { dayMs<it } ?: false
 
     /** Old recordings are transcribed only while charging or with at least half the battery (no heat during work calls). */
     fun powerOk(context:Context):Boolean {

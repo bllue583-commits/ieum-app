@@ -71,10 +71,17 @@ internal class CallTranscriptionRunner(
                 val started=now()
                 val decoded=audio.decode(read(c),c.mime)
                 val segments=mutableListOf<CallTranscript.Segment>()
-                for((offset,pcm) in decoded.chunks) {
+                val finished=store.parts(c.key) // pieces finished before the worker was stopped last time
+                for((index,chunk) in decoded.chunks.withIndex()) {
+                    val (offset,pcm)=chunk
+                    val kept=finished[index]
+                    if(kept!=null) { segments+=kept;continue }
                     if(stopped())throw Stopped()
-                    transcriber.transcribe(file,pcm,stopped).forEach { segments+=CallTranscript.Segment(it.startMs+offset,it.endMs+offset,it.text) }
+                    val piece=transcriber.transcribe(file,pcm,stopped).map { CallTranscript.Segment(it.startMs+offset,it.endMs+offset,it.text) }
+                    if(stopped())throw Stopped() // a piece cut short is not kept
+                    store.savePart(c.key,index,piece);segments+=piece
                 }
+                store.clearParts(c.key)
                 val text=segments.joinToString(""){it.text}.trim()
                 skipReason(c)?.let { store.finish(c.key,"SKIPPED",it);return@repeat }
                 if(text.isEmpty()){store.finish(c.key,"SKIPPED","NO_SPEECH");return@repeat}
@@ -127,7 +134,8 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                 val pass=CallTranscriptionRunner(store,model,PipelineAudioDecoder(),WhisperCallTranscriber(AndroidWhisperEngine(storage),model),
                     read={ c -> readAudio(local,c) },
                     skipReason={ c -> skipReason(c,settings) },
-                    sink={ CallTranscriptSinks.factory?.invoke(applicationContext) },
+                    // The app may not have been opened since the phone restarted: the sink is made here then (review 11/4, round 2).
+                    sink={ CallTranscriptSinks.factory?.invoke(applicationContext) ?: CallSinkImpl(applicationContext) },
                     stopped={ isStopped || tooHot() },
                     speed={ ms -> settings.update{ it.put(PipelineSettingsKeys.LAST_MS_PER_AUDIO_MINUTE,ms).put(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,System.currentTimeMillis()) } },
                     holdOld={ c -> FirstPass.isOld(c.startedAtMs ?: c.modifiedMs,settings.snapshot()) && !FirstPass.powerOk(applicationContext) },
