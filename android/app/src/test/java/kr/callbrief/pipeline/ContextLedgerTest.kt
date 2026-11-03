@@ -239,7 +239,7 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
     @Test fun morningLineHomeDoorAndSettingsMemo() {
         apply(call(1),analysis(cp("김민수","△△철강"),"요약",listOf(create("단가 재견적 받기")),"현장 메모 본문"))
         val m=store().use { CallDigestText.morning(it,java.time.LocalDate.of(2026,10,30)) }
-        assertTrue(m.lines.toString(),m.lines.any { it.startsWith("• [△△철강] 단가 재견적 받기 — ") })
+        assertTrue(m.lines.toString(),m.lines.any { it.startsWith("[△△철강] 단가 재견적 받기, ") && it.endsWith(" 요청") })
         val home=Robolectric.buildActivity(HomeActivity::class.java).setup().get()
         settle { home.window.decorView.findViewWithTag<View>("home_calls_button")!=null }
         home.render(HomeActivity.Snapshot(true,true,true,"READY",0,0,0,0,0,0,companies=3))
