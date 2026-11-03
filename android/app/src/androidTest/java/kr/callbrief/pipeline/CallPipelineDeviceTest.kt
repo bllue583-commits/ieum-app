@@ -159,7 +159,8 @@ class CallPipelineDeviceTest {
         CallDigestNotifier.post(context,CallDigestSchedule.MORNING,message)
         Thread.sleep(1000)
         val posted=context.getSystemService(android.app.NotificationManager::class.java).activeNotifications.firstOrNull{it.tag=="ieum.calls.${CallDigestSchedule.MORNING}"}
-        val lines=posted?.notification?.extras?.getCharSequenceArray(android.app.Notification.EXTRA_TEXT_LINES)?.map{it.toString()}.orEmpty()
+        // Whole lines in one wrapped text (round 2: an inbox style cut each line with "…").
+        val lines=posted?.notification?.extras?.getCharSequence(android.app.Notification.EXTRA_BIG_TEXT)?.toString()?.lines().orEmpty()
         report("t5_notification",JSONObject().put("posted",posted!=null).put("title",message.title).put("lines",org.json.JSONArray(lines)))
         assertNotNull("morning notification not shown",posted);assertTrue(lines.any{it.contains("견적서")})
     }
