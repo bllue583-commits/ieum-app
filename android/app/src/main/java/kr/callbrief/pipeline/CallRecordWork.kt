@@ -28,74 +28,82 @@ internal class CallRecordAnalysisRunner(
         else -> runApi()
     }
 
-    /** Applies any results, then sends waiting transcripts (once; again after [RESEND_MS] without an answer).
-     * During the first pass, old records go as "b-" files, [FirstPass.OLD_IN_FLIGHT] at a time, oldest first, after
-     * the new ones; when none is left the one consolidation ("ctx-") goes up, and its answer rewrites the ledger. */
+    /** One hourly pass (design: 장부의 원본, 처음 정리): the user's corrections go up, results are applied, the repository
+     * ledger is taken in when it moved on, then waiting records are sent (once; again after [RESEND_MS] without an
+     * answer). New records go one file each; old ones (처음 정리) in time-ordered batches of [FirstPass.BATCH], at most
+     * [FirstPass.BATCHES_IN_FLIGHT] at a time. Every request carries the person's ledger id; the task keeps the ledger. */
     private fun runInbox(store:CallInboxStore):Boolean = try {
         val s=settings()
         val consent=s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false)
         CallRecordStore(context,clock).use { db ->
             runCatching { db.reconcileCallLog(callLog()) }
-            // Results first: answered records leave the queue and give the next uploads fresher context.
+            for((id,json) in db.pendingEdits()) { store.put(CallInbox.EDITS+"/"+id+".json",json);db.editSent(id) }
             for((name,sha) in store.list(CallInbox.RESULTS)) {
                 if(name.startsWith("selftest-")) continue // CI end-to-end check, not a call of this phone
                 val path=CallInbox.RESULTS+"/"+name
-                val o=runCatching { JSONObject(store.get(path)) }.getOrNull()
-                val id=o?.optString("id").orEmpty()
-                if(id.startsWith(FirstPass.CONTEXT_PREFIX)) {
-                    if(!FirstPass.done(settings()) && runCatching { db.applyDigest(FirstPass.Digest.parse(o!!.getJSONObject("analysis"))) }.isSuccess)
-                        save { it.put(PipelineSettingsKeys.FIRST_PASS_DONE,true) }
-                } else {
-                    val parsed=o?.let { runCatching { id to ClaudeCallAnalysis.parse(it.getJSONObject("analysis")) }.getOrNull() }
-                    val record=parsed?.let { db.record(it.first) }
-                    if(parsed!=null && record!=null && record.state!=CallRecordStore.ANALYZED) {
-                        val isOld=FirstPass.isOld(record.dayMs,s)
-                        val a=analyzer.filter(parsed.second,db.request(record,isOld))
-                        db.applyAnalysis(record.recordId,if(isOld) FirstPass.restrict(a,record.dayMs,clock()) else a)
-                        save { it.put(PipelineSettingsKeys.LAST_ANALYZED_MS,clock()) }
-                    }
+                for((id,analysis) in runCatching { CallInbox.parseResults(store.get(path)) }.getOrDefault(emptyList())) {
+                    val record=db.record(id) ?: continue
+                    if(record.state==CallRecordStore.ANALYZED) continue
+                    val isOld=FirstPass.isOld(record.dayMs,s)
+                    // Memos come from the repository ledger, which the task keeps in time order.
+                    val a=analyzer.filter(analysis,db.request(record,isOld)).copy(siteMemo=null,companyMemo=null,companyTrade=null)
+                    db.applyAnalysis(record.recordId,if(isOld) FirstPass.restrict(a,record.dayMs,clock()) else a)
+                    save { it.put(PipelineSettingsKeys.LAST_ANALYZED_MS,clock()) }
                 }
                 store.delete(path,sha)
             }
-            val (old,live)=db.pending().partition { FirstPass.isOld(it.dayMs,s) }
-            var inFlight=old.count { r -> db.sentMs(r.recordId)?.let { clock()-it<RESEND_MS }==true }
-            for(record in live+old.sortedBy { it.dayMs }) {
-                if(!consent) { db.setState(record.recordId,CallRecordStore.WAITING_CONSENT);continue }
-                if(record.state!=CallRecordStore.TRANSCRIBED) db.setState(record.recordId,CallRecordStore.TRANSCRIBED)
-                if(record.transcript.isBlank()) { db.setState(record.recordId,CallRecordStore.FAILED,"EMPTY_TRANSCRIPT");continue }
-                val sent=db.sentMs(record.recordId)
-                if(sent!=null && clock()-sent<RESEND_MS) continue
-                val isOld=record in old
-                if(isOld && inFlight>=FirstPass.OLD_IN_FLIGHT) continue
-                store.put(CallInbox.INBOX+"/"+(if(isOld) CallInbox.OLD else "")+CallInbox.fileName(record.recordId),CallInbox.job(record.recordId,db.request(record,isOld),clock()))
-                db.markSent(record.recordId,clock())
-                if(isOld) inFlight++
+            takeLedger(store,db)
+
+            fun due(r:CallRecord):Boolean {
+                if(!consent) { db.setState(r.recordId,CallRecordStore.WAITING_CONSENT);return false }
+                if(r.state!=CallRecordStore.TRANSCRIBED) db.setState(r.recordId,CallRecordStore.TRANSCRIBED)
+                if(r.transcript.isBlank()) { db.setState(r.recordId,CallRecordStore.FAILED,"EMPTY_TRANSCRIPT");return false }
+                return db.sentMs(r.recordId)?.let { clock()-it>=RESEND_MS } ?: true
             }
-            if(consent) sendDigest(store,db)
+            val (old,live)=db.pending().partition { FirstPass.isOld(it.dayMs,s) }
+            for(record in live.filter(::due)) {
+                db.ledgerIdFor(record)
+                store.put(CallInbox.INBOX+"/"+CallInbox.fileName(record.recordId),CallInbox.job(record.recordId,db.request(record),clock()))
+                db.markSent(record.recordId,clock())
+            }
+            val start=FirstPass.start(s)
+            if(start!=null && !FirstPass.done(s)) {
+                val inFlight=old.count { r -> db.sentMs(r.recordId)?.let { clock()-it<RESEND_MS }==true }
+                // Old records earlier than this are complete; later ones may still be joined by older ones.
+                val bound=listOfNotNull(db.oldestOldJobMs(start),messagesBound(s)).minOrNull()
+                var slots=FirstPass.BATCHES_IN_FLIGHT-(inFlight+FirstPass.BATCH-1)/FirstPass.BATCH
+                for(chunk in old.filter(::due).filter { bound==null || it.dayMs<bound }.sortedBy { it.dayMs }.chunked(FirstPass.BATCH)) {
+                    if(slots<=0 || (chunk.size<FirstPass.BATCH && bound!=null)) break
+                    val items=chunk.map { r -> db.ledgerIdFor(r);r.recordId to db.request(r,true) }
+                    store.put(CallInbox.INBOX+"/"+CallInbox.batchName(chunk.first().dayMs,items.map { it.first }),CallInbox.batch(items,clock()))
+                    chunk.forEach { db.markSent(it.recordId,clock()) }
+                    slots--
+                }
+                if(consent && old.isEmpty() && bound==null) save { it.put(PipelineSettingsKeys.FIRST_PASS_DONE,true) }
+            }
         }
         true
     } catch(e:java.io.IOException) { false }
 
-    /** The consolidation, once every old record is summarised and nothing since 10/1 is left to read or transcribe. */
-    private fun sendDigest(store:CallInboxStore,db:CallRecordStore) {
-        val s=settings();val start=FirstPass.start(s) ?: return
-        if(FirstPass.done(s)) return
-        val sent=s.optLong(PipelineSettingsKeys.FIRST_PASS_CONTEXT_SENT_MS,0)
-        if(sent>0 && clock()-sent<RESEND_MS) return
-        if(!messagesCaughtUp(s)) return
-        val p=db.firstPassProgress(start)
-        if(p.toTranscribe>0 || p.waiting>0) return
-        val input=db.digestInput()
-        if(input.lines.isEmpty()) { save { it.put(PipelineSettingsKeys.FIRST_PASS_DONE,true) };return }
-        val id=FirstPass.CONTEXT_PREFIX+start
-        store.put(CallInbox.INBOX+"/"+CallInbox.CONTEXT+CallInbox.fileName(id),FirstPass.job(id,input,clock()))
-        save { it.put(PipelineSettingsKeys.FIRST_PASS_CONTEXT_SENT_MS,clock()) }
+    /** Takes the repository ledger when its rev moved on. A missing ledger (nothing analysed yet) is fine. */
+    private fun takeLedger(store:CallInboxStore,db:CallRecordStore) {
+        val o=runCatching { JSONObject(store.get(CallInbox.LEDGER)) }.getOrNull() ?: return
+        val rev=o.optLong("rev",0)
+        if(rev<=settings().optLong(PipelineSettingsKeys.LEDGER_REV,0)) return
+        db.applyLedger(o)
+        save { it.put(PipelineSettingsKeys.LEDGER_REV,rev) }
     }
-    /** Old texts and mail since 10/1 have been read (or cannot be: no permission, no mailbox). */
-    private fun messagesCaughtUp(s:JSONObject):Boolean {
-        val sms=!smsAllowed() || s.optLong(PipelineSettingsKeys.SMS_BACKFILL_UNTIL,0).let { u -> u>0 && s.optLong(PipelineSettingsKeys.SMS_BACKFILL_CURSOR,0)>=u }
-        val mail=s.optString(PipelineSettingsKeys.MAIL_HOST).isBlank() || s.optString(PipelineSettingsKeys.MAIL_ERROR).isNotBlank() || s.optLong(PipelineSettingsKeys.MAIL_BACKFILL_UNTIL,0).let { u -> u>0 && s.optLong(PipelineSettingsKeys.MAIL_BACKFILL_CURSOR,0)>=u }
-        return sms && mail
+    /** From when old texts or mail may still come in (their first-pass reading goes forward from 10/1), or null when
+     * both are read to the end or cannot be read (no permission, no mailbox, a mailbox that refuses the password). */
+    private fun messagesBound(s:JSONObject):Long? {
+        fun bound(reading:Boolean,cursorKey:String,untilKey:String):Long? {
+            if(!reading) return null
+            val until=s.optLong(untilKey,0);val cursor=s.optLong(cursorKey,0)
+            return if(until>0 && cursor>=until) null else maxOf(cursor,FirstPass.FROM_MS)
+        }
+        val mail=s.optString(PipelineSettingsKeys.MAIL_HOST).isNotBlank() && s.optString(PipelineSettingsKeys.MAIL_ERROR).isBlank()
+        return listOfNotNull(bound(smsAllowed(),PipelineSettingsKeys.SMS_BACKFILL_CURSOR,PipelineSettingsKeys.SMS_BACKFILL_UNTIL),
+            bound(mail,PipelineSettingsKeys.MAIL_BACKFILL_CURSOR,PipelineSettingsKeys.MAIL_BACKFILL_UNTIL)).minOrNull()
     }
 
     private fun runApi():Boolean {

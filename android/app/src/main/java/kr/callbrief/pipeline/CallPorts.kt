@@ -52,10 +52,11 @@ object PipelineSettingsKeys {
     const val MAIL_PASSWORD="mailAppPassword"
     const val LAST_MAIL_MS="messagesLastMailMs"
     const val MAIL_ERROR="mailLastError"
-    /** 처음 정리: when it started (records before are "old"), whether the consolidation is applied, when it was sent. */
+    /** 처음 정리: when it started (records before are "old") and whether it is over. */
     const val FIRST_PASS_START_MS="firstPassStartMs"
     const val FIRST_PASS_DONE="firstPassDone"
-    const val FIRST_PASS_CONTEXT_SENT_MS="firstPassContextSentMs"
+    /** rev of the repository ledger last taken in (design: 장부의 원본). */
+    const val LEDGER_REV="ledgerRev"
     /** Reading old texts and mail from 10/1 up to where the regular intake began: progress and end. */
     const val SMS_BACKFILL_CURSOR="firstPassSmsCursor"
     const val SMS_BACKFILL_UNTIL="firstPassSmsUntil"

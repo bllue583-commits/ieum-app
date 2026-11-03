@@ -45,7 +45,7 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         }
     }
 
-    @Test fun oldRecordsGoTwentyAtATimeAfterNewOnesThenOneConsolidation() {
+    @Test fun oldRecordsGoInTimeOrderedBatchesAfterNewOnes() {
         CallRecordStore(context){ now }.use { db ->
             (1..22).forEach { db.insert(transcript("old$it",now-2*day-it*60_000L)) }
             db.insert(transcript("new",now))
@@ -53,28 +53,65 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         val s=JSONObject().put(PipelineSettingsKeys.CONSENT_GRANTED,true).put(PipelineSettingsKeys.FIRST_PASS_START_MS,now-3_600_000L)
         val inbox=FakeInbox()
         assertTrue(runner(inbox,s).runPending())
-        val sent=inbox.files.keys
-        assertEquals(20,sent.count { it.startsWith("inbox/b-") });assertEquals(1,sent.count { !it.startsWith("inbox/b-") })
-        assertTrue("old ones say so",inbox.files.filterKeys { it.startsWith("inbox/b-") }.values.all { JSONObject(it).getString("message").startsWith("[처음 정리]") })
-        assertFalse(JSONObject(inbox.files.getValue(sent.first { !it.startsWith("inbox/b-") })).getString("message").contains("[처음 정리]"))
+        val batches=inbox.files.keys.filter { it.startsWith("inbox/b-") }.sorted()
+        assertEquals(2,batches.size);assertEquals(1,inbox.files.keys.count { !it.startsWith("inbox/b-") })
+        val first=JSONObject(inbox.files.getValue(batches[0]));val second=JSONObject(inbox.files.getValue(batches[1]))
+        assertTrue(first.getString("id").startsWith(FirstPass.BATCH_PREFIX));assertTrue(first.has("schema"))
+        val items=first.getJSONArray("items");assertEquals(15,items.length());assertEquals(7,second.getJSONArray("items").length())
+        // Time order: oldest first inside a batch and across batch names.
+        assertEquals(CallRecordStore.recordId(transcript("old22",0)),items.getJSONObject(0).getString("id"))
+        assertTrue(items.getJSONObject(0).getString("message").startsWith("[처음 정리]"))
+        assertTrue(items.getJSONObject(0).getString("counterpartId").startsWith("p_"))
+        val single=JSONObject(inbox.files.entries.first { !it.key.startsWith("inbox/b-") }.value)
+        assertFalse(single.getString("message").contains("[처음 정리]"))
+        assertEquals("same person, same id",items.getJSONObject(0).getString("counterpartId"),single.getString("counterpartId"))
+        assertFalse(s.optBoolean(PipelineSettingsKeys.FIRST_PASS_DONE))
 
-        answer(inbox);runner(inbox,s).runPending()
-        assertEquals("the last two old ones follow",2,inbox.files.keys.count { it.startsWith("inbox/b-") })
-        answer(inbox);runner(inbox,s).runPending()
-        val ctx=inbox.files.entries.single()
-        assertTrue(ctx.key.startsWith("inbox/ctx-"))
-        val job=JSONObject(ctx.value)
-        assertTrue(job.getString("id").startsWith(FirstPass.CONTEXT_PREFIX));assertTrue(job.has("schema"))
-        assertEquals(23,job.getString("message").lines().count { it.startsWith("- ") })
-
-        inbox.files.clear()
-        inbox.files["results/"+ctx.key.removePrefix("inbox/")]=JSONObject().put("id",job.getString("id")).put("analysis",
-            JSONObject().put("siteMemo","3공구 철근 견적과 계약서 일정 조율 중").put("companies",JSONArray()).put("people",JSONArray()).put("sameAs",JSONArray())).toString()
+        // The task answers each batch with one file listing every record.
+        inbox.files.keys.filter { it.startsWith("inbox/") }.toList().forEach { k ->
+            val job=JSONObject(inbox.files.remove(k)!!)
+            val results=JSONArray()
+            val list=job.optJSONArray("items")
+            if(list==null) results.put(JSONObject().put("id",job.getString("id")).put("analysis",ClaudeCallAnalyzerTest.analysis()))
+            else for(n in 0 until list.length()) results.put(JSONObject().put("id",list.getJSONObject(n).getString("id")).put("analysis",ClaudeCallAnalyzerTest.analysis()))
+            inbox.files["results/"+k.removePrefix("inbox/")]=JSONObject().put("id",job.getString("id")).put("results",results).toString()
+        }
         runner(inbox,s).runPending()
-        assertTrue(s.getBoolean(PipelineSettingsKeys.FIRST_PASS_DONE))
-        assertEquals("3공구 철근 견적과 계약서 일정 조율 중",CallRecordStore(context).use { it.siteMemo() })
         assertTrue(inbox.files.isEmpty())
-        runner(inbox,s).runPending();assertTrue("sent once",inbox.files.isEmpty())
+        assertEquals(23,CallRecordStore(context).use { it.counts()[CallRecordStore.ANALYZED] })
+        assertTrue("all old records summarised: the first pass is over",s.getBoolean(PipelineSettingsKeys.FIRST_PASS_DONE))
+    }
+
+    @Test fun theRepositoryLedgerIsTakenInAndCorrectionsGoUp() {
+        CallRecordStore(context){ now }.use { db -> db.insert(transcript("r1",now,"010-1111-2222")) }
+        val s=JSONObject().put(PipelineSettingsKeys.CONSENT_GRANTED,true)
+        val inbox=FakeInbox()
+        runner(inbox,s).runPending()
+        val job=JSONObject(inbox.files.values.single())
+        val lid=job.getString("counterpartId");assertTrue(lid.startsWith("p_"))
+        assertFalse("the number stays on the phone",inbox.files.values.single().let { it.contains("010-1111-2222") || it.contains("01011112222") })
+        inbox.files.clear()
+        inbox.files["ledger/ledger.json"]=JSONObject().put("rev",3).put("siteMemo","3공구 철근 반입 중")
+            .put("companies",JSONArray().put(JSONObject().put("name","△△철강").put("trade","철근").put("memo","견적 진행")))
+            .put("people",JSONArray().put(JSONObject().put("id",lid).put("name","김민수").put("company","△△철강").put("role","과장").put("isStaff",false).put("aliases",JSONArray().put("김민슈")))
+                .put(JSONObject().put("id","p_unknown").put("name","남의 사람"))).toString()
+        runner(inbox,s).runPending()
+        assertEquals(3L,s.getLong(PipelineSettingsKeys.LEDGER_REV))
+        CallRecordStore(context).use { db ->
+            assertEquals("3공구 철근 반입 중",db.siteMemo())
+            val co=db.companies().single();assertEquals("△△철강",co.name);assertEquals("철근",co.trade)
+            val p=db.peopleOf(co.id).single();assertEquals("김민수",p.name);assertEquals("과장",p.role)
+            assertTrue(db.renamePerson(p.id,"김민서"))
+        }
+        // The correction goes up as an edit; an older ledger name does not undo it.
+        runner(inbox,s).runPending()
+        val edit=inbox.files.entries.single { it.key.startsWith("ledger/edits/") }
+        assertEquals("김민서",JSONObject(edit.value).getString("name"))
+        assertEquals(lid,JSONObject(edit.value).getString("id"))
+        inbox.files["ledger/ledger.json"]=JSONObject(inbox.files.getValue("ledger/ledger.json")).put("rev",4).toString()
+        runner(inbox,s).runPending()
+        assertEquals("김민서",CallRecordStore(context).use { db -> db.peopleOf(db.companies().single().id).single().name })
+        assertTrue("sent once",inbox.files.keys.count { it.startsWith("ledger/edits/") }==1)
     }
 
     @Test fun oldResultsKeepNamesButNotMemosOrOldWork() {
@@ -118,27 +155,6 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         }
     }
 
-    @Test fun consolidationMergesMisheardPeopleButNeverOneTheUserRenamed() {
-        CallRecordStore(context){ now }.use { db -> db.insert(transcript("r1",now)) }
-        AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql")).use { p -> p.transaction {
-            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms) VALUES('a','김민슈',NULL,NULL,NULL,0,0)")
-            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms) VALUES('b','김민수','01011112222',NULL,NULL,0,0)")
-            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms) VALUES('c','박재웅',NULL,NULL,NULL,0,0)")
-            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms) VALUES('d','박재옹',NULL,NULL,NULL,0,0)")
-            p.execute("INSERT INTO person_aliases VALUES('박제웅','c')") // the user corrected c's name earlier
-            p.execute("INSERT INTO call_links VALUES(?,'a',NULL)",CallRecordStore.recordId(transcript("r1",now)));null
-        } }
-        CallRecordStore(context){ now }.use { db ->
-            db.applyDigest(FirstPass.Digest.parse(JSONObject().put("siteMemo","현장 메모").put("companies",JSONArray()).put("people",JSONArray()
-                .put(JSONObject().put("name","김민수").put("company",JSONObject.NULL).put("role","과장").put("isStaff",true)))
-                .put("sameAs",JSONArray().put(JSONObject().put("name","김민슈").put("sameAs","김민수")).put(JSONObject().put("name","박재웅").put("sameAs","박재옹")))))
-            val people=db.peopleOf(null).associateBy { it.name }
-            assertEquals(setOf("김민수","박재웅","박재옹"),people.keys)
-            assertEquals("과장",people["김민수"]?.role);assertTrue(people["김민수"]!!.isStaff)
-            assertEquals("the call follows the merged person","김민수",db.record(CallRecordStore.recordId(transcript("r1",now)))?.linkedPerson)
-        }
-    }
-
     @Test fun oldTextsAreGroupedPerNumberAndDay() {
         fun sms(id:Long,at:Long,phone:String)=MessageIntake.Sms(id,at,false,phone,"내일 반입 가능합니다")
         val list=listOf(sms(1,now,"01011112222"),sms(2,now+60_000,"01011112222"),sms(3,now+day,"01011112222"),sms(-4,now,"01033334444"))
@@ -147,12 +163,12 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         assertTrue(MessageIntake.threads(list,byDay=true).all { it.first.all(Char::isDigit) })
     }
 
-    @Test fun digestParsesAndDropsEmptyNames() {
-        val d=FirstPass.Digest.parse(JSONObject().put("siteMemo",JSONObject.NULL)
-            .put("companies",JSONArray().put(JSONObject().put("name","△△철강").put("trade","철근").put("memo","견적 중")).put(JSONObject().put("name","")))
-            .put("people",JSONArray()).put("sameAs",JSONArray().put(JSONObject().put("name","가").put("sameAs","가"))))
-        assertNull(d.siteMemo);assertEquals(listOf("△△철강"),d.companies.map { it.name });assertTrue(d.sameAs.isEmpty())
-        val schema=FirstPass.SCHEMA;assertFalse(schema.getBoolean("additionalProperties"))
-        assertEquals(setOf("siteMemo","companies","people","sameAs"),schema.getJSONObject("properties").keys().asSequence().toSet())
+    @Test fun batchResultsParseAndBrokenEntriesAreLeftOut() {
+        val ok=JSONObject().put("id","a").put("analysis",ClaudeCallAnalyzerTest.analysis())
+        val text=JSONObject().put("id","batch:x").put("results",JSONArray().put(ok).put(JSONObject().put("id","b"))).toString()
+        assertEquals(listOf("a"),CallInbox.parseResults(text).map { it.first })
+        assertEquals(listOf("a"),CallInbox.parseResults(ok.toString()).map { it.first })
+        assertTrue(CallInbox.batchName(5,listOf("x")).startsWith("b-0000000000005-"))
+        assertTrue(CallInbox.batchName(5,listOf("x"))<CallInbox.batchName(40,listOf("y")))
     }
 }

@@ -65,9 +65,13 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         db.execute("UPDATE call_transcription_jobs SET state='QUEUED',reason='INTERRUPTED',updated_ms=? WHERE state='RUNNING'",now());null
     }
 
-    fun nextQueued():Job? = db.query("""SELECT j.state,j.reason,j.attempts,x.* FROM call_transcription_jobs j JOIN ($select WHERE r.owner_key=?) x
+    /** Newest first; with [oldBefore] (처음 정리) recordings before it come after all newer ones, oldest first, so the
+     * old ones reach the analysis in time order. */
+    fun nextQueued(oldBefore:Long?=null):Job? = db.query("""SELECT j.state,j.reason,j.attempts,x.* FROM call_transcription_jobs j JOIN ($select WHERE r.owner_key=?) x
         ON x.recording_id=j.recording_id AND x.source_version=j.source_version AND x.audio_sha256=j.audio_sha
-        WHERE j.state='QUEUED' ORDER BY coalesce(x.original_started_at_ms,0) DESC,j.updated_ms LIMIT 1""".trimIndent(),GeneralLocalStore.OWNER)
+        WHERE j.state='QUEUED' ORDER BY CASE WHEN coalesce(x.original_started_at_ms,x.modified_at_ms,0)<CAST(? AS INTEGER) THEN 1 ELSE 0 END,
+        CASE WHEN coalesce(x.original_started_at_ms,x.modified_at_ms,0)<CAST(? AS INTEGER) THEN coalesce(x.original_started_at_ms,x.modified_at_ms,0) ELSE -coalesce(x.original_started_at_ms,0) END,
+        j.updated_ms LIMIT 1""".trimIndent(),GeneralLocalStore.OWNER,oldBefore ?: Long.MIN_VALUE,oldBefore ?: Long.MIN_VALUE)
         .singleOrNull()?.let{Job(candidate(it),it["state"].toString(),it["reason"].toString(),(it["attempts"] as Number).toInt())}
 
     /** QUEUED -> RUNNING, counting the attempt. False when the row is no longer queued. */

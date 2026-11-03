@@ -49,6 +49,8 @@ internal class CallTranscriptionRunner(
     private val speed:(Long)->Unit={},
     /** True for an old recording (처음 정리) that has to wait for the charger or more battery. */
     private val holdOld:(CallTranscriptionStore.Candidate)->Boolean={false},
+    /** The first-pass start while it runs: older recordings are done after newer ones, oldest first. */
+    private val oldBefore:()->Long?={null},
 ) {
     data class Pass(val state:String,val done:Int,val failed:Int)
     private class Stopped:RuntimeException()
@@ -61,9 +63,9 @@ internal class CallTranscriptionRunner(
         var done=0;var failed=0
         repeat(maxJobs) {
             if(stopped())return Pass("STOPPED",done,failed)
-            val job=store.nextQueued() ?: return Pass("IDLE",done,failed)
+            val job=store.nextQueued(oldBefore()) ?: return Pass("IDLE",done,failed)
             val c=job.candidate
-            if(holdOld(c))return Pass("WAIT_POWER",done,failed) // newest first: everything after this is old too
+            if(holdOld(c))return Pass("WAIT_POWER",done,failed) // new ones come first: everything after this is old too
             if(!store.claim(c.key))return@repeat
             try {
                 val started=now()
@@ -128,7 +130,8 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                     sink={ CallTranscriptSinks.factory?.invoke(applicationContext) },
                     stopped={ isStopped || tooHot() },
                     speed={ ms -> settings.update{ it.put(PipelineSettingsKeys.LAST_MS_PER_AUDIO_MINUTE,ms).put(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,System.currentTimeMillis()) } },
-                    holdOld={ c -> FirstPass.isOld(c.startedAtMs ?: c.modifiedMs,settings.snapshot()) && !FirstPass.powerOk(applicationContext) }
+                    holdOld={ c -> FirstPass.isOld(c.startedAtMs ?: c.modifiedMs,settings.snapshot()) && !FirstPass.powerOk(applicationContext) },
+                    oldBefore={ settings.snapshot().let { s -> FirstPass.start(s).takeUnless { FirstPass.done(s) } } }
                 ).run()
                 if(pass.state=="MORE")enqueue(applicationContext)
                 Result.success()

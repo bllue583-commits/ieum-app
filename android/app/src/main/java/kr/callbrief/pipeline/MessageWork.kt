@@ -167,7 +167,8 @@ internal object MessageIntake {
                         val from=(m.from?.firstOrNull() as? javax.mail.internet.InternetAddress)
                         if(isBulk(m.getHeader("List-Unsubscribe")!=null,m.getHeader("Precedence")?.firstOrNull(),from?.address))continue
                         val body=newPart(runCatching { text(m) }.getOrNull().orEmpty()).take(3000)
-                        val who=from?.personal?.takeIf { it.isNotBlank() } ?: from?.address
+                        // The address identifies the sender (design: 장부의 원본); the name is in the text.
+                        val who=from?.address?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: from?.personal
                         val content="제목: ${m.subject.orEmpty()}\n보낸 사람: ${listOfNotNull(from?.personal,from?.address).joinToString(" ")}\n\n$body"
                         val id=MessageKind.MAIL+(uidFolder?.let { "${it.uidValidity}:${it.getUID(m)}" } ?: "${m.messageNumber}:$at")
                         if(store.insertMessage(id,at,who,content)) added++

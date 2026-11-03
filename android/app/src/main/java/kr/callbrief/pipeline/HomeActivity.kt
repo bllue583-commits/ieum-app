@@ -167,11 +167,11 @@ class HomeActivity:ComponentActivity() {
         s.firstPass?.let { f ->
             val c=CallUi.card(this,rail=CallUi.ACCENT).apply { tag="home_first_pass" }
             c.addView(CallUi.text(this,"처음 정리 중이에요",CallUi.HEADING,true))
-            c.addView(CallUi.text(this,"10월 1일부터의 통화와 문자를 먼저 정리하고 있어요. 끝나면 다음 통화부터 지난 맥락까지 함께 보고 정리해요.",CallUi.BODY))
+            c.addView(CallUi.text(this,"10월 1일부터의 통화와 문자를 시간 순서대로 정리하고 있어요. 정리할수록 업체와 사람 장부가 채워져 다음 통화를 더 정확하게 정리해요.",CallUi.BODY))
             val lines=buildList {
                 if(f.toTranscribe>0) add("글자로 바꿀 녹음 ${f.toTranscribe}개"+(f.hoursLeft?.let { h -> ", 약 ${if(h<1) "1시간 안" else "${Math.round(h)}시간"}" } ?: ""))
                 if(f.waiting>0) add("요약을 기다리는 기록 ${f.waiting}건")
-                if(f.toTranscribe==0 && f.waiting==0) add("모은 기록으로 업체와 사람을 정리하고 있어요")
+                if(f.toTranscribe==0 && f.waiting==0) add("지난 문자와 메일을 읽고 있어요")
                 if(f.unrecorded>0) add("녹음 없는 통화 ${f.unrecorded}건 (통화기록 기준)")
             }
             lines.forEach { c.addView(CallUi.text(this,it,CallUi.BODY,true)) }
