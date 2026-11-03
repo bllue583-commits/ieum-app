@@ -56,7 +56,7 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         val sent=inbox.files.keys
         assertEquals(20,sent.count { it.startsWith("inbox/b-") });assertEquals(1,sent.count { !it.startsWith("inbox/b-") })
         assertTrue("old ones say so",inbox.files.filterKeys { it.startsWith("inbox/b-") }.values.all { JSONObject(it).getString("message").startsWith("[처음 정리]") })
-        assertFalse(inbox.files.getValue(sent.first { !it.startsWith("inbox/b-") }).contains("[처음 정리]"))
+        assertFalse(JSONObject(inbox.files.getValue(sent.first { !it.startsWith("inbox/b-") })).getString("message").contains("[처음 정리]"))
 
         answer(inbox);runner(inbox,s).runPending()
         assertEquals("the last two old ones follow",2,inbox.files.keys.count { it.startsWith("inbox/b-") })
