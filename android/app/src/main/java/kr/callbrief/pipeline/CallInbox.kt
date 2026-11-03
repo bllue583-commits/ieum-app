@@ -20,6 +20,8 @@ internal interface CallInboxStore {
     fun list(dir:String):List<Pair<String,String>>
     fun get(path:String):String
     fun delete(path:String,sha:String)
+    /** Writes [path] whether or not it exists (put leaves an existing file alone). */
+    fun replace(path:String,json:String) { put(path,json) }
     /** Large binary file (the update APK) streamed to [to]. */
     fun download(path:String,to:java.io.File) { to.writeText(get(path)) }
 }
@@ -37,6 +39,14 @@ internal class GitHubInboxStore(private val repo:String,private val token:String
         val (code,text)=call(request(path).put(body.toString().toRequestBody(this.json)).build())
         if(code==422)return // already there (re-send after a lost reply)
         ok(code,text)
+    }
+    override fun replace(path:String,json:String) {
+        val (code,text)=call(request(path).get().build())
+        val sha=if(code==200) JSONObject(text).optString("sha").takeIf { it.isNotEmpty() } else null
+        if(code!=200 && code!=404) ok(code,text)
+        val body=JSONObject().put("message","state").put("content",Base64.encodeToString(json.toByteArray(),Base64.NO_WRAP)).apply { sha?.let { put("sha",it) } }
+        val (c2,t2)=call(request(path).put(body.toString().toRequestBody(this.json)).build())
+        ok(c2,t2)
     }
     override fun list(dir:String):List<Pair<String,String>> {
         val (code,text)=call(request(dir).get().build())
@@ -72,18 +82,22 @@ internal object CallInbox {
     const val OLD="b-"
     /** The repository ledger the task keeps, and the user's corrections waiting for it (design: 장부의 원본). */
     const val LEDGER="ledger/ledger.json";const val EDITS="ledger/edits"
+    /** The morning tidy (design: 새벽 정리): what the phone sends it once a night, and what it proposes back. */
+    const val TIDY_STATE="tidy/state.json";const val TIDY_PROPOSAL="tidy/proposal.json"
+    /** A record as the task and the ledger know it: a hash of its id, so no number or name shows. */
+    fun recordKey(recordId:String)="r_"+fileName(recordId).take(24)
     fun batchName(firstMs:Long,recordIds:List<String>)=OLD+"%013d-".format(firstMs)+fileName(recordIds.joinToString("|")).removeSuffix(".json").take(16)+".json"
     /** Repository-safe file name for a record id (no phone numbers or names in paths). */
     fun fileName(recordId:String)=MessageDigest.getInstance("SHA-256").digest(recordId.toByteArray()).joinToString(""){"%02x".format(it)}.take(32)+".json"
     /** Self-contained job: the scheduled task follows `system`, reads `message`, answers with JSON matching `schema`. */
     fun job(recordId:String,request:ClaudeCallRequest,now:Long):String=JSONObject().put("id",recordId).put("createdMs",now)
-        .put("counterpartId",request.counterpartId ?: JSONObject.NULL)
+        .put("counterpartId",request.counterpartId ?: JSONObject.NULL).put("recordKey",recordKey(recordId))
         .put("system",ClaudeCallAnalyzer.SYSTEM).put("message",ClaudeCallAnalyzer.userMessage(request)).put("schema",ClaudeCallAnalyzer.SCHEMA).toString()
     /** Several old records in time order; the task analyses them one after another, carrying the ledger along, and
      * answers with {"id": ..., "results": [{"id": record, "analysis": {...}}]}. */
     fun batch(items:List<Pair<String,ClaudeCallRequest>>,now:Long):String=JSONObject().put("id",FirstPass.BATCH_PREFIX+fileName(items.joinToString("|") { it.first }).removeSuffix(".json"))
         .put("createdMs",now).put("system",ClaudeCallAnalyzer.SYSTEM).put("schema",ClaudeCallAnalyzer.SCHEMA)
-        .put("items",JSONArray().apply { items.forEach { (id,r) -> put(JSONObject().put("id",id).put("counterpartId",r.counterpartId ?: JSONObject.NULL).put("message",ClaudeCallAnalyzer.userMessage(r))) } }).toString()
+        .put("items",JSONArray().apply { items.forEach { (id,r) -> put(JSONObject().put("id",id).put("counterpartId",r.counterpartId ?: JSONObject.NULL).put("recordKey",recordKey(id)).put("message",ClaudeCallAnalyzer.userMessage(r))) } }).toString()
     /** Result file: {"id": ..., "analysis": {...}} where analysis matches the schema. */
     fun parseResult(text:String):Pair<String,ClaudeCallAnalysis> { val o=JSONObject(text);return o.getString("id") to ClaudeCallAnalysis.parse(o.getJSONObject("analysis")) }
     /** One result file: a single record, or a batch's list. Broken entries are left out. */

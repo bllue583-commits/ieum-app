@@ -44,6 +44,7 @@ class HomeActivity:ComponentActivity() {
         val missing=listOf(android.Manifest.permission.READ_SMS,android.Manifest.permission.READ_CALL_LOG).filterNot(::granted)
         if(missing.isEmpty() || prefs.getBoolean("asked_reading_v1",false) || kr.callbrief.BuildConfig.LOCAL_PREVIEW) return
         prefs.edit().putBoolean("asked_reading_v1",true).apply()
+        missing.forEach { ReadingPermission.markAsked(this,it) }
         askReading.launch(missing.toTypedArray())
     }
     private fun notifyAllowed()=android.os.Build.VERSION.SDK_INT<33||checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)==android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -133,10 +134,14 @@ class HomeActivity:ComponentActivity() {
 
         // First-run checklist: done steps get a tick, only the next step is open (one thing at a time).
         class Step(val done:Boolean,val label:String,val detail:String,val button:String,val action:()->Unit)
+        /** Asked once and still not allowed: Android may be holding it as a restricted setting for a sideloaded app. */
+        fun readingStep(done:Boolean,permission:String,what:String,detail:String,ask:androidx.activity.result.ActivityResultLauncher<String>)=
+            if(!done && ReadingPermission.asked(this,permission)) Step(false,"$what 읽기 허용",ReadingPermission.restrictedHelp(what),"앱 정보 열기") { ReadingPermission.openAppInfo(this) }
+            else Step(done,"$what 읽기 허용",detail,"$what 읽기 허용") { ReadingPermission.markAsked(this,permission);ask.launch(permission) }
         val steps=listOfNotNull(
             Step(s.folder,"녹음 폴더 연결","통화 녹음 폴더(보통 Recordings › Call)가 열리면 아래 [이 폴더 사용]을 누르세요.","녹음 폴더 고르기") { pickFolder.launch(CallFolder.pickIntent()) },
-            Step(s.sms,"문자 읽기 허용","업무 문자도 통화와 함께 정리해요. 문자는 휴대폰 안에서 읽어요.","문자 읽기 허용") { askSms.launch(android.Manifest.permission.READ_SMS) },
-            Step(s.callLog,"통화기록 읽기 허용","녹음과 통화기록을 맞춰서 상대 번호를 찾아요. 통화기록은 휴대폰 밖으로 나가지 않아요.","통화기록 읽기 허용") { askCallLog.launch(android.Manifest.permission.READ_CALL_LOG) },
+            readingStep(s.sms,android.Manifest.permission.READ_SMS,"문자","업무 문자도 통화와 함께 정리해요. 문자는 휴대폰 안에서 읽어요.",askSms),
+            readingStep(s.callLog,android.Manifest.permission.READ_CALL_LOG,"통화기록","녹음과 통화기록을 맞춰서 상대 번호를 찾아요. 통화기록은 휴대폰 밖으로 나가지 않아요.",askCallLog),
             if(CallInboxConfig.enabled) null else Step(s.key,"Claude 키 넣기","통화를 요약하는 데 쓰는 키예요. 설정 화면에 붙여 넣으면 돼요.","설정에서 키 넣기") { open(CallSettingsActivity::class.java) },
             Step(s.consent,"정리 동의","녹음 파일은 휴대폰에 그대로 두고, 글자로 바꾼 통화 내용만 보내 정리해요. 설정에서 언제든 끌 수 있어요.","동의하고 켜기") { agree() },
             Step(s.model=="READY","음성 인식 모델 받기",
@@ -208,5 +213,17 @@ class HomeActivity:ComponentActivity() {
             c.addView(CallUi.BarChart(this,s.week,days.mapIndexed { i,d -> if(i==6) "오늘" else CallUi.weekday(d) }),LinearLayout.LayoutParams(-1,CallUi.dp(this,150)))
             body.addView(c)
         }
+    }
+}
+
+/** Text and call-log access. A sideloaded app on recent Android can get these refused as "제한된 설정" without a dialog:
+ * after one ask, the screens point to App info, where the restriction is lifted and the permission is allowed. */
+internal object ReadingPermission {
+    private fun prefs(c:android.content.Context)=c.getSharedPreferences("ieum_ui",android.content.Context.MODE_PRIVATE)
+    fun asked(c:android.content.Context,permission:String)=prefs(c).getBoolean("asked_$permission",false)
+    fun markAsked(c:android.content.Context,permission:String)=prefs(c).edit().putBoolean("asked_$permission",true).apply()
+    fun restrictedHelp(what:String)="허용 창이 뜨지 않았다면 앱 정보에서 오른쪽 위 메뉴(⋮)를 눌러 제한된 설정을 허용한 뒤, 권한에서 $what 항목을 허용해 주세요."
+    fun openAppInfo(a:android.app.Activity) {
+        runCatching { a.startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.parse("package:${a.packageName}"))) }
     }
 }

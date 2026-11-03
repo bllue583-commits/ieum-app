@@ -127,20 +127,35 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         assertTrue(FirstPass.beforeRange(FirstPass.FROM_MS-1));assertFalse(FirstPass.beforeRange(FirstPass.FROM_MS));assertFalse(FirstPass.beforeRange(null))
     }
 
-    @Test fun recordingsMatchTheCallLogByNumberNameOrTheOnlyAnsweredCall() {
-        val t=now
+    @Test fun recordingsMatchTheCallLogWithinOneMinuteBeforeToTwoAfterAndSimilarLength() {
+        val t=now;val min=60_000L
         fun e(id:Long,n:String?,name:String?,at:Long,dur:Long=60_000,type:Int=1)=FirstPass.LogEntry(id,n,name,at,dur,type)
-        val m=FirstPass.match(listOf(
-            FirstPass.RecordForMatch("byNumber",t,"010-1111-2222","01011112222"),
-            FirstPass.RecordForMatch("byName",t+3_600_000,"홍 길동","홍길동"),
-            FirstPass.RecordForMatch("only",t+7_200_000,null,null),
-            FirstPass.RecordForMatch("none",t+9_000_000,null,null)),
-            listOf(e(1,"01099998888",null,t+10_000),e(2,"01011112222",null,t+60_000),
-                e(3,"01033334444","홍길동",t+3_600_000+90_000),e(4,"01055556666","다른 사람",t+3_600_000+5_000),
-                e(5,"01077778888",null,t+7_200_000-30_000),e(6,"01077778888",null,t+7_200_000+20_000,dur=0,type=3),
-                e(7,"01012121212",null,t+9_000_000+400_000)))
-        assertEquals(2L,m["byNumber"]?.id);assertEquals(3L,m["byName"]?.id);assertEquals(5L,m["only"]?.id);assertNull(m["none"])
-        assertEquals("받은 전화",m["only"]?.direction)
+        fun r(id:String,at:Long,cp:String?,key:String?,dur:Long=60_000)=FirstPass.RecordForMatch(id,at,cp,key,dur)
+        // Window edges: the recording may start 1 min before to 2 min after the log time.
+        assertEquals(1L,FirstPass.match(listOf(r("a",t-min,null,null)),listOf(e(1,null,null,t)))["a"]?.id)
+        assertNull(FirstPass.match(listOf(r("a",t-min-1000,null,null)),listOf(e(1,null,null,t)))["a"])
+        assertEquals(1L,FirstPass.match(listOf(r("a",t+2*min,null,null)),listOf(e(1,null,null,t)))["a"]?.id)
+        assertNull(FirstPass.match(listOf(r("a",t+2*min+1000,null,null)),listOf(e(1,null,null,t)))["a"])
+        // Lengths must agree within 20% or 15 s.
+        assertEquals(1L,FirstPass.match(listOf(r("a",t,null,null,dur=70_000)),listOf(e(1,null,null,t,dur=60_000)))["a"]?.id)
+        assertNull(FirstPass.match(listOf(r("a",t,null,null,dur=120_000)),listOf(e(1,null,null,t,dur=60_000)))["a"])
+        // Two candidates in the same window: left unlinked.
+        assertNull(FirstPass.match(listOf(r("a",t,null,null)),listOf(e(1,"01011112222",null,t),e(2,"01033334444",null,t+30_000)))["a"])
+        // A number in the filename picks its entry even with another call nearby; a name picks the phone-book name.
+        assertEquals(2L,FirstPass.match(listOf(r("a",t,"010-3333-4444","01033334444")),listOf(e(1,"01011112222",null,t),e(2,"01033334444",null,t+30_000)))["a"]?.id)
+        assertEquals(1L,FirstPass.match(listOf(r("a",t,"홍 길동","홍 길동")),listOf(e(1,"01011112222","홍길동",t),e(2,"01033334444","김민수",t)))["a"]?.id)
+        assertNull("a name not in the log",FirstPass.match(listOf(r("a",t,"박철수","박철수")),listOf(e(1,"01011112222","홍길동",t)))["a"])
+        // Missed and rejected calls are never candidates.
+        assertNull(FirstPass.match(listOf(r("a",t,null,null)),listOf(e(1,null,null,t,dur=0,type=3),e(2,null,null,t,type=5)))["a"])
+        assertEquals("받은 전화",e(1,null,null,t).direction);assertEquals("건 전화",e(1,null,null,t,type=2).direction)
+    }
+
+    @Test fun callsWithoutARecordingAreCountedButNotMissedOrRejectedOnes() {
+        CallRecordStore(context){ now }.use { db ->
+            db.reconcileCallLog(listOf(FirstPass.LogEntry(1,"01011112222",null,now,60_000,1),FirstPass.LogEntry(2,"01011112222",null,now+day,30_000,2),
+                FirstPass.LogEntry(3,"01011112222",null,now,0,3),FirstPass.LogEntry(4,"01011112222",null,now,0,5)))
+            assertEquals(2,db.unrecordedCalls())
+        }
     }
 
     @Test fun theCallLogGivesANamedRecordingItsNumberAndDirection() {

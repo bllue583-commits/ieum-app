@@ -35,14 +35,17 @@ internal object CallDigestText {
         val text=if(calls.isEmpty()) "오늘 정리된 통화가 없어요" else "${who}펼치면 통화별 요약이 보여요"+(if(waiting>0) ", 아직 정리 중인 통화가 ${waiting}건 있어요" else "")
         return Message("오늘 통화 ${calls.size}건, 새 체크할 일 ${newTasks}개",text,more(lines))
     }
-    fun morning(items:List<CallTodoItem>,today:LocalDate):Message {
+    /** Up to [ISSUE_LINES] "진행 중인 일" lead the morning lines (design: 새벽 정리). */
+    const val ISSUE_LINES=3
+    fun morning(items:List<CallTodoItem>,today:LocalDate,issues:List<Issue> =emptyList()):Message {
         val overdue=items.count { it.due<today.toString() }
-        val lines=items.sortedBy { it.due }.map { "• ${it.company?.let { c -> "[$c] " } ?: ""}${it.title} — ${CallUi.dueWords(it.due)}"+(if(it.status=="needs_confirmation") " (확인 필요)" else "") }
+        val lines=issues.take(ISSUE_LINES).map { "▸ ${it.title}"+(if(it.status.isBlank()) "" else ": ${it.status}") }+
+            items.sortedBy { it.due }.map { "• ${it.company?.let { c -> "[$c] " } ?: ""}${it.title} — ${CallUi.dueWords(it.due)}"+(if(it.status=="needs_confirmation") " (확인 필요)" else "") }
         return Message("오늘 체크할 일 ${items.size}개"+(if(overdue>0) " (지난 기한 ${overdue}개)" else ""),
-            if(items.isEmpty()) "오늘까지 체크할 일이 없어요" else lines.first().removePrefix("• "),more(lines))
+            if(items.isEmpty()) "오늘까지 체크할 일이 없어요" else lines.first { it.startsWith("• ") }.removePrefix("• "),more(lines))
     }
     fun evening(store:CallRecordStore,day:LocalDate)=evening(store.day(day),store.newTaskCount(day))
-    fun morning(store:CallRecordStore,day:LocalDate)=morning(store.dueItems(day),day)
+    fun morning(store:CallRecordStore,day:LocalDate)=morning(store.dueItems(day),day,store.issues())
 }
 
 /** Next KST run time for a given hour. */

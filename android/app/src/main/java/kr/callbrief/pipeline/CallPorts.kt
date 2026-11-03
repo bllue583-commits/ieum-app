@@ -57,6 +57,9 @@ object PipelineSettingsKeys {
     const val FIRST_PASS_DONE="firstPassDone"
     /** rev of the repository ledger last taken in (design: 장부의 원본). */
     const val LEDGER_REV="ledgerRev"
+    /** Morning tidy (design: 새벽 정리): when the nightly state last went up, and the rev of the last proposal applied. */
+    const val TIDY_SENT_MS="tidySentMs"
+    const val TIDY_REV="tidyRev"
     /** Reading old texts and mail from 10/1 up to where the regular intake began: progress and end. */
     const val SMS_BACKFILL_CURSOR="firstPassSmsCursor"
     const val SMS_BACKFILL_UNTIL="firstPassSmsUntil"

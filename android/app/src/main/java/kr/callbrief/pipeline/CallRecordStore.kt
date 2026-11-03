@@ -50,7 +50,10 @@ internal data class CallTodoItem(val id:String,val title:String,val due:String,v
 internal data class CompanyRow(val id:String,val name:String,val trade:String?,val openTasks:Int,val lastCallMs:Long?)
 internal data class CompanyCall(val recordId:String,val dayMs:Long,val person:String?,val summary:String?)
 internal data class PersonRow(val id:String,val name:String,val role:String?,val isStaff:Boolean)
-internal data class CompanyDetail(val id:String,val name:String,val trade:String?,val memo:String,val tasks:List<OpenItem>,val calls:List<CompanyCall>,val people:List<PersonRow> =emptyList())
+internal data class CompanyDetail(val id:String,val name:String,val trade:String?,val memo:String,val tasks:List<OpenItem>,val calls:List<CompanyCall>,val people:List<PersonRow> =emptyList(),
+                                  val issues:List<Issue> =emptyList())
+/** One "진행 중인 일": a thread of calls, texts and mail with its one-line state (design: 새벽 정리). */
+internal data class Issue(val title:String,val status:String,val companies:List<String>)
 
 internal class CallRecordStore(context:Context,private val clock:()->Long=System::currentTimeMillis):AutoCloseable {
     data class Applied(val op:String,val itemId:String,val title:String,val due:String?,val applied:Boolean)
@@ -81,7 +84,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
             "CREATE TABLE IF NOT EXISTS call_log(log_id INTEGER PRIMARY KEY,number_key TEXT,name TEXT,start_ms INTEGER NOT NULL,duration_ms INTEGER NOT NULL,type INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS call_record_log(record_id TEXT PRIMARY KEY,log_id INTEGER NOT NULL UNIQUE,direction TEXT)",
             // The user's corrections waiting to go to the repository ledger (ledger/edits/).
-            "CREATE TABLE IF NOT EXISTS ledger_edits(id TEXT PRIMARY KEY,json TEXT NOT NULL,created_ms INTEGER NOT NULL)")
+            "CREATE TABLE IF NOT EXISTS ledger_edits(id TEXT PRIMARY KEY,json TEXT NOT NULL,created_ms INTEGER NOT NULL)",
+            // "진행 중인 일" from the repository ledger (design: 새벽 정리), in the ledger's order.
+            "CREATE TABLE IF NOT EXISTS issues(id TEXT PRIMARY KEY,ord INTEGER NOT NULL,title TEXT NOT NULL,status TEXT NOT NULL,companies TEXT NOT NULL,updated_ms INTEGER NOT NULL)")
         /** Columns added after the first release: the repository-ledger id of a person and the user's name lock. */
         private val PEOPLE_COLUMNS=listOf("ledger_id" to "TEXT","name_locked" to "INTEGER NOT NULL DEFAULT 0")
         fun recordId(t:CallTranscript)="${t.recordingId}|${t.sourceVersion}|${t.audioSha256}"
@@ -217,7 +222,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
     fun companyCount():Int=(rows("SELECT COUNT(*) AS n FROM companies").single().long("n") ?: 0).toInt()
     /** All companies, the one called most recently first. */
     fun companies():List<CompanyRow> =rows("""SELECT co.id,co.name,co.trade,
-        (SELECT COUNT(*) FROM task_companies tc JOIN workflow_items i ON i.id=tc.item_id WHERE tc.company_id=co.id AND i.status!='done' AND i.kind='TODO') AS open_n,
+        (SELECT COUNT(*) FROM task_companies tc JOIN workflow_items i ON i.id=tc.item_id WHERE tc.company_id=co.id AND i.status NOT IN ('done','merged') AND i.kind='TODO') AS open_n,
         (SELECT MAX(COALESCE(c.started_ms,c.created_ms)) FROM call_links l JOIN call_records c ON c.record_id=l.record_id WHERE l.company_id=co.id) AS last_ms
         FROM companies co ORDER BY COALESCE(last_ms,0) DESC,co.name""")
         .map { CompanyRow(it.str("id")!!,it.str("name")!!,it.str("trade"),(it.long("open_n") ?: 0).toInt(),it.long("last_ms")) }
@@ -225,12 +230,12 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         val co=companyById(id) ?: return null
         val name=co.str("name")!!
         val tasks=rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.edition,i.created_ms FROM task_companies tc JOIN workflow_items i ON i.id=tc.item_id
-            WHERE tc.company_id=? AND i.status!='done' AND i.kind='TODO' ORDER BY i.created_ms DESC""",id)
+            WHERE tc.company_id=? AND i.status NOT IN ('done','merged') AND i.kind='TODO' ORDER BY i.created_ms DESC""",id)
             .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),null,name,it.long("created_ms") ?: 0) }
         val calls=rows("""SELECT c.record_id,COALESCE(c.started_ms,c.created_ms) AS day_ms,c.summary,p.name AS person FROM call_links l JOIN call_records c ON c.record_id=l.record_id
             LEFT JOIN people p ON p.id=l.person_id WHERE l.company_id=? ORDER BY day_ms DESC LIMIT 10""",id)
             .map { CompanyCall(it.str("record_id")!!,it.long("day_ms") ?: 0,it.str("person"),it.str("summary")) }
-        return CompanyDetail(id,name,co.str("trade"),co.str("memo").orEmpty(),tasks,calls,peopleOf(id))
+        return CompanyDetail(id,name,co.str("trade"),co.str("memo").orEmpty(),tasks,calls,peopleOf(id),issues(name))
     }
     private fun personRow(r:Map<String,Any?>)=PersonRow(r.str("id")!!,r.str("name")!!,r.str("role"),r.long("is_staff")==1L)
     /** People of one company, or with [companyId] null those without a company (staff and unknown). */
@@ -263,7 +268,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         class Open(val task:ClaudeCallRequest.OpenTask,val companyId:String?,val trade:String?)
         val all=rows("""SELECT i.id,i.title,i.due_text,i.status,co.id AS cid,co.name AS cname,co.trade AS ctrade FROM workflow_items i
             LEFT JOIN task_companies tc ON tc.item_id=i.id LEFT JOIN companies co ON co.id=tc.company_id
-            WHERE i.status!='done' AND i.kind='TODO' ORDER BY i.created_ms DESC LIMIT 300""")
+            WHERE i.status NOT IN ('done','merged') AND i.kind='TODO' ORDER BY i.created_ms DESC LIMIT 300""")
             .map { Open(ClaudeCallRequest.OpenTask(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty(),it.str("status")!!,it.str("cname")),it.str("cid"),it.str("ctrade")) }
         val own=all.filter { (companyId!=null && it.companyId==companyId) || it.task.id in sameCounterpart }.take(30)
         val rest=all.filter { o -> own.none { it.task.id==o.task.id } }
@@ -333,7 +338,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
                 else -> {
                     val item=t.taskId!!
                     val owned=rows("SELECT i.revision,i.status,b.last_revision FROM workflow_items i JOIN call_task_bindings b ON b.item_id=i.id WHERE i.id=? AND NOT EXISTS(SELECT 1 FROM workflow_item_history h WHERE h.item_id=i.id)",item).singleOrNull()
-                        ?.takeIf { it.long("revision")==it.long("last_revision") && it.str("status")!="done" }
+                        ?.takeIf { it.long("revision")==it.long("last_revision") && it.str("status") !in setOf("done","merged") }
                     if(owned==null) Applied(t.op,item,t.title,t.due,false) else {
                         val next=owned.long("revision")!!+1
                         if(t.op=="update") port.execute("UPDATE workflow_items SET title=?,due_text=?,evidence_quote=?,revision=? WHERE id=?",t.title.take(240),t.due ?: "",t.quote,next,item)
@@ -359,14 +364,14 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
     /** Open items (any source) with an ISO due date on or before [today]. */
     fun dueItems(today:LocalDate):List<CallTodoItem> =rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.created_ms,
         (SELECT co.name FROM task_companies tc JOIN companies co ON co.id=tc.company_id WHERE tc.item_id=i.id) AS cname
-        FROM workflow_items i WHERE i.status!='done' AND i.due_text!='' ORDER BY i.due_text,i.created_ms""")
+        FROM workflow_items i WHERE i.status NOT IN ('done','merged') AND i.due_text!='' ORDER BY i.due_text,i.created_ms""")
         .filter { val d=it.str("due_text")!!.trim();d.matches(ISO_DATE) && d<=today.toString() }
         .map { CallTodoItem(it.str("id")!!,it.str("title")!!,it.str("due_text")!!.trim(),it.str("status")!!,it.long("revision")!!,it.str("cname"),it.long("created_ms") ?: 0) }
     /** Every open to-do (any source), newest first, with the latest call counterpart of its recording. */
     fun openItems():List<OpenItem> =rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.edition,i.created_ms,
         (SELECT c.counterpart FROM call_records c WHERE c.recording_id=i.recording_id ORDER BY c.created_ms DESC LIMIT 1) AS counterpart,
         (SELECT co.name FROM task_companies tc JOIN companies co ON co.id=tc.company_id WHERE tc.item_id=i.id) AS cname
-        FROM workflow_items i WHERE i.status!='done' AND i.kind='TODO' ORDER BY i.created_ms DESC LIMIT 300""")
+        FROM workflow_items i WHERE i.status NOT IN ('done','merged') AND i.kind='TODO' ORDER BY i.created_ms DESC LIMIT 300""")
         .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),it.str("counterpart"),it.str("cname"),it.long("created_ms") ?: 0) }
     /** The user's "완료했어요": marks one item done and records the edit so analysis never touches it again. */
     fun completeItem(item:String,revision:Long)=port.transaction {
@@ -427,7 +432,80 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
                 if(staff) 1 else 0,company,normName(p.text("role"))?.take(20),if(staff) 1 else 0,company,id)
             val aliases=p.optJSONArray("aliases") ?: JSONArray()
             for(k in 0 until aliases.length()) { val a=noSpace(aliases.optString(k));if(a.isNotEmpty() && a!=noSpace(row.str("name").orEmpty())) port.execute("INSERT OR REPLACE INTO person_aliases VALUES(?,?)",a,id) }
-        };null
+        }
+        // Duplicates the morning tidy found: a company spelled two ways, a person known twice without a number between them.
+        for(i in 0 until companies.length()) { val c=companies.optJSONObject(i) ?: continue
+            val from=normName(c.text("name")) ?: continue;val into=normName(c.text("mergedInto")) ?: continue
+            val a=rows("SELECT id FROM companies WHERE REPLACE(name,' ','')=?",noSpace(from)).firstOrNull()?.str("id") ?: continue
+            val b=upsertCompany(into,now);if(a==b) continue
+            port.execute("UPDATE people SET company_id=? WHERE company_id=?",b,a);port.execute("UPDATE call_links SET company_id=? WHERE company_id=?",b,a)
+            port.execute("UPDATE task_companies SET company_id=? WHERE company_id=?",b,a);port.execute("DELETE FROM companies WHERE id=?",a) }
+        for(i in 0 until people.length()) { val p=people.optJSONObject(i) ?: continue
+            val a=p.text("id")?.let { rows("SELECT * FROM people WHERE ledger_id=?",it).firstOrNull() } ?: continue
+            val b=p.text("mergedInto")?.let { rows("SELECT * FROM people WHERE ledger_id=?",it).firstOrNull() } ?: continue
+            val aPhone=a.str("phone_key");val bPhone=b.str("phone_key")
+            if(a.str("id")==b.str("id") || (aPhone!=null && bPhone!=null && aPhone!=bPhone)) continue
+            port.execute("UPDATE call_links SET person_id=? WHERE person_id=?",b.str("id"),a.str("id"))
+            port.execute("DELETE FROM people WHERE id=?",a.str("id"))
+            if(aPhone!=null) port.execute("UPDATE people SET phone_key=COALESCE(phone_key,?) WHERE id=?",aPhone,b.str("id"))
+            noSpace(a.str("name").orEmpty()).takeIf { it.isNotEmpty() }?.let { port.execute("INSERT OR REPLACE INTO person_aliases VALUES(?,?)",it,b.str("id")) } }
+        o.optJSONArray("issues")?.let { list ->
+            port.execute("DELETE FROM issues")
+            for(i in 0 until list.length()) { val x=list.optJSONObject(i) ?: continue
+                val title=x.text("title") ?: continue
+                port.execute("INSERT OR REPLACE INTO issues VALUES(?,?,?,?,?,?)",x.text("id") ?: "i_$i",i,title.take(80),x.text("status").orEmpty().take(160),
+                    (x.optJSONArray("companies") ?: JSONArray()).toString(),now) } };null
+    }
+
+    /** "진행 중인 일" in the ledger's order; with [company], only those that name it. */
+    fun issues(company:String?=null):List<Issue> =rows("SELECT * FROM issues ORDER BY ord").map { r ->
+        val names=JSONArray(r.str("companies") ?: "[]").let { a -> (0 until a.length()).map { a.optString(it) } }
+        Issue(r.str("title")!!,r.str("status").orEmpty(),names) }.filter { company==null || it.companies.any { n -> noSpace(n)==noSpace(company) } }
+
+    // ---- 새벽 정리 (design: 새벽 정리) ------------------------------------------------------------------------------
+    /** What the morning tidy reads: open check items (marked when the user changed them, which it must leave alone) and
+     * every work record since 10/1 as summary only, keyed by a hash so no number shows. */
+    fun tidyState(firstPassDone:Boolean,now:Long):JSONObject {
+        val tasks=JSONArray()
+        rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.created_ms,b.last_revision,
+            (SELECT COUNT(*) FROM workflow_item_history h WHERE h.item_id=i.id) AS edits,
+            (SELECT co.name FROM task_companies tc JOIN companies co ON co.id=tc.company_id WHERE tc.item_id=i.id) AS cname
+            FROM workflow_items i LEFT JOIN call_task_bindings b ON b.item_id=i.id WHERE i.status NOT IN ('done','merged') AND i.kind='TODO' ORDER BY i.created_ms""").forEach { r ->
+            val locked=r.long("last_revision")==null || r.long("last_revision")!=r.long("revision") || (r.long("edits") ?: 0)>0
+            tasks.put(JSONObject().put("id",r.str("id")).put("title",r.str("title")).put("due",r.str("due_text").orEmpty()).put("status",r.str("status"))
+                .put("company",r.str("cname") ?: JSONObject.NULL).put("createdMs",r.long("created_ms") ?: 0).put("locked",locked)) }
+        val records=JSONArray()
+        rows("""$withPerson WHERE c.state='ANALYZED' AND c.summary IS NOT NULL AND COALESCE(c.started_ms,c.created_ms)>=CAST(? AS INTEGER)
+            ORDER BY COALESCE(c.started_ms,c.created_ms)""",FirstPass.FROM_MS).map(::map).filter { it.analysis?.business!=false }.forEach { c ->
+            val lid=rows("SELECT p.ledger_id FROM call_links l JOIN people p ON p.id=l.person_id WHERE l.record_id=?",c.recordId).firstOrNull()?.str("ledger_id")
+            records.put(JSONObject().put("key",CallInbox.recordKey(c.recordId)).put("atMs",c.dayMs).put("kind",c.kind)
+                .put("counterpartId",lid ?: JSONObject.NULL).put("company",c.analysis?.counterpartCompany ?: JSONObject.NULL).put("summary",c.summary)) }
+        return JSONObject().put("generatedMs",now).put("firstPassDone",firstPassDone).put("tasks",tasks).put("records",records)
+    }
+    /** Applies the morning tidy's proposal to check items the AI still owns (never one the user changed or finished):
+     * clearer wording, duplicates merged away, and "끝났는지 확인" where it looks finished. Returns how many changed. */
+    fun applyTidy(o:JSONObject):Int=port.transaction {
+        fun owned(id:String)=rows("""SELECT i.revision FROM workflow_items i JOIN call_task_bindings b ON b.item_id=i.id WHERE i.id=? AND i.revision=b.last_revision
+            AND i.status NOT IN ('done','merged') AND NOT EXISTS(SELECT 1 FROM workflow_item_history h WHERE h.item_id=i.id)""",id).singleOrNull()?.long("revision")
+        fun bump(id:String,rev:Long) { port.execute("UPDATE call_task_bindings SET last_revision=? WHERE item_id=?",rev+1,id) }
+        var n=0
+        val ops=o.optJSONArray("tasks") ?: JSONArray()
+        for(k in 0 until ops.length()) { val t=ops.optJSONObject(k) ?: continue
+            val id=t.optString("id");val rev=owned(id) ?: continue
+            when(t.optString("op")) {
+                "rewrite" -> { val title=t.optString("title").trim().take(240);if(title.isEmpty()) continue
+                    val due=t.optString("due").trim().takeIf { d -> d.isEmpty() || ISO_DATE.matches(d) } ?: continue
+                    port.execute("UPDATE workflow_items SET title=?,due_text=?,revision=? WHERE id=?",title,due,rev+1,id) }
+                "merge" -> { val into=t.optString("into")
+                    if(into==id || rows("SELECT 1 FROM workflow_items WHERE id=? AND status NOT IN ('done','merged')",into).isEmpty()) continue
+                    port.execute("UPDATE workflow_items SET status='merged',revision=? WHERE id=?",rev+1,id) }
+                "done_suggested" -> port.execute("UPDATE workflow_items SET status='needs_confirmation',revision=? WHERE id=?",rev+1,id)
+                else -> continue
+            }
+            bump(id,rev);n++
+        }
+        if(n>0) port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER)
+        n
     }
 
     // ---- 처음 정리 -------------------------------------------------------------------------------------------------
@@ -435,8 +513,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
      * the entry's number as its key, so it reaches the same person as calls named by number. */
     fun reconcileCallLog(log:List<FirstPass.LogEntry>)=port.transaction {
         log.forEach { port.execute("INSERT OR REPLACE INTO call_log VALUES(?,?,?,?,?,?)",it.id,it.numberKey,it.name,it.startMs,it.durationMs,it.type) }
-        val open=rows("""SELECT record_id,started_ms,counterpart,counterpart_key FROM call_records WHERE started_ms IS NOT NULL AND recording_id NOT LIKE 'sms:%' AND recording_id NOT LIKE 'mail:%'
-            AND record_id NOT IN (SELECT record_id FROM call_record_log)""").map { FirstPass.RecordForMatch(it.str("record_id")!!,it.long("started_ms")!!,it.str("counterpart"),it.str("counterpart_key")) }
+        val open=rows("""SELECT record_id,started_ms,duration_ms,counterpart,counterpart_key FROM call_records WHERE started_ms IS NOT NULL AND recording_id NOT LIKE 'sms:%' AND recording_id NOT LIKE 'mail:%'
+            AND record_id NOT IN (SELECT record_id FROM call_record_log)""").map { FirstPass.RecordForMatch(it.str("record_id")!!,it.long("started_ms")!!,it.str("counterpart"),it.str("counterpart_key"),it.long("duration_ms") ?: 0) }
         val free=rows("SELECT * FROM call_log WHERE log_id NOT IN (SELECT log_id FROM call_record_log)")
             .map { FirstPass.LogEntry(it.long("log_id")!!,it.str("number_key"),it.str("name"),it.long("start_ms")!!,it.long("duration_ms")!!,(it.long("type") ?: 0).toInt()) }
         for((recordId,e) in FirstPass.match(open,free)) {
@@ -456,8 +534,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
             JOIN recordings r ON r.recording_id=j.recording_id LEFT JOIN local_files l ON l.recording_id=j.recording_id
             WHERE j.state IN ('QUEUED','RUNNING') AND COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)<CAST(? AS INTEGER)""",old).single().long("m")
     }
-    /** Answered calls in the log since 10/1 with no recording. */
-    fun unrecordedCalls():Int=(rows("SELECT COUNT(*) AS n FROM call_log WHERE duration_ms>0 AND log_id NOT IN (SELECT log_id FROM call_record_log)").single().long("n") ?: 0).toInt()
+    /** Answered calls in the log since 10/1 with no recording (missed and rejected calls are not counted). */
+    fun unrecordedCalls():Int=(rows("SELECT COUNT(*) AS n FROM call_log WHERE duration_ms>0 AND type IN (1,2) AND log_id NOT IN (SELECT log_id FROM call_record_log)").single().long("n") ?: 0).toInt()
     /** Start of the earliest stored text ("sms:") or mail ("mail:") record, or null. */
     fun earliestMessage(prefix:String):Long? =rows("SELECT MIN(started_ms) AS m FROM call_records WHERE recording_id LIKE ?","$prefix%").single().long("m")
 

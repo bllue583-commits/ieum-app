@@ -44,20 +44,28 @@ internal object FirstPass {
     data class LogEntry(val id:Long,val numberKey:String?,val name:String?,val startMs:Long,val durationMs:Long,val type:Int) {
         val direction:String? get()=when(type) { CallLog.Calls.INCOMING_TYPE -> "받은 전화";CallLog.Calls.OUTGOING_TYPE -> "건 전화";else -> null }
     }
-    data class RecordForMatch(val recordId:String,val startedMs:Long,val counterpart:String?,val counterpartKey:String?)
+    data class RecordForMatch(val recordId:String,val startedMs:Long,val counterpart:String?,val counterpartKey:String?,val durationMs:Long=0)
     private fun noSpace(s:String?)=s.orEmpty().filterNot { it.isWhitespace() }
+    /** Answered calls only: missed and rejected calls have no recording. */
+    fun answered(e:LogEntry)=e.durationMs>0 && e.type in setOf(CallLog.Calls.INCOMING_TYPE,CallLog.Calls.OUTGOING_TYPE)
 
-    /** Each recording to the call-log entry within 3 minutes of it: same number first, then same phone-book name,
-     * then the only answered call in that window. One entry is used once. */
+    /** Each recording to its call-log entry (design: 처음 정리, 대조). The log time is when the call was placed and the
+     * recording starts once connected, so the recording may be up to 1 minute early or 2 minutes late; the lengths must
+     * agree within 20% or 15 s. A number in the filename must match the entry's number, a name the entry's phone-book
+     * name; with neither, time and length alone. Only a single candidate is taken; two or more leave it unlinked. */
     fun match(records:List<RecordForMatch>,log:List<LogEntry>):Map<String,LogEntry> {
         val used=mutableSetOf<Long>();val out=LinkedHashMap<String,LogEntry>()
         for(r in records.sortedBy { it.startedMs }) {
-            val near=log.filter { it.id !in used && kotlin.math.abs(it.startMs-r.startedMs)<=180_000L }
-            val digits=r.counterpartKey?.takeIf { k -> k.all { it.isDigit() } }
-            val pick=near.filter { digits!=null && it.numberKey==digits }.minByOrNull { kotlin.math.abs(it.startMs-r.startedMs) }
-                ?: near.filter { r.counterpart!=null && it.name!=null && noSpace(it.name)==noSpace(r.counterpart) }.minByOrNull { kotlin.math.abs(it.startMs-r.startedMs) }
-                ?: near.filter { it.durationMs>0 }.singleOrNull()
-            if(pick!=null) { used+=pick.id;out[r.recordId]=pick }
+            val key=r.counterpartKey
+            val candidates=log.filter { e -> e.id !in used && answered(e) && r.startedMs-e.startMs in -60_000L..120_000L &&
+                (r.durationMs<=0 || kotlin.math.abs(r.durationMs-e.durationMs)<=maxOf(15_000L,maxOf(r.durationMs,e.durationMs)/5)) &&
+                when {
+                    key!=null && key.all { it.isDigit() } -> e.numberKey==key
+                    key!=null -> e.name!=null && noSpace(e.name)==noSpace(r.counterpart ?: key)
+                    else -> true
+                } }
+            val pick=candidates.singleOrNull() ?: continue
+            used+=pick.id;out[r.recordId]=pick
         }
         return out
     }

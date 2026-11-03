@@ -76,12 +76,12 @@ class CallSettingsActivity:ComponentActivity() {
         group(CallUi.heading(this,"문자"))
         val sms=checkSelfPermission(android.Manifest.permission.READ_SMS)==android.content.pm.PackageManager.PERMISSION_GRANTED
         body.addView(CallUi.text(this,if(sms) "허용됨 ✓  업무 문자도 통화와 함께 정리해요." else "문자를 읽도록 허용하면 업무 문자도 통화와 함께 정리해요.",CallUi.BODY,sms,if(sms) CallUi.OK else CallUi.INK).apply { tag="sms_state" })
-        if(!sms) body.addView(button("문자 읽기 허용") { askSms.launch(android.Manifest.permission.READ_SMS) }.apply { tag="sms_allow" })
+        if(!sms) readingButton(android.Manifest.permission.READ_SMS,"문자",askSms,"sms_allow")
 
         group(CallUi.heading(this,"통화기록"))
         val log=checkSelfPermission(android.Manifest.permission.READ_CALL_LOG)==android.content.pm.PackageManager.PERMISSION_GRANTED
         body.addView(CallUi.text(this,if(log) "허용됨 ✓  녹음과 통화기록을 맞춰 상대 번호를 찾아요." else "통화기록을 읽도록 허용하면 녹음과 맞춰 상대 번호와 녹음 없는 통화를 찾아요.",CallUi.BODY,log,if(log) CallUi.OK else CallUi.INK).apply { tag="call_log_state" })
-        if(!log) body.addView(button("통화기록 읽기 허용") { askCallLog.launch(android.Manifest.permission.READ_CALL_LOG) }.apply { tag="call_log_allow" })
+        if(!log) readingButton(android.Manifest.permission.READ_CALL_LOG,"통화기록",askCallLog,"call_log_allow")
 
         group(CallUi.heading(this,"메일"))
         mailGroup(s)
@@ -183,6 +183,14 @@ class CallSettingsActivity:ComponentActivity() {
                 input.text.clear();save { it.put(PipelineSettingsKeys.CLAUDE_API_KEY,key) }
             }.apply { tag="api_key_save" })
         }
+    }
+
+    /** Ask; once asked and still refused, explain the restricted setting and open App info instead. */
+    private fun readingButton(permission:String,what:String,ask:androidx.activity.result.ActivityResultLauncher<String>,tag:String) {
+        if(ReadingPermission.asked(this,permission)) {
+            body.addView(CallUi.text(this,ReadingPermission.restrictedHelp(what),CallUi.SMALL,color=CallUi.SUBTLE))
+            body.addView(button("앱 정보 열기") { ReadingPermission.openAppInfo(this) }.apply { this.tag=tag })
+        } else body.addView(button("$what 읽기 허용") { ReadingPermission.markAsked(this,permission);ask.launch(permission) }.apply { this.tag=tag })
     }
 
     private fun mailGroup(s:JSONObject) {

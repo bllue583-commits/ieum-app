@@ -103,6 +103,17 @@ class CompaniesActivity:ComponentActivity() {
         CallUi.band(body,d.name,d.trade?.let { "공종 $it" },back={ detailId=null;load() })
         body.addView(CallUi.section(this,"업체 메모"))
         body.addView(CallUi.card(this).apply { addView(CallUi.text(this@CompaniesActivity,d.memo.ifBlank { "아직 메모가 없어요. 통화가 쌓이면 자동으로 채워져요." },CallUi.BODY,color=if(d.memo.isBlank()) CallUi.SUBTLE else CallUi.INK)) })
+        // "진행 중인 일" from the morning tidy (design: 새벽 정리); shown only once there are some.
+        if(d.issues.isNotEmpty()) {
+            body.addView(CallUi.section(this,"진행 중인 일 (${d.issues.size})"))
+            val c=CallUi.card(this).apply { tag="company_issues" }
+            d.issues.forEachIndexed { i,x ->
+                if(i>0) c.addView(CallUi.divider(this))
+                c.addView(CallUi.text(this,x.title,CallUi.BODY,true))
+                if(x.status.isNotBlank()) c.addView(CallUi.text(this,x.status,CallUi.SMALL,color=CallUi.SUBTLE))
+            }
+            body.addView(c)
+        }
         body.addView(CallUi.section(this,"사람 (${d.people.size})"))
         if(d.people.isEmpty()) body.addView(CallUi.text(this,"아직 알게 된 사람이 없어요.",CallUi.BODY,color=CallUi.SUBTLE))
         if(d.people.isNotEmpty()) body.addView(CallUi.list(this,d.people.map(::personRow)))
