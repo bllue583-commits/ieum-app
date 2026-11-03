@@ -140,8 +140,8 @@ internal class ClaudeCallAnalyzer(private val http:ClaudeCallHttp=OkHttpClaudeCa
             "companyMemo" to nullable("string").put("description","상대 업체 메모 전체 새 글(400자 이내), 바뀐 게 없으면 null"),
             "companyTrade" to nullable("string").put("description","상대 업체 공종(철근, 타설, 전기 등) 또는 null"),
             "business" to JSONObject().put("type","boolean").put("description","업무와 관련 있으면 true, 개인적인 문자·메일이면 false"),
-            "promises" to array(obj("text" to str(),"due" to date(),"owner" to enum("me","them","unknown"),"quote" to str("자막이나 texts 원문 그대로"),"source" to enum("transcript","texts"))),
-            "tasks" to array(obj("op" to enum("create","update","done_suggested"),"taskId" to nullable("string"),"title" to str(),"due" to date(),"quote" to str("자막이나 texts 원문 그대로"),"company" to nullable("string"),"source" to enum("transcript","texts"))))
+            "promises" to array(obj("text" to str(),"due" to date(),"owner" to enum("me","them","unknown"),"quote" to str("자막이나 texts 원문 그대로"),"from" to enum("transcript","texts"))),
+            "tasks" to array(obj("op" to enum("create","update","done_suggested"),"taskId" to nullable("string"),"title" to str(),"due" to date(),"quote" to str("자막이나 texts 원문 그대로"),"company" to nullable("string"),"from" to enum("transcript","texts"))))
         val SYSTEM="""
 당신은 업무 통화를 정리해 주는 비서입니다. 사용자는 하루에 업무 통화를 많이 해서 저녁이 되면 누구와 무슨 약속을 했는지 기억하기 어렵습니다.
 규칙:
@@ -165,7 +165,7 @@ internal class ClaudeCallAnalyzer(private val http:ClaudeCallHttp=OkHttpClaudeCa
 18. business는 이 통화·문자·메일이 사용자의 일(현장, 협력업체, 회사 업무)과 관련 있으면 true입니다. 문자와 메일은 업무 상대만 골라 오지 않으므로 가족, 지인, 쇼핑, 택배, 광고, 금융 알림 같은 개인적인 것도 옵니다. 그런 것이면 business를 false로 하고, summary는 "개인 내용"이라고만 쓰고 나머지 목록은 비우며 이름, 메모, 업체도 모두 null로 두세요. 개인 내용은 요약하거나 옮겨 적지 마세요. 통화는 거의 업무지만, 분명히 개인 통화면 false로 하세요.
 19. 메시지 맨 위에 [처음 정리]가 있으면 이미 정리한 새 기록보다 오래된 지난 기록입니다. summary, keyPoints, counterpart, business는 똑같이 쓰되, siteMemo와 companyMemo에는 아직 모르던 사실만 보태고 더 최신 내용을 지우거나 되돌리지 마세요.
 20. "상대 id"가 있으면 그 상대는 전화번호(메일은 주소)로 확인된 사람입니다. 자막의 이름이 [상대]의 이름과 다르게 들려도 같은 사람이니 [상대]의 이름을 쓰세요.
-21. [통화기록]이 있으면 이름은 전화부 이름과 [상대], [이름 목록]으로 정하고, 날짜 계산은 통화기록의 실제 통화 시각을 기준으로 하세요. <texts>는 같은 상대와 최근 7일 동안 주고받은 업무 문자와 메일 원문입니다. 통화와 문자, 메일에서 오간 내용을 한 흐름으로 이어서 요약하고, 이미 문자로 끝난 일은 새 할 일로 만들지 마세요. promises와 tasks의 quote는 자막이나 <texts>의 원문에서 그대로 복사하고, source에 "transcript" 또는 "texts"를 쓰세요.
+21. [통화기록]이 있으면 이름은 전화부 이름과 [상대], [이름 목록]으로 정하고, 날짜 계산은 통화기록의 실제 통화 시각을 기준으로 하세요. <texts>는 같은 상대와 최근 7일 동안 주고받은 업무 문자와 메일 원문입니다. 통화와 문자, 메일에서 오간 내용을 한 흐름으로 이어서 요약하고, 이미 문자로 끝난 일은 새 할 일로 만들지 마세요. promises와 tasks의 quote는 자막이나 <texts>의 원문에서 그대로 복사하고, from에 근거가 자막이면 "transcript", 문자나 메일이면 "texts"를 쓰세요.
 """.trim()
         private fun durationText(ms:Long)=if(ms<=0) "미상" else "${ms/60000}분 ${(ms/1000)%60}초"
         private fun clip(t:String,n:Int)=t.replace(Regex("\\s+")," ").trim().let { if(it.length>n) it.take(n-1)+"…" else it }
