@@ -102,7 +102,10 @@ python run_gradle.py --log local-$(date +%H%M%S).log :app:compileDebugKotlin
 - **버그 수정:** 실제 통화가 모두 "통화 시각: 시각 미상"으로 분석에 감. 녹음 파일 이름의 시각이 `local_files.filename_time_candidate_ms`에만 있고 자막 단계는 비어 있는 `recordings.original_started_at_ms`만 읽었음 → `CallTranscriptionStore` select에서 둘을 합침, `CallRecordStore` 열 때 기존 기록 보정.
 - **분석 지연 표시:** 3시간 넘게 기다린 기록은 "정리가 늦어지고 있어요, 순서대로 정리해요"(`CallUi.state(CallRecord)`), 저녁 보고에 "아직 정리 중인 통화 N건", 보고 문구 "체크할 일" 통일.
 - **설정 화면:** 구독 방식이면 "통화 정리 방식" 칸 자체를 숨김(사용자 요청, `apiKeyGroup`).
-- **처음 정리(10월 1일부터)** — 설계도 "처음 정리" 절. 코드 `FirstPass.kt` + `CallRecordStore`(call_log, call_record_log, `firstPassProgress`, `digestInput`, `applyDigest`) + `CallRecordAnalysisRunner.runInbox/sendDigest`. 시작 시각은 앱 시작 때 `FIRST_PASS_START_MS`에 한 번 기록. 10/1 이전 녹음은 `BEFORE_START`로 건너뜀(그 전에는 녹음 폴더 전체를 최신부터 거꾸로 자막 만들고 있었음). 통화기록(READ_CALL_LOG)·문자(장문·사진 문자 MMS 포함, 개인 제외 번호 적용) 권한은 앱을 열 때 한 번 요청 + 처음 설정 카드 + 설정 화면.
+- **장부의 원본 = 저장소 장부 (11/4 사용자 결정, 설계도 "장부의 원본" 절):** `ieum-inbox/ledger/ledger.json`(rev, 현장 메모, 업체, 사람 id·이름·소속·직책·별칭·잠금)을 예약 작업이 시간순으로 기록을 처리하며 직접 고침. 폰은 매시간 결과 적용 → 장부 rev가 오르면 받아 반영(`CallRecordAnalysisRunner.takeLedger`, `CallRecordStore.applyLedger`), 결과의 메모는 쓰지 않음. 사람은 **전화번호(메일은 주소) 기준**: 폰이 번호마다 `p_…` id를 만들고(`ledgerIdFor`, `people.ledger_id`), 번호는 폰에만, 요청에는 `counterpartId`만. [이름 고치기]는 `ledger_edits` → `ledger/edits/<id>.json`으로 올라가고 폰에서는 `name_locked`로 장부 반영 전까지 유지.
+- **처음 정리(10월 1일부터, 묶음 시간순):** 코드 `FirstPass.kt`, `CallRecordAnalysisRunner.runInbox`. 시작 시각은 앱 시작 때 `FIRST_PASS_START_MS`에 한 번 기록. 10/1 이전 녹음은 `BEFORE_START`로 건너뜀(그 전에는 녹음 폴더 전체를 최신부터 거꾸로 자막 만들고 있었음). 지난 녹음은 오래된 것부터 자막(`nextQueued(oldBefore)`), 충전 중이나 배터리 50% 이상일 때만. 지난 기록은 15건씩 `inbox/b-<첫 시각>-<해시>.json` 묶음으로, 앞선 기록이 다 준비된 만큼만(`oldestOldJobMs`, 문자·메일 읽기 위치), 2묶음까지. 결과는 묶음마다 `{"id","results":[…]}`. 체크할 일은 최근 7일 기록만. 남은 지난 기록이 없으면 `FIRST_PASS_DONE`. 처음에 만든 "맥락 정리(ctx-) 한 번" 방식은 같은 날 사용자 결정으로 폐기.
+- 통화기록(READ_CALL_LOG)·문자(장문·사진 문자 MMS 포함, 개인 제외 번호 적용) 권한은 앱을 열 때 한 번 요청 + 처음 설정 카드 + 설정 화면. 요청 메시지에 전화번호는 넣지 않음("전화부에 없는 번호" + 상대 id).
+- **예약 작업 지시(11/4 갱신):** pull → 장부 읽기 → edits 반영·잠금 → 새 기록 먼저, b- 묶음 2개까지, 시간순 → 기록마다 분석 후 장부 갱신 → 결과·장부(rev+1) 한 커밋 → 충돌 시 rebase 후 재적용. 옛 형식(상대 id 없음)도 처리. 스크립트 일괄 생성과 파일 내용 출력 금지 명시(11/3 실행이 15건을 스크립트 하나로 49초 만에 만들고 자막을 로그에 찍었음).
 - **문자 점검 결과(사용자 요청):** 10/30 구현은 SMS만 읽어 장문(LMS)·사진 문자(MMS)를 통째로 놓쳤음 → 추가. 설계도의 주기(15분)를 실제(30분)에 맞춤.
 - Mac에는 JDK·Android SDK가 아직 없음 → 판정은 GitHub ci/device-test로. 작업 브랜치에서 CI 확인 후 `feature/lean-calls`에 합쳐야 폰 자동 업데이트(release-apk는 lean-calls·main에서만).
 
@@ -147,8 +150,8 @@ python run_gradle.py --log local-$(date +%H%M%S).log :app:compileDebugKotlin
 - 아직: 설정 화면은 제목 띠만 바뀜(카드 묶음 정리 필요), 아침·저녁 알림 문구의 "할 일" → "체크할 일" 통일, 설계도(Claude Docs) "화면 디자인" 절 개정, 앱 아이콘 다듬기, 모모콜에서 본 "전화 올 때 지난 통화 요약 띄우기" 검토.
 
 ## 6. 다음 할 일 (순서대로, 11/4 갱신)
-1. **처음 정리 실기기 확인** — 업데이트 후 아내 폰 홈의 "처음 정리 중이에요" 카드(녹음 수, 남은 시간, 녹음 없는 통화)와 `ieum-inbox`의 `b-`·`ctx-` 파일 흐름, 맥락 정리 후 장부(업체·사람·현장 메모)가 채워지는지 확인. 통화 내용은 열어 보지 말고 파일 이름·건수·형식만 볼 것.
-2. **예약 분석 지시와 한도** — 루틴 프롬프트는 11/4에 `b-`/`ctx-` 순서·20건 제한으로 갱신. 처음 정리 동안 분석 양이 늘어 주간 한도에 다시 걸릴 수 있음(11/1~11/3 실제 발생). 루틴 실행 기록(`RemoteTrigger list_runs`→`get_run_log`)으로 실패 원인 확인. effort는 claude.ai/code/routines 에서 사용자가 medium으로(안내만).
+1. **실기기 확인** — 업데이트 후 아내 폰 홈의 "처음 정리 중이에요" 카드, `ieum-inbox`의 `b-` 묶음과 `ledger/ledger.json` rev 증가, 폰 장부(업체·사람·현장 메모)가 채워지는지 확인. 통화 내용은 열어 보지 말고 파일 이름·건수·형식·rev만 볼 것. 첫 예약 실행(새 지시) 로그에서 장부를 실제로 고쳤는지, 스크립트 일괄 생성이 없는지 확인.
+2. **예약 분석 한도** — 루틴 프롬프트는 11/4에 장부 방식으로 갱신. 처음 정리 동안 분석 양이 늘어 주간 한도에 다시 걸릴 수 있음(11/1~11/3 실제 발생). 루틴 실행 기록(`RemoteTrigger list_runs`→`get_run_log`)으로 실패 원인 확인. effort는 claude.ai/code/routines 에서 사용자가 medium으로(안내만).
 3. **문자·메일 실제 확인** — MMS(장문·사진) 읽기는 실제 삼성 메시지 앱 데이터로 아직 확인 안 함. RCS(채팅+) 메시지는 일반 문자 저장소에 없을 수 있음(미확인).
 4. **inbox-e2e 정기 점검이 돌지 않음** — `schedule`은 기본 브랜치(`main`) 워크플로만 실행. `feature/lean-calls`를 `main`에 합치는 시점에 함께 정리.
 5. 토큰 만료 전 서명용 비밀 따로 고정 (설계도 남은 일).
