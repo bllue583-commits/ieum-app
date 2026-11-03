@@ -67,7 +67,7 @@ class CallSettingsActivity:ComponentActivity() {
         page.removeAllViews();body=page
         CallUi.band(page,"설정","처음 설정한 것도 여기서 언제든 바꿀 수 있어요")
 
-        group(CallUi.heading(this,"1. 녹음 폴더"))
+        group(CallUi.heading(this,"녹음 폴더"))
         val folder=s.optString("treeUri").isNotBlank()
         body.addView(CallUi.text(this,if(folder) "연결됨 ✓  새 통화를 자동으로 가져와요." else "아직 연결하지 않았어요. 통화 녹음 폴더를 골라 주세요.",CallUi.BODY,true,if(folder) CallUi.OK else CallUi.WARN).apply { tag="folder_state" })
         body.addView(button(if(folder) "폴더 바꾸기" else "녹음 폴더 고르기") { pickFolder.launch(CallFolder.pickIntent()) }.apply { tag="folder_pick" })
@@ -80,28 +80,10 @@ class CallSettingsActivity:ComponentActivity() {
         group(CallUi.heading(this,"메일"))
         mailGroup(s)
 
-        group(CallUi.heading(this,"2. 통화 정리 방식"))
-        val hasKey=s.optString(PipelineSettingsKeys.CLAUDE_API_KEY).isNotBlank()
-        if(CallInboxConfig.enabled) {
-            body.addView(CallUi.text(this,"자동 정리 ✓  Claude 구독으로 매시간 정리해요. 따로 넣을 키가 없어요.",CallUi.BODY,true,CallUi.OK).apply { tag="api_key_state" })
-        } else if(hasKey) {
-            body.addView(CallUi.text(this,"저장됨 ✓  (보안을 위해 다시 보여주지 않아요)",CallUi.BODY,true,CallUi.OK).apply { tag="api_key_state" })
-            body.addView(button("키 지우기") { save { it.remove(PipelineSettingsKeys.CLAUDE_API_KEY) } }.apply { tag="api_key_delete" })
-        } else {
-            body.addView(CallUi.text(this,"통화를 요약하는 데 쓰는 키예요. Claude 콘솔(platform.claude.com)에서 만든 키를 아래 칸에 붙여 넣고 [키 저장]을 누르세요. 이 휴대폰에만 암호화해 저장해요.").apply { tag="api_key_state" })
-            val input=EditText(this).apply {
-                inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD;textSize=CallUi.BODY;hint="여기에 키 붙여넣기";tag="api_key_input"
-                isSingleLine=true;minHeight=CallUi.dp(this@CallSettingsActivity,60);importantForAutofill=android.view.View.IMPORTANT_FOR_AUTOFILL_NO
-            }
-            body.addView(input)
-            body.addView(CallUi.bigButton(this,"","키 저장") {
-                if(busy)return@bigButton
-                val key=input.text.toString().trim();if(key.isEmpty())return@bigButton
-                input.text.clear();save { it.put(PipelineSettingsKeys.CLAUDE_API_KEY,key) }
-            }.apply { tag="api_key_save" })
-        }
+        // With the inbox (subscription) there is nothing to set, so the section is not shown at all.
+        if(!CallInboxConfig.enabled) apiKeyGroup(s)
 
-        group(CallUi.heading(this,"3. 정리 동의"))
+        group(CallUi.heading(this,"정리 동의"))
         body.addView(CallUi.text(this,"통화 녹음 파일은 휴대폰 밖으로 나가지 않아요. 휴대폰에서 글자로 바꾼 통화 내용과 업무 문자, 메일의 글만 Claude로 보내 요약하고, 결과는 이 휴대폰에만 저장해요. 언제든 끌 수 있어요."))
         val consent=s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false)
         body.addView(Switch(this).apply {
@@ -110,7 +92,7 @@ class CallSettingsActivity:ComponentActivity() {
             setOnCheckedChangeListener { _,checked -> if(checked!=consent) save { it.put(PipelineSettingsKeys.CONSENT_GRANTED,checked) } }
         })
 
-        group(CallUi.heading(this,"4. 음성 인식 모델"))
+        group(CallUi.heading(this,"음성 인식 모델"))
         val modelState=s.optString(PipelineSettingsKeys.MODEL_STATE)
         body.addView(CallUi.text(this,when(modelState) {
             "READY" -> "준비됨 ✓";"DOWNLOADING" -> "받는 중이에요 (Wi-Fi 연결 필요, 약 570MB)";"FAILED" -> "받지 못했어요. 다시 받아주세요."
@@ -122,7 +104,7 @@ class CallSettingsActivity:ComponentActivity() {
 
         if(kr.callbrief.BuildConfig.SYNTHETIC_TOOLS_ENABLED&&!CallInboxConfig.enabled&&modelState=="READY") body.addView(button("속도 측정 (시험용)") { benchmark() }.apply { tag="benchmark" })
 
-        group(CallUi.heading(this,"5. 알림 시각"))
+        group(CallUi.heading(this,"알림 시각"))
         hourRow("저녁 통화 정리",PipelineSettingsKeys.EVENING_HOUR,s.optInt(PipelineSettingsKeys.EVENING_HOUR,19),15..23)
         body.addView(CallUi.divider(this))
         hourRow("아침 체크할 일",PipelineSettingsKeys.MORNING_HOUR,s.optInt(PipelineSettingsKeys.MORNING_HOUR,6),4..11)
@@ -176,6 +158,27 @@ class CallSettingsActivity:ComponentActivity() {
 
     /** Work mailbox: which service, address, app password, then one [연결하기] that checks before saving. */
     private var mailService="네이버"
+    /** API-key analysis, only for a build without the inbox token. */
+    private fun apiKeyGroup(s:JSONObject) {
+        group(CallUi.heading(this,"통화 정리 방식"))
+        if(s.optString(PipelineSettingsKeys.CLAUDE_API_KEY).isNotBlank()) {
+            body.addView(CallUi.text(this,"저장됨 ✓  (보안을 위해 다시 보여주지 않아요)",CallUi.BODY,true,CallUi.OK).apply { tag="api_key_state" })
+            body.addView(button("키 지우기") { save { it.remove(PipelineSettingsKeys.CLAUDE_API_KEY) } }.apply { tag="api_key_delete" })
+        } else {
+            body.addView(CallUi.text(this,"통화를 요약하는 데 쓰는 키예요. Claude 콘솔(platform.claude.com)에서 만든 키를 아래 칸에 붙여 넣고 [키 저장]을 누르세요. 이 휴대폰에만 암호화해 저장해요.").apply { tag="api_key_state" })
+            val input=EditText(this).apply {
+                inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD;textSize=CallUi.BODY;hint="여기에 키 붙여넣기";tag="api_key_input"
+                isSingleLine=true;minHeight=CallUi.dp(this@CallSettingsActivity,60);importantForAutofill=android.view.View.IMPORTANT_FOR_AUTOFILL_NO
+            }
+            body.addView(input)
+            body.addView(CallUi.bigButton(this,"","키 저장") {
+                if(busy)return@bigButton
+                val key=input.text.toString().trim();if(key.isEmpty())return@bigButton
+                input.text.clear();save { it.put(PipelineSettingsKeys.CLAUDE_API_KEY,key) }
+            }.apply { tag="api_key_save" })
+        }
+    }
+
     private fun mailGroup(s:JSONObject) {
         val user=s.optString(PipelineSettingsKeys.MAIL_USER)
         if(user.isNotBlank() && s.optString(PipelineSettingsKeys.MAIL_PASSWORD).isNotBlank()) {

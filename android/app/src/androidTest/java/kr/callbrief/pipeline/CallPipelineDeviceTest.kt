@@ -142,7 +142,7 @@ class CallPipelineDeviceTest {
         shot("1_home",HomeActivity::class.java){has(it,"home_calls_button")&&has(it,"home_today")}
         shot("2_today",TodayCallsActivity::class.java){text(it,"김민수")}
         shot("3_tasks",CallTasksActivity::class.java){text(it,"견적서 보내기")}
-        shot("4_settings",CallSettingsActivity::class.java){text(it,"통화 정리 방식")}
+        shot("4_settings",CallSettingsActivity::class.java){text(it,"정리 동의")}
         shot("5_companies",CompaniesActivity::class.java){text(it,"△△철강")}
         // Company detail with its people and the [이름 고치기] button.
         val companyTag="company_"+CallRecordStore(storage).use{it.companies().first().id}
