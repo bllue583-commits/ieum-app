@@ -206,4 +206,23 @@ class PersonScreenTest:ProtectedTextHostTestBase() {
         tagged<View>(tasks,"task_who_person")!!.performClick()
         onPerson(tasks,"김민수");assertEquals(Screen.TASKS,tasks.personFrom)
     }
+
+    @Test fun aSearchShowsMatchingPeopleAboveTheCallsAndOpensThem() {
+        val (_,id)=seedOne()
+        val a=launchMain(Screen.CALLS)
+        settle { tagged<View>(a,"calls_search")!=null }
+        (tagged<View>(a,"calls_search") as android.widget.EditText).setText("탄탄")
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(CallsScreen.SEARCH_WAIT_MS+50))
+        settle { tagged<View>(a,"calls_search_people")!=null && tagged<View>(a,"person_$id")!=null }
+        tagged<View>(a,"person_$id")!!.performClick()
+        onPerson(a,"김민수")
+    }
+
+    @Test fun keepingTheNumberPersonalDropsItsCard() {
+        seedOne()
+        store().use { s -> ContactCards.rebuildAll(s) }
+        assertNotNull(ContactCards.get(context,firstKey))
+        store().use { s -> s.rememberPersonal(firstKey);ContactCards.flushPending(s) }
+        assertNull(ContactCards.get(context,firstKey))
+    }
 }
