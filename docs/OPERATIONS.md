@@ -14,12 +14,13 @@
 
 우편함은 비공개 저장소 `bllue583-commits/ieum-inbox`이다. 앱 저장소는 `bllue583-commits/ieum-app`이다.
 
-## 2. 예약 작업 두 개
+## 2. 예약 작업 세 개 (11/4 밤 기준, 소스 ieum-inbox, 알림 켬)
 
-| 이름 | 시각(한국) | 모델 | 지시문 원본 | 하는 일 |
-|---|---|---|---|---|
-| 이음 통화 분석 (매시간) | 07~23시 매시 정각 | Sonnet 5.5 | `docs/routines/hourly.md`의 "---" 아래 | inbox 요청 분석, 결과 쓰기, 장부(현장 메모, 업체, 사람, issues 현황) 고치기 |
-| 이음 새벽 정리 (매일) | 05시 (06시 아침 보고 전) | Opus 5.5 | `docs/routines/tidy.md`의 "---" 아래 | 진행 중인 일 묶기, 팔로업 제안, 업체와 사람 중복 합치기, 메모 다시 쓰기 |
+| 이름 | 시각(한국) | 모델 | 지시문 원본 | 기억 파일 | 하는 일 |
+|---|---|---|---|---|---|
+| 이음 통화 분석 (매시간) | 매시 30분 | Sonnet 5.5 | `docs/routines/hourly.md`(v5)의 "---" 아래 | `status/last-run.json` | inbox 요청 분석, 결과 쓰기, 장부 고치기, 세 줄 보고 |
+| 이음 새벽 정리 (매일) | 05:16 | Opus 5.5 | `docs/routines/tidy.md`의 "---" 아래 | `tidy/project.md`, `tidy/history/YYYY-MM.md`, `tidy/briefing.md` | 진행 중인 일 묶기, 팔로업 제안, 중복 합치기, 현황 파일과 다섯 줄 알림. 폰이 처음 정리를 끝낸 뒤 밤에 올리는 `tidy/state.json`이 있어야 일을 한다(그 전에는 "정리할 것 없음"이 정상) |
+| 이음 통화 목록 검증 (매일) | 09:00 | Opus 5.5 | 예약 작업 프롬프트가 원본 | `status/verify-log.md`(숫자만) | 폰 통화기록(`status/calllog.txt`)과 저장·분석 결과 대조, 검증 파일과 다섯 줄 알림 |
 
 - 지시문을 바꿀 때: 이 저장소의 원본 파일을 먼저 고친다 → 예약 작업 프롬프트에 "---" 아래 전문을 붙여 넣는다 → 이름, 시각, 링크를 사용자에게 알린다. 매시간 지시문의 [분석 규칙]과 [결과 형식]은 앱 코드(`ClaudeCallAnalyzer.SYSTEM`, `SCHEMA`)와 같아야 하며 `RoutineDocTest`가 검사한다. 규칙을 바꾸면 `ClaudeCallAnalyzer.PROMPT_VERSION`과 지시문 버전을 함께 올린다.
 - 실행 확인: claude.ai의 예약 작업 화면에서 실행 기록을 본다. 실행 로그에는 통화 내용이 남지 않게 지시돼 있다. 빈 실행은 "새 기록 없음" 한 줄로 끝나는 것이 정상이다.
@@ -112,6 +113,8 @@
 읽는 순서: `endedMs`가 최근인가 → `limitHit`가 true면 한도 → inbox에 파일이 있는데 `processed`가 0이면 작업이 일을 안 함 → `promptMismatch`가 true면 폰과 지시문 버전이 어긋남.
 
 ### 워치독 (ieum-inbox의 감시)
+11/5 설치 완료(ieum-inbox 커밋 2d121ae, 첫 수동 실행 41853205350 이상 0건). 아래 설치 절차는 다시 설치할 때만 쓴다.
+
 원본은 이 저장소의 `tools/inbox/watchdog.yml`, `watchdog.py`, 시험은 `test_watchdog.py`(ci가 돌림)다. ieum-inbox에 설치하면 3시간마다(그리고 수동 실행 때) 아래 규칙으로 검사해 문제마다 라벨 `ieum-watch` 이슈를 하나 만들고, 같은 제목의 열린 이슈가 있으면 댓글도 달지 않으며, 정상으로 돌아오면 "정상으로 돌아왔어요." 댓글과 함께 닫는다.
 
 | 이슈 제목 | 조건 |
@@ -119,7 +122,7 @@
 | 폰이 조용해요 | `status/phone.json`이 없거나 `atMs`가 12시간 넘음. 본문에 마지막 하트비트의 `consent`, `folder`, `batteryFree`, `standbyBucket`, `notifyAllowed`, `lastDiscoveryMs`로 짐작한 원인을 붙인다 |
 | 녹음 가져오기가 멈췄어요 | 폰은 살아 있는데 `lastDiscoveryMs`가 12시간 넘음(0이면 건너뜀) |
 | 통화 목록을 빠뜨리고 있어요 | 폰은 살아 있는데 `callLog.deviceTotal`과 `storedTotal`이 다르고 `mismatchSinceMs`가 2시간 넘음(권한 없으면 건너뜀) |
-| 자막이 밀려요 | `oldestQueuedMs`가 6시간 넘음 |
+| 자막이 밀려요 | `oldestQueuedMs`가 6시간 넘음. 단 처음 정리 중(`firstPass.done=false`)에는 옛 녹음이 대기열에 오래 있는 것이 정상이라, 남은 자막이 있는데 마지막 자막(`lastTranscribedMs`)이 24시간 넘었을 때만 |
 | 업데이트 실패 | `lastUpdateError`가 있음 |
 | 분석이 멈췄어요 | inbox/의 가장 오래된 요청이 3시간 넘음(파일이 처음 커밋된 시각 기준) |
 | 루틴이 일을 안 해요 / 루틴이 한도에 걸렸어요 / 루틴 지시문 버전이 달라요 | `status/last-run.json`의 `processed`, `limitHit`, `promptMismatch` |
@@ -154,5 +157,8 @@
 | 업데이트가 안 됨 | GitHub Actions의 release-apk와 update-smoke 실행, `app/version.json`, 하트비트의 `lastUpdateError` | ci 또는 smoke 실패, 서명 지문 불일치, 설치 권한 |
 | 장부 이름이나 업체가 이상함 | `ledger/ledger.json`의 rev와 updatedMs(내용은 옮기지 않고 앱에서 확인), `ledger/edits/` | 수정 반영 대기, 새벽 정리 전 |
 | CI 실패 | 실행의 "Summarize results" 요약과 `android-test-results` 산출물 | 단위 테스트, lint, 내보내기 검사 |
+| 모든 워크플로가 몇 초 만에 실패(단계 없음) | 실행 주석: "recent account payments have failed or your spending limit needs to be increased" | GitHub Actions 사용량·결제 한도. 사용자가 GitHub 설정 Billing에서 해결해야 하며 그동안 ci, 배포, 워치독이 모두 멈춘다. 에뮬레이터 시험(약 90분)이 사용량 대부분을 쓴다 |
+
+정기 점검: 달에 한 번 예약 작업 실행 기록 1건을 열어 통화 원문이 남지 않았는지 확인한다.
 
 관련 파일: `docs/routines/`(지시문), `tools/inbox/`(워치독), `tools/needs_update_smoke.sh`, `tools/update_smoke.sh`, `.github/workflows/`, `docs/DEVELOPMENT.md`(개발 환경).

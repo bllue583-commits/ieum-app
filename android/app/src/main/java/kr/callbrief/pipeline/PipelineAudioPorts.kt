@@ -23,7 +23,13 @@ internal class PipelineBytesInput(private val bytes:ByteArray,private val length
         fun read(input:java.io.InputStream,expected:Long):PipelineBytesInput {
             var buf=ByteArray(expected.coerceIn(1L,Int.MAX_VALUE-8L).toInt());var n=0
             while(true){
-                if(n==buf.size){ check(buf.size<Int.MAX_VALUE-8){"PIPELINE_AUDIO_TOO_LARGE"};val bigger=buf.copyOf(minOf(Int.MAX_VALUE-8L,buf.size*2L).toInt());buf.fill(0);buf=bigger }
+                if(n==buf.size){
+                    // Full: usually the stream has ended exactly here, so look for one more byte before growing
+                    // (growing first doubled every vault copy: 15 MB read held 30 MB).
+                    val next=input.read();if(next<0)break
+                    check(buf.size<Int.MAX_VALUE-8){"PIPELINE_AUDIO_TOO_LARGE"};val bigger=buf.copyOf(minOf(Int.MAX_VALUE-8L,buf.size*2L).toInt());buf.fill(0);buf=bigger
+                    buf[n++]=next.toByte();continue
+                }
                 val r=input.read(buf,n,buf.size-n);if(r<0)break;n+=r
             }
             return PipelineBytesInput(buf,n)
