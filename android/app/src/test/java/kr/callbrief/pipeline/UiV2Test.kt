@@ -81,8 +81,9 @@ class UiV2Test:ProtectedTextHostTestBase() {
     /** Design 3.6 (review #9, #10, #11): the lights follow the permission, the discovery age and the queue by entry time. */
     @Test fun statusLightsAreNoLongerFalselyGreen() {
         val h=3_600_000L
-        val ok=StatusLights.Input(now=1000*h,folderConnected=true,modelState="READY",consent=true,lastTranscribedMs=1000*h-h,
-            folderReadable=true,lastDiscoveryMs=1000*h-h)
+        val t=FirstPass.FROM_MS+40*24*h // a day in November: after 10/1
+        val ok=StatusLights.Input(now=t,folderConnected=true,modelState="READY",consent=true,lastTranscribedMs=t-h,
+            folderReadable=true,lastDiscoveryMs=t-h)
         fun bad(i:StatusLights.Input,tag:String)=StatusLights.lights(i).single { !it.ok }.also { assertEquals(tag,it.tag) }.words
         // Normal: all green.
         assertTrue(StatusLights.lights(ok).all { it.ok })

@@ -185,8 +185,9 @@ internal object PhoneStatus {
                 (s.opt(LAST_DISCOVERY_ATTEMPT_MS) as? Number)?.toLong(),s.optString(LAST_DISCOVERY_OUTCOME).takeIf { s.has(LAST_DISCOVERY_OUTCOME) },
                 s.opt(INVENTORY_TRUNCATED) as? Boolean,(s.opt(HELD_UNSUPPORTED_COUNT) as? Number)?.toInt(),
                 store.dbPercent,
-                (s.opt(UPDATE_AVAILABLE_CODE) as? Number)?.toLong() ?: runCatching { CallUpdate.available(app)?.versionCode?.toLong() }.getOrNull(),
-                (s.opt(UPDATE_READY_SINCE_MS) as? Number)?.toLong(),
+                // r7-3 writes 0 once installed: that is "nothing waiting" (null) here.
+                (s.opt(UPDATE_AVAILABLE_CODE) as? Number)?.toLong()?.takeIf { it>0 } ?: runCatching { CallUpdate.available(app)?.versionCode?.toLong() }.getOrNull(),
+                (s.opt(UPDATE_READY_SINCE_MS) as? Number)?.toLong()?.takeIf { it>0 },
                 matchStats(s),s.optString(DB_RECOVERY_LAST).takeIf { it.isNotBlank() },inboxErrorSince(app,s,now)))
     }
     private fun inboxErrorSince(app:Context,s:JSONObject,now:Long):Long? {
