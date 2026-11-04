@@ -25,10 +25,18 @@ if [ -n "${IEUM_MODEL_FILE:-}" ] && [ -f "$IEUM_MODEL_FILE" ]; then
   adb shell rm -f /data/local/tmp/ieum-model.bin || true
 fi
 adb logcat -c
-adb shell am instrument -w -r -e class kr.callbrief.pipeline.CallPipelineDeviceTest -e model "${IEUM_MODEL:-large}" \
+# Results are streamed as they come, and the run has its own time limit (IEUM_INSTRUMENT_MIN, default 70 minutes), so a test
+# that hangs still leaves what ran before it and where it stopped (the job's own limit would cancel the step with nothing).
+adb logcat -s IEUM_RESULT:I > "$out/results.live" 2>/dev/null &
+live=$!
+timeout "${IEUM_INSTRUMENT_MIN:-70}m" adb shell am instrument -w -r -e class kr.callbrief.pipeline.CallPipelineDeviceTest -e model "${IEUM_MODEL:-large}" \
   -e repeat "${IEUM_REPEAT:-3}" -e threads "${IEUM_THREADS:-6,8}" -e callLike "${IEUM_CALL_LIKE:-true}" -e golden "${IEUM_GOLDEN:-compare}" \
   kr.callbrief.test/androidx.test.runner.AndroidJUnitRunner > "$out/instrument.txt" 2>&1
+code=$?
+kill $live 2>/dev/null || true
+if [ $code -eq 124 ]; then echo "instrument timed out after ${IEUM_INSTRUMENT_MIN:-70} minutes; last result: $(tail -1 "$out/results.live")" | tee -a "$out/instrument.txt"; adb shell am force-stop kr.callbrief || true; fi
 adb logcat -d -s IEUM_RESULT:I > "$out/results.txt"
+[ -s "$out/results.txt" ] || cp "$out/results.live" "$out/results.txt"
 adb logcat -d '*:E' | tail -300 > "$out/errors.txt"
 adb pull /sdcard/Android/data/kr.callbrief/files/device-test "$out/" >/dev/null 2>&1 || true
 adb shell getprop ro.product.model > "$out/device.txt"

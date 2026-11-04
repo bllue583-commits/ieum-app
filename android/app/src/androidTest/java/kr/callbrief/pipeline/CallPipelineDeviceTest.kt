@@ -231,6 +231,7 @@ class CallPipelineDeviceTest {
             for(i in 0 until set.getJSONArray("calls").length()) {
                 val call=set.getJSONArray("calls").getJSONObject(i)
                 val t0=System.currentTimeMillis()
+                Log.i("IEUM_RESULT","golden_start ${v.name} ${call.getString("id")}") // a hang shows where it stopped
                 val decoded=GoldenSwitches.decode(inst.context.assets.open("golden/"+call.getString("file")).use{it.readBytes()},v.floor)
                 val prompt=if(v.prompt) set.getString("prompt") else null
                 val segments=GoldenSwitches.transcriber(storage,model,prompt,TEST_DEADLINE).open(file){false}.use { session ->
@@ -335,15 +336,17 @@ class CallPipelineDeviceTest {
         } finally { file.delete() }
     }
 
-    /** Peak used Java heap above the start, sampled every 10 ms while [block] runs. */
+    /** Peak live Java heap above the start while [block] runs: every 100 ms the sampler collects garbage first, so the number
+     * is what the code holds, not what it has let go of and the collector has not reached yet (raw "used" counted that, and
+     * the two-pass decoder lets go of a lot: 101 MB raw for 30 minutes, nearly all garbage). */
     private object HeapPeak {
         private fun used()=Runtime.getRuntime().let{it.totalMemory()-it.freeMemory()}
         fun measure(block:()->Any?):Long {
             repeat(3){System.gc();System.runFinalization()};Thread.sleep(200)
             val base=used();val peak=java.util.concurrent.atomic.AtomicLong(base);val running=java.util.concurrent.atomic.AtomicBoolean(true)
-            val sampler=Thread{ while(running.get()){ peak.accumulateAndGet(used(),::maxOf);Thread.sleep(10) } }.apply{isDaemon=true;start()}
+            val sampler=Thread{ while(running.get()){ System.gc();peak.accumulateAndGet(used(),::maxOf);Thread.sleep(100) } }.apply{isDaemon=true;start()}
             try { block() } finally { running.set(false);sampler.join() }
-            return maxOf(0L,maxOf(peak.get(),used())-base)
+            System.gc();return maxOf(0L,maxOf(peak.get(),used())-base)
         }
     }
 
