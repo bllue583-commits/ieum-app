@@ -1,12 +1,20 @@
 name: device-test
 
 # Builds the real APK (with Whisper native code) and runs CallPipelineDeviceTest on an Android
-# emulator: large-model download, Korean speed, m4a decode, transcript -> screens, screenshots.
+# emulator: model download + SHA-256 check, Korean Whisper, m4a decode, transcript -> screens, screenshots, notification.
+#
+# Quick run (default, about 10 minutes): a small pinned multilingual model (ggml-base-q5_1, 60 MB) only shows
+# Korean text comes out of t3/t3b; the large-model speed test (t2) is skipped.
+# Full run (about 40 minutes): the app's own large model and the speed test. Runs when a push changes speech
+# recognition files (native code, AndroidWhisper*, CallTranscription*, PipelineAudio*, PipelineModel*, the native
+# build script or the whisper.cpp source), or by hand with full=true.
 on:
   push:
     branches: ['feature/**']
-    paths: ['android/**', 'tools/run_device_test.sh', '.github/workflows/device-test.yml']
+    paths: ['android/**', 'tools/run_device_test.sh', 'tools/build_android_whisper.py', 'third_party/whisper.cpp-*', '.github/workflows/device-test.yml']
   workflow_dispatch:
+    inputs:
+      full: {description: 'Full run: large model + speed test (about 40 minutes)', type: boolean, default: false}
 
 concurrency:
   group: device-${{ github.ref }}
@@ -15,37 +23,158 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  NDK_VERSION: '28.2.13676358'
+  CMAKE_VERSION: '3.22.1'
+
 jobs:
   emulator:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with: {fetch-depth: 0} # small repository; needed to see which files a push changed
+      - name: Choose quick or full run
+        id: mode
+        env:
+          EVENT: ${{ github.event_name }}
+          FULL_INPUT: ${{ inputs.full }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          speech='^android/app/src/main/cpp/|AndroidWhisper|CallTranscription|PipelineAudio|PipelineModel|^tools/build_android_whisper\.py$|^third_party/whisper\.cpp-'
+          full=false; why='no speech recognition file changed'
+          if [ "$EVENT" = workflow_dispatch ]; then
+            if [ "$FULL_INPUT" = true ]; then full=true; why='requested (full=true)'; else why='manual run without full=true'; fi
+          else
+            # Normal push: the commits since the previous branch head. New branch or rewritten history: since lean-calls.
+            base="$BEFORE"
+            if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then base=$(git merge-base origin/feature/lean-calls HEAD 2>/dev/null || true); fi
+            if [ -z "$base" ]; then full=true; why='could not tell which files changed'
+            else
+              hits=$(git diff --name-only "$base" "$GITHUB_SHA" | grep -E "$speech" || true)
+              if [ -n "$hits" ]; then full=true; why="speech recognition changed: $(echo $hits | cut -c1-300)"; fi
+            fi
+          fi
+          if [ "$full" = true ]; then
+            echo "model=large" >> "$GITHUB_OUTPUT"; echo "name=ggml-large-v3-turbo-q5_0" >> "$GITHUB_OUTPUT"
+            echo "sha=394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2" >> "$GITHUB_OUTPUT"
+          else
+            # Pinned in CallPipelineDeviceTest.SMALL_MODEL (huggingface.co/ggerganov/whisper.cpp, LFS SHA-256).
+            echo "model=small" >> "$GITHUB_OUTPUT"; echo "name=ggml-base-q5_1" >> "$GITHUB_OUTPUT"
+            echo "sha=422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898" >> "$GITHUB_OUTPUT"
+          fi
+          echo "::notice title=device-test::$([ "$full" = true ] && echo FULL || echo QUICK) run - $why"
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '17'}
+      # Native Whisper library + runtime pin, rebuilt only when its inputs change.
+      - name: Restore native build
+        id: native
+        uses: actions/cache/restore@v4
+        with:
+          path: android/app/build/generated/ieum-whisper
+          key: native-${{ hashFiles('android/app/src/main/cpp/**', 'tools/build_android_whisper.py', 'third_party/whisper.cpp-*', 'tools/audio/**') }}
       - uses: android-actions/setup-android@v3
         with:
-          packages: 'platforms;android-36 build-tools;35.0.0 ndk;28.2.13676358 cmake;3.22.1'
-      - uses: actions/cache@v4
+          packages: 'platforms;android-36 build-tools;35.0.0'
+      - name: Install NDK (native cache miss only)
+        if: steps.native.outputs.cache-hit != 'true'
+        run: sdkmanager "ndk;$NDK_VERSION" "cmake;$CMAKE_VERSION" > /dev/null
+      - name: Restore Gradle cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             gradle-user/caches
             gradle-user/wrapper
           key: device-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties') }}
       - name: Build APKs
+        env:
+          NATIVE_CACHED: ${{ steps.native.outputs.cache-hit }}
         run: |
           export ANDROID_SDK_ROOT="$ANDROID_HOME" \
-            IEUM_ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/28.2.13676358" IEUM_CMAKE_BINARY="$ANDROID_HOME/cmake/3.22.1/bin/cmake"
+            IEUM_ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/$NDK_VERSION" IEUM_CMAKE_BINARY="$ANDROID_HOME/cmake/$CMAKE_VERSION/bin/cmake"
+          if [ "$NATIVE_CACHED" = true ]; then export IEUM_SKIP_ANDROID_NATIVE=1; cat android/app/build/generated/ieum-whisper/assets/local-stt/runtime-pin.json; fi
           python3 run_gradle.py --log device-build.log :app:assembleDebug :app:assembleDebugAndroidTest
+      - name: Save native build
+        if: steps.native.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: android/app/build/generated/ieum-whisper
+          key: ${{ steps.native.outputs.cache-primary-key }}
+      - name: Save Gradle cache
+        uses: actions/cache/save@v4
+        continue-on-error: true # the key already exists when nothing changed
+        with:
+          path: |
+            gradle-user/caches
+            gradle-user/wrapper
+          key: device-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties') }}
       - name: Free runner disk
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/share/swift /usr/local/share/boost /opt/hostedtoolcache/CodeQL /usr/local/lib/node_modules
-          rm -rf android/app/build/intermediates android/app/build/tmp android/app/build/android-whisper gradle-user/caches/transforms-* || true
+          rm -rf android/app/build/intermediates android/app/build/tmp android/app/build/android-whisper gradle-user || true
           df -h / | tail -1
+      # Whisper model file on the runner, written on the emulator as the app's finished partial download; the app's own size + SHA-256 check decides.
+      - name: Restore model
+        id: model
+        uses: actions/cache/restore@v4
+        with:
+          path: model-cache
+          key: whisper-${{ steps.mode.outputs.name }}-${{ steps.mode.outputs.sha }}
+      - name: Download model (cache miss only)
+        if: steps.model.outputs.cache-hit != 'true'
+        env: {NAME: '${{ steps.mode.outputs.name }}', SHA: '${{ steps.mode.outputs.sha }}'}
+        run: |
+          mkdir -p model-cache
+          ok=false
+          for i in 1 2 3; do
+            curl -fsSL --retry 3 -o "model-cache/$NAME.bin" "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$NAME.bin" \
+              && echo "$SHA  model-cache/$NAME.bin" | sha256sum -c - && { ok=true; break; }
+            rm -f "model-cache/$NAME.bin"; sleep $((20*i))
+          done
+          echo "MODEL_OK=$ok" >> "$GITHUB_ENV"
+          [ "$ok" = true ] || echo "::warning title=model::download failed on the runner; the test downloads it on the emulator"
+      - name: Save model
+        if: steps.model.outputs.cache-hit != 'true' && env.MODEL_OK == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: model-cache
+          key: ${{ steps.model.outputs.cache-primary-key }}
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm && [ -r /dev/kvm ] && [ -w /dev/kvm ] || { echo "::error title=kvm::/dev/kvm not usable: the emulator would run without acceleration"; exit 1; }
+      # Booted emulator snapshot (saves the cold boot on later runs). Made once per AVD setting.
+      - name: Restore AVD snapshot
+        id: avd
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-34-google_apis-x86_64-c4-r4096-d4G-v1
+      - name: Create AVD snapshot (cache miss only)
+        if: steps.avd.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          cores: 4
+          ram-size: 4096M
+          disk-size: 4G
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: false
+          script: echo "AVD snapshot made"
+      - name: Save AVD snapshot
+        if: steps.avd.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: ${{ steps.avd.outputs.cache-primary-key }}
       - name: Run on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -54,13 +183,15 @@ jobs:
           arch: x86_64
           cores: 4
           ram-size: 4096M
-          disk-size: 3G
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          disk-size: 4G # the cached model copy and the app's verified copy sit side by side for a moment
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: IEUM_REPEAT=1 IEUM_THREADS=6 IEUM_CALL_LIKE=false bash tools/run_device_test.sh
+          script: IEUM_MODEL=${{ steps.mode.outputs.model }} IEUM_MODEL_FILE=model-cache/${{ steps.mode.outputs.name }}.bin IEUM_REPEAT=1 IEUM_THREADS=6 IEUM_CALL_LIKE=false bash tools/run_device_test.sh
       - name: Summarize
         if: always()
         run: |
+          echo "::notice title=device::model=${{ steps.mode.outputs.model }}"
           [ -f device-results/results.txt ] && sed 's/^/::notice title=device::/' device-results/results.txt | cut -c1-900 || true
           grep -E 'FAILURES|Error in|^OK|AssertionError|Exception' device-results/instrument.txt 2>/dev/null | head -20 | sed 's/^/::warning title=instrument::/' || true
       - uses: actions/upload-artifact@v4

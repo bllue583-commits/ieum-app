@@ -55,7 +55,7 @@
 |---|---|---|
 | `android-ci.yml` (ci) | JVM 단위 테스트 + lint | 약 5분 |
 | `release-apk.yml` | 서명 APK 빌드 → ieum-inbox 릴리스·version.json (자동 업데이트) | 약 4분 |
-| `device-test.yml` | 에뮬레이터: 모델 다운로드, 한국어 Whisper, m4a, 화면 6장 스크린샷, 알림 | 약 40분 |
+| `device-test.yml` | 에뮬레이터: 모델 확인(SHA-256), 한국어 Whisper(t3·m4a), 화면 6장 스크린샷, 알림. 평소엔 작은 모델(ggml-base-q5_1)로 빠른 시험, 큰 모델+속도 측정 전체 시험은 음성 인식 파일(`cpp/`, `AndroidWhisper*`, `CallTranscription*`, `PipelineAudio*`, `PipelineModel*`, `build_android_whisper.py`)이 바뀐 push나 수동 실행 `full=true`일 때만 | 빠른 시험 약 10~15분 / 전체 약 40분 |
 | `real-device-test.yml` | Firebase 실기기(최신 Galaxy S, 현재 S26). **하루 5번 한도.** 수동 실행(`repeat`, `model`) | 약 40분 |
 | `inbox-e2e.yml` | 공개 합성 통화를 inbox에 넣고 → 분석 결과를 폰 파서로 검증 후 삭제 | 약 2분 |
 | `update-smoke.yml` | 직전 릴리스 APK 위에 새 APK를 덮어 설치해 시작 확인 (수동 실행) | 약 30분 |
