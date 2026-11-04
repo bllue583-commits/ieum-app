@@ -106,6 +106,8 @@ class ReviewRoundTwoTest:ProtectedTextHostTestBase() {
         assertEquals("2026-10-28",s.getString(PipelineSettingsKeys.DISCONNECT_WARNED_DAY));assertEquals("INBOX_HTTP_401",s.getString(PipelineSettingsKeys.LAST_INBOX_ERROR))
         s.put(PipelineSettingsKeys.LAST_INBOX_ERROR,"")
         runner(Inbox("INBOX_HTTP_401"),s,at=now+3_600_000L).runPending()
-        assertEquals("told once a day","",s.getString(PipelineSettingsKeys.LAST_INBOX_ERROR))
+        // r7-1: the code and time are kept on every failed pass; the notice day stays (told once a day).
+        assertEquals("2026-10-28",s.getString(PipelineSettingsKeys.DISCONNECT_WARNED_DAY))
+        assertEquals("INBOX_HTTP_401",s.getString(PipelineSettingsKeys.LAST_INBOX_ERROR));assertEquals(now+3_600_000L,s.getLong(PipelineSettingsKeys.LAST_INBOX_ERROR_MS))
     }
 }

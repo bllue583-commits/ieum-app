@@ -141,8 +141,8 @@
 
 1. `feature/lean-calls`(또는 `main`)에 push한다. 앱 작업은 시험 브랜치에서 CI를 통과시킨 뒤 합친다.
 2. `ci`(android-ci.yml): 도구 시험, 화면 규칙 검사, 내보내기 검사(`tools/scan_export.py`: 비밀 값은 실패, 개인 경로는 경고), 업데이트 문구 알림(앱 코드가 바뀌었는데 `docs/UPDATE_NOTE.txt`가 그대로면 경고), JVM 단위 테스트와 lint.
-3. `update-smoke`(update-smoke.yml): 같은 push에서 함께 돈다. 마지막으로 성공한 배포 이후 AndroidManifest.xml, IeumApplication, StartupReceiver, CallSinkImpl, 빌드 설정(*.gradle.kts, gradle.properties, Gradle wrapper) 중 하나라도 바뀌었으면(`tools/needs_update_smoke.sh`) 에뮬레이터에 직전 릴리스를 깔고 새 APK를 덮어 설치해 시작, 충돌 없음, 예약 작업 다섯 개를 확인한다. 아니면 바로 끝난다.
-4. `release-apk`: 같은 커밋의 ci 통과를 기다린다(40분). 3의 조건에 해당하면 update-smoke의 "Install, update, start" 단계 통과도 기다린다(50분). 서명 키는 저장소 비밀에서 만들고(cryptography 버전 고정), 직전 릴리스와 서명 인증서 지문이 다르면 배포하지 않는다. 통과하면 ieum-inbox에 릴리스 `v<빌드 번호>`와 `app/version.json`을 올리고 오래된 릴리스는 3개만 남긴다(정리 실패는 경고만).
+3. `update-smoke`(update-smoke.yml): 같은 push에서 함께 돈다. 마지막으로 성공한 배포 이후 AndroidManifest.xml, IeumApplication, StartupReceiver, CallSinkImpl, 빌드 설정(*.gradle.kts, gradle.properties, Gradle wrapper) 중 하나라도 바뀌었으면(`tools/needs_update_smoke.sh`) 에뮬레이터에 직전 릴리스를 깔고 새 APK를 덮어 설치해 시작, 충돌 없음, 예약 작업 다섯 개를 확인한다. 아니면 바로 끝난다. 에뮬레이터가 켜지지 않으면(러너 문제) 한 번 자동 재시도하고, 두 번 모두 안 켜지면 "Emulator did not boot (infra)" 단계가 실패로 남는다.
+4. `release-apk`: 같은 커밋의 ci 통과를 기다린다(40분). 3의 조건에 해당하면 update-smoke의 "Install, update, start" 단계 통과도 기다린다(70분). 앱 설치·덮어 설치·실행 실패나 시간 초과면 배포하지 않는다. 에뮬레이터가 재시도 뒤에도 켜지지 않은 경우(인프라)만 경고를 남기고 배포한다. 서명 키는 저장소 비밀에서 만들고(cryptography 버전 고정), 직전 릴리스와 서명 인증서 지문이 다르면 배포하지 않는다. 통과하면 ieum-inbox에 릴리스 `v<빌드 번호>`와 `app/version.json`(versionCode, versionName, apk, sha256, size=APK 바이트 크기, notes)을 올리고 오래된 릴리스는 3개만 남긴다(정리 실패는 경고만).
 5. 폰은 `app/version.json`을 보고 새 버전이면 `docs/UPDATE_NOTE.txt` 첫 줄을 알림 문구로 보여 주고 설치한다. 이름은 `docs/VERSION`(사용자에게 보이는 변경마다 0.1씩), 빌드 번호는 업데이트 순서에만 쓴다.
 
 수동 배포(release-apk 수동 실행)는 update-smoke 실행이 없으면 경고만 남기고 진행한다.

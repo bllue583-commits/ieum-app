@@ -151,6 +151,24 @@ class SelfCheckNoticesTest:ProtectedTextHostTestBase() {
         assertEquals("",SecureSettings(app).snapshot().optString(PipelineSettingsKeys.LAST_UPDATE_ERROR))
     }
 
+    /** Review data #4 / UI #9: the store share is measured on the real sealed file (the old path never existed). */
+    @Test fun storageShareIsReadFromTheSealedFileAndShownInSettings() {
+        PreviewSeed.ensure(app)
+        val sealed=kr.co.callsummary.core.android.ProtectedDatabase.file(app,kr.callbrief.GeneralLocalStore.DATABASE)
+        assertTrue(sealed.isFile);assertFalse(app.getDatabasePath(kr.callbrief.GeneralLocalStore.DATABASE).isFile)
+        val store=StatusLights.read(app,SecureSettings(app).snapshot(),now)
+        assertEquals(sealed.length(),store.dbBytes);assertTrue((store.dbRows ?: 0)>0);assertNotNull(store.dbPercent)
+        assertNotNull(store.queue);assertNotNull(store.failed)
+        // The self-check gets the same numbers: the 80% notice can ring now.
+        val full=SelfCheckNotices.check(fine.copy(dbBytes=null,dbRows=StatusLights.ROW_LIMIT*85/100))
+        assertEquals(listOf(SelfCheckNotices.STORAGE_FULL),full.map { it.code })
+        val a=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        fun find(t:String)=a.window.decorView.findViewWithTag<View>(t)
+        repeat(400) { shadowOf(Looper.getMainLooper()).idle();if(find("storage_use")!=null) return@repeat;Thread.sleep(10) }
+        val line=(find("storage_use") as TextView).text.toString()
+        assertTrue(line,Regex("""저장 공간 \d+% 사용""").matches(line))
+    }
+
     @Test fun settingsShowNoAmberForAStoredCancel() {
         PreviewSeed.ensure(app)
         SecureSettings(app).update { it.put(PipelineSettingsKeys.LAST_UPDATE_ERROR,"STATUS_FAILURE_ABORTED (3): User rejected permissions") }

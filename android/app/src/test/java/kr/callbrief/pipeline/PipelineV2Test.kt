@@ -56,7 +56,7 @@ class PipelineV2Test:ProtectedTextHostTestBase() {
         override fun open(model:String,threads:Int):Long {log+="open:$threads";return next++}
         override fun cancel(handle:Long){log+="cancel:$handle"}
         override fun close(handle:Long){log+="close:$handle"}
-        override fun transcribeChunk(handle:Long,pcm:FloatArray,language:String,seconds:Int):ByteArray {
+        override fun transcribeChunk(handle:Long,pcm:FloatArray,language:String,seconds:Int,prompt:String):ByteArray {
             log+="chunk:$handle:$seconds"
             if(transcribed++==failOn)throw IllegalStateException("ANDROID_STT_NOT_COMPLETED")
             return """{"transcription":[{"offsets":{"from":0,"to":1000},"text":" 가"}]}""".toByteArray()
@@ -113,7 +113,7 @@ class PipelineV2Test:ProtectedTextHostTestBase() {
         assertTrue(spec.hasContentUriTriggers())
         val trigger=spec.contentUriTriggers.single()
         assertEquals(android.provider.CallLog.Calls.CONTENT_URI,trigger.uri);assertTrue(trigger.isTriggeredForDescendants)
-        assertEquals(45_000L,spec.contentTriggerUpdateDelayMillis)
+        assertEquals(140_000L,spec.contentTriggerUpdateDelayMillis) // r7-2: 45 s -> 140 s (design 3.2 #4)
         val follow=AutomaticRecordingDiscovery.followupRequest(AutomaticRecordingDiscovery.Binding("a".repeat(64))).workSpec
         assertEquals(150_000L,follow.initialDelay)
         assertEquals("ieum.discovery.followup",AutomaticRecordingDiscovery.FOLLOWUP_NAME);assertEquals("ieum.discovery.calllog",AutomaticRecordingDiscovery.CALLLOG_NAME)

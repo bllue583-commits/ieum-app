@@ -69,6 +69,8 @@ object PipelineSettingsKeys {
     /** The inbox refused this phone (401/403/404): day told, and the code. */
     const val DISCONNECT_WARNED_DAY="disconnectWarnedDay"
     const val LAST_INBOX_ERROR="lastInboxError"
+    /** When [LAST_INBOX_ERROR] was written (r7-1); 0 once a pass went through. */
+    const val LAST_INBOX_ERROR_MS="lastInboxErrorMs"
     /** Mirrors the repository ledger's tidiedOnce: the morning tidy has read everything once. */
     const val TIDIED_ONCE="tidiedOnce"
     /** Reading old texts and mail from 10/1 up to where the regular intake began: progress and end. */
@@ -82,6 +84,12 @@ object PipelineSettingsKeys {
     const val RESCHEDULED_MS="rescheduledMs"
     /** The last failed self-update install: "code: message" (cleared when an install succeeds). Shown on the settings update light. */
     const val LAST_UPDATE_ERROR="lastUpdateError"
+    /** Design 3.3 (r7-3): install a downloaded, verified new version in the background (default on). Off: a notification only. */
+    const val AUTO_INSTALL="autoInstall"
+    /** The downloaded, verified new version code waiting to be installed (0 once installed or when up to date). */
+    const val UPDATE_AVAILABLE_CODE="updateAvailableCode"
+    /** When that version's download was verified (ms); 0 once it is installed. The watchdog's "not installed for 24 hours" rule reads it. */
+    const val UPDATE_READY_SINCE_MS="updateReadySinceMs"
     /** When the evening or morning report was last actually posted (ms). */
     const val LAST_DIGEST_MS="lastDigestMs"
     /** "내 정보" (design C5 [사용자]): the user's name, company and site, and title. Empty: the request says roles only. */
@@ -90,6 +98,13 @@ object PipelineSettingsKeys {
     const val MY_ROLE="myRole"
     /** Check items the AI proposed that were left out as the same as an existing one: a running count (design E5). */
     const val DUPLICATE_SKIPPED="duplicateSkipped"
+    /** Near-duplicate check items left out (design 3.4): a JSON array, newest last, at most 50, of [kept item id, record key of
+     * the call that proposed the other]; the morning tidy's state carries it as mergeCandidates. */
+    const val MERGE_CANDIDATES="mergeCandidates"
+    /** People the v3 key migration merged (same number or same company): a JSON array of {"from":id,"into":id}, ledger ids where known. */
+    const val MERGE_LOG="mergeLog"
+    /** Why recordings did or did not pair with the call log (design 3.4): a JSON string, see [FirstPass.MatchStats.mergeInto]. */
+    const val CALLLOG_MATCH_STATS="callLogMatchStats"
     /** First-pass batches put up on one KST day (design C7: at most [FirstPass.BATCHES_PER_DAY]): the day and the count. */
     const val FIRST_PASS_BATCH_DAY="firstPassBatchDay"
     const val FIRST_PASS_BATCHES_TODAY="firstPassBatchesToday"

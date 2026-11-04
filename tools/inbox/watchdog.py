@@ -11,10 +11,14 @@ import argparse, json, os, subprocess, sys, time
 
 HOUR = 3_600_000
 PHONE_SILENT_MS = 12 * HOUR
+FIRST_PASS_STUCK_MS = 24 * HOUR
 QUEUE_STUCK_MS = 6 * HOUR
 INBOX_STUCK_MS = 3 * HOUR
 DISCOVERY_STUCK_MS = 12 * HOUR
 CALL_LOG_MISMATCH_MS = 2 * HOUR
+UPDATE_NOT_INSTALLED_MS = 24 * HOUR
+INBOX_ERROR_STUCK_MS = 2 * HOUR
+DB_FULL_PERCENT = 80
 TOKEN_WARN_DAYS = 14
 
 T_PHONE = "폰이 조용해요"
@@ -27,6 +31,9 @@ T_UPDATE = "업데이트 실패"
 T_TOKEN = "우편함 토큰이 곧 만료돼요"
 T_DISCOVERY = "녹음 가져오기가 멈췄어요"
 T_CALL_LOG = "통화 목록을 빠뜨리고 있어요"
+T_NOT_INSTALLED = "새 버전이 설치되지 않아요"
+T_INBOX_ERROR = "우편함 오류가 계속돼요"
+T_DB_FULL = "폰 저장 공간이 거의 찼어요"
 
 
 def hours(ms):
@@ -51,7 +58,7 @@ def causes(phone, now_ms):
     if phone.get("batteryFree") is False:
         out.append("배터리 최적화 예외가 꺼져 있었어요(batteryFree=false).")
     bucket = phone.get("standbyBucket")
-    if bucket in ("RARE", "RESTRICTED"):
+    if bucket in ("RARE", "RESTRICTED", "NEVER"):
         out.append(f"절전 버킷이 {bucket}였어요. 앱을 한 번 열면 풀려요.")
     if phone.get("notifyAllowed") is False:
         out.append("알림이 꺼져 있었어요(notifyAllowed=false).")
@@ -82,8 +89,18 @@ def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count):
                 "추정 원인: 절전 모드로 앱이 멈췄거나, 폰이 꺼졌거나, 재부팅 뒤 앱을 열지 않았거나, 우편함 토큰이 만료됐어요.", phone, now_ms))
         else:
             d = ms(phone, "lastDiscoveryMs")
-            # The phone is alive but has not looked at the recording folder for 12 hours (0: an app before v2.4, unknown).
-            if d and now_ms - d > DISCOVERY_STUCK_MS:
+            attempt = ms(phone, "lastDiscoveryAttemptMs")
+            # The phone is alive but no discovery cycle ended well for 12 hours. With tries reported (v2.6), a never-good
+            # cycle (0) counts too: that was the silent failure of 11/4. Without tries (before v2.6), 0 stays "unknown".
+            if attempt and now_ms - d > DISCOVERY_STUCK_MS:
+                outcome = phone.get("lastDiscoveryOutcome")
+                code = w_code(outcome)
+                when = f"녹음 폴더를 끝까지 살펴본 지 {hours(now_ms - d)} 지났어요" if d else "녹음 폴더를 한 번도 끝까지 살펴보지 못했어요"
+                add(T_DISCOVERY, with_causes(f"폰은 살아 있고 마지막 시도는 {hours(max(0, now_ms - attempt))} 전인데, {when} (기준 12시간)."
+                    + (f" 마지막 결과 코드: {code}." if code else "")
+                    + ("\n폴더의 녹음이 너무 많아 목록이 잘렸어요(inventoryTruncated)." if phone.get("inventoryTruncated") is True else "")
+                    + "\n\n추정 원인: 녹음 폴더 권한이 풀렸거나, 찾기가 시간 한도에 걸리거나, 오류로 끝나요.", phone, now_ms))
+            elif d and now_ms - d > DISCOVERY_STUCK_MS:
                 add(T_DISCOVERY, with_causes(f"폰은 살아 있지만 녹음 폴더를 마지막으로 살펴본 지 {hours(now_ms - d)} 지났어요 (기준 12시간).\n\n"
                     "추정 원인: 녹음 폴더 권한이 풀렸거나, 자동 찾기 작업이 멈췄어요.", phone, now_ms))
             log = phone.get("callLog") if isinstance(phone.get("callLog"), dict) else {}
@@ -94,11 +111,39 @@ def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count):
                     + ("추정 원인: 앱이 통화 기록을 다 저장하지 못했어요(개인 번호·부재중 저장 전 버전이면 그 수만큼 적어요)."
                        if device > stored else "추정 원인: 폰에서 통화 기록을 지웠거나, 기록 읽기가 중간에 끊겼어요."))
         oq = phone.get("oldestQueuedMs")
-        if oq:
+        fp = phone.get("firstPass") if isinstance(phone.get("firstPass"), dict) else {}
+        if fp and fp.get("done") is False:
+            # First pass (10/1 on) still running: old recordings wait at the back by design, so the oldest one says nothing.
+            # Stuck means no new subtitle for a day while recordings are left.
+            lt = ms(phone, "lastTranscribedMs")
+            if (fp.get("toTranscribe") or 0) > 0 and lt and now_ms - lt > FIRST_PASS_STUCK_MS:
+                add(T_QUEUE, f"처음 정리 중인데 마지막 자막이 {hours(now_ms - lt)} 전이에요 (기준 24시간). "
+                    f"남은 녹음 {fp.get('toTranscribe')}개, 약 {fp.get('audioMinutesLeft', '?')}분.\n\n"
+                    "추정 원인: 충전하지 않아 폰이 작업을 미루거나, 음성 인식 모델이 없거나, 절전 모드예요.")
+        elif "newQueuedCount" in phone:
+            # v2.6: only new recordings, by when they entered the queue (old first-pass ones may rightly wait for the charger).
+            nq = phone.get("newOldestQueuedMs")
+            if ms(phone, "newQueuedCount") > 0 and nq and now_ms - int(nq) > QUEUE_STUCK_MS:
+                add(T_QUEUE, f"글자로 바꾸기를 기다리는 새 녹음 중 가장 오래된 것이 대기열에 들어온 지 {hours(now_ms - int(nq))} 됐어요 (기준 6시간). "
+                    f"기다리는 새 녹음 {ms(phone, 'newQueuedCount')}개.\n\n추정 원인: 배터리가 부족하거나, 음성 인식 모델이 없거나, 절전 모드예요.")
+        elif oq:
             qage = now_ms - int(oq)
             if qage > QUEUE_STUCK_MS:
                 add(T_QUEUE, f"글자로 바꾸기를 기다리는 가장 오래된 녹음이 {hours(qage)} 됐어요 (기준 6시간). "
                     f"기다리는 녹음 {ms(phone, 'queuedCount')}개.\n\n추정 원인: 충전하지 않아 폰이 작업을 미루거나, 음성 인식 모델이 없거나, 절전 모드예요.")
+        available, ready_since = ms(phone, "updateAvailableCode"), ms(phone, "updateReadySinceMs")
+        if available and ready_since and available > ms(phone, "versionCode") and now_ms - ready_since > UPDATE_NOT_INSTALLED_MS:
+            add(T_NOT_INSTALLED, f"새 버전({available})이 폰에 준비된 지 {hours(now_ms - ready_since)} 지났는데 아직 설치되지 않았어요 (기준 24시간). "
+                f"지금 버전: {ms(phone, 'versionCode')}.\n\n추정 원인: 설치에 사람의 확인이 필요하거나, 자동 설치가 꺼져 있거나, 앱을 열지 않았어요.")
+        db = phone.get("dbPercent")
+        if isinstance(db, (int, float)) and not isinstance(db, bool) and db > DB_FULL_PERCENT:
+            add(T_DB_FULL, f"폰의 보호 저장소를 {int(db)}% 쓰고 있어요 (기준 80%). 다 차면 모든 저장이 멈춰요.\n\n"
+                "해야 할 일: 오래된 기록 정리 규칙을 확인하거나 저장소 한도를 늘린 새 버전을 배포해 주세요.")
+        ie, ie_since = w_code(phone.get("lastInboxError")), ms(phone, "lastInboxErrorSinceMs")
+        # The phone keeps since when the code has been the same (lastInboxErrorSinceMs), so no state is kept here.
+        if ie and ie_since and now_ms - ie_since > INBOX_ERROR_STUCK_MS:
+            add(T_INBOX_ERROR, f"폰이 {hours(now_ms - ie_since)} 동안 같은 우편함 오류를 보내요 (기준 2시간). 코드: {ie}\n\n"
+                "추정 원인: 우편함 토큰 만료나 권한 문제, 요청 형식 오류예요.")
         err = phone.get("lastUpdateError")
         if err:
             add(T_UPDATE, f"앱 업데이트가 실패했어요. 코드: {err}\n앱 버전: {phone.get('appVersion', '?')}\n\n추정 원인: 설치 권한, 저장 공간, 서명 불일치예요.")
@@ -131,6 +176,13 @@ def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count):
                 "IEUM_SIGNING_SEED 비밀이 있는지 먼저 확인해 주세요(없으면 서명이 바뀌어 업데이트가 막혀요). "
                 "폰이 새 버전을 받으면 다음 하트비트에서 저절로 닫혀요.")
     return out
+
+
+def w_code(raw):
+    """A code from the heartbeat (INBOX_HTTP_401, DISCOVERY_ACCESS_CHANGED): letters, digits and _-: only, at most 60."""
+    if not isinstance(raw, str):
+        return ""
+    return "".join(c for c in raw.strip()[:60] if c.isascii() and (c.isalnum() or c in "_-:"))
 
 
 def plan(problems, open_issues):

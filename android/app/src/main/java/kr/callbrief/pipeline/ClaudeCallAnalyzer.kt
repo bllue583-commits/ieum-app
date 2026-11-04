@@ -146,8 +146,10 @@ internal class ClaudeCallAnalyzer {
                 "certainty" to enum("sure","tentative").put("description","하기로 정해졌으면 sure, 알아보겠다 정도면 tentative")),
                 "체크할 일, 한 기록에 최대 5개"))
         /** Version of the analysis rules and result format (docs/routines/hourly.md). Requests carry it; the request file format is [FORMAT].
-         * 5: the result no longer has siteMemo, companyMemo, companyTrade (the phone never used them; the task keeps the ledger). */
-        const val PROMPT_VERSION=5
+         * 5: the result no longer has siteMemo, companyMemo, companyTrade (the phone never used them; the task keeps the ledger).
+         * 6: rules 7, 8, 11 to 16 and 19 say more (how people address each other, more date words, a surname with a title only);
+         * the result format is the same as 5, so a 4 or 5 request is answered by the same rules. */
+        const val PROMPT_VERSION=6
         const val FORMAT=3
         /** Site words the speech recogniser tends to mishear (design C5 [용어]). */
         val TERMS=listOf("타설","양생","레미콘","슬럼프","거푸집","동바리","배근","D10","D13","D16","D19","D22","D25","샵드로잉","기성","내역서","견적서","도면",
@@ -173,10 +175,21 @@ internal class ClaudeCallAnalyzer {
         const val NUMBER_MASK="[번호]"
         // 11 or more digits in a row, single hyphens or spaces between them allowed (a phone number); an account number shape.
         private val LONG_NUMBER=Regex("(?<!\\d)\\d(?:[- ]?\\d){10,}(?!\\d)")
+        // A 9 or 10 digit landline: area code 02 or 0xx, then 3 or 4 digits and 4, spaces or hyphens allowed (review 19).
+        private val LANDLINE=Regex("(?<!\\d)0(?:2|[3-6]\\d|70)[- ]?\\d{3,4}[- ]?\\d{4}(?!\\d)")
         private val ACCOUNT=Regex("(?<!\\d)\\d{2,6}-\\d{2,6}-\\d{2,8}(?!\\d)")
         private val ISO_DAY=Regex("^(19|20)\\d{2}-\\d{1,2}-\\d{1,2}$")
         /** Phone and account numbers in a transcript or text replaced by [NUMBER_MASK] (a date like 2026-11-04 stays). */
-        fun maskNumbers(text:String):String=ACCOUNT.replace(LONG_NUMBER.replace(text,NUMBER_MASK)) { m -> if(ISO_DAY.matches(m.value)) m.value else NUMBER_MASK }
+        fun maskNumbers(text:String):String {
+            // Phone numbers of every shape first (a 10-digit landline "031 123 4567" too, review 19), then long digit runs and accounts.
+            // The landline shape also when a particle sticks to it ("031 123 4567로"), which the phone rule's word edge misses.
+            val phones=LANDLINE.replace(kr.callbrief.core.PrivacyRules.replacePhoneTokens(text,NUMBER_MASK),NUMBER_MASK)
+            return ACCOUNT.replace(LONG_NUMBER.replace(phones,NUMBER_MASK)) { m -> if(ISO_DAY.matches(m.value)) m.value else NUMBER_MASK }
+        }
+        /** A name as it may leave the phone: number-shaped parts gone, any other long number masked; null when nothing is left. */
+        fun safeName(name:String?):String? = CallRecordStore.noNumber(name)?.let { maskNumbers(it).trim() }?.takeIf { it.isNotEmpty() && it!=NUMBER_MASK }
+        /** The sender of a mail as sent: the name only, never the address (the person is known by id, review 18). */
+        fun mailSender(raw:String?):String? = raw?.trim()?.takeIf { it.isNotEmpty() && !(it.contains('@') && !it.contains(' ')) }?.let { safeName(it) }
         /** Who the user is, in roles only (no name, company or site): the first block of every request when "내 정보" is empty. */
         const val USER_PROFILE="건설사 직원(부장), 건설 현장 한 곳을 맡고 있습니다. 협력업체와 같은 회사 직원에게 일을 시키고 받는 통화가 많습니다. 상대가 \"부장님\"이라고 부르면 듣는 쪽이 사용자입니다."
         val SYSTEM="""
@@ -195,31 +208,31 @@ internal class ClaudeCallAnalyzer {
 6. tasks의 quote에는 자막이나 <texts>에 실제로 있는 부분을 한 글자도 바꾸지 말고 그대로 복사하세요. 8글자 이상, 한 문장 이내로, 두 문장을 이어 붙이거나 "..."로 줄이지 말고, 숫자와 표기도 그대로 두세요. 원문의 [번호]는 가려 둔 전화번호나 계좌번호이니 그대로 두세요. 근거가 되는 원문이 없으면 그 항목은 만들지 마세요.
 
 [누가 말했나]
-7. 자막에는 누가 말했는지 표시가 없습니다. 다음 순서로 판단하고 그 근거를 speakerNotes에 한두 문장으로 먼저 적으세요. (1) [통화 방향]: 건 전화면 사용자가 먼저 용건을 꺼내고, 받은 전화면 상대가 먼저 꺼냅니다. (2) 호칭: 사용자를 직책으로 부르는 쪽이 상대입니다. (3) 말투: "~해 주세요", "~까지 부탁드립니다"는 시키는 쪽, "~하겠습니다", "~보내드리겠습니다"는 맡는 쪽입니다. (4) 판단이 서지 않으면 owner는 "unknown"으로 두고 title에 주어를 단정해 쓰지 마세요.
+7. 자막에는 누가 말했는지 표시가 없습니다. 다음 순서로 판단하고 그 근거를 speakerNotes에 한두 문장으로 먼저 적으세요. (1) [통화 방향]: 건 전화면 사용자가 먼저 용건을 꺼내고, 받은 전화면 상대가 먼저 꺼냅니다. (2) 호칭: 사용자를 직책으로 부르는 쪽이 상대입니다. (3) 말투: "~해 주세요", "~까지 부탁드립니다"는 시키는 쪽, "~하겠습니다", "~보내드리겠습니다"는 맡는 쪽입니다. (4) 판단이 서지 않으면 owner는 "unknown"으로 두고 title에 주어를 단정해 쓰지 마세요. (5) 상대가 '부장님', '김 부장님'처럼 [사용자]의 직책으로 부르는 문장은 상대가 한 말이고, '과장님', '소장님', '사장님', '기사님'으로 부르는 문장은 사용자가 한 말입니다. (6) 받은 전화의 첫 인사('네, ○○현장입니다')는 사용자, 건 전화의 첫 인사('네, △△철강입니다')는 상대입니다.
 
 [날짜]
-8. 날짜는 메시지의 [달력]을 보고 YYYY-MM-DD로 쓰고, 알 수 없으면 null로 둡니다. 계산 기준은 [통화기록]의 실제 통화 시각 하나입니다. "오늘 중", "오전 중", "퇴근 전"은 통화 당일, "이번 주 X요일"은 통화일이 속한 월~일 주의 X요일, "다음 주 X요일"은 그다음 주, "다음 주 초"는 다음 주 월요일, "월말"은 그달 마지막 평일, "내일모레"는 이틀 뒤입니다. 이미 지난 요일을 말했다면 앞으로 처음 오는 그 요일입니다. 분명하지 않으면 null입니다.
+8. 날짜는 메시지의 [달력]을 보고 YYYY-MM-DD로 쓰고, 알 수 없으면 null로 둡니다. 계산 기준은 [통화기록]의 실제 통화 시각 하나입니다. "오늘 중", "오전 중", "퇴근 전"은 통화 당일, "이번 주 X요일"은 통화일이 속한 월~일 주의 X요일, "다음 주 X요일"은 그다음 주, "다음 주 초"는 다음 주 월요일, "월말"은 그달 마지막 평일, "내일모레"는 이틀 뒤입니다. 이미 지난 요일을 말했다면 앞으로 처음 오는 그 요일입니다. '내일'은 통화일 다음 날, '모레'는 이틀 뒤, '글피'는 사흘 뒤, '이번 주 안'은 그 주 금요일, '주말'은 그 주 토요일, '다음 달 초'는 다음 달 첫 평일입니다. '금요일까지'처럼 '이번 주/다음 주'가 없으면 앞으로 처음 오는 그 요일입니다. [달력]이 없거나 통화 시각이 '시각 미상'이면 due는 모두 null입니다. [달력]의 '공휴일'이 기한이면 그대로 두고 옮기지 마세요. 분명하지 않으면 null입니다.
 
 [숫자와 용어]
 9. 금액, 수량, 규격(철근 규격, 콘크리트 강도, 타설 물량 등), 날짜, 시각은 자막에 나온 그대로 쓰고 합산, 반올림, 단위 변환을 하지 마세요. 숫자가 앞뒤와 맞지 않으면 summary 끝에 "(숫자 확인 필요)"를 붙이세요. 메시지의 [용어]에 있는 말과 비슷한 소리의 다른 말이 자막에 있으면 그 용어로 이해하되 quote는 자막 그대로 복사하세요.
 
 [체크할 일]
 10. tasks는 사용자가 나중에 "됐는지 확인할 일" 목록입니다. 사용자는 부장이라 상대에게 일을 시키는 경우가 많습니다. 상대가 하기로 한 약속(owner "them")과 사용자가 하기로 한 약속(owner "me") 모두 넣으세요. 상대가 할 일의 title은 "김민수 과장 견적서 회신 확인"처럼 누가 무엇을 했는지 확인하는 꼴로 짧게 쓰세요.
-11. "~하겠다", "~하기로 했다", "~보내드리겠다"처럼 정해진 것만 certainty "sure"로 만드세요. "~해 볼게요", "알아볼게요", "검토해 보겠습니다"는 certainty "tentative"로 하고 title을 "회신 확인"처럼 쓰세요. "~하면 좋겠다", "~일 것 같다"는 만들지 마세요.
-12. 체크할 일을 정하는 순서: (1) [열린 체크할 일]에 같은 업체의 같은 대상(문서 이름, 공정, 회차)이 있으면 op "update"와 그 taskId를 쓰세요. 새 날짜가 분명할 때만 due를 쓰고 아니면 null로 두세요(기존 날짜가 유지됩니다). (2) 이번 통화에서 그 일이 끝났다고 누군가 말했으면 op "done_suggested"로 제안만 하세요(quote는 끝났다고 말한 부분). 일이 끝났다고 스스로 결정하지 마세요. (3) 둘 다 아니면 "create"(taskId null). 같은 일에 update와 create를 함께 내지 마세요. 회차나 날짜가 다른 일(11/5 타설과 11/12 타설)은 새 일입니다. taskId는 메시지에 있는 것만 쓸 수 있습니다. 기록 하나에서 tasks는 5개까지입니다. [최근 끝낸 체크할 일]에 있는 일은 새로 요청받지 않는 한 다시 만들지 마세요. tasks의 company에는 그 일이 속한 업체 이름을 [이름 목록]의 표기로 쓰고 모르면 null로 두세요. [열린 체크할 일]의 각 항목에는 taskId, title, due, status, company와 함께 askedOn(요청한 날), owner(그때 정한 맡는 쪽), person(요청한 통화 상대 이름), quote(그때 근거 원문의 앞 40자)가 있을 수 있고, 없는 키는 알 수 없다는 뜻입니다.
+11. "~하겠다", "~하기로 했다", "~보내드리겠다"처럼 정해진 것만 certainty "sure"로 만드세요. "~해 볼게요", "알아볼게요", "검토해 보겠습니다"는 certainty "tentative"로 하고 title을 "회신 확인"처럼 쓰세요. "~하면 좋겠다", "~일 것 같다"는 만들지 마세요. 상대가 '확인해 보고 연락드릴게요', '여쭤보고 말씀드릴게요'라고 하면 tentative이고 title은 '○○ 회신 확인'입니다. 사용자가 '알아보고 연락드릴게요'라고 하면 owner 'me', tentative입니다.
+12. 체크할 일을 정하는 순서: (1) [열린 체크할 일]에 같은 업체의 같은 대상(문서 이름, 공정, 회차)이 있으면 op "update"와 그 taskId를 쓰세요. 새 날짜가 분명할 때만 due를 쓰고 아니면 null로 두세요(기존 날짜가 유지됩니다). update는 대상이 같고 '날짜', '수량', '방법' 중 하나가 바뀌었을 때만 씁니다. 같은 대상에 대해 다시 말하기만 했으면 아무것도 내지 마세요. (2) 이번 통화에서 그 일이 끝났다고 누군가 말했으면 op "done_suggested"로 제안만 하세요(quote는 끝났다고 말한 부분). 일이 끝났다고 스스로 결정하지 마세요. (3) 둘 다 아니면 "create"(taskId null). 같은 일에 update와 create를 함께 내지 마세요. 회차나 날짜가 다른 일(11/5 타설과 11/12 타설)은 새 일입니다. taskId는 메시지에 있는 것만 쓸 수 있습니다. 기록 하나에서 tasks는 5개까지입니다. [최근 끝낸 체크할 일]에 있는 일은 새로 요청받지 않는 한 다시 만들지 마세요. tasks의 company에는 그 일이 속한 업체 이름을 [이름 목록]의 표기로 쓰고 모르면 null로 두세요. [열린 체크할 일]의 각 항목에는 taskId, title, due, status, company와 함께 askedOn(요청한 날), owner(그때 정한 맡는 쪽), person(요청한 통화 상대 이름), quote(그때 근거 원문의 앞 40자)가 있을 수 있고, 없는 키는 알 수 없다는 뜻입니다.
 
 [이름]
 13. counterpart에는 이번 통화 상대의 personName, companyName, role, isStaff(우리 회사 직원이면 true, 이때 companyName은 null)를 씁니다. 자막이나 [이름 목록]에서 확인되지 않으면 null로 두고, 자막과 [이름 목록]에 없는 이름은 절대 지어내지 마세요. counterpartName과 counterpartCompany에는 같은 값을 넣습니다. 호칭(과장, 소장, 님)은 이름에 붙이지 말고 role에 씁니다.
 14. 자막의 이름은 음성 인식 오타가 있을 수 있습니다. [이름 목록]에 비슷한 이름이 있으면 목록의 표기를 그대로 쓰세요. 목록에 "김민수(△△철강 과장, 오인식 김민서)"처럼 "오인식" 뒤에 적힌 이름은 다르게 들린 적이 있는 틀린 표기이니 같은 사람으로 보고 앞의 이름을 쓰세요.
 15. "상대 id"가 있으면 그 상대는 전화번호(메일은 주소)로 확인된 사람입니다. 자막의 이름이 [상대]의 이름과 다르게 들려도 같은 사람이니 [상대]의 이름을 쓰세요. 다만 자막에서 상대가 자기 이름을 분명히 다르게 말하면 [이 번호를 쓰는 사람들]에서 고르고, 거기에도 없으면 그 이름을 쓰세요(사무실 번호를 여러 사람이 씁니다).
-16. 전화부 이름에 업체나 직책이 붙어 있으면(김과장 △△철강) 이름, 업체, 직책으로 나눠 쓰세요.
+16. 전화부 이름에 업체나 직책이 붙어 있으면(김과장 △△철강) 이름, 업체, 직책으로 나눠 쓰세요. 자막이나 전화부 이름에 '김 과장'처럼 성과 직책만 들리고 [상대]나 [이름 목록]에 같은 성의 그 직책 사람이 하나 있으면 그 사람의 이름을 쓰세요. 없으면 personName은 '김'이 아니라 null로 두고 role만 '과장'으로 씁니다.
 
 [문자와 메일]
 17. 메시지 맨 위 "종류"가 문자나 메일이면 <transcript> 안의 글은 업무 문자(시각과 보낸/받은 표시) 또는 메일(제목, 보낸 사람, 본문, 첨부 목록)입니다. 자막 규칙을 똑같이 적용하고 quote도 그 글에서 복사하세요. 보낸 문자의 약속은 사용자의 약속(owner "me")입니다. "첨부: 견적서.pdf" 같은 줄은 그 서류가 실제로 갔다는 신호이므로 [열린 체크할 일]의 "보내기" 일이 끝난 것으로 보이면 done_suggested를 내세요.
 18. <texts>는 같은 상대와 최근 7일 동안 주고받은 업무 문자와 메일 원문입니다. 통화와 문자, 메일을 한 흐름으로 이어서 요약하고, 이미 문자로 끝난 일은 새 할 일로 만들지 마세요. "아직 정리 전" 표시는 아직 분석되지 않은 문자라는 뜻입니다.
 
 [개인 내용]
-19. business는 이 통화·문자·메일이 사용자의 일(현장, 협력업체, 회사 업무)과 관련 있으면 true입니다. 가족, 지인, 쇼핑, 택배, 광고, 금융 알림 같은 개인적인 것이면 false로 하고, summary는 "개인 내용"이라고만 쓰고 나머지 목록은 비우며 이름과 업체도 모두 null로 두세요. 개인 내용은 요약하거나 옮겨 적지 마세요. [상대]에 업체가 있는 통화는 분명히 개인적인 내용일 때만 false입니다.
+19. business는 이 통화·문자·메일이 사용자의 일(현장, 협력업체, 회사 업무)과 관련 있으면 true입니다. 가족, 지인, 쇼핑, 택배, 광고, 금융 알림 같은 개인적인 것이면 false로 하고, summary는 "개인 내용"이라고만 쓰고 나머지 목록은 비우며 이름과 업체도 모두 null로 두세요. 개인 내용은 요약하거나 옮겨 적지 마세요. [상대]에 업체가 있는 통화는 분명히 개인적인 내용일 때만 false입니다. 협력업체 사람의 명절 인사, 경조사 안내는 업무 관계이므로 business true이고 tasks는 비웁니다.
 
 [예시 1] [열린 체크할 일]에 {"taskId":"w12","title":"김민수 과장 수정 견적서 회신 확인"}이 있고 자막에 "수정 견적서는 어제 메일로 보내드렸습니다"가 있으면 → tasks: [{"op":"done_suggested","taskId":"w12","quote":"수정 견적서는 어제 메일로 보내드렸습니다","owner":"them","certainty":"sure"}]
 [예시 2] [열린 체크할 일]에 {"taskId":"w20","title":"3층 타설 일정표 공유","due":"2026-11-05"}가 있고 자막에 "타설 일정표는 금요일까지 드릴게요"(통화일 수요일 11/4)가 있으면 → tasks: [{"op":"update","taskId":"w20","title":"3층 타설 일정표 공유","due":"2026-11-06","quote":"타설 일정표는 금요일까지 드릴게요","owner":"them","certainty":"sure"}]
@@ -248,10 +261,12 @@ internal class ClaudeCallAnalyzer {
             append("종류: ").append(r.kind).append('\n')
             append(r.kind).append(" 시각: ").append(r.callTimeKst).append('\n')
             // A bare phone number is not sent: the person is known by id (design: 장부의 원본).
-            val shown=r.counterpart?.takeIf { it.isNotBlank() }?.let { c -> if(r.kind!="메일" && CallRecordStore.isContact(CallRecordStore.counterpartKey(c))) "전화부에 없는 번호" else CallRecordStore.noNumber(c) ?: "전화부에 없는 번호" }
+            // Mail: the sender's name only, the address never (review 18); a name with a number in it loses the number.
+            val shown=if(r.kind=="메일") mailSender(r.counterpart) ?: r.person?.name?.let { safeName(it) }
+                else r.counterpart?.takeIf { it.isNotBlank() }?.let { c -> if(CallRecordStore.isContact(CallRecordStore.counterpartKey(c))) "전화부에 없는 번호" else safeName(c) ?: "전화부에 없는 번호" }
             append(if(r.kind=="메일") "보낸 사람: " else "전화부 이름: ").append(shown ?: "미상").append('\n')
             r.counterpartId?.let { append("상대 id: ").append(it).append('\n') }
-            r.callLog?.let { l -> append("[통화기록] ").append(listOfNotNull(l.phoneBookName?.let { "전화부 이름 $it" },l.direction,"실제 시각 ${l.startTime}",
+            r.callLog?.let { l -> append("[통화기록] ").append(listOfNotNull(safeName(l.phoneBookName)?.let { "전화부 이름 $it" },l.direction,"실제 시각 ${l.startTime}",
                 "길이 ${durationText(l.durationMs)}").joinToString(", ")).append('\n') }
             if(r.kind=="통화") append("통화 길이: ").append(durationText(r.durationMs)).append('\n')
             (r.direction ?: r.callLog?.direction)?.let { append("[통화 방향] ").append(it).append('\n') }
@@ -301,16 +316,41 @@ internal class ClaudeCallAnalyzer {
         val known=r.knownTaskIds+stillOpen
         // Spaces and punctuation are ignored: segments are joined without spaces and the model tidies them when copying.
         // Compared with the text as it was sent: long numbers masked (J2).
-        val inCall=NameKey.bare(maskNumbers(r.transcript));val inTexts=NameKey.bare(maskNumbers(r.recentTexts))
-        val pieces by lazy { NameKey.trigrams(inCall+"\n"+inTexts) }
+        val callText=maskNumbers(r.transcript);val textsText=maskNumbers(r.recentTexts)
+        val inCall=NameKey.bare(callText);val inTexts=NameKey.bare(textsText)
         fun count(text:String,q:String):Int { var n=0;var i=text.indexOf(q);while(i>=0) { n++;i=text.indexOf(q,i+1) };return n }
+        /** The sentences of a text (split at line ends and . ? ! 。), each bare; joined they are the bare text. */
+        fun sentences(t:String)=t.split(Regex("[\\n.?!。]+")).map { NameKey.bare(it) }.filter { it.isNotEmpty() }
+        /** A quote said more than once proves an item only when a key word of its title is said next to one of its times:
+         * in the sentences it spans, the one before or the one after (design E7, 3.4). */
+        fun nearTitleWord(b:String,title:String):Boolean {
+            val words=title.split(Regex("\\s+")).map { NameKey.bare(it) }.filter { it.length>=2 && it !in NameKey.ACTIONS && it !in NameKey.TITLES }
+            if(words.isEmpty()) return false
+            for(raw in listOf(callText,textsText)) {
+                val list=sentences(raw);val ends=IntArray(list.size);var at=0
+                list.forEachIndexed { i,s -> at+=s.length;ends[i]=at } // sentence i covers [ends[i]-len, ends[i])
+                val bare=list.joinToString("")
+                fun sentenceAt(pos:Int)=ends.indexOfFirst { pos<it }
+                var p=bare.indexOf(b)
+                while(p>=0) {
+                    val first=sentenceAt(p);val last=sentenceAt(p+b.length-1)
+                    val from=if(first>0) ends[first-1]-list[first-1].length else 0
+                    val to=ends[minOf(list.size-1,last+1)]
+                    if(words.any { bare.substring(from,to).contains(it) }) return true
+                    p=bare.indexOf(b,p+1)
+                }
+            }
+            return false
+        }
         /** null: no proof; false: found letter for letter; true: found closely. */
-        fun proof(q:String):Boolean? {
+        fun proof(q:String,title:String):Boolean? {
             val b=NameKey.bare(q);if(b.length<MIN_QUOTE) return null
             val c=count(inCall,b);val t=count(inTexts,b)
             if(c==1 || (c==0 && t==1)) return false
-            if(c+t>1) return true // said several times (a repeated phrase, a looping transcript): kept, but only as a close match
-            return if(NameKey.coverage3(b,pieces)>=FUZZY_COVERAGE) true else null
+            // Said several times (a repeated phrase, a looping transcript): only next to what the title is about, and only as a close match.
+            if(c+t>1) return if(nearTitleWord(b,title)) true else null
+            // Close: one stretch of the call (or of the texts) the quote's length plus 20% holds 90% of its 3-letter pieces.
+            return if(maxOf(NameKey.windowCoverage3(b,inCall),NameKey.windowCoverage3(b,inTexts))>=FUZZY_COVERAGE) true else null
         }
         fun iso(d:String?)=d?.trim()?.takeIf { Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(it) && runCatching { java.time.LocalDate.parse(it) }.isSuccess }
         val heard=NameKey.squash(r.transcript+r.recentTexts+(r.callLog?.phoneBookName ?: ""))
@@ -323,8 +363,8 @@ internal class ClaudeCallAnalyzer {
             ?.let { if(it.personName==null) it.copy(role=null) else it }?.let { if(it.isStaff) it.copy(companyName=null) else it }?.takeIf { it.personName!=null || it.companyName!=null }
         return a.copy(
             counterpart=cp,siteMemo=memo(a.siteMemo,600),companyMemo=memo(a.companyMemo,400),companyTrade=memo(a.companyTrade,20),
-            promises=a.promises.mapNotNull { p -> proof(p.quote)?.takeIf { p.text.isNotEmpty() }?.let { p.copy(owner=owner(p.owner),due=iso(p.due),quoteFuzzy=it) } },
-            tasks=a.tasks.mapNotNull { t -> val fuzzy=proof(t.quote)
+            promises=a.promises.mapNotNull { p -> proof(p.quote,p.text)?.takeIf { p.text.isNotEmpty() }?.let { p.copy(owner=owner(p.owner),due=iso(p.due),quoteFuzzy=it) } },
+            tasks=a.tasks.mapNotNull { t -> val fuzzy=proof(t.quote,t.title)
                 if(fuzzy==null || t.title.isEmpty() || !when(t.op) { "create" -> true;"update","done_suggested" -> t.taskId in known;else -> false }) null
                 else t.copy(taskId=if(t.op=="create") null else t.taskId,company=seen(t.company),due=iso(t.due),owner=owner(t.owner),quoteFuzzy=fuzzy) }.take(MAX_TASKS))
     }

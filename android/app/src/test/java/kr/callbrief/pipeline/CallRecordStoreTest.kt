@@ -182,6 +182,58 @@ class CallRecordStoreTest:ProtectedTextHostTestBase() {
         assertEquals(listOf(true),makeItems("△△철강",long1))
     }
 
+    /** Design 3.4: a shared person's name and "확인" no longer make two jobs one; a near one skipped is kept as a merge candidate. */
+    @Test fun aPersonsNameInBothTitlesDoesNotMakeThemOneAndSkippedNearOnesAreKept() {
+        assertEquals(listOf(true),makeItems("△△철강","김민수 과장 철근 반입 일정 확인"))
+        assertEquals(listOf(true),makeItems("△△철강","김민수 과장 철근 반입 수량 확인"))
+        val saved=JSONObject()
+        val v=versions++
+        store().use { it.insert(transcript("rec1",startedMs=started+v*60_000L).copy(sourceVersion=v)) }
+        val id=CallRecordStore.recordId(transcript("rec1").copy(sourceVersion=v))
+        val a=ClaudeCallAnalysis("s",emptyList(),null,null,emptyList(),listOf(ClaudeCallAnalysis.Task("create",null,"김민수 과장 철근 반입 일정 회신 확인",null,quote)),
+            counterpart=ClaudeCallAnalysis.Counterpart("김민수","△△철강",null,false))
+        val applied=CallRecordStore(context,clock,CallRecordStore.SettingsEdit { e -> e(saved) }).use { it.applyAnalysis(id,a) }
+        assertTrue(applied.single().duplicate)
+        val kept=port().use { it.query("SELECT id FROM workflow_items WHERE title='김민수 과장 철근 반입 일정 확인'").single()["id"] as String }
+        val list=JSONArray(saved.getString(PipelineSettingsKeys.MERGE_CANDIDATES))
+        assertEquals(1,list.length());assertEquals(kept,list.getJSONArray(0).getString(0));assertEquals(CallInbox.recordKey(id),list.getJSONArray(0).getString(1))
+    }
+
+    @Test fun anItemFinishedAfterTheCallStillCountsAsOpenForThatCall() {
+        assertEquals(listOf(true),makeItems("△△철강","3층 타설 일정표 공유"))
+        val item=port().use { it.query("SELECT id,created_ms FROM workflow_items").single() }
+        port().use { it.execute("UPDATE workflow_items SET status='done',done_ms=? WHERE id=?",started+500*60_000L,item["id"]) }
+        val v=versions++
+        store().use { it.insert(transcript("rec1",startedMs=started+v*60_000L).copy(sourceVersion=v)) }
+        val req=store().use { s -> s.request(s.record(CallRecordStore.recordId(transcript("rec1").copy(sourceVersion=v)))!!) }
+        assertEquals(listOf(item["id"]),req.openTasks.map { it.id });assertEquals("open",req.openTasks.single().status)
+        // A call after it was finished does not see it.
+        store().use { it.insert(transcript("rec1",startedMs=started+600*60_000L).copy(sourceVersion=900)) }
+        assertTrue(store().use { s -> s.request(s.record(CallRecordStore.recordId(transcript("rec1").copy(sourceVersion=900)))!!) }.openTasks.isEmpty())
+    }
+
+    @Test fun peopleOfOneKeyAreMergedByTheMigrationOnlyOnTheSameNumberOrInTheSameCompany() {
+        store().use { }
+        val saved=JSONObject()
+        port().use { p -> p.transaction {
+            p.execute("INSERT INTO companies(id,name,trade,memo,updated_ms,name_key) VALUES('co_a','△△철강',NULL,'',1,'△△철강')")
+            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms,name_key,ledger_id) VALUES('pe_1','김민수',NULL,'co_a',NULL,0,5,'김민수','p_1')")
+            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms,name_key,ledger_id) VALUES('pe_2','김민수 씨',NULL,'co_a',NULL,0,4,'김민수씨','p_2')")
+            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms,name_key) VALUES('pe_3','김민수 씨','01099990000',NULL,NULL,0,3,'김민수씨')")
+            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms,name_key) VALUES('pe_4','이과장','01077770000',NULL,'과장',0,2,'이과장')")
+            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms,name_key) VALUES('pe_5','이영호',NULL,NULL,NULL,0,1,'이영호')")
+            p.execute("INSERT INTO people_phones VALUES('01077770000','pe_5')")
+            p.execute("INSERT INTO call_links VALUES('x','pe_2','co_a')")
+            p.execute("DELETE FROM app_migration");null } }
+        CallRecordStore(context,clock,CallRecordStore.SettingsEdit { e -> e(saved) }).use { }
+        val left=port().use { it.query("SELECT id,name FROM people ORDER BY id") }.associate { it["id"] to it["name"] }
+        assertEquals(mapOf("pe_1" to "김민수","pe_3" to "김민수 씨","pe_5" to "이영호"),left)
+        assertEquals("pe_1",port().use { it.query("SELECT person_id FROM call_links WHERE record_id='x'").single()["person_id"] })
+        assertEquals("pe_5",port().use { it.query("SELECT person_id FROM person_aliases WHERE name_key='이과장'").single()["person_id"] })
+        val log=JSONArray(saved.getString(PipelineSettingsKeys.MERGE_LOG))
+        assertEquals(listOf("p_2>p_1","pe_4>pe_5"),(0 until log.length()).map { log.getJSONObject(it).let { o -> o.getString("from")+">"+o.getString("into") } })
+    }
+
     @Test fun titlesThatDifferInANumberAreNewItems() {
         listOf("3층 타설 일정 확인" to "4층 타설 일정 확인","□□레미콘 11/5 타설 확인" to "□□레미콘 11/12 타설 확인","2공구 철근 반입 확인" to "3공구 철근 반입 확인").forEach { (x,y) ->
             assertEquals(x,listOf(true),makeItems("△△철강",x))

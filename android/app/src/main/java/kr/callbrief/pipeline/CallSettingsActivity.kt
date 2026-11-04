@@ -12,16 +12,32 @@ import kotlinx.coroutines.withContext
 import kr.callbrief.SecureSettings
 import org.json.JSONObject
 
+/** The download bar shared by settings and the home card: a thick horizontal bar in the accent over its soft tint. */
+internal object UpdateViews {
+    fun bar(a:android.app.Activity,percent:Int)=ProgressBar(a,null,android.R.attr.progressBarStyleHorizontal).apply {
+        isIndeterminate=false;max=100;progress=percent.coerceIn(0,100);tag="update_progress"
+        // Rounded track and fill of our own: the theme's bar tints its track nearly invisible on the white sheet.
+        progressDrawable=android.graphics.drawable.LayerDrawable(arrayOf(CallUi.sheet(a,CallUi.ACCENT_SOFT,radius=6),
+            android.graphics.drawable.ClipDrawable(CallUi.sheet(a,CallUi.ACCENT,radius=6),Gravity.START,android.graphics.drawable.ClipDrawable.HORIZONTAL))).apply {
+            setId(0,android.R.id.background);setId(1,android.R.id.progress) }
+        contentDescription="새 버전 받기 ${progress}%"
+        layoutParams=LinearLayout.LayoutParams(-1,CallUi.dp(a,12)).apply { topMargin=CallUi.dp(a,10);bottomMargin=CallUi.dp(a,6) }
+    }
+}
+
 /** "설정": Claude key, consent, voice-model download, notification hours and a plain status. The key is never shown again. */
 class CallSettingsActivity:ComponentActivity() {
+    companion object { const val TICK_MS=1000L }
     private lateinit var page:LinearLayout
     /** The sheet the current settings group is written into. */
     private lateinit var body:LinearLayout
     private var busy=false
     /** When the oldest call still waiting for its summary was stored (for the status lights). */
     @Volatile private var oldestWaiting:Long?=null
-    /** Recordings still to turn into text (first pass only) and the share of the 16 MB store in use, for the status lights and the storage line. */
-    @Volatile private var backlog=0
+    /** What the status lights read from the store (queue by entry time, late live calls, failures) and the share of the
+     * protected store in use (sealed file and rows, design 3.6), for the status lights and the storage line. */
+    @Volatile private var watch:StatusLights.Store?=null
+    @Volatile private var folderReadable=false
     @Volatile private var storagePercent:Int?=null
     /** Numbers found personal (design E9), the latest first: their records stay on the phone. */
     @Volatile private var personal:List<Pair<String,Long>> =emptyList()
@@ -37,7 +53,68 @@ class CallSettingsActivity:ComponentActivity() {
         super.onCreate(savedInstanceState)
         page=CallUi.page(this,CallUi.Tab.SETTINGS);body=page
     }
-    override fun onResume() { super.onResume();refresh() }
+    override fun onResume() { super.onResume();refresh();ticker.removeCallbacks(tick);ticker.postDelayed(tick,TICK_MS) }
+    override fun onPause() { super.onPause();ticker.removeCallbacks(tick) }
+
+    // ---- 앱 버전: getting the next version, with a bar while it comes (round 6 v2.5) ----
+    private val ticker=android.os.Handler(android.os.Looper.getMainLooper())
+    /** While the screen is open, the update part follows the download every second. */
+    private val tick=object:Runnable { override fun run() { fillUpdate();ticker.postDelayed(this,TICK_MS) } }
+    private var updateBlock:LinearLayout?=null
+    private var updateKey:String?=null
+    private fun metered()=runCatching { getSystemService(android.net.ConnectivityManager::class.java)?.let { it.activeNetwork!=null && it.isActiveNetworkMetered } }.getOrNull()==true
+    private fun startFetch() {
+        val m=metered()
+        CallUpdate.fetchNow(this,installAfter=false,metered=m)
+        if(m) Toast.makeText(this,"모바일 데이터로 ${CallUpdate.sizeWords(CallUpdate.available(this)?.size ?: 0)} 받아요.",Toast.LENGTH_LONG).show()
+        fillUpdate()
+    }
+    /** The part under the version line: a bar and "받는 중 42%" while it comes, [지금 설치] when it is ready, [지금 받기] when a newer
+     * version is known and not yet here. Rebuilt only when what it shows changes. */
+    internal fun fillUpdate() {
+        val block=updateBlock ?: return
+        val ready=CallUpdate.ready(this)
+        if(ready!=null && CallUpdate.takeInstallWish(this)) { CallUpdate.install(this,metered()) } // asked for from [지금 업데이트]: on to the install
+        val f=CallUpdate.fetchState(this);val avail=CallUpdate.available(this)
+        val key="$f|${avail?.versionCode}|${ready?.versionCode}"
+        if(key==updateKey) return
+        updateKey=key;block.removeAllViews()
+        val name=(ready ?: avail)?.let(CallUpdate::shownName)
+        fun headline(t:String,color:Int=CallUi.INK)=CallUi.text(this,t,CallUi.HEADING,true,color).apply { tag="update_state";fontFeatureSettings="tnum";setPadding(0,CallUi.dp(this@CallSettingsActivity,12),0,0) }
+        fun note(t:String)=CallUi.text(this,t,CallUi.CAPTION,color=CallUi.SUBTLE).apply { tag="update_note" }
+        when {
+            ready!=null -> {
+                block.addView(headline("새 버전이 준비됐어요",CallUi.ACCENT))
+                if(ready.notes.isNotBlank()) block.addView(CallUi.text(this,ready.notes,CallUi.BODY))
+                block.addView(CallUi.bigButton(this,"","지금 설치") { if(!busy) { CallUpdate.install(this,metered());fillUpdate() } }.apply { tag="update_install" })
+            }
+            f.stage==CallUpdate.Stage.DOWNLOADING -> {
+                block.addView(headline(listOfNotNull("새 버전",name,"받는 중 ${f.percent}%").joinToString(" ")))
+                block.addView(UpdateViews.bar(this,f.percent))
+                block.addView(note(if(f.metered) "모바일 데이터로 ${CallUpdate.sizeWords(avail?.size ?: 0)} 받아요." else "다 받으면 바로 설치할 수 있어요."))
+            }
+            f.stage==CallUpdate.Stage.WAITING -> {
+                block.addView(headline(if(name!=null) "새 버전 $name 받을 준비 중이에요" else "새 버전이 있는지 보고 있어요"))
+                block.addView(UpdateViews.bar(this,0))
+                block.addView(note("인터넷에 연결되면 바로 시작해요."))
+            }
+            f.stage==CallUpdate.Stage.FAILED -> {
+                block.addView(headline(f.reason.ifBlank { CallUpdate.OTHER_WORDS },CallUi.AMBER))
+                block.addView(CallUi.bigButton(this,"","다시 받기") { if(!busy) startFetch() }.apply { tag="update_fetch" })
+            }
+            avail!=null -> {
+                block.addView(headline("새 버전 $name 받을 수 있어요"))
+                if(avail.notes.isNotBlank()) block.addView(CallUi.text(this,avail.notes,CallUi.BODY))
+                block.addView(CallUi.bigButton(this,"","지금 받기") { if(!busy) startFetch() }.apply { tag="update_fetch" })
+                block.addView(note("받는 데 ${CallUpdate.sizeWords(avail.size)}가 들어요. 받은 뒤 설치를 한 번 눌러 주세요."))
+            }
+            else -> {
+                block.addView(note("마지막 확인 "+CallUi.dateTime(CallUpdate.lastChecked(this))).apply { setPadding(0,CallUi.dp(this@CallSettingsActivity,6),0,0) })
+                block.addView(CallUi.linkButton(this,"새 버전 확인하기 ›") { if(!busy) startFetch() }.apply { tag="update_check" },
+                    LinearLayout.LayoutParams(-2,-2).apply { marginStart=-CallUi.dp(this@CallSettingsActivity,6) })
+            }
+        }
+    }
 
     /** Starts a settings group: its name above, a white sheet below that the following views go into. */
     private fun group(name:String) {
@@ -58,8 +135,9 @@ class CallSettingsActivity:ComponentActivity() {
                 val counts=runCatching { CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.counts() } }.getOrDefault(emptyMap())
                 val memo=runCatching { CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.siteMemo() } }.getOrNull()
                 oldestWaiting=runCatching { CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.oldestWaitingMs() } }.getOrNull()
-                backlog=runCatching { FirstPass.start(s)?.takeIf { !FirstPass.done(s) }?.let { st -> CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.firstPassProgress(st).toTranscribe } } ?: 0 }.getOrDefault(0)
-                storagePercent=runCatching { getDatabasePath(kr.callbrief.GeneralLocalStore.DATABASE).takeIf { it.isFile }?.let { (it.length()*100/CallRecordStore.DB_LIMIT_BYTES).toInt().coerceIn(0,100) } }.getOrNull()
+                watch=StatusLights.read(CallPipelineStartup.storage(this@CallSettingsActivity),s,System.currentTimeMillis())
+                folderReadable=StatusLights.folderReadable(this@CallSettingsActivity,s)
+                storagePercent=watch?.dbPercent
                 personal=runCatching { CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.personalNumbers() } }.getOrDefault(emptyList())
                 Triple(s,counts,memo)
             } }
@@ -121,6 +199,16 @@ class CallSettingsActivity:ComponentActivity() {
         hourRow("저녁 통화 정리",PipelineSettingsKeys.EVENING_HOUR,s.optInt(PipelineSettingsKeys.EVENING_HOUR,19),15..23)
         body.addView(CallUi.divider(this))
         hourRow("아침 체크할 일",PipelineSettingsKeys.MORNING_HOUR,s.optInt(PipelineSettingsKeys.MORNING_HOUR,6),4..11)
+        // Design 3.3 (r7-3): a verified new version installs by itself; off, a notification only.
+        body.addView(CallUi.divider(this))
+        val auto=s.optBoolean(PipelineSettingsKeys.AUTO_INSTALL,true)
+        body.addView(Switch(this).apply {
+            text="새 버전은 자동으로 설치";textSize=CallUi.SUMMARY;isChecked=auto
+            minHeight=CallUi.dp(this@CallSettingsActivity,64);tag="auto_install_switch";setTextColor(CallUi.INK)
+            val tint=android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_checked),intArrayOf()),intArrayOf(CallUi.ACCENT,CallUi.FAINT))
+            thumbTintList=tint;trackTintList=tint.withAlpha(120)
+            setOnCheckedChangeListener { _,checked -> if(checked!=auto) save { it.put(PipelineSettingsKeys.AUTO_INSTALL,checked) } }
+        })
         myInfo(s)
         personalNumbers()
 
@@ -130,6 +218,7 @@ class CallSettingsActivity:ComponentActivity() {
         body.addView(CallUi.divider(this))
         // Installed version, and the next one when it is downloaded and waiting (design: 보고와 화면); a failed install shows its reason.
         body.addView(CallUi.text(this,CallUpdate.versionLine(kr.callbrief.BuildConfig.VERSION_NAME,kr.callbrief.BuildConfig.VERSION_CODE,CallUpdate.ready(this)),CallUi.BODY,true).apply { tag="app_version" })
+        updateBlock=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL;tag="update_block" }.also { body.addView(it) };updateKey=null;fillUpdate()
         CallUpdate.errorWords(s.optString(PipelineSettingsKeys.LAST_UPDATE_ERROR))?.let {
             body.addView(CallUi.text(this,it.reason,CallUi.CAPTION,color=CallUi.AMBER).apply { tag="update_error" }) }
         storagePercent?.let { body.addView(CallUi.text(this,"저장 공간 ${it}% 사용",CallUi.BODY).apply { tag="storage_use" }) }
@@ -179,11 +268,13 @@ class CallSettingsActivity:ComponentActivity() {
     private fun notifyAllowed()=android.os.Build.VERSION.SDK_INT<33||checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)==android.content.pm.PackageManager.PERMISSION_GRANTED
     /** "지금 상태": five lights (green "정상" or amber with the reason and what to do, never red) at the top of the last group. */
     private fun statusLights(s:JSONObject,counts:Map<String,Int>) {
-        val input=StatusLights.Input(System.currentTimeMillis(),s.optString("treeUri").isNotBlank(),s.optString(PipelineSettingsKeys.MODEL_STATE),
-            backlog,s.optLong(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,0),s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false),
-            (counts[CallRecordStore.TRANSCRIBED] ?: 0)+(counts[CallRecordStore.WAITING_CONSENT] ?: 0),counts[CallRecordStore.FAILED] ?: 0,
-            oldestWaiting?.let { System.currentTimeMillis()-it },s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),
-            s.optString(PipelineSettingsKeys.LAST_UPDATE_ERROR),CallUpdate.ready(this)!=null)
+        val now=System.currentTimeMillis();val w=watch
+        val input=StatusLights.Input(now,s.optString("treeUri").isNotBlank(),s.optString(PipelineSettingsKeys.MODEL_STATE),
+            w?.queue?.count ?: 0,s.optLong(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,0),s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false),
+            w?.lateLive ?: 0,w?.failed ?: (counts[CallRecordStore.FAILED] ?: 0),w?.oldestLateMs,s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),
+            s.optString(PipelineSettingsKeys.LAST_UPDATE_ERROR),CallUpdate.ready(this)!=null,
+            folderReadable=folderReadable,lastDiscoveryMs=s.optLong(kr.callbrief.AutomaticRecordingDiscovery.LAST_DISCOVERY_MS,0L),
+            oldestQueuedMs=w?.queue?.oldestMs,updateReadySinceMs=s.optLong(PhoneStatus.UPDATE_READY_SINCE_MS,0L))
         val card=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL;tag="settings_status" }
         card.addView(CallUi.text(this,"지금 상태",CallUi.HEADING,true).apply { setPadding(0,0,0,CallUi.dp(this@CallSettingsActivity,4)) })
         StatusLights.lights(input).forEach { l -> card.addView(CallUi.signalRow(this,l.label,l.words,l.ok).apply { tag=l.tag }) }

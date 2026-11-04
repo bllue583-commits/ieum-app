@@ -47,7 +47,7 @@ class FirstPassTest:ProtectedTextHostTestBase() {
 
     @Test fun oldRecordsGoInTimeOrderedBatchesAfterNewOnes() {
         CallRecordStore(context){ now }.use { db ->
-            (1..22).forEach { db.insert(transcript("old$it",now-2*day-it*60_000L)) }
+            (1..22).forEach { db.insert(transcript("old$it",now-10*day-it*60_000L)) }
             db.insert(transcript("new",now))
         }
         val s=JSONObject().put(PipelineSettingsKeys.CONSENT_GRANTED,true).put(PipelineSettingsKeys.FIRST_PASS_START_MS,now-3_600_000L)
@@ -123,10 +123,13 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         val recent=FirstPass.restrict(a,now-3*day,now);val old=FirstPass.restrict(a,now-10*day,now)
         assertNull(recent.siteMemo);assertNull(recent.companyMemo);assertEquals(1,recent.tasks.size)
         assertTrue(old.tasks.isEmpty());assertEquals("김과장",old.counterpartName)
+        // r7-1: old = more than 7 days before now while the first pass runs, whenever it started.
         val start=JSONObject().put(PipelineSettingsKeys.FIRST_PASS_START_MS,now)
-        assertTrue(FirstPass.isOld(now-1,start));assertFalse(FirstPass.isOld(now,start))
-        assertFalse(FirstPass.isOld(now-1,JSONObject(start.toString()).put(PipelineSettingsKeys.FIRST_PASS_DONE,true)))
-        assertFalse("nothing old before the first run",FirstPass.isOld(0,JSONObject()))
+        assertTrue(FirstPass.isOld(now-7*day-1,start,now));assertFalse(FirstPass.isOld(now-7*day,start,now))
+        assertFalse("before the start but this week: live",FirstPass.isOld(now-2*day,start,now))
+        assertFalse(FirstPass.isOld(now-30*day,JSONObject(start.toString()).put(PipelineSettingsKeys.FIRST_PASS_DONE,true),now))
+        assertFalse("nothing old before the first run",FirstPass.isOld(0,JSONObject(),now))
+        assertTrue(FirstPass.stale(now-7*day-1,now));assertFalse(FirstPass.stale(now-7*day,now))
         assertTrue(FirstPass.beforeRange(FirstPass.FROM_MS-1));assertFalse(FirstPass.beforeRange(FirstPass.FROM_MS));assertFalse(FirstPass.beforeRange(null))
     }
 
@@ -154,10 +157,46 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         // A number in the filename picks its entry even with another call nearby; a name picks the phone-book name.
         assertEquals(2L,FirstPass.match(listOf(r("a",t,"010-3333-4444","01033334444")),listOf(e(1,"01011112222",null,t),e(2,"01033334444",null,t+30_000)))["a"]?.id)
         assertEquals(1L,FirstPass.match(listOf(r("a",t,"홍 길동","홍 길동")),listOf(e(1,"01011112222","홍길동",t),e(2,"01033334444","김민수",t)))["a"]?.id)
-        assertNull("a name not in the log",FirstPass.match(listOf(r("a",t,"박철수","박철수")),listOf(e(1,"01011112222","홍길동",t)))["a"])
+        // A name not in the log (the phone book changed): the only call in time and length is it (design 3.4); two are not.
+        assertEquals(1L,FirstPass.match(listOf(r("a",t,"박철수","박철수")),listOf(e(1,"01011112222","홍길동",t)))["a"]?.id)
+        assertNull(FirstPass.match(listOf(r("a",t,"박철수","박철수")),listOf(e(1,"01011112222","홍길동",t),e(2,"01033334444","김민수",t+20_000)))["a"])
         // Missed and rejected calls are never candidates.
         assertNull(FirstPass.match(listOf(r("a",t,null,null)),listOf(e(1,null,null,t,dur=0,type=3),e(2,null,null,t,type=5)))["a"])
         assertEquals("받은 전화",e(1,null,null,t).direction);assertEquals("건 전화",e(1,null,null,t,type=2).direction)
+    }
+
+    /** Design 3.4: an empty CACHED_NAME or another spelling no longer keeps a named recording from its call; the reasons are counted. */
+    @Test fun aNamedRecordingPairsByTimeAndLengthWhenTheLogHasNoNameAndTheReasonsAreCounted() {
+        val t=now
+        fun e(id:Long,name:String?,at:Long,dur:Long=60_000,number:String="01011112222")=FirstPass.LogEntry(id,number,name,at,dur,1)
+        fun r(id:String,at:Long,cp:String?,dur:Long=60_000)=FirstPass.RecordForMatch(id,at,cp,CallRecordStore.counterpartKey(cp),dur)
+        var st:FirstPass.MatchStats?=null
+        val out=FirstPass.match(listOf(r("null",t,"홍길동"),r("spelt",t+3_600_000,"홍길동 과장님"),r("two",t+7_200_000,"박철수"),r("far",t+9_000_000,"최영호"),
+                r("long",t+10_800_000,"한소장",dur=300_000),r("both",t+14_400_000,"오세훈")),
+            listOf(e(1,null,t+15_000),e(2,"홍길동",t+3_600_000-5_000),e(3,"김민수",t+7_200_000),e(4,"이민호",t+7_200_000+20_000),e(5,"한소장",t+10_800_000),
+                e(6,null,t+14_400_000),e(7,null,t+14_400_000+30_000))) { st=it }
+        assertEquals(1L,out["null"]?.id);assertEquals(2L,out["spelt"]?.id)
+        assertNull(out["two"]);assertNull(out["far"]);assertNull(out["long"]);assertNull(out["both"])
+        val s=st!!
+        assertEquals(2,s.matched);assertEquals(1,s.nameDiffers);assertEquals(1,s.noCandidate);assertEquals(1,s.length);assertEquals(1,s.nameNull)
+        assertEquals(mapOf(-20 to 1,0 to 1),s.gapSec)
+        // Stored as one JSON string that grows run by run.
+        val once=s.copy(noTime=2).mergeInto(null,100);val twice=s.mergeInto(once,200)
+        val o=JSONObject(twice)
+        assertEquals(2,o.getInt("runs"));assertEquals(200L,o.getLong("lastMs"));assertEquals(4,o.getInt("matched"))
+        assertEquals(0,o.getJSONObject("last").getInt("noTime"));assertEquals(2,o.getJSONObject("gapSec").getInt("-20"))
+    }
+
+    @Test fun theStoreKeepsTheMatchCountersInSettings() {
+        val saved=JSONObject()
+        CallRecordStore(context,{ now },CallRecordStore.SettingsEdit { edit -> edit(saved) }).use { db ->
+            db.insert(transcript("unnamed",now,"홍길동"))
+            db.reconcileCallLog(listOf(FirstPass.LogEntry(9,"01012345678",null,now-20_000,60_000,2)))
+            assertEquals("01012345678",db.record(CallRecordStore.recordId(transcript("unnamed",now,"홍길동")))!!.counterpartKey)
+            db.reconcileCallLog(emptyList())
+        }
+        val o=JSONObject(saved.getString(PipelineSettingsKeys.CALLLOG_MATCH_STATS))
+        assertEquals(2,o.getInt("runs"));assertEquals(1,o.getInt("matched"));assertEquals(1,o.getJSONObject("gapSec").getInt("20"))
     }
 
     @Test fun callsPlacedAgainWithinTwoMinutesAreAssignedAcrossAllRecordingsAndEntries() {
@@ -286,5 +325,111 @@ class FirstPassTest:ProtectedTextHostTestBase() {
             assertEquals(false,db.record(CallRecordStore.recordId(home))!!.analysis?.business) // kept on the phone as personal
             assertEquals(3,db.dayLog(CallRecordStore.kstDay(now)).size+db.day(CallRecordStore.kstDay(now)).size)
         }
+    }
+
+    // ---- r7-1: the first-pass gate ---------------------------------------------------------------------------------
+    private fun port()=AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql"))
+    /** A recording row with a known start time and a transcription job in [state]. */
+    private fun job(id:String,startedMs:Long,state:String="QUEUED") {
+        CallTranscriptionStore(context).close() // the job table
+        port().use { p -> p.transaction {
+            p.execute("INSERT OR IGNORE INTO board_state(owner_key,revision) VALUES(?,0)",GeneralLocalStore.OWNER)
+            p.execute("INSERT OR IGNORE INTO folder_grants VALUES('g1',?,'content://generated/tree',1,1,1)",GeneralLocalStore.OWNER)
+            p.execute("INSERT INTO recordings(recording_id,owner_key,grant_id,document_id,display_name,mime_type,byte_count,first_seen_ms,last_seen_ms,source_seq,source_version,head_revision,original_started_at_ms) VALUES(?,?,'g1',?,?,'audio/mp4',10,0,0,1,1,1,?)",
+                id,GeneralLocalStore.OWNER,id,"$id.m4a",startedMs)
+            p.execute("INSERT INTO call_transcription_jobs(recording_id,source_version,audio_sha,state,reason,updated_ms) VALUES(?,1,?,?,'',0)",id,"a".repeat(64),state);null } }
+    }
+    private fun jobState(id:String)=port().use { it.query("SELECT state,reason FROM call_transcription_jobs WHERE recording_id=?",id).single().let { r -> r["state"].toString() to r["reason"].toString() } }
+    private val aug2025=java.time.LocalDateTime.of(2025,8,6,15,3,59).atZone(CallRecordStore.KST).toInstant().toEpochMilli()
+
+    @Test fun aQueuedRecordingFrom2025DoesNotHoldTheBound() {
+        job("y2025",aug2025)
+        val oct5=java.time.LocalDate.of(2026,10,5).atStartOfDay(CallRecordStore.KST).toInstant().toEpochMilli()
+        job("oct5",oct5)
+        CallRecordStore(context){ now }.use { db ->
+            assertEquals("skipped when the store opens",("SKIPPED" to "BEFORE_START"),jobState("y2025"))
+            assertEquals("QUEUED",jobState("oct5").first)
+            assertEquals("the bound is the oldest recording since 10/1",oct5,db.oldestOldJobMs(now-FirstPass.LIVE_MS))
+        }
+        // The transcription store skips it on open as well.
+        port().use { it.execute("UPDATE call_transcription_jobs SET state='QUEUED',reason='' WHERE recording_id='y2025'") }
+        CallTranscriptionStore(context).use { assertEquals("SKIPPED",it.rows().single { r -> r.first.recordingId=="y2025" }.second) }
+        // Queued again while the store is open (an older build writing): the query alone leaves it out.
+        CallRecordStore(context){ now }.use { db ->
+            port().use { it.execute("UPDATE call_transcription_jobs SET state='QUEUED',reason='' WHERE recording_id='y2025'") }
+            port().use { it.execute("UPDATE call_transcription_jobs SET state='SKIPPED' WHERE recording_id='oct5'") }
+            assertNull("skipped rows and rows before 10/1 never count",db.oldestOldJobMs(now-FirstPass.LIVE_MS))
+        }
+    }
+
+    @Test fun aCallFromThisWeekGoesAloneWhateverTheFirstPassStart() {
+        CallRecordStore(context){ now }.use { db -> db.insert(transcript("week",now-3*day));db.insert(transcript("old",now-9*day)) }
+        // The first pass started an hour ago: before r7-1 both were "old" and waited for a full batch.
+        val s=JSONObject().put(PipelineSettingsKeys.CONSENT_GRANTED,true).put(PipelineSettingsKeys.FIRST_PASS_START_MS,now-3_600_000L)
+        job("held",now-8*day) // an old recording still waiting for its words: the bound
+        val inbox=FakeInbox()
+        assertTrue(runner(inbox,s).runPending())
+        val sent=inbox.files.keys.filter { it.startsWith("inbox/") }
+        assertEquals(1,sent.size);assertFalse(sent.single().startsWith("inbox/b-"))
+        assertEquals(CallInbox.recordKey(CallRecordStore.recordId(transcript("week",0))),JSONObject(inbox.files.getValue(sent.single())).getString("id"))
+        assertFalse("a live call is not an old record",inbox.files.getValue(sent.single()).contains("[처음 정리]"))
+        assertEquals(now-8*day,s.getLong(FirstPass.BOUND_KEY));assertEquals(FirstPass.BLOCKED_TRANSCRIPTS,s.getString(FirstPass.BLOCKED_KEY))
+    }
+
+    @Test fun tenOldRecordsThatWaitedSixHoursGoAsOneBatch() {
+        CallRecordStore(context){ now }.use { db -> (1..10).forEach { db.insert(transcript("o$it",now-20*day+it*60_000L)) } }
+        job("held",now-10*day) // the bound: later old recordings may still come
+        val s=JSONObject().put(PipelineSettingsKeys.CONSENT_GRANTED,true).put(PipelineSettingsKeys.FIRST_PASS_START_MS,now-day)
+        val inbox=FakeInbox()
+        runner(inbox,s,at=now+3_600_000L).runPending()
+        assertTrue("10 of 15, an hour old: they wait",inbox.files.isEmpty())
+        assertEquals(FirstPass.BLOCKED_TRANSCRIPTS,s.getString(FirstPass.BLOCKED_KEY))
+        runner(inbox,s,at=now+6*3_600_000L).runPending()
+        val batch=inbox.files.entries.single();assertTrue(batch.key.startsWith("inbox/b-"))
+        assertEquals(10,JSONObject(batch.value).getJSONArray("items").length())
+        assertEquals(FirstPass.BLOCKED_NONE,s.getString(FirstPass.BLOCKED_KEY));assertEquals(1,s.getInt(PipelineSettingsKeys.FIRST_PASS_BATCHES_TODAY))
+    }
+
+    @Test fun theDayCapAndTheStepBackStillHold() {
+        CallRecordStore(context){ now }.use { db -> (1..10).forEach { db.insert(transcript("o$it",now-20*day+it*60_000L)) } }
+        job("held",now-10*day)
+        val today=java.time.Instant.ofEpochMilli(now+6*3_600_000L).atZone(CallRecordStore.KST).toLocalDate().toString()
+        val s=JSONObject().put(PipelineSettingsKeys.CONSENT_GRANTED,true).put(PipelineSettingsKeys.FIRST_PASS_START_MS,now-day)
+            .put(PipelineSettingsKeys.FIRST_PASS_BATCH_DAY,today).put(PipelineSettingsKeys.FIRST_PASS_BATCHES_TODAY,FirstPass.BATCHES_PER_DAY)
+        val inbox=FakeInbox()
+        runner(inbox,s,at=now+6*3_600_000L).runPending()
+        assertTrue("four batches today already",inbox.files.isEmpty());assertEquals(FirstPass.BLOCKED_BACKOFF,s.getString(FirstPass.BLOCKED_KEY))
+    }
+
+    @Test fun theOfferPassIsOneTransactionAndStops() {
+        CallTranscriptionStore(context).use { store ->
+            val list=(1..40).map { CallTranscriptionStore.Candidate(CallTranscriptionStore.Key("c$it",1,"a".repeat(64)),"c$it.m4a","content://x","audio/mp4",now,false,true) }
+            val before=store.outerTransactions;val writes=kr.callbrief.ShadowTextAtomicFile.writes
+            assertEquals(40,store.offerAll(list,{ c -> if(c.key.recordingId=="c1") "EXCLUDED" else null }))
+            assertEquals("one outer transaction for 40 candidates",1,store.outerTransactions-before)
+            assertEquals("one sealed write",1,kr.callbrief.ShadowTextAtomicFile.writes-writes)
+            assertEquals(39,store.rows().count { it.second=="QUEUED" })
+            var n=0
+            assertEquals("stops between candidates",5,store.offerAll(list,{ null },{ n++>=5 }))
+        }
+    }
+
+    private class FailingInbox(val fail:Exception):CallInboxStore {
+        override fun put(path:String,json:String){}
+        override fun list(dir:String):List<Pair<String,String>> = throw fail
+        override fun get(path:String):String = throw ClaudeCallException("INBOX_HTTP_404")
+        override fun delete(path:String,sha:String){}
+    }
+    @Test fun everyInboxErrorIsKeptAsItsCodeAndTime() {
+        val s=JSONObject().put(PipelineSettingsKeys.CONSENT_GRANTED,true)
+        fun run(e:Exception,at:Long=now)=CallRecordAnalysisRunner(context,ClaudeCallAnalyzer(),{ s },{ at },FailingInbox(e),save={ edit -> edit(s) },callLog={ emptyList() },smsAllowed={ false }).runPending()
+        assertFalse("a 422 is retried",run(ClaudeCallException("INBOX_HTTP_422")))
+        assertEquals("INBOX_HTTP_422",s.getString(PipelineSettingsKeys.LAST_INBOX_ERROR));assertEquals(now,s.getLong(PipelineSettingsKeys.LAST_INBOX_ERROR_MS))
+        assertFalse(run(IllegalStateException("김 부장 010-1234-5678"),now+1))
+        assertEquals("the class name only, never the text","IllegalStateException",s.getString(PipelineSettingsKeys.LAST_INBOX_ERROR))
+        assertFalse(run(java.io.IOException("INBOX_HTTP_503"),now+2));assertEquals("INBOX_HTTP_503",s.getString(PipelineSettingsKeys.LAST_INBOX_ERROR))
+        // A pass that goes through clears it.
+        CallRecordAnalysisRunner(context,ClaudeCallAnalyzer(),{ s },{ now+3 },FakeInbox(),save={ edit -> edit(s) },callLog={ emptyList() },smsAllowed={ false }).runPending()
+        assertEquals("",s.getString(PipelineSettingsKeys.LAST_INBOX_ERROR))
     }
 }

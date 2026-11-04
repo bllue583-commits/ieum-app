@@ -25,6 +25,9 @@ class GeneralLocalStore(private val context: Context,
         const val OWNER="local-device-v2"
         /** A transcript DONE this long ago no longer needs the encrypted original. */
         const val PRUNE_AFTER_MS=14L*24*60*60*1000
+        /** Skip reasons that end a recording's way for good (#39): before 10/1 never changes; excluded is private and undoing
+         * an exclusion counts from then on; no speech was decided from the audio; an older version has a newer one. */
+        val FINAL_SKIPS=listOf("BEFORE_START","EXCLUDED","NO_SPEECH","NOT_CURRENT")
         const val ALIAS="callsummary.audio.v2.local_device_v2"
         private const val OVERLAY="""
 CREATE TABLE IF NOT EXISTS local_files(recording_id TEXT PRIMARY KEY REFERENCES recordings(recording_id),root_uri TEXT NOT NULL,actual_document_id TEXT NOT NULL,actual_uri TEXT NOT NULL,source_signature TEXT NOT NULL,plaintext_sha256 TEXT NOT NULL,filename_time_candidate_ms INTEGER,UNIQUE(root_uri,actual_document_id));
@@ -51,13 +54,18 @@ CREATE TABLE IF NOT EXISTS local_intakes(event_id TEXT PRIMARY KEY,root_uri TEXT
         val privateContext=object:ContextWrapper(context) { override fun getNoBackupFilesDir()=File(super.getNoBackupFilesDir(),"local-recordings-v2").apply { mkdirs() } }
         try {
             val v=factory(privateContext)
+            val ledger=context.assets.open("vault2_ledger.sql").bufferedReader().use { it.readText() }
             encrypted=EncryptedRecordingStore(port,repository,OWNER,v.vault,v.root,ALIAS,v.provision,token,
-                context.assets.open("vault2_ledger.sql").bufferedReader().use { it.readText() },now,fault) { recording ->
+                ledger,now,fault) { recording ->
                 val row=port.query("SELECT * FROM local_visibility WHERE recording_id=?",recording).singleOrNull()
                 if((row?.get("archived") as? Number)?.toInt()==1) null else (row?.get("revision") as? Number)?.toLong() ?: 0L
             }
+            // v2.6: 25 MB -> 60 MB in a store made before (only the CHECK number). A failure keeps 25 MB (audioByteLimit).
+            runCatching { VaultSizeLimit.widen(port,ledger) }
         } catch(error: Exception) { port.close();throw error }
     }
+    /** Largest recording this store's database accepts (discovery holds bigger ones as HELD_UNSUPPORTED). */
+    internal fun audioByteLimit():Long = runCatching { VaultSizeLimit.current(port) }.getOrDefault(VaultSizeLimit.OLD_BYTES)
     fun setupState(): String=when {
         encrypted.initializedKeyReady()->"READY"
         encrypted.mayInitialize()->"EMPTY"
@@ -181,15 +189,18 @@ CREATE TABLE IF NOT EXISTS local_intakes(event_id TEXT PRIMARY KEY,root_uri TEXT
         return checkNotNull(recoverDiscoveryReceipt(c.selection,c.operationId))
     }
 
-    /** Deletes the encrypted original of recordings whose transcript has been DONE for 14 days (review B21). The reference
-     * rows are immutable and stay; `vault_pruned` remembers which blobs are gone (a negative at_ms: deleting it failed, not retried). Returns how many blobs were deleted. */
+    /** Deletes the encrypted original of recordings whose transcript has been DONE for 14 days (review B21), and of the ones
+     * skipped for good for 14 days ([FINAL_SKIPS], #39: before 10/1, excluded, no speech, an older version). Skips the user
+     * can undo (archived, folder access removed) keep their blob. The reference rows are immutable and stay; `vault_pruned`
+     * remembers which blobs are gone (a negative at_ms: deleting it failed, not retried), and the transcription line no
+     * longer offers a pruned recording ([kr.callbrief.pipeline.CallTranscriptionStore]). Returns how many blobs were deleted. */
     fun pruneVault(nowMs:Long=now(),limit:Int=200):Int {
         token.check()
         if(port.query("SELECT name FROM sqlite_master WHERE type='table' AND name='call_transcription_jobs'").isEmpty()) return 0
         port.transaction { port.execute("CREATE TABLE IF NOT EXISTS vault_pruned(ciphertext_sha256 TEXT PRIMARY KEY,at_ms INTEGER NOT NULL)") }
         val due=port.query("""SELECT q.recording_id,q.source_version,q.ciphertext_sha256 FROM vault2_refs q
             JOIN call_transcription_jobs j ON j.recording_id=q.recording_id AND j.source_version=q.source_version AND j.audio_sha=q.plaintext_sha256
-            WHERE q.owner_key=? AND j.state='DONE' AND j.updated_ms<=?
+            WHERE q.owner_key=? AND (j.state='DONE' OR (j.state='SKIPPED' AND j.reason IN (${FINAL_SKIPS.joinToString(",") { "'$it'" }}))) AND j.updated_ms<=?
             AND NOT EXISTS(SELECT 1 FROM vault_pruned p WHERE p.ciphertext_sha256=q.ciphertext_sha256) LIMIT ?""",OWNER,nowMs-PRUNE_AFTER_MS,limit.toLong())
         var deleted=0
         for(row in due) {

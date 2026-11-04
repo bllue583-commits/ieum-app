@@ -61,5 +61,60 @@ class CallTranscriptionStallTest:ProtectedTextHostTestBase() {
         assertTrue(CallTranscriptionRunner.NATIVE_DEADLINE_SECONDS<540+1)
         assertTrue(CallTranscriptionRunner.requeueNow("MORE",0));assertTrue(CallTranscriptionRunner.requeueNow("STOPPED",1))
         assertFalse(CallTranscriptionRunner.requeueNow("STOPPED",0));assertFalse(CallTranscriptionRunner.requeueNow("IDLE",3))
+        assertTrue(CallTranscriptionRunner.harmlessStop(true,1));assertFalse(CallTranscriptionRunner.harmlessStop(true,0));assertFalse(CallTranscriptionRunner.harmlessStop(false,3))
+    }
+
+    // ---- review #12: a call of about an hour needs ~10 runs of the 10 minute limit and must not end as STALLED ----
+    private val rate=8000
+    /** A synthetic 8 kHz mono WAV of [seconds]: tones with pauses, written straight into one array. */
+    private fun wav(seconds:Int):ByteArray {
+        val n=rate*seconds;val out=ByteArray(44+n*2)
+        val h=java.nio.ByteBuffer.wrap(out,0,44).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        h.put("RIFF".toByteArray());h.putInt(36+n*2);h.put("WAVE".toByteArray());h.put("fmt ".toByteArray());h.putInt(16)
+        h.putShort(1);h.putShort(1);h.putInt(rate);h.putInt(rate*2);h.putShort(2);h.putShort(16);h.put("data".toByteArray());h.putInt(n*2)
+        val r=kotlin.random.Random(7);var t=0
+        fun put(v:Int){ if(t<n){ out[44+2*t]=(v and 0xff).toByte();out[45+2*t]=((v shr 8) and 0xff).toByte();t++ } }
+        while(t<n){ val speak=rate*(20+r.nextInt(40));val f=200+r.nextInt(300);repeat(speak){ put((kotlin.math.sin(2*Math.PI*f*t/rate)*6000).toInt()) }
+            repeat(rate/2+r.nextInt(rate*2)){ put(r.nextInt(40)-20) } }
+        return out
+    }
+    private val model=object:PipelineSttModel { override val modelSha256="a".repeat(64);override val runtimeSha256="b".repeat(64);override val modelName="m";override fun verifiedModelFile()=java.io.File("m") }
+
+    /** Runs a 60-minute recording the way the worker does: each run finishes two pieces and is stopped by the time limit
+     * on the third. Returns the job's final state and the transcript when it came through. */
+    private fun longCall(timeLimit:Boolean,bytes:ByteArray,id:String):Pair<String,List<CallTranscript.Segment>?> {
+        var calls=0
+        val transcriber=CallTranscriber { _,pcm,_ -> calls++;listOf(CallTranscript.Segment(0,pcm.size*1000L/16000,"조각${pcm.size}")) }
+        CallTranscriptionStore(RuntimeEnvironment.getApplication()).use { s ->
+            val k=CallTranscriptionStore.Key(id,1,"a".repeat(64))
+            s.offer(CallTranscriptionStore.Candidate(k,"long.wav","content://generated/long","audio/wav",null,false,true),true,"")
+            val runner=CallTranscriptionRunner(s,model,PipelineAudioDecoder(),transcriber,read={error("unused")},skipReason={null},sink={null},
+                stopped={ calls>2 },timeLimited={ timeLimit })
+            repeat(40) {
+                if(!s.claim(k)) return s.rows().single { it.first==k }.second to null
+                calls=0
+                try { val (_,segments)=runner.transcribeRecording(k,PipelineBytesInput(bytes),"audio/wav",java.io.File("m"));s.finish(k,"DONE","");return "DONE" to segments }
+                catch(_:CallTranscriptionRunner.Stopped) { runner.endStopped(k) }
+            }
+            return s.rows().single { it.first==k }.second to null
+        }
+    }
+
+    @Test fun aSixtyMinuteCallIsTranscribedToTheEndAcrossTimeLimitStops() {
+        val bytes=wav(60*60)
+        // Reference: the same recording in one go.
+        val reference=CallTranscriptionStore(RuntimeEnvironment.getApplication()).use { s ->
+            CallTranscriptionRunner(s,model,PipelineAudioDecoder(),CallTranscriber { _,pcm,_ -> listOf(CallTranscript.Segment(0,pcm.size*1000L/16000,"조각${pcm.size}")) },
+                read={error("unused")},skipReason={null},sink={null}).transcribeRecording(CallTranscriptionStore.Key("ref",1,"a".repeat(64)),PipelineBytesInput(bytes),"audio/wav",java.io.File("m"))
+        }
+        assertTrue("an hour is many pieces",reference.first.chunks>=20)
+        val (state,segments)=longCall(true,bytes,"hour")
+        assertEquals("DONE",state);assertEquals(reference.second,segments)
+        CallTranscriptionStore(RuntimeEnvironment.getApplication()).use { s ->
+            val k=CallTranscriptionStore.Key("hour",1,"a".repeat(64))
+            assertEquals("no stop was counted as a stall",0,s.totalStalls(k));assertEquals(1,s.attempts(k))
+        }
+        // The old rule (every stop a stall) ends the same call as STALLED part way.
+        assertEquals("FAILED",longCall(false,bytes,"hour-old-rule").first)
     }
 }

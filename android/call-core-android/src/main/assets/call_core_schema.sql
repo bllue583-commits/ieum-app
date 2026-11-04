@@ -38,7 +38,7 @@ CREATE TABLE observe_commands(event_id TEXT PRIMARY KEY, request_digest TEXT NOT
 -- statement-break
 CREATE TRIGGER observe_execute AFTER INSERT ON observe_commands BEGIN
   SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM folder_grants WHERE grant_id=NEW.grant_id AND owner_key=NEW.owner_key AND active=1 AND selected_by_user=1 AND policy_revision=NEW.policy_revision) THEN RAISE(ABORT,'FOLDER_POLICY_CHANGED') END;
-  SELECT CASE WHEN NEW.source_seq<1 OR NEW.byte_count<1 OR NEW.byte_count>25000000 THEN RAISE(ABORT,'INVALID_OBSERVATION') END;
+  SELECT CASE WHEN NEW.source_seq<1 OR NEW.byte_count<1 OR NEW.byte_count>60000000 THEN RAISE(ABORT,'INVALID_OBSERVATION') END;
   SELECT CASE WHEN NEW.task_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM tasks WHERE task_id=NEW.task_id AND owner_key=NEW.owner_key AND person_id IS NEW.person_id AND company_id IS NEW.company_id) THEN RAISE(ABORT,'TASK_LINK_NOT_CONFIRMED') END;
   SELECT CASE WHEN EXISTS(SELECT 1 FROM recordings WHERE recording_id=NEW.recording_id AND (owner_key!=NEW.owner_key OR grant_id!=NEW.grant_id OR document_id!=NEW.document_id)) OR EXISTS(SELECT 1 FROM recordings WHERE owner_key=NEW.owner_key AND grant_id=NEW.grant_id AND document_id=NEW.document_id AND recording_id!=NEW.recording_id) THEN RAISE(ABORT,'DOCUMENT_IDENTITY_CONFLICT') END;
   SELECT CASE WHEN EXISTS(SELECT 1 FROM recordings WHERE recording_id=NEW.recording_id AND source_seq>=NEW.source_seq) THEN RAISE(ABORT,'STALE_OBSERVATION') END;

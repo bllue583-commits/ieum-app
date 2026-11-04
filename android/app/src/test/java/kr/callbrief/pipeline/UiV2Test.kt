@@ -78,6 +78,50 @@ class UiV2Test:ProtectedTextHostTestBase() {
         StatusLights.lights(ok.copy(folderConnected=false,consent=false)).forEach { assertFalse(it.words.contains("·")) }
     }
 
+    /** Design 3.6 (review #9, #10, #11): the lights follow the permission, the discovery age and the queue by entry time. */
+    @Test fun statusLightsAreNoLongerFalselyGreen() {
+        val h=3_600_000L
+        val t=FirstPass.FROM_MS+40*24*h // a day in November: after 10/1
+        val ok=StatusLights.Input(now=t,folderConnected=true,modelState="READY",consent=true,lastTranscribedMs=t-h,
+            folderReadable=true,lastDiscoveryMs=t-h)
+        fun bad(i:StatusLights.Input,tag:String)=StatusLights.lights(i).single { !it.ok }.also { assertEquals(tag,it.tag) }.words
+        // Normal: all green.
+        assertTrue(StatusLights.lights(ok).all { it.ok })
+        // Folder chosen but the permission is gone: amber, pointing up to the connection group.
+        val lost=bad(ok.copy(folderReadable=false),"status_import")
+        assertTrue(lost,lost.contains("풀렸어요") && lost.contains("위 연결 묶음에서"))
+        assertTrue(bad(ok.copy(folderConnected=false,folderReadable=false),"status_import").contains("위 연결 묶음에서"))
+        // Permission kept but no good discovery cycle for a day (or never): amber.
+        assertTrue(bad(ok.copy(lastDiscoveryMs=ok.now-25*h),"status_import").contains("하루"))
+        assertTrue(bad(ok.copy(lastDiscoveryMs=0),"status_import").contains("하루"))
+        assertTrue(StatusLights.lights(ok.copy(lastDiscoveryMs=ok.now-23*h)).all { it.ok })
+        // The first pass is over and a new call has waited 7 hours in the queue: amber (it used to stay green).
+        val s=org.json.JSONObject().put(PipelineSettingsKeys.FIRST_PASS_START_MS,FirstPass.FROM_MS+86_400_000L).put(PipelineSettingsKeys.FIRST_PASS_DONE,true)
+        val q=StatusLights.queue(listOf(StatusLights.QueuedRow(ok.now-8*h,ok.now-7*h)),s,ok.now)
+        assertEquals(1,q.newCount);assertEquals(ok.now-7*h,q.newOldestMs)
+        assertTrue(bad(ok.copy(transcribeBacklog=q.count,oldestQueuedMs=q.oldestMs,lastTranscribedMs=ok.now-8*h),"status_transcribe").contains("1개"))
+        // A recording that just entered the queue is no backlog, even if the call itself is old; a pre-10/1 one is not counted.
+        val fresh=StatusLights.queue(listOf(StatusLights.QueuedRow(ok.now-30*h,ok.now-h),StatusLights.QueuedRow(FirstPass.FROM_MS-86_400_000L,ok.now-90*h)),s,ok.now)
+        assertEquals(1,fresh.count);assertEquals(ok.now-h,fresh.oldestMs)
+        assertTrue(StatusLights.lights(ok.copy(transcribeBacklog=fresh.count,oldestQueuedMs=fresh.oldestMs,lastTranscribedMs=ok.now-8*h)).all { it.ok })
+        // While the first pass runs, recordings of calls more than 7 days ago are old (r7-1); recent ones are live.
+        val running=org.json.JSONObject().put(PipelineSettingsKeys.FIRST_PASS_START_MS,ok.now-10*h)
+        val split=StatusLights.queue(listOf(StatusLights.QueuedRow(ok.now-10*24*h,ok.now-9*h),StatusLights.QueuedRow(ok.now-2*h,ok.now-2*h)),running,ok.now)
+        assertEquals(StatusLights.Queue(1,ok.now-2*h,1,ok.now-9*h),split)
+        // Analysis: only live calls without a result for over 6 hours; old first-pass records may wait.
+        val (late,age)=StatusLights.lateLive(listOf(StatusLights.WaitingRow(ok.now-7*h,ok.now-7*h),StatusLights.WaitingRow(ok.now-2*h,ok.now-2*h),
+            StatusLights.WaitingRow(ok.now-30*h,ok.now-10*24*h)),running,ok.now)
+        assertEquals(1,late);assertEquals(7*h,age)
+        assertTrue(bad(ok.copy(waiting=late,oldestWaitMs=age),"status_analyze").contains("7시간"))
+        // Update: ready for over a day is its own sentence.
+        assertTrue(bad(ok.copy(updateReady=true,updateReadySinceMs=ok.now-25*h),"status_update").contains("하루 넘게"))
+        assertFalse(bad(ok.copy(updateReady=true,updateReadySinceMs=ok.now-2*h),"status_update").contains("하루 넘게"))
+        // Store fill: the fuller of the sealed file and the rows.
+        assertEquals(50,StatusLights.dbPercent(CallRecordStore.DB_LIMIT_BYTES/2,10));assertEquals(90,StatusLights.dbPercent(1024,90_000))
+        assertNull(StatusLights.dbPercent(null,null));assertEquals(100,StatusLights.dbPercent(CallRecordStore.DB_LIMIT_BYTES*2,null))
+        StatusLights.lights(ok.copy(folderReadable=false,updateReady=true,updateReadySinceMs=1)).forEach { assertFalse(it.words,Regex("[·…]").containsMatchIn(it.words)) }
+    }
+
     @Test fun settingsKeepThreeGroupsMailGuideAndMarkers() {
         seeded()
         SecureSettings(app).update { it.put(PipelineSettingsKeys.LAST_UPDATE_ERROR,"STATUS_FAILURE_STORAGE (6): 공간 부족") }
@@ -232,5 +276,28 @@ class UiV2Test:ProtectedTextHostTestBase() {
         UpdateStatusReceiver().onReceive(app,Intent().putExtra(PackageInstaller.EXTRA_STATUS,PackageInstaller.STATUS_SUCCESS))
         assertTrue(SecureSettings(app).snapshot().optString("lastUpdateError").isNotEmpty())
         CallUpdate.saveError(app,null);assertEquals("",SecureSettings(app).snapshot().optString("lastUpdateError"))
+    }
+
+    // ---- v2.5 #20: 처음 정리 rests (battery under half and not charging, or no result for six hours) and says so ----
+    @Test fun firstPassRestSaysWhyAndWhatIsLeft() {
+        val home=Robolectric.buildActivity(HomeActivity::class.java).setup().get()
+        settle { tag(home,"home_calls_button")!=null }
+        fun show(f:HomeActivity.FirstPassView):String { home.render(HomeActivity.Snapshot(true,true,"READY",2,0,1,0,0,1_793_300_000_000,firstPass=f))
+            return views(tag(home,"home_first_pass")).filterIsInstance<TextView>().joinToString("\n") { it.text.toString() } }
+        val low=show(HomeActivity.FirstPassView(37,9.0,4,2,audioMinutesLeft=190,lowBattery=true))
+        assertTrue(low,low.contains("잠시 쉬고 있어요") && low.contains("충전기에 꽂으면 이어서 정리해요"))
+        assertTrue(low,low.contains("남은 녹음") && low.contains("37개") && low.contains("남은 녹음 시간") && low.contains("3시간"))
+        assertTrue(low,low.contains("요약을 기다리는 기록 4건"))
+        assertFalse("no processing estimate while resting",low.contains("글자로 바꿀 녹음"))
+        val stalled=show(HomeActivity.FirstPassView(0,null,6,0,stalled=true))
+        assertTrue(stalled,stalled.contains("잠시 쉬고 있어요") && stalled.contains("결과가 오면 이어서 정리해요") && !stalled.contains("충전기"))
+        val running=show(HomeActivity.FirstPassView(37,9.0,4,2,audioMinutesLeft=190))
+        assertNull(tag(home,"home_first_pass_rest"));assertTrue(running,running.contains("글자로 바꿀 녹음 37개"))
+        for(t in listOf(low,stalled)) { assertFalse(t,t.contains("·"));assertFalse(t,Regex("[A-Za-z]").containsMatchIn(t)) }
+        // 50대 기준: the rest line is a heading, the reason reading size, the numbers big.
+        show(HomeActivity.FirstPassView(37,9.0,4,2,audioMinutesLeft=190,lowBattery=true))
+        assertTrue((tag(home,"home_first_pass_rest") as TextView).textSize/home.resources.displayMetrics.scaledDensity>=CallUi.HEADING)
+        assertTrue(views(tag(home,"home_first_pass")).filterIsInstance<TextView>().all { it.textSize/it.resources.displayMetrics.scaledDensity>=16f })
+        assertEquals("40" to "분",HomeActivity.roughLength(40));assertEquals("3" to "시간",HomeActivity.roughLength(190));assertEquals("1" to "분",HomeActivity.roughLength(0))
     }
 }

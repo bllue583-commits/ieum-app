@@ -236,6 +236,78 @@ class NativeAutomaticDiscoveryTest {
                 t.elapsed+=10;n.cycle(4,3);assertEquals(2,listings);assertEquals(3,s.snapshot().length())}}
     }
 
+    // ---- r7-2 (design 3.2) ----
+    private val cutoff=kr.callbrief.pipeline.FirstPass.FROM_MS
+    /** #1: a 2025 filename time keeps the file out of the vault even when its modified time is recent (moved/restored). */
+    @Test fun R72A2025FilenameTimeNeverReachesTheVault()=worker {
+        val src=Source().apply{put("old",sample=1,modified=now-300000,name="통화 녹음_합성_250806_150359.wav");put("new",sample=2,modified=now-300000,name="통화 녹음_합성_261011_100000.wav")}
+        val t=Time();val wide=Config(10,10000,1000,25000000,10)
+        store().use{s->s.initializeEmpty()
+            NativeDiscoverySession(s,src,selected(src),{JSONObject()},t,{now},true,wide,FaultHook{},cutoff).use{n->
+                n.cycle(1,2);t.elapsed+=10;n.cycle(1,2)
+                assertEquals(setOf("new"),n.engine.rows().map{it.metadata.documentId}.toSet())
+                assertEquals(1,rows("SELECT * FROM vault2_refs").size);assertEquals(1,src.opens)
+                assertEquals(0,rows("SELECT * FROM discovery_documents WHERE document_id='old'").size)}}
+    }
+    /** #2: 2500 files, 2000 before 10/1: the three new calls are all stored. The other 497 are still being written (partial). */
+    @Test fun R72NewCallsAreFoundInAFolderWith2000OldRecordings()=worker {
+        val src=Source()
+        for(i in 0 until 2000)src.docs["old$i"]=SourceDocument("old$i","${src.rootUri}/document/old$i","통화 녹음_합성_250806_15${"%02d".format(i/60%60)}${"%02d".format(i%60)}.wav",52,"audio/wav",now-300000)
+        for(i in 0 until 497)src.docs["mid$i"]=SourceDocument("mid$i","${src.rootUri}/document/mid$i","SYNTHETIC_MID_$i.wav",52,"audio/wav",now-300000,partial=true)
+        listOf("new1","new2","new3").forEachIndexed{i,id->src.put(id,sample=i+1,modified=now-300000,name="통화 녹음_합성_26101${i+1}_100000.wav")}
+        assertEquals(2500,src.docs.size)
+        val t=Time();val big=Config(10,10000,1000,25000000,512)
+        store().use{s->s.initializeEmpty()
+            NativeDiscoverySession(s,src,selected(src),{JSONObject()},t,{now},true,big,FaultHook{},cutoff).use{n->
+                n.cycle(4,3);t.elapsed+=10;n.cycle(4,3)
+                val byId=n.engine.rows().associateBy{it.metadata.documentId}
+                assertTrue(byId.keys.none{it.startsWith("old")});assertEquals(500,byId.size)
+                assertTrue(listOf("new1","new2","new3").all{byId.getValue(it).status==Status.STORED})
+                assertEquals(3,rows("SELECT * FROM vault2_refs").size)}}
+    }
+    /** #5: a file over the size line is held (never read) and counted for the heartbeat. */
+    @Test fun R72TooLargeIsHeldAndCounted()=worker {
+        val src=Source().apply{put("big",modified=now-300000,samples=100);put("small",sample=1,modified=now-300000)}
+        val t=Time();val tight=Config(10,10000,1000,100,10)
+        store().use{s->s.initializeEmpty()
+            NativeDiscoverySession(s,src,selected(src),{JSONObject()},t,{now},true,tight).use{n->
+                n.cycle(1,2);t.elapsed+=10;n.cycle(1,2)
+                assertEquals(Status.HELD_UNSUPPORTED,n.engine.rows().single{it.metadata.documentId=="big"}.status)
+                assertEquals(1,n.heldTooLarge());assertEquals(1,src.opens)}}
+    }
+    @Test fun R72LimitIs60MbInDiscoveryAndVault() {
+        assertEquals(60_000_000L,kr.co.ieum.discovery.DiscoveryTypes.Config.MAX_AUDIO_BYTES);assertEquals(60_000_000L,AudioBinding.MAX_BYTES)
+        assertEquals(60_000_000L,kr.co.ieum.discovery.DiscoveryTypes.Config.conservative().maxBytes)
+        AudioBinding("p","r",1,"a".repeat(64),59_000_000L) // accepted
+        assertThrows(VaultException::class.java){AudioBinding("p","r",1,"a".repeat(64),60_000_001L)}
+    }
+    /** A store made before v2.6 carries 25 MB in its database checks; opening it widens them once, data and triggers kept. */
+    @Test fun R72OldStoreDatabaseLineIsWidenedTo60Mb()=worker {
+        val core=context.assets.open("call_core_schema.sql").bufferedReader().use{it.readText()}.replace("byte_count>60000000","byte_count>25000000")
+        val ledger=context.assets.open("vault2_ledger.sql").bufferedReader().use{it.readText()}
+        AndroidSqlPort(context,GeneralLocalStore.DATABASE,core.byteInputStream()).use{p->p.requireProtectedPersistence()
+            p.transaction{ledger.replace("plaintext_bytes<=60000000","plaintext_bytes<=25000000").split("\n-- statement-break\n").forEach{p.execute(it)}}
+            assertEquals(25_000_000L,VaultSizeLimit.current(p))}
+        store().use{s->assertEquals(60_000_000L,s.audioByteLimit());s.initializeEmpty();val src=Source().apply{put(modified=now-300000)};ready(s,src,Time()){}}
+        assertTrue(rows("SELECT sql FROM sqlite_master WHERE name='vault2_refs'").single()["sql"].toString().contains("plaintext_bytes<=60000000"))
+        assertTrue(rows("SELECT sql FROM sqlite_master WHERE name='observe_execute'").single()["sql"].toString().contains("byte_count>60000000"))
+        assertEquals(1,rows("SELECT name FROM sqlite_master WHERE name='vault2_ref_no_update'").size)
+        assertEquals(1,rows("SELECT * FROM vault2_refs").size)
+    }
+    /** #3: the queue keeps the latest 100 audit notes and an unchanged transaction rewrites no row. */
+    @Test fun R72QueueKeepsLatestAuditAndWritesOnlyChangedRows()=worker {
+        val src=Source().apply{put(modified=now-300000)}
+        store().use{s->s.initializeEmpty();ready(s,src,Time()){n->
+            val q=s.discoveryQueue(selected(src))
+            q.transact<Unit>{st->repeat(150){st.audit.add("SYNTHETIC_NOTE_$it")}}
+            val audit=q.snapshot().audit;assertEquals(100,audit.size);assertEquals("SYNTHETIC_NOTE_149",audit.last())
+            val before=rows("SELECT rowid,payload FROM discovery_queue_rows")
+            q.transact<Unit>{}
+            assertEquals(before,rows("SELECT rowid,payload FROM discovery_queue_rows"))
+            q.transact<Unit>{st->st.rows.clear()}
+            assertEquals(0,rows("SELECT * FROM discovery_queue_rows").size)}}
+    }
+
     @Test fun N28PruneVaultDeletesOriginalOnlyAfterTranscriptWasDoneFor14Days()=worker {
         store().use{s->s.initializeEmpty();val src=Source().apply{put(modified=now-300000)};ready(s,src,Time()){
             val ref=rows("SELECT * FROM vault2_refs").single();val blob=File(context.noBackupFilesDir,"local-recordings-v2/audio-vault-v2/"+ref["ciphertext_sha256"]+".vault")
@@ -246,6 +318,47 @@ class NativeAutomaticDiscoveryTest {
             assertEquals(0,s.pruneVault(now+13*86400000L));assertTrue(blob.isFile)
             assertEquals(1,s.pruneVault(now+15*86400000L));assertFalse(blob.exists())
             assertEquals(0,s.pruneVault(now+16*86400000L));assertEquals(1,rows("SELECT * FROM vault_pruned").size);assertEquals(1,rows("SELECT * FROM vault2_refs").size)
+        }}
+    }
+
+    @Test fun N32PruneVaultAlsoDeletesRecordingsSkippedForGoodAndTheLedgerMatchesTheFiles()=worker {
+        val ids=listOf("a","b","c","d","e")
+        val src=Source().apply{ids.forEachIndexed{i,id->put(id,sample=i+1,modified=now-900000+i*1000L,name="SYNTHETIC_$id.wav")}}
+        val t=Time();val paged=Config(10,10000,1000,25000000,1)
+        store().use{s->s.initializeEmpty()
+            NativeDiscoverySession(s,src,selected(src),{JSONObject()},t,{now},true,paged).use{n->n.cycle(10,1);t.elapsed+=10;n.cycle(10,5) // closing the session ends the store's work
+            val refs=rows("SELECT * FROM vault2_refs");assertEquals(5,refs.size)
+            val vaultDir=File(context.noBackupFilesDir,"local-recordings-v2/audio-vault-v2")
+            fun blob(r:Map<String,Any?>)=File(vaultDir,r["ciphertext_sha256"].toString()+".vault")
+            // a: before 10/1, b: no speech, c: archived (the user can undo it), d: transcribed, e: no speech later on.
+            val byName=refs.associateBy { r -> rows("SELECT display_name FROM recordings WHERE recording_id='${r["recording_id"]}'").single()["display_name"].toString().removePrefix("SYNTHETIC_").removeSuffix(".wav") }
+            assertEquals(ids.toSet(),byName.keys)
+            val day=86_400_000L
+            kr.callbrief.pipeline.CallTranscriptionStore(context).close()
+            fun job(id:String,state:String,reason:String,at:Long)=AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql")).use{p->p.requireProtectedPersistence()
+                val r=byName.getValue(id);p.execute("INSERT INTO call_transcription_jobs(recording_id,source_version,audio_sha,state,reason,updated_ms) VALUES(?,?,?,?,?,?)",r["recording_id"],r["source_version"],r["plaintext_sha256"],state,reason,at)}
+            job("a","SKIPPED","BEFORE_START",now);job("b","SKIPPED","NO_SPEECH",now);job("c","SKIPPED","ARCHIVED",now)
+            job("d","DONE","",now+5*day);job("e","SKIPPED","NO_SPEECH",now+10*day)
+            assertEquals("nothing is 14 days old yet",0,s.pruneVault(now+13*day));assertTrue(ids.all{blob(byName.getValue(it)).isFile})
+            assertEquals(2,s.pruneVault(now+15*day))
+            assertFalse(blob(byName.getValue("a")).exists());assertFalse(blob(byName.getValue("b")).exists())
+            assertTrue("an undoable skip keeps its original",blob(byName.getValue("c")).isFile)
+            assertTrue(blob(byName.getValue("d")).isFile);assertTrue(blob(byName.getValue("e")).isFile)
+            kr.callbrief.pipeline.CallTranscriptionStore(context).use{ts->
+                val offered=ts.candidates()
+                assertEquals("a pruned recording is not offered again",setOf("c","d","e").map{byName.getValue(it)["recording_id"]}.toSet(),offered.map{it.key.recordingId}.toSet())
+                // "No speech" came from the audio: offering it again as eligible must not queue it (it was queued on every pass before).
+                ts.offer(offered.single{it.key.recordingId==byName.getValue("e")["recording_id"]},true,"")
+                assertEquals(null,ts.nextQueued())}
+            assertEquals("SKIPPED",rows("SELECT state FROM call_transcription_jobs WHERE recording_id='${byName.getValue("e")["recording_id"]}'").single()["state"])
+            assertEquals(2,s.pruneVault(now+30*day))
+            assertEquals(0,s.pruneVault(now+60*day))
+            // The ledger and the vault agree: every reference row stays, the pruned ones are noted, and exactly the rest have a file.
+            assertEquals(5,rows("SELECT * FROM vault2_refs").size)
+            val pruned=rows("SELECT * FROM vault_pruned").onEach{assertTrue((it["at_ms"] as Number).toLong()>0)}.map{it["ciphertext_sha256"].toString()}.toSet()
+            assertEquals(setOf("a","b","d","e").map{byName.getValue(it)["ciphertext_sha256"].toString()}.toSet(),pruned)
+            val files=vaultDir.listFiles{f->f.name.endsWith(".vault")}!!.map{it.name.removeSuffix(".vault")}.toSet()
+            assertEquals(refs.map{it["ciphertext_sha256"].toString()}.toSet()-pruned,files)
         }}
     }
 }

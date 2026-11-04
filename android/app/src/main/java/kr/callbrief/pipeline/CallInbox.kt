@@ -22,8 +22,8 @@ internal interface CallInboxStore {
     fun delete(path:String,sha:String)
     /** Writes [path] whether or not it exists (put leaves an existing file alone). */
     fun replace(path:String,json:String) { put(path,json) }
-    /** Large binary file (the update APK) streamed to [to]. */
-    fun download(path:String,to:java.io.File) { to.writeText(get(path)) }
+    /** Large binary file (the update APK) streamed to [to]; [progress] gets (bytes so far, whole size or -1 when unknown). */
+    fun download(path:String,to:java.io.File,progress:(Long,Long)->Unit={_,_->}) { to.writeText(get(path));progress(to.length(),to.length()) }
 }
 
 internal class GitHubInboxStore(private val repo:String,private val token:String,
@@ -59,7 +59,7 @@ internal class GitHubInboxStore(private val repo:String,private val token:String
         val (code,text)=call(request(path).header("Accept","application/vnd.github.raw+json").get().build())
         ok(code,text);return text
     }
-    override fun download(path:String,to:java.io.File) {
+    override fun download(path:String,to:java.io.File,progress:(Long,Long)->Unit) {
         val big=client.newBuilder().readTimeout(5,TimeUnit.MINUTES).build()
         // Release assets (the update APK) redirect to storage; OkHttp drops the token on the cross-host hop.
         val r0=if(path.startsWith("releases/assets/")) Request.Builder().url("https://api.github.com/repos/$repo/$path")
@@ -68,7 +68,11 @@ internal class GitHubInboxStore(private val repo:String,private val token:String
         big.newCall(r0.get().build()).execute().use { r ->
             if(path.startsWith("releases/assets/")) CallInbox.noteTokenExpiry(r.priorResponse?.header(CallInbox.TOKEN_EXPIRY_HEADER)) else CallInbox.noteTokenExpiry(r.header(CallInbox.TOKEN_EXPIRY_HEADER))
             ok(r.code,if(r.isSuccessful) "" else r.body?.string() ?: "")
-            r.body!!.byteStream().use { input -> to.outputStream().use { input.copyTo(it) } }
+            val body=r.body!!;val total=body.contentLength()
+            body.byteStream().use { input -> to.outputStream().use { out ->
+                val buf=ByteArray(1 shl 16);var got=0L
+                while(true) { val n=input.read(buf);if(n<0)break;out.write(buf,0,n);got+=n;progress(got,total) }
+            } }
         }
     }
     override fun delete(path:String,sha:String) {

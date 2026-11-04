@@ -29,7 +29,8 @@ internal object CallPipelineStartup {
         val app=context.applicationContext
         executor.execute {
             try {
-                // 처음 정리 starts with the first run of this version; records older than this are summarised first.
+                // 처음 정리 starts with the first run of this version. The start only marks that it runs (and starts the 3 days
+                // old texts may hold it); which records are old is "more than 7 days ago" (r7-1), whenever this was.
                 runCatching { kr.callbrief.SecureSettings(app).update { if(FirstPass.start(it)==null) it.put(PipelineSettingsKeys.FIRST_PASS_START_MS,System.currentTimeMillis()) } }
                     .onFailure { Log.w(TAG,"first pass start not saved: ${it.javaClass.simpleName}") }
                 ensureWork(app)

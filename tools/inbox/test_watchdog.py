@@ -38,6 +38,12 @@ class WatchdogTest(unittest.TestCase):
         self.assertEqual([], titles(phone={"atMs": NOW - 11 * H}))
         self.assertEqual([w.T_PHONE], titles(phone=None))
 
+    def test_first_pass_old_queue_is_not_stuck(self):
+        fp = {"done": False, "toTranscribe": 139, "audioMinutesLeft": 225}
+        self.assertEqual([], titles(phone=phone(oldestQueuedMs=NOW - 90 * DAY, queuedCount=139, firstPass=fp)))
+        self.assertEqual([w.T_QUEUE], titles(phone=phone(oldestQueuedMs=NOW - 90 * DAY, queuedCount=139, firstPass=fp,
+                                                         lastTranscribedMs=NOW - 25 * H)))
+
     def test_silent_phone_says_why_from_its_last_heartbeat(self):
         body = problems(phone=phone(atMs=NOW - 20 * H, folder=False, standbyBucket="RESTRICTED", consent=False,
                                     lastDiscoveryMs=NOW - 30 * H))[0]["body"]
@@ -125,6 +131,61 @@ class WatchdogTest(unittest.TestCase):
         for p in w.evaluate(NOW, {"atMs": 0, "oldestQueuedMs": 1, "lastUpdateError": "X", "tokenExpiresMs": NOW, "folder": False},
                             {"processed": 0, "promptMismatch": True, "limitHit": True}, 1, 3):
             self.assertNotIn("http", p["body"])
+
+    # ---- v2.6 (design 3.6, r7-6) ----
+    def test_queue_alarm_uses_new_recordings_by_entry_time(self):
+        # A v2.6 heartbeat: the old oldestQueuedMs (call time of a first-pass recording) says nothing any more.
+        self.assertEqual([], titles(phone=phone(queuedCount=40, oldestQueuedMs=NOW - 90 * DAY, newQueuedCount=0,
+                                                newOldestQueuedMs=None, oldQueuedCount=40)))
+        self.assertEqual([w.T_QUEUE], titles(phone=phone(queuedCount=3, oldestQueuedMs=NOW - 7 * H, newQueuedCount=3,
+                                                         newOldestQueuedMs=NOW - 7 * H, oldQueuedCount=0)))
+        self.assertIn("새 녹음 3개", problems(phone=phone(newQueuedCount=3, newOldestQueuedMs=NOW - 7 * H))[0]["body"])
+        self.assertEqual([], titles(phone=phone(newQueuedCount=3, newOldestQueuedMs=NOW - 5 * H)))
+        # Old recordings waiting a long time after the first pass is over: still no alarm (only new ones count).
+        self.assertEqual([], titles(phone=phone(newQueuedCount=0, newOldestQueuedMs=None, oldQueuedCount=5,
+                                                firstPass={"done": True})))
+
+    def test_first_pass_running_never_alarms_on_old(self):
+        fp = {"done": False, "toTranscribe": 139, "audioMinutesLeft": 225}
+        self.assertEqual([], titles(phone=phone(firstPass=fp, newQueuedCount=0, oldQueuedCount=139, oldestQueuedMs=NOW - 90 * DAY)))
+
+    def test_discovery_tries_without_success(self):
+        # Tries are reported and none ended well for 12 hours, also when none ever did (lastDiscoveryMs 0, the 11/4 case).
+        self.assertEqual([w.T_DISCOVERY], titles(phone=phone(lastDiscoveryMs=0, lastDiscoveryAttemptMs=NOW - H,
+                                                             lastDiscoveryOutcome="TIME_LIMIT")))
+        body = problems(phone=phone(lastDiscoveryMs=NOW - 13 * H, lastDiscoveryAttemptMs=NOW - H,
+                                    lastDiscoveryOutcome="FAILED 김 010", inventoryTruncated=True))[0]["body"]
+        self.assertIn("FAILED", body)
+        self.assertIn("inventoryTruncated", body)
+        self.assertNotIn("김", body)
+        self.assertNotIn(" 010", body)
+        self.assertEqual([], titles(phone=phone(lastDiscoveryMs=NOW - 11 * H, lastDiscoveryAttemptMs=NOW - H)))
+        # No tries reported (app before v2.6) and never a good cycle: unknown, as before.
+        self.assertEqual([], titles(phone=phone(lastDiscoveryMs=0, lastDiscoveryAttemptMs=None)))
+
+    def test_update_not_installed_for_a_day(self):
+        self.assertEqual([w.T_NOT_INSTALLED], titles(phone=phone(updateAvailableCode=1050, updateReadySinceMs=NOW - 25 * H)))
+        self.assertEqual([], titles(phone=phone(updateAvailableCode=1050, updateReadySinceMs=NOW - 23 * H)))
+        self.assertEqual([], titles(phone=phone(updateAvailableCode=1040, updateReadySinceMs=NOW - 30 * H)))  # already running it
+        self.assertEqual([], titles(phone=phone(updateAvailableCode=None, updateReadySinceMs=None)))
+
+    def test_same_inbox_error_for_two_hours(self):
+        self.assertEqual([w.T_INBOX_ERROR], titles(phone=phone(lastInboxError="INBOX_HTTP_401", lastInboxErrorSinceMs=NOW - 3 * H)))
+        self.assertIn("INBOX_HTTP_401", problems(phone=phone(lastInboxError="INBOX_HTTP_401", lastInboxErrorSinceMs=NOW - 3 * H))[0]["body"])
+        self.assertEqual([], titles(phone=phone(lastInboxError="INBOX_HTTP_401", lastInboxErrorSinceMs=NOW - H)))
+        self.assertEqual([], titles(phone=phone(lastInboxError="INBOX_HTTP_401")))  # since unknown
+        self.assertEqual([], titles(phone=phone(lastInboxErrorSinceMs=NOW - 3 * H)))  # no error now
+
+    def test_db_percent_over_80(self):
+        self.assertEqual([w.T_DB_FULL], titles(phone=phone(dbPercent=81)))
+        self.assertIn("81%", problems(phone=phone(dbPercent=81))[0]["body"])
+        self.assertEqual([], titles(phone=phone(dbPercent=80)))
+        self.assertEqual([], titles(phone=phone(dbPercent=None)))
+
+    def test_exempted_bucket_is_no_cause(self):
+        body = problems(phone=phone(atMs=NOW - 20 * H, standbyBucket="EXEMPTED"))[0]["body"]
+        self.assertNotIn("EXEMPTED", body)
+        self.assertIn("NEVER", problems(phone=phone(atMs=NOW - 20 * H, standbyBucket="NEVER"))[0]["body"])
 
 
 if __name__ == "__main__":

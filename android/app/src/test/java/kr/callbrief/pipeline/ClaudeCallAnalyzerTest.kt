@@ -78,7 +78,7 @@ class ClaudeCallAnalyzerTest {
 
     @Test fun rulesV4CarryTheNewWordingWithTheKeptExceptions() {
         val sys=ClaudeCallAnalyzer.SYSTEM
-        assertEquals(5,ClaudeCallAnalyzer.PROMPT_VERSION)
+        assertEquals(6,ClaudeCallAnalyzer.PROMPT_VERSION)
         listOf("speakerNotes","줄바꿈은 말이 끊긴 자리일 뿐 화자가 바뀐 표시가 아닙니다","(숫자 확인 필요)","\"다음 주 초\"는 다음 주 월요일","\"내일모레\"는 이틀 뒤",
             "호칭(과장, 소장, 님)은 이름에 붙이지 말고 role","[이 번호를 쓰는 사람들]","[통화 방향]","\"첨부: 견적서.pdf\"",
             "certainty \"sure\"","<transcript>","<texts>").forEach { assertTrue(it,sys.contains(it)) }
@@ -115,17 +115,30 @@ class ClaudeCallAnalyzerTest {
         assertEquals("김과장",result.counterpartName);assertNull(result.counterpartCompany)
     }
 
-    @Test fun shortQuotesProveNothingAndRepeatedOnesAreKeptAsFuzzy() {
+    @Test fun shortQuotesProveNothingAndRepeatedOnesOnlyNextToTheTitlesSubject() {
         val said="네 알겠습니다 그렇게 할게요. 철근 반입은 금요일 오전으로 확정했습니다. 네 알겠습니다 그렇게 할게요."
         val t=tasks(task("create",null,"짧은 인용","네네"),task("create",null,"일곱 글자","철근 반입은 금요일"),task("create",null,"두 번 나온 말","네 알겠습니다 그렇게 할게요"),
             task("create",null,"한 번 나온 말","철근 반입은 금요일 오전으로 확정했습니다"))
         val r=filter.filter(parsed(t),request(transcript=said))
-        // "철근 반입은 금요일" has 8 letters once in the call: it passes the length rule. The repeated line (Whisper loops) stays, but only as a close match.
-        assertEquals(listOf("일곱 글자","두 번 나온 말","한 번 나온 말"),r.tasks.map { it.title });assertEquals(listOf(false,true,false),r.tasks.map { it.quoteFuzzy })
+        // "철근 반입은 금요일" has 8 letters once in the call: it passes the length rule. A line said twice with nothing of the
+        // title near it (Whisper loops, a polite reply) proves nothing (design E7, 3.4).
+        assertEquals(listOf("일곱 글자","한 번 나온 말"),r.tasks.map { it.title });assertEquals(listOf(false,false),r.tasks.map { it.quoteFuzzy })
         assertEquals(0,filter.filter(parsed(tasks(task("create",null,"일곱","철근 반입은 금"))),request(transcript=said)).tasks.size)
-        // Said twice in the texts only: also kept as close.
-        val inTexts=filter.filter(parsed(tasks(task("create",null,"문자","도면은 금요일까지 보내주세요"))),request(transcript="네 알겠습니다 그렇게 할게요",texts="도면은 금요일까지 보내주세요 / 도면은 금요일까지 보내주세요"))
+        // The title's subject in the sentence next to one of its times: kept, as a close match.
+        val near=filter.filter(parsed(tasks(task("create",null,"철근 반입 확인","네 알겠습니다 그렇게 할게요"))),request(transcript=said))
+        assertTrue(near.tasks.single().quoteFuzzy)
+        // Said twice in the texts only, about what the title says: also kept as close.
+        val inTexts=filter.filter(parsed(tasks(task("create",null,"도면 받기","도면은 금요일까지 보내주세요"))),request(transcript="네 알겠습니다 그렇게 할게요",texts="도면은 금요일까지 보내주세요 / 도면은 금요일까지 보내주세요"))
         assertTrue(inTexts.tasks.single().quoteFuzzy)
+    }
+
+    @Test fun twoPhrasesFarApartGluedIntoOneQuoteAreDropped() {
+        val said="견적서는 내일까지 메일로 보내드릴게요\n그건 그렇고 오늘 현장 날씨가 참 좋네요\n점심은 다들 드셨어요\n다음 주에 현장에서 뵙겠습니다"
+        val glued=filter.filter(parsed(tasks(task("create",null,"견적서 보내기","견적서는 내일까지 다음 주에 현장에서 뵙겠습니다"))),request(transcript=said))
+        assertTrue(glued.tasks.isEmpty())
+        // Line ends in the transcript change nothing for a quote that runs over one.
+        val over=filter.filter(parsed(tasks(task("create",null,"견적서 보내기","메일로 보내드릴게요 그건 그렇고"))),request(transcript=said))
+        assertFalse(over.tasks.single().quoteFuzzy)
     }
 
     @Test fun aQuoteTidiedFromTheSpeechIsKeptAsFuzzyOnlyWhenNearlyAllItsPiecesAreThere() {

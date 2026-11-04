@@ -28,7 +28,15 @@ class HomeActivity:ComponentActivity() {
                                  val firstPass:FirstPassView?=null,
                                  /** Open to-dos, the ones to check first and then the newest (the short list on home). */
                                  val tasks:List<OpenItem> =emptyList())
-    internal data class FirstPassView(val toTranscribe:Int,val hoursLeft:Double?,val waiting:Int,val unrecorded:Int,val mailConnected:Boolean=true)
+    /** [audioMinutesLeft]: how long the recordings still to transcribe are, together. [lowBattery]: not charging and under half
+     * the battery, so old recordings wait ([FirstPass.powerOk]). [stalled]: nothing came back for [FirstPass.STALL_MS], so no
+     * new batch goes up (design C7). Either one shows the "잠시 쉬고 있어요" line (#20). */
+    internal data class FirstPassView(val toTranscribe:Int,val hoursLeft:Double?,val waiting:Int,val unrecorded:Int,val mailConnected:Boolean=true,
+                                      val audioMinutesLeft:Long?=null,val lowBattery:Boolean=false,val stalled:Boolean=false)
+    internal companion object {
+        /** Minutes of audio as one big number and its unit: under an hour in minutes, then whole hours ("약" is in the label). */
+        fun roughLength(minutes:Long):Pair<String,String> = if(minutes<60) "${minutes.coerceAtLeast(1)}" to "분" else "${(minutes+30)/60}" to "시간"
+    }
     private lateinit var body:LinearLayout
     private val pickFolder=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { r ->
         if(r.resultCode==RESULT_OK) CallFolder.save(this,r.data)?.let { android.widget.Toast.makeText(this,it,android.widget.Toast.LENGTH_LONG).show() }
@@ -51,7 +59,11 @@ class HomeActivity:ComponentActivity() {
     }
     // Text and call-log access are asked from the setup card, after it says why (round 2), not as the app opens.
     override fun onResume() { super.onResume();load()
-        if(intent?.getBooleanExtra("install_update",false)==true) { intent.removeExtra("install_update");CallUpdate.install(this) } }
+        if(intent?.getBooleanExtra("install_update",false)==true) { intent.removeExtra("install_update");updateNow() }
+        else if(CallUpdate.ready(this)!=null && CallUpdate.takeInstallWish(this)) CallUpdate.install(this) } // the asked-for download finished meanwhile
+    /** [지금 업데이트]: installs the version that is here; otherwise starts getting it and shows its bar in settings (round 6 v2.5). */
+    internal fun updateNow() { if(!CallUpdate.install(this,metered())) CallUi.go(this,CallUi.Tab.SETTINGS) }
+    private fun metered()=runCatching { getSystemService(android.net.ConnectivityManager::class.java)?.let { it.activeNetwork!=null && it.isActiveNetworkMetered } }.getOrNull()==true
     override fun onNewIntent(intent:Intent) { super.onNewIntent(intent);setIntent(intent) }
 
     private fun load() {
@@ -91,8 +103,15 @@ class HomeActivity:ComponentActivity() {
         if(FirstPass.done(s) || !s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false)) return null
         val p=runCatching { CallRecordStore(storage).use { it.firstPassProgress(start) } }.getOrNull() ?: return null
         val msPerMinute=s.optLong(PipelineSettingsKeys.LAST_MS_PER_AUDIO_MINUTE,72_000L)
-        val hours=p.bytesPerMinute?.takeIf { it>0 && p.bytesLeft>0 }?.let { p.bytesLeft.toDouble()/it*msPerMinute/3_600_000.0 }
-        return FirstPassView(p.toTranscribe,hours,p.waiting,p.unrecorded,s.optString(PipelineSettingsKeys.MAIL_HOST).isNotBlank())
+        val perMinute=p.bytesPerMinute?.takeIf { it>0 && p.bytesLeft>0 }
+        val hours=perMinute?.let { p.bytesLeft.toDouble()/it*msPerMinute/3_600_000.0 }
+        val now=System.currentTimeMillis()
+        // The same test as CallRecordWork.batchSlots: something sent waits for STALL_MS and no result came in that long.
+        val stalled=p.waiting>0 && runCatching { CallRecordStore(storage).use { db ->
+            db.pending().mapNotNull { r -> db.sentMs(r.recordId)?.takeIf { db.receivedMs(r.recordId)==null } }.minOrNull() } }.getOrNull()
+            ?.let { since -> now-since>=FirstPass.STALL_MS && now-s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0)>=FirstPass.STALL_MS } ?: false
+        return FirstPassView(p.toTranscribe,hours,p.waiting,p.unrecorded,s.optString(PipelineSettingsKeys.MAIL_HOST).isNotBlank(),
+            perMinute?.let { (p.bytesLeft+it/2)/it },p.toTranscribe>0 && !FirstPass.powerOk(storage),stalled)
     }
 
     private fun agree() {
@@ -119,11 +138,16 @@ class HomeActivity:ComponentActivity() {
         if(s.working>0) today.addView(CallUi.pill(this,"정리 중 ${s.working}건",CallUi.SUBTLE))
         body.addView(today)
 
-        CallUpdate.ready(this)?.let { u ->
+        // A newer version: ready to install, coming, or known and not yet here. The one button always does something.
+        val ready=CallUpdate.ready(this);val fetch=CallUpdate.fetchState(this)
+        (ready ?: CallUpdate.available(this))?.let { u ->
             val c=CallUi.card(this,rail=CallUi.ACCENT).apply { tag="home_update" }
-            c.addView(CallUi.text(this,"새 버전이 준비됐어요",CallUi.HEADING,true))
+            val coming=ready==null && fetch.stage==CallUpdate.Stage.DOWNLOADING
+            c.addView(CallUi.text(this,when { ready!=null -> "새 버전이 준비됐어요";coming -> "새 버전 ${CallUpdate.shownName(u)} 받는 중 ${fetch.percent}%"
+                else -> "새 버전 ${CallUpdate.shownName(u)} 받을 수 있어요" },CallUi.HEADING,true).apply { tag="home_update_state" })
+            if(coming) c.addView(UpdateViews.bar(this,fetch.percent))
             if(u.notes.isNotBlank()) c.addView(CallUi.text(this,u.notes,CallUi.BODY))
-            c.addView(CallUi.bigButton(this,"","지금 업데이트") { CallUpdate.install(this) }.apply { tag="home_update_button" })
+            c.addView(CallUi.bigButton(this,"",if(coming) "받는 상황 보기" else "지금 업데이트") { if(coming) CallUi.go(this,CallUi.Tab.SETTINGS) else updateNow() }.apply { tag="home_update_button" })
             body.addView(c)
         }
 
@@ -175,19 +199,41 @@ class HomeActivity:ComponentActivity() {
             body.addView(c)
         }
 
-        // 처음 정리: what is left before the calls since 10/1 become the context of the next ones.
+        // 처음 정리: what is left before the calls since 10/1 become the context of the next ones. While it rests (battery under
+        // half and not charging, or no result for six hours) the card turns amber and says so first, then what is left (#20).
         s.firstPass?.let { f ->
-            val c=CallUi.card(this,rail=CallUi.ACCENT).apply { tag="home_first_pass" }
-            c.addView(CallUi.text(this,"지난 통화를 정리하고 있어요",CallUi.HEADING,true))
-            c.addView(CallUi.text(this,"10월 1일부터의 통화와 문자를 시간 순서대로 정리하고 있어요. 오늘 통화는 지금처럼 바로 정리돼요. 충전해 두면 더 빨리 끝나요.",CallUi.BODY))
-            val lines=buildList {
-                if(f.toTranscribe>0) add("글자로 바꿀 녹음 ${f.toTranscribe}개"+(f.hoursLeft?.let { h -> ", 약 ${if(h<1) "1시간 안" else "${Math.round(h)}시간"}" } ?: ""))
-                if(f.waiting>0) add("요약을 기다리는 기록 ${f.waiting}건")
-                if(f.toTranscribe==0 && f.waiting==0) add("지난 문자와 메일을 읽고 있어요")
-                if(f.unrecorded>0) add("녹음 없는 통화 ${f.unrecorded}건 (통화기록 기준)")
+            val resting=f.lowBattery || f.stalled
+            val c=CallUi.card(this,rail=if(resting) CallUi.AMBER_RAIL else CallUi.ACCENT).apply { tag="home_first_pass" }
+            if(resting) {
+                c.addView(CallUi.text(this,"잠시 쉬고 있어요",CallUi.HEADING,true).apply { tag="home_first_pass_rest" })
+                c.addView(CallUi.text(this,if(f.lowBattery) "충전기에 꽂으면 이어서 정리해요." else "결과가 오면 이어서 정리해요.",CallUi.BODY,true)
+                    .apply { tag="home_first_pass_rest_why" })
+                c.addView(CallUi.text(this,"10월 1일부터 밀린 통화를 정리하는 중이에요. 오늘 통화는 지금처럼 바로 정리돼요.",CallUi.BODY,color=CallUi.SUBTLE))
+                if(f.toTranscribe>0) {
+                    c.addView(CallUi.divider(this))
+                    val items=mutableListOf(Triple("${f.toTranscribe}","남은 녹음",CallUi.INK));val units=mutableListOf("개")
+                    f.audioMinutesLeft?.takeIf { it>0 }?.let { m -> val (n,u)=roughLength(m);items+=Triple(n,"남은 녹음 시간 (약)",CallUi.INK);units+=u }
+                    c.addView(CallUi.stats(this,items,units).apply { tag="home_first_pass_left" })
+                }
+                val rest=buildList {
+                    if(f.waiting>0) add("요약을 기다리는 기록 ${f.waiting}건")
+                    if(f.unrecorded>0) add("녹음 없는 통화 ${f.unrecorded}건 (통화기록 기준)")
+                }
+                if(rest.isNotEmpty() && f.toTranscribe==0) c.addView(CallUi.divider(this))
+                rest.forEach { c.addView(CallUi.text(this,it,CallUi.BODY,true).apply { setPadding(0,CallUi.dp(this@HomeActivity,8),0,0) }) }
+                if(f.lowBattery) c.addView(CallUi.caption(this,"배터리가 절반 넘게 차도 이어서 해요.").apply { setPadding(0,CallUi.dp(this@HomeActivity,8),0,0) })
+            } else {
+                c.addView(CallUi.text(this,"지난 통화를 정리하고 있어요",CallUi.HEADING,true))
+                c.addView(CallUi.text(this,"10월 1일부터의 통화와 문자를 시간 순서대로 정리하고 있어요. 오늘 통화는 지금처럼 바로 정리돼요. 충전해 두면 더 빨리 끝나요.",CallUi.BODY))
+                val lines=buildList {
+                    if(f.toTranscribe>0) add("글자로 바꿀 녹음 ${f.toTranscribe}개"+(f.hoursLeft?.let { h -> ", 약 ${if(h<1) "1시간 안" else "${Math.round(h)}시간"}" } ?: ""))
+                    if(f.waiting>0) add("요약을 기다리는 기록 ${f.waiting}건")
+                    if(f.toTranscribe==0 && f.waiting==0) add("지난 문자와 메일을 읽고 있어요")
+                    if(f.unrecorded>0) add("녹음 없는 통화 ${f.unrecorded}건 (통화기록 기준)")
+                }
+                lines.forEach { c.addView(CallUi.text(this,it,CallUi.BODY,true)) }
+                if(f.toTranscribe>0) c.addView(CallUi.caption(this,"지난 녹음은 충전 중이거나 배터리가 절반 넘게 남았을 때 바꿔요."))
             }
-            lines.forEach { c.addView(CallUi.text(this,it,CallUi.BODY,true)) }
-            if(f.toTranscribe>0) c.addView(CallUi.caption(this,"지난 녹음은 충전 중이거나 배터리가 절반 넘게 남았을 때 바꿔요."))
             if(!f.mailConnected) c.addView(CallUi.caption(this,"메일을 연결하면 메일도 함께 정리해요. 설정의 메일에서 연결할 수 있어요.").apply { tag="home_first_pass_mail" })
             body.addView(c)
         }
