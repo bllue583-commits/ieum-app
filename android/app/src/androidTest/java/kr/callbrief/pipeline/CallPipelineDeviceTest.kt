@@ -23,6 +23,9 @@ import java.io.File
 @RunWith(AndroidJUnit4::class)
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
 class CallPipelineDeviceTest {
+    /** The emulator runs the large model about 60x slower than a phone; one-piece device tests need the old 30-minute limit. */
+    private val TEST_DEADLINE=1800
+
     private val inst get()=InstrumentationRegistry.getInstrumentation()
     private val context get()=inst.targetContext
     private val storage get()=CallPipelineStartup.storage(context)
@@ -59,7 +62,7 @@ class CallPipelineDeviceTest {
         val variants=(args.getString("threads") ?: "6,8").split(',').mapNotNull{it.trim().toIntOrNull()}
         for(threads in variants) {
             val started=System.currentTimeMillis()
-            val segments=WhisperCallTranscriber(AndroidWhisperEngine(storage),model,threads).transcribe(file,pcm){false}
+            val segments=WhisperCallTranscriber(AndroidWhisperEngine(storage),model,threads,deadlineSeconds=TEST_DEADLINE).transcribe(file,pcm){false}
             val elapsed=System.currentTimeMillis()-started
             text=segments.joinToString(""){it.text}.trim()
             result.put("secondsPerAudioMinute_threads$threads",elapsed*60.0/audioMs)
@@ -71,7 +74,7 @@ class CallPipelineDeviceTest {
         val callMs=call.size*1000L/16000
         val trimmed=PipelineAudioMath.speechOnly(PipelineDecodedAudio(callMs,PipelineAudioMath.split(call),false))
         val started=System.currentTimeMillis()
-        val callText=trimmed.chunks.flatMap{(_,x)->WhisperCallTranscriber(AndroidWhisperEngine(storage),model).transcribe(file,x){false}}.joinToString(""){it.text}.trim()
+        val callText=trimmed.chunks.flatMap{(_,x)->WhisperCallTranscriber(AndroidWhisperEngine(storage),model,deadlineSeconds=TEST_DEADLINE).transcribe(file,x){false}}.joinToString(""){it.text}.trim()
         val elapsed=System.currentTimeMillis()-started
         result.put("callAudioSeconds",callMs/1000.0).put("callSpeechSeconds",trimmed.chunks.sumOf{it.second.size}/16000.0)
             .put("callSecondsPerAudioMinute",elapsed*60.0/callMs).put("text",text.take(200)).put("callText",callText.take(200))
@@ -84,7 +87,7 @@ class CallPipelineDeviceTest {
     @Test fun t3_transcriptReachesTodayScreen() {
         val model=PipelineModelManager(storage);val file=checkNotNull(model.verifiedModelFile())
         val decoded=PipelineAudioDecoder().decode(context.assets.open("local-stt/public-ko.wav").use{it.readBytes()},"audio/wav")
-        val segments=decoded.chunks.flatMap{(offset,pcm)->WhisperCallTranscriber(AndroidWhisperEngine(storage),model).transcribe(file,pcm){false}
+        val segments=decoded.chunks.flatMap{(offset,pcm)->WhisperCallTranscriber(AndroidWhisperEngine(storage),model,deadlineSeconds=TEST_DEADLINE).transcribe(file,pcm){false}
             .map{CallTranscript.Segment(it.startMs+offset,it.endMs+offset,it.text)}}
         val text=segments.joinToString(""){it.text}.trim();assertTrue(text.isNotEmpty())
         val now=System.currentTimeMillis();val recording="device-test-$now"
@@ -117,7 +120,7 @@ class CallPipelineDeviceTest {
     @Test fun t3b_m4aRecordingDecodesAndTranscribes() {
         val model=PipelineModelManager(storage);val file=checkNotNull(model.verifiedModelFile())
         val decoded=PipelineAudioDecoder().decode(inst.context.assets.open("public-ko.m4a").use{it.readBytes()},"audio/mp4")
-        val text=decoded.chunks.flatMap{(_,pcm)->WhisperCallTranscriber(AndroidWhisperEngine(storage),model).transcribe(file,pcm){false}}.joinToString(""){it.text}.trim()
+        val text=decoded.chunks.flatMap{(_,pcm)->WhisperCallTranscriber(AndroidWhisperEngine(storage),model,deadlineSeconds=TEST_DEADLINE).transcribe(file,pcm){false}}.joinToString(""){it.text}.trim()
         report("t3b_m4a",JSONObject().put("durationMs",decoded.durationMs).put("chunks",decoded.chunks.size).put("text",text.take(200)))
         assertTrue(decoded.durationMs in 6000..10000);assertTrue("no Korean: $text",text.any{it in '가'..'힣'})
     }

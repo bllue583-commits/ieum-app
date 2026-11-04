@@ -44,7 +44,10 @@ internal object TranscriptionThreads {
 /** Production transcriber: the pinned JNI runtime with the verified large model, Korean. */
 internal class WhisperCallTranscriber(private val engine:AndroidWhisperEngine,private val model:PipelineSttModel,private val threadCount:Int?=null,
     /** Thread count read when a recording starts (battery state); ignored when [threadCount] is given. */
-    private val threadSource:(()->Int)?=null):CallTranscriber {
+    private val threadSource:(()->Int)?=null,
+    /** Native time limit for one piece. Under WorkManager's 10 minutes for the background work; device tests on a slow
+     * emulator transcribe a whole recording in one piece and pass a longer limit. */
+    private val deadlineSeconds:Int=CallTranscriptionRunner.NATIVE_DEADLINE_SECONDS):CallTranscriber {
     private fun threads()=threadCount ?: threadSource?.invoke() ?: (Runtime.getRuntime().availableProcessors()-1).coerceIn(1,6) // S26: 6 threads 85 s/min, 8 threads ~3x slower
     private fun segmentsOf(raw:ByteArray):List<CallTranscript.Segment> {
         val output=AndroidWhisperEngine.decodeOutput(raw) // no segments = silence; a malformed segment is dropped alone
@@ -56,7 +59,7 @@ internal class WhisperCallTranscriber(private val engine:AndroidWhisperEngine,pr
     override fun open(model:File,stopped:()->Boolean):CallTranscriber.Session {
         val session=engine.openVerifiedModel(model,{this.model.verifiedModelFile()!=null},threads(),stopped)
         return object:CallTranscriber.Session {
-            override fun transcribe(pcm:FloatArray,stopped:()->Boolean)=segmentsOf(session.transcribe(pcm,"ko",CallTranscriptionRunner.NATIVE_DEADLINE_SECONDS,stopped))
+            override fun transcribe(pcm:FloatArray,stopped:()->Boolean)=segmentsOf(session.transcribe(pcm,"ko",deadlineSeconds,stopped))
             override fun close()=session.close()
         }
     }
