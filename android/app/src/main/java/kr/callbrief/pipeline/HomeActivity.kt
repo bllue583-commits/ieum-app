@@ -112,7 +112,7 @@ class HomeActivity:ComponentActivity() {
         // Today at a glance: three big numbers (only the open to-dos in the accent), then when the next report comes.
         val today=CallUi.card(this).apply { tag="home_today" }
         val left=s.byCompany.sumOf { it.second }
-        today.addView(CallUi.stats(this,listOf(Triple("${s.calls}","오늘 통화",CallUi.INK),Triple("${s.newTasks}","오늘 새 체크",CallUi.INK),
+        today.addView(CallUi.stats(this,listOf(Triple("${s.calls}","오늘 통화",CallUi.INK),Triple("${s.newTasks}","새 체크",CallUi.INK),
             Triple("$left","체크할 일",CallUi.ACCENT)),listOf("건","개","개")).apply { tag="home_calls" })
         today.addView(CallUi.divider(this))
         today.addView(CallUi.caption(this,s.nextReport.takeIf{it.isNotBlank()}?.let{"다음 알림 $it"} ?: "마지막 정리 "+CallUi.dateTime(s.lastAnalyzedMs)).apply { tag="home_next_report";setPadding(0,0,0,0) })
@@ -153,14 +153,25 @@ class HomeActivity:ComponentActivity() {
             })
         if(!steps.all{it.done}) {
             val c=CallUi.card(this,rail=CallUi.AMBER_RAIL).apply { tag="home_setup" }
-            c.addView(CallUi.text(this,"처음 설정 ${steps.count{it.done}}/${steps.size}",CallUi.HEADING,true))
+            val doneCount=steps.count{it.done}
+            // Title with "4/8" on the right and a progress bar; every step keeps its own number, so the open one reads "1단계".
+            c.addView(LinearLayout(this).apply {
+                orientation=LinearLayout.HORIZONTAL;gravity=android.view.Gravity.CENTER_VERTICAL
+                addView(CallUi.text(this@HomeActivity,"처음 설정",CallUi.HEADING,true).apply { setPadding(0,0,0,0) },LinearLayout.LayoutParams(0,-2,1f))
+                addView(CallUi.text(this@HomeActivity,"$doneCount/${steps.size}",CallUi.BODY,true,CallUi.SUBTLE).apply { tag="home_setup_count";setPadding(0,0,0,0);fontFeatureSettings="tnum" })
+            })
+            c.addView(CallUi.StackBar(this,listOf(doneCount to CallUi.AMBER_RAIL,(steps.size-doneCount) to CallUi.CARD),split=false),
+                LinearLayout.LayoutParams(-1,CallUi.dp(this,8)).apply { topMargin=CallUi.dp(this@HomeActivity,10);bottomMargin=CallUi.dp(this@HomeActivity,14) })
             val next=steps.indexOfFirst { !it.done }
-            // Finished steps fold into one line; only the step in front of the user is open (one thing at a time).
-            if(steps.count{it.done}>0) c.addView(CallUi.caption(this,"${steps.count{it.done}}단계를 마쳤어요",CallUi.OK,true))
+            // Finished steps fold away; only the step in front of the user is open (one thing at a time), the rest wait below in grey.
             steps.forEachIndexed { i,st ->
                 if(st.done) return@forEachIndexed
-                c.addView(CallUi.text(this,"${i+1}.  "+st.label,CallUi.BODY,i==next,if(i==next) CallUi.INK else CallUi.SUBTLE))
-                if(i==next) { c.addView(CallUi.text(this,st.detail,CallUi.CAPTION,color=CallUi.SUBTLE));c.addView(CallUi.bigButton(this,"",st.button,st.action).apply { tag="home_setup_next" }) }
+                if(i==next) {
+                    c.addView(CallUi.caption(this,"${i+1}단계",CallUi.SUBTLE,true).apply { tag="home_setup_step";setPadding(0,0,0,0) })
+                    c.addView(CallUi.text(this,st.label,CallUi.BODY,true).apply { setPadding(0,0,0,CallUi.dp(this@HomeActivity,4)) })
+                    c.addView(CallUi.text(this,st.detail,CallUi.CAPTION,color=CallUi.SUBTLE))
+                    c.addView(CallUi.bigButton(this,"",st.button,st.action).apply { tag="home_setup_next" })
+                } else c.addView(CallUi.text(this,"${i+1}단계  "+st.label,CallUi.BODY,color=CallUi.SUBTLE).apply { setPadding(0,CallUi.dp(this@HomeActivity,10),0,0) })
             }
             body.addView(c)
         }

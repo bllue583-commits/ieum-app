@@ -273,33 +273,69 @@ internal object CallUi {
     fun requested(ms:Long)=if(ms<=0) "" else when(val d=CallRecordStore.kstDay(ms)) {
         today() -> "오늘 요청";today().minusDays(1) -> "어제 요청";else -> DateTimeFormatter.ofPattern("M월 d일",Locale.KOREAN).format(d)+" 요청" }
 
-    /** The one to-do row used on every screen, meant for the inside of a [list]: the title (what to do), below it a company
-     * badge and who and when it was asked for, a [다 됐어요] button on the right, and under it the AI's note when there is one.
+    /** A horizontal row that stacks itself when it is too narrow, so no text is ever squeezed into a column of single letters.
+     * Child [flex] takes the room left by the others; the row stays side by side while that room is at least
+     * [minFraction] of the width (or all the flex child needs), otherwise each child gets its own line, the later ones at
+     * the end ([endWhenStacked]) or the start. Works for every screen width and font size, because it decides at measure time. */
+    class FitRow(a:Activity,private val flex:Int=0,private val minFraction:Float=0.5f,private val gapDp:Int=12,private val endWhenStacked:Boolean=false):LinearLayout(a) {
+        private val gapPx=dp(a,gapDp);private val stackGapPx=dp(a,8)
+        /** True while the children are side by side (for tests). */
+        var sideBySide=true
+            private set
+        override fun onMeasure(widthSpec:Int,heightSpec:Int) {
+            val shown=(0 until childCount).map(::getChildAt).filter { it.visibility!=View.GONE }
+            val f=getChildAt(flex)
+            sideBySide=if(MeasureSpec.getMode(widthSpec)==MeasureSpec.UNSPECIFIED || shown.size<2 || f==null || f.visibility==View.GONE) true else {
+                val avail=MeasureSpec.getSize(widthSpec)-paddingLeft-paddingRight
+                val free=MeasureSpec.makeMeasureSpec(0,MeasureSpec.UNSPECIFIED)
+                val others=shown.filter { it!==f }.sumOf { it.measure(free,free);it.measuredWidth }+gapPx*(shown.size-1)
+                f.measure(free,free)
+                avail-others>=minOf(f.measuredWidth,(avail*minFraction).toInt())
+            }
+            orientation=if(sideBySide) HORIZONTAL else VERTICAL
+            shown.forEachIndexed { i,v ->
+                val lp=v.layoutParams as LayoutParams
+                if(sideBySide) { lp.width=if(v===f) 0 else -2;lp.weight=if(v===f) 1f else 0f;lp.marginStart=if(i>0) gapPx else 0;lp.topMargin=0;lp.gravity=Gravity.CENTER_VERTICAL }
+                else { lp.width=if(v===f) -1 else -2;lp.weight=0f;lp.marginStart=0;lp.topMargin=if(i>0) stackGapPx else 0
+                    lp.gravity=if(i>0 && endWhenStacked) Gravity.END else Gravity.START
+                    if(i>0 && v.getTag(kr.callbrief.R.id.ui_min_sp)!=null) lp.topMargin=dp(context as Activity,2) }
+            }
+            super.onMeasure(widthSpec,heightSpec)
+        }
+    }
+
+    /** The one to-do row used on every screen, meant for the inside of a [list]: the title (what to do) across the whole row,
+     * below it a company badge with who and when it was asked for, and the [다 됐어요] button on the right of that line
+     * (or under it, at the end, when the screen is narrow or the letters large); the AI's note at the bottom when there is one.
      * The whole row opens the call it came from when [onOpen] is given. Calm on purpose: no red, no countdown. */
     fun taskRow(a:Activity,title:String,requestedMs:Long,company:String?,person:String?=null,status:String="",onDone:((View)->Unit)?=null,
                 onOpen:(()->Unit)?=null,aiNote:String?=null):LinearLayout {
         val outer=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;setPadding(dp(a,16),dp(a,14),dp(a,16),dp(a,14)) }
         if(onOpen!=null) outer.apply { isClickable=true;isFocusable=true;background=rowRipple();setOnClickListener { onOpen() };contentDescription=null }
-        val row=LinearLayout(a).apply { orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL }
-        val words=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
-        words.addView(text(a,title,SUMMARY,true).apply { setPadding(0,0,0,dp(a,4)) })
+        outer.addView(text(a,title,SUMMARY,true).apply { tag="task_title";setPadding(0,0,0,0) })
         val who=listOfNotNull(person?.let { "$it 님" },requested(requestedMs).takeIf { it.isNotEmpty() }).joinToString(", ")
-        if(!company.isNullOrBlank() || who.isNotEmpty()) {
-            val meta=LinearLayout(a).apply { orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL }
-            if(!company.isNullOrBlank()) meta.addView(chip(a,company),LinearLayout.LayoutParams(-2,-2).apply { marginEnd=dp(a,8) })
-            if(who.isNotEmpty()) meta.addView(caption(a,who,SUBTLE).apply { setPadding(0,0,0,0) },LinearLayout.LayoutParams(0,-2,1f))
-            words.addView(meta)
+        // Badge and words side by side while the words still get most of the line; else the words go under the badge.
+        val meta=if(company.isNullOrBlank() && who.isEmpty()) null else FitRow(a,flex=if(company.isNullOrBlank()) 0 else 1,minFraction=0.6f,gapDp=8).apply {
+            tag="task_meta"
+            if(!company.isNullOrBlank()) addView(chip(a,company).apply { tag="task_company" },LinearLayout.LayoutParams(-2,-2))
+            if(who.isNotEmpty()) addView(caption(a,who,SUBTLE).apply { tag="task_who";setPadding(0,0,0,0) },LinearLayout.LayoutParams(-2,-2))
         }
-        taskStatus(status).takeIf { it.isNotEmpty() }?.let { words.addView(pill(a,it,ACCENT)) }
-        row.addView(words,LinearLayout.LayoutParams(0,-2,1f))
-        if(onDone!=null) row.addView(Button(a).apply {
+        val pill=taskStatus(status).takeIf { it.isNotEmpty() }?.let { pill(a,it,ACCENT) }
+        val done=onDone?.let { Button(a).apply {
             text="다 됐어요";isAllCaps=false;stateListAnimator=null;textSize=17f;typeface=font(a,Weight.SEMIBOLD);setTextColor(INK);tag="task_done"
-            background=ripple(a,sheet(a,CHIP,radius=14))
+            maxLines=1;isSingleLine=true;background=ripple(a,sheet(a,CHIP,radius=14))
             setCompoundDrawablesWithIntrinsicBounds(icon(a,"tick",SUBTLE,20),null,null,null);compoundDrawablePadding=dp(a,6)
             minHeight=dp(a,48);minimumHeight=dp(a,48);minWidth=0;minimumWidth=0;setPadding(dp(a,12),0,dp(a,14),0)
-            contentDescription="$title, 다 됐어요";setOnClickListener { onDone(outer) }
-        },LinearLayout.LayoutParams(-2,-2).apply { marginStart=dp(a,12) })
-        outer.addView(row)
+            contentDescription="$title, 다 됐어요";setOnClickListener { it(outer) }
+        } }
+        val left=if(meta!=null && pill!=null) LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;addView(meta);addView(pill) } else meta ?: pill
+        if(done!=null) {
+            // The button stays on the badge line only while that line fits whole; otherwise it moves under it, at the end.
+            val line=FitRow(a,flex=0,minFraction=1f,gapDp=12,endWhenStacked=true).apply { tag="task_line" }
+            line.addView(left ?: View(a),LinearLayout.LayoutParams(-2,-2))
+            line.addView(done,LinearLayout.LayoutParams(-2,-2))
+            outer.addView(line,LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,8) })
+        } else if(left!=null) outer.addView(left,LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,8) })
         aiNoteRow(a,aiNote)?.let { outer.addView(it) }
         return outer
     }
@@ -341,9 +377,11 @@ internal object CallUi {
         gravity=Gravity.TOP;setPadding(dp(a,16),dp(a,14),dp(a,16),dp(a,14));minimumHeight=dp(a,72);contentDescription="$time $who, $memo. 눌러서 자세히 보기"
         addView(avatar(a,avatarName ?: who.removePrefix("(주)").trim().split(' ').first(),44,company))
         val words=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
-        val head=LinearLayout(a).apply { orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL }
-        head.addView(text(a,who,BODY,true).apply { setPadding(0,0,0,0) },LinearLayout.LayoutParams(0,-2,1f))
-        if(time.isNotEmpty()) head.addView(caption(a,time,SUBTLE).apply { setPadding(dp(a,8),0,0,0) })
+        // The time sits on the right of the name while the name fits on one line next to it; otherwise the name keeps the
+        // whole line (a phone number or "업체 사람" is never broken) and the time goes under it as an aside.
+        val head=FitRow(a,flex=0,minFraction=1f,gapDp=10).apply { tag="memo_head" }
+        head.addView(text(a,who,BODY,true).apply { tag="memo_who";setPadding(0,0,0,0) },LinearLayout.LayoutParams(-2,-2))
+        if(time.isNotEmpty()) head.addView(caption(a,time,SUBTLE).apply { tag="memo_time";maxLines=1;setPadding(0,0,0,0) },LinearLayout.LayoutParams(-2,-2))
         words.addView(head)
         words.addView(text(a,memo,BODY,color=if(quiet) MUTED else SUBTLE).apply { setPadding(0,dp(a,2),0,0) })
         addView(words,LinearLayout.LayoutParams(0,-2,1f))
@@ -374,17 +412,43 @@ internal object CallUi {
     }
 
     // ---- numbers and charts ---------------------------------------------------------------------------------------------
-    /** Big numbers in one sheet: grey label on top, the number large with its unit small ("5건"). Only one number is blue. */
-    fun stats(a:Activity,items:List<Triple<String,String,Int>>,units:List<String> =emptyList())=LinearLayout(a).apply {
-        orientation=LinearLayout.HORIZONTAL
-        items.forEachIndexed { i,(number,label,color) ->
-            val unit=units.getOrElse(i) { "" }
-            val col=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;contentDescription="$label $number$unit" }
-            col.addView(caption(a,label,SUBTLE).apply { setPadding(0,0,0,dp(a,4)) })
-            val big=android.text.SpannableString(number+unit).apply {
-                if(unit.isNotEmpty()) { setSpan(android.text.style.AbsoluteSizeSpan(19,true),number.length,length,0);setSpan(android.text.style.ForegroundColorSpan(SUBTLE),number.length,length,0) } }
-            col.addView(text(a,"",NUMBER,true,color).apply { text=big;letterSpacing=-0.02f;fontFeatureSettings="tnum";setPadding(0,0,0,0);includeFontPadding=false })
-            addView(col,LinearLayout.LayoutParams(0,-2,1f))
+    /** Big numbers in one sheet: grey label on top, the number large with its unit small ("5건"). Only one number is blue.
+     * The columns share the width equally; when a label would not fit its column on one line (a narrow phone, large letters),
+     * the numbers become rows instead (label on the left, number on the right), so labels never run into each other. */
+    fun stats(a:Activity,items:List<Triple<String,String,Int>>,units:List<String> =emptyList()):LinearLayout=Stats(a,items,units)
+    class Stats(a:Activity,items:List<Triple<String,String,Int>>,units:List<String>):LinearLayout(a) {
+        private val labels=ArrayList<TextView>();private val cols=ArrayList<LinearLayout>()
+        private val gapPx=dp(a,12)
+        /** True while the numbers sit in columns (for tests). */
+        var columns=true
+            private set
+        init {
+            orientation=HORIZONTAL
+            items.forEachIndexed { i,(number,label,color) ->
+                val unit=units.getOrElse(i) { "" }
+                val col=LinearLayout(a).apply { orientation=VERTICAL;contentDescription="$label $number$unit";tag="stat_$i" }
+                val l=caption(a,label,SUBTLE).apply { setPadding(0,0,0,dp(a,4));tag="stat_label_$i" }
+                col.addView(l,LayoutParams(-2,-2))
+                val big=android.text.SpannableString(number+unit).apply {
+                    if(unit.isNotEmpty()) { setSpan(android.text.style.RelativeSizeSpan(19f/NUMBER),number.length,length,0);setSpan(android.text.style.ForegroundColorSpan(SUBTLE),number.length,length,0) } }
+                col.addView(text(a,"",NUMBER,true,color).apply { text=big;letterSpacing=-0.02f;fontFeatureSettings="tnum";setPadding(0,0,0,0);includeFontPadding=false;maxLines=1 },LayoutParams(-2,-2))
+                labels+=l;cols+=col;addView(col,LayoutParams(0,-2,1f))
+            }
+        }
+        override fun onMeasure(widthSpec:Int,heightSpec:Int) {
+            if(MeasureSpec.getMode(widthSpec)!=MeasureSpec.UNSPECIFIED && cols.isNotEmpty()) {
+                val each=(MeasureSpec.getSize(widthSpec)-paddingLeft-paddingRight-gapPx*(cols.size-1))/cols.size
+                columns=labels.all { it.paint.measureText(it.text.toString())<=each }
+            }
+            orientation=if(columns) HORIZONTAL else VERTICAL
+            cols.forEachIndexed { i,col ->
+                val lp=col.layoutParams as LayoutParams
+                if(columns) { col.orientation=VERTICAL;col.gravity=Gravity.START;lp.width=0;lp.weight=1f;lp.marginStart=if(i>0) gapPx else 0;lp.topMargin=0
+                    (labels[i].layoutParams as LayoutParams).apply { width=-2;weight=0f } }
+                else { col.orientation=HORIZONTAL;col.gravity=Gravity.CENTER_VERTICAL;lp.width=-1;lp.weight=0f;lp.marginStart=0;lp.topMargin=if(i>0) dp(context as Activity,10) else 0
+                    (labels[i].layoutParams as LayoutParams).apply { width=0;weight=1f } }
+            }
+            super.onMeasure(widthSpec,heightSpec)
         }
     }
 
@@ -446,16 +510,19 @@ internal object CallUi {
         addView(text(a,label,BODY,color=INK).apply { setPadding(0,0,0,0) },LinearLayout.LayoutParams(0,-2,1f))
         addView(text(a,"${n}개",BODY,true,INK).apply { setPadding(0,0,0,0);fontFeatureSettings="tnum" })
     }
-    /** A traffic light for a status line: a round dot (green when [good], amber otherwise), then the [label] and its [value]. */
+    /** A traffic light for a status line: the [label] as a grey aside on top, then the [value] in SemiBold with a round dot
+     * in front of it (green when [good], amber otherwise). The same shape at every width, so the lights of one sheet line up. */
     fun signalRow(a:Activity,label:String,value:String,good:Boolean)=LinearLayout(a).apply {
-        orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setPadding(0,dp(a,8),0,dp(a,8))
+        orientation=LinearLayout.VERTICAL;setPadding(0,dp(a,8),0,dp(a,8))
         val color=if(good) OK else AMBER
         contentDescription="$label, $value, "+(if(good) "정상" else "확인이 필요해요")
-        addView(View(a).apply { background=GradientDrawable().apply { shape=GradientDrawable.OVAL;setColor(color) };importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO },LinearLayout.LayoutParams(dp(a,12),dp(a,12)).apply { marginEnd=dp(a,12) })
-        val words=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
-        words.addView(caption(a,label,SUBTLE).apply { setPadding(0,0,0,0) })
-        words.addView(text(a,value,BODY,true).apply { setPadding(0,0,0,0) })
-        addView(words,LinearLayout.LayoutParams(0,-2,1f))
+        val indent=dp(a,10+10)
+        addView(caption(a,label,SUBTLE).apply { setPadding(indent,0,0,0) })
+        addView(text(a,value,BODY,true).apply {
+            setPadding(0,0,0,0);compoundDrawablePadding=dp(a,10)
+            val dot=GradientDrawable().apply { shape=GradientDrawable.OVAL;setColor(color);setSize(dp(a,10),dp(a,10)) }
+            setCompoundDrawablesRelativeWithIntrinsicBounds(dot,null,null,null)
+        })
     }
 
     // ---- line icons: the set in [CallIcons], stroked 2 units wide on a 24 unit grid -------------------------------------------

@@ -204,22 +204,25 @@ class CallSettingsActivity:ComponentActivity() {
         }
         body.addView(CallUi.text(this,"업무 메일을 연결하면 메일도 업체와 사람별로 함께 정리해요. 메일 서비스 설정에서 IMAP을 켜고 앱 비밀번호를 만들어 아래에 넣어 주세요.",CallUi.BODY).apply { tag="mail_state" })
         val choices=MessageIntake.MAIL_HOSTS.keys.toList()+"직접 입력"
-        val row=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
+        // Two rows of two, so every name stays on one line at any width and letter size.
+        val row=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
+        val lines=List((choices.size+1)/2) { LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }.also { l -> row.addView(l,LinearLayout.LayoutParams(-1,-2).apply { if(it>0) topMargin=CallUi.dp(this@CallSettingsActivity,6) }) } }
         fun field(hint:String,password:Boolean=false)=EditText(this).apply {
             this.hint=hint;textSize=CallUi.BODY;isSingleLine=true;minHeight=CallUi.dp(this@CallSettingsActivity,56);importantForAutofill=android.view.View.IMPORTANT_FOR_AUTOFILL_NO
             inputType=if(password) InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD else InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
             typeface=CallUi.font(this@CallSettingsActivity,CallUi.Weight.REGULAR)
         }
         val host=field("IMAP 서버 (예: imap.회사.com)").apply { tag="mail_host";visibility=if(mailService=="직접 입력") android.view.View.VISIBLE else android.view.View.GONE }
-        choices.forEach { name ->
+        choices.forEachIndexed { i,name ->
             val on=name==mailService
-            row.addView(Button(this).apply {
-                text=name;textSize=16f;isAllCaps=false;stateListAnimator=null;minHeight=CallUi.dp(this@CallSettingsActivity,48);minimumHeight=minHeight;setPadding(0,0,0,0)
+            lines[i/2].addView(Button(this).apply {
+                text=name;textSize=16f;isAllCaps=false;stateListAnimator=null;minHeight=CallUi.dp(this@CallSettingsActivity,48);minimumHeight=minHeight;setPadding(0,0,0,0);maxLines=1
                 typeface=CallUi.font(this@CallSettingsActivity,if(on) CallUi.Weight.SEMIBOLD else CallUi.Weight.MEDIUM)
                 setTextColor(if(on) CallUi.ON_ACCENT else CallUi.SUBTLE);background=CallUi.ripple(this@CallSettingsActivity,CallUi.sheet(this@CallSettingsActivity,if(on) CallUi.ACCENT else CallUi.CHIP,radius=14))
                 setOnClickListener { mailService=name;refresh() }
-            },LinearLayout.LayoutParams(0,-2,1f).apply { marginEnd=CallUi.dp(this@CallSettingsActivity,6) })
+            },LinearLayout.LayoutParams(0,-2,1f).apply { if(i%2==0) marginEnd=CallUi.dp(this@CallSettingsActivity,6) })
         }
+        if(choices.size%2==1) lines.last().addView(android.view.View(this),LinearLayout.LayoutParams(0,1,1f).apply { marginStart=CallUi.dp(this@CallSettingsActivity,0) })
         body.addView(row,LinearLayout.LayoutParams(-1,-2).apply { topMargin=CallUi.dp(this@CallSettingsActivity,10) })
         body.addView(host)
         val address=field("메일 주소").apply { tag="mail_user" }
