@@ -57,6 +57,17 @@ class CallRecordStoreTest:ProtectedTextHostTestBase() {
         s.applyAnalysis(recordId,a)
     }
 
+    private var versions=10L
+    /** Stores a fresh record of rec1 and applies [titles] as new items of [company] (null: no company known). Returns the applied flags. */
+    private fun makeItems(company:String?,vararg titles:String):List<Boolean> {
+        val v=versions++
+        store().use { it.insert(transcript("rec1",startedMs=started+v*60_000L).copy(sourceVersion=v)) }
+        val id=CallRecordStore.recordId(transcript("rec1").copy(sourceVersion=v))
+        val a=ClaudeCallAnalysis("s",emptyList(),null,null,emptyList(),titles.map { ClaudeCallAnalysis.Task("create",null,it,null,quote) },
+            counterpart=company?.let { ClaudeCallAnalysis.Counterpart("김민수",it,null,false) })
+        return store().use { it.applyAnalysis(id,a) }.map { it.applied }
+    }
+
     @Test fun insertIsIdempotentAndSinkStores() {
         var enqueued=0
         val sink=CallSinkImpl(context) { enqueued++ }
@@ -154,27 +165,47 @@ class CallRecordStoreTest:ProtectedTextHostTestBase() {
         assertTrue(store().use { s -> s.request(s.record(idOf("rec1"))!!) }.previousSummaries.isEmpty())
     }
 
-    @Test fun nearTitlesOfTheSameCompanyAreOneItemAndRecentlyFinishedOnesAreNotMadeAgain() {
-        store().use { it.insert(transcript("rec1",startedMs=started)) }
+    @Test fun nearTitlesOfTheSameCompanyAreOneOpenItemAndFinishedOnesBlockOnlyAnIdenticalTitle() {
         val long1="△△철강 김민수 과장 3층 철근 견적서 회신 확인"
-        val first=answer(idOf(),taskJson("create",null,long1,quote)).single();assertTrue(first.applied)
-        store().use { it.insert(transcript("rec2",startedMs=started+60_000)) }
-        // 2-letter pieces: 0.6 and above is the same item.
-        val second=answer(idOf("rec2"),taskJson("create",null,"△△철강 김민수 과장 3층 철근 견적서 회신 여부 확인",quote),taskJson("create",null,"전혀 다른 일 도면 받기",quote2))
-        assertEquals(listOf(false,true),second.map { it.applied })
-        // Finished 5 days ago: still blocks; 20 days ago: no longer.
-        port().use { it.execute("UPDATE workflow_items SET status='done',done_ms=? WHERE id=?",now-5*86_400_000L,first.itemId) }
-        store().use { it.insert(transcript("rec1",startedMs=started+120_000).copy(sourceVersion=2)) }
-        val third=CallRecordStore.recordId(transcript("rec1").copy(sourceVersion=2))
-        assertFalse(answer(third,taskJson("create",null,long1,quote)).single().applied)
-        store().use { it.insert(transcript("rec1",startedMs=started+180_000).copy(sourceVersion=3)) }
-        port().use { it.execute("UPDATE workflow_items SET done_ms=? WHERE id=?",now-20*86_400_000L,first.itemId) }
-        assertTrue(answer(CallRecordStore.recordId(transcript("rec1").copy(sourceVersion=3)),taskJson("create",null,long1,quote)).single().applied)
+        val near="△△철강 김민수 과장 3층 철근 견적서 회신 여부 확인"
+        assertEquals(listOf(true),makeItems("△△철강",long1))
+        // 2-letter pieces: 0.6 and above is the same open item of the same company.
+        assertEquals(listOf(false,true),makeItems("△△철강",near,"전혀 다른 일 도면 받기"))
+        val first=port().use { it.query("SELECT id FROM workflow_items WHERE title=?",long1).single()["id"] as String }
+        // Finished 5 days ago: only the identical title is blocked (spaces ignored); wording that is merely near is a new item.
+        port().use { it.execute("UPDATE workflow_items SET status='done',done_ms=? WHERE id=?",now-5*86_400_000L,first) }
+        assertEquals(listOf(false),makeItems("△△철강",long1.replace(" ","")))
+        assertEquals(listOf(true),makeItems("△△철강",near))
+        // Finished 20 days ago: no longer blocks the identical title either.
+        port().use { it.execute("UPDATE workflow_items SET done_ms=? WHERE id=?",now-20*86_400_000L,first) }
+        port().use { it.execute("UPDATE workflow_items SET status='done',done_ms=? WHERE title=?",now-20*86_400_000L,near) }
+        assertEquals(listOf(true),makeItems("△△철강",long1))
+    }
+
+    @Test fun titlesThatDifferInANumberAreNewItems() {
+        listOf("3층 타설 일정 확인" to "4층 타설 일정 확인","□□레미콘 11/5 타설 확인" to "□□레미콘 11/12 타설 확인","2공구 철근 반입 확인" to "3공구 철근 반입 확인").forEach { (x,y) ->
+            assertEquals(x,listOf(true),makeItems("△△철강",x))
+            assertEquals(y,listOf(true),makeItems("△△철강",y))
+            assertEquals("the same title again is still one item",listOf(false),makeItems("△△철강",y))
+        }
+    }
+
+    @Test fun withoutACompanyOnlyAnIdenticalTitleIsTheSameItem() {
+        assertEquals(listOf(true),makeItems(null,"△△철강 김민수 과장 3층 철근 견적서 회신 확인"))
+        assertEquals(listOf(true),makeItems(null,"△△철강 김민수 과장 3층 철근 견적서 회신 여부 확인"))
+        assertEquals(listOf(false),makeItems(null,"△△철강 김민수 과장 3층 철근 견적서 회신 확인"))
+    }
+
+    @Test fun theMorningTidyUsesTheSameDuplicateRule() {
+        assertEquals(listOf(true),makeItems("△△철강","3층 타설 일정 확인"))
+        val ops=JSONObject().put("tasks",JSONArray().put(JSONObject().put("op","create").put("title","4층 타설 일정 확인").put("company","△△철강").put("basis","x"))
+            .put(JSONObject().put("op","create").put("title","3층 타설 일정 확인").put("company","△△철강").put("basis","x")))
+        assertEquals(1,store().use { it.applyTidy(ops) })
     }
 
     @Test fun trimClearsWordsOfAnsweredRecordsOnlyAndShrinksOldAnalysesToTheSummary() {
         store().use { it.insert(transcript("rec1",startedMs=started)) }
-        answer(idOf(),taskJson("create",null,"견적서 보내기",quote))
+        val madeItem=answer(idOf(),taskJson("create",null,"견적서 보내기",quote)).single().itemId
         store().use { it.insert(transcript("rec2",startedMs=started+60_000)) } // never answered
         store().use { it.setState(idOf("rec2"),CallRecordStore.FAILED,"X") }
         now+=15*86_400_000L
@@ -186,7 +217,9 @@ class CallRecordStoreTest:ProtectedTextHostTestBase() {
         store().use { it.trim(now) }
         val r=store().use { it.record(idOf())!! }
         assertEquals("김과장과 견적서와 계약서 일정을 정했다.",r.summary);assertEquals("김과장",r.analysis!!.counterpartName)
-        assertTrue(r.analysis!!.keyPoints.isEmpty() && r.analysis!!.tasks.isEmpty());assertTrue(r.applied.isEmpty())
+        assertTrue(r.analysis!!.keyPoints.isEmpty() && r.analysis!!.tasks.isEmpty())
+        // The items the call made stay known, so "통화 보기" still finds them.
+        assertEquals(listOf(madeItem),r.applied.map { it.itemId });assertEquals("견적서 보내기",r.applied.single().title);assertTrue(r.applied.single().applied)
     }
 
     @Test fun oldRowsAreMigratedKeysFilledWaitingKeyRequeuedAndSegmentsDropped() {
@@ -200,7 +233,7 @@ class CallRecordStoreTest:ProtectedTextHostTestBase() {
             p.execute("INSERT INTO call_links VALUES('x','pe_a','co_a')")
             p.execute("INSERT INTO task_companies VALUES('t1','co_a')");null
         } }
-        port().use { p -> p.execute("UPDATE people SET name_key=NULL");p.execute("UPDATE companies SET name_key=NULL");p.execute("DELETE FROM people_phones") }
+        port().use { p -> p.execute("UPDATE people SET name_key=NULL");p.execute("UPDATE companies SET name_key=NULL");p.execute("DELETE FROM people_phones");p.execute("DELETE FROM app_migration") }
         store().use { s ->
             assertEquals(1,s.companyCount());assertEquals("김민수",port().use { it.query("SELECT name_key FROM people").single()["name_key"] })
             assertEquals("co_b",port().use { it.query("SELECT id FROM companies").single()["id"] }) // the most recently used spelling stays
@@ -210,5 +243,47 @@ class CallRecordStoreTest:ProtectedTextHostTestBase() {
         }
         assertEquals("01011112222",port().use { it.query("SELECT phone_key FROM people_phones").single()["phone_key"] })
         assertEquals("[]",port().use { it.query("SELECT segments_json FROM call_records").single()["segments_json"] })
+    }
+
+    @Test fun migrationRunsOnceAndRefillsEveryNameKeyWithTheCurrentRule() {
+        store().use { it.insert(transcript()) }
+        port().use { p -> p.transaction {
+            p.execute("INSERT INTO companies(id,name,trade,memo,updated_ms,name_key) VALUES('co_i','△△이사',NULL,'',5,'△△')")
+            p.execute("INSERT INTO companies(id,name,trade,memo,updated_ms,name_key) VALUES('co_j','△△',NULL,'',9,'△△')")
+            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms,name_key) VALUES('pe_k','김 과장',NULL,NULL,NULL,0,1,'김')")
+            p.execute("DELETE FROM app_migration");null } }
+        store().use { s -> assertEquals("old keys are filled again by the current rule",listOf("김과장"),port().use { it.query("SELECT name_key FROM people WHERE id='pe_k'") }.map { it["name_key"] })
+            assertEquals("a company named ...이사 is not the company without it",2,s.companyCount()) }
+        // Done once: later opens do not repeat the work.
+        port().use { it.execute("UPDATE call_records SET segments_json='[[1]]'") }
+        store().use { }
+        assertEquals("[[1]]",port().use { it.query("SELECT segments_json FROM call_records").single()["segments_json"] })
+    }
+
+    @Test fun mergedCompaniesKeepBothMemosUpToTheLimit() {
+        store().use { it.insert(transcript()) }
+        port().use { p -> p.transaction {
+            p.execute("INSERT INTO companies(id,name,trade,memo,updated_ms) VALUES('co_a','(주)△△철강',NULL,?,5)","가".repeat(300))
+            p.execute("INSERT INTO companies(id,name,trade,memo,updated_ms) VALUES('co_b','△△ 철강',NULL,?,9)","나".repeat(300))
+            p.execute("INSERT INTO companies(id,name,trade,memo,updated_ms) VALUES('co_c','□□건설',NULL,'첫째',5)")
+            p.execute("INSERT INTO companies(id,name,trade,memo,updated_ms) VALUES('co_d','□□ 건설',NULL,'둘째',9)")
+            p.execute("UPDATE companies SET name_key=NULL");p.execute("DELETE FROM app_migration");null } }
+        store().use { s ->
+            val memo=s.companyDetail("co_b")!!.memo
+            assertEquals(CallRecordStore.COMPANY_MEMO_MAX,memo.length);assertTrue(memo.startsWith("나".repeat(300)+"\n가"))
+            assertEquals("둘째\n첫째",s.companyDetail("co_d")!!.memo)
+        }
+    }
+
+    @Test fun dialNumbersIncludePeopleWhoShareAnOfficeNumber() {
+        store().use { }
+        port().use { p -> p.transaction {
+            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms,name_key) VALUES('pe_1','김민수','0212345678',NULL,NULL,0,1,'김민수')")
+            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms,name_key) VALUES('pe_2','이영희',NULL,NULL,NULL,0,1,'이영희')")
+            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms,name_key) VALUES('pe_3','박철수',NULL,NULL,NULL,0,1,'박철수')")
+            p.execute("INSERT INTO people_phones VALUES('0212345678','pe_1')");p.execute("INSERT INTO people_phones VALUES('0212345678','pe_2')")
+            p.execute("INSERT INTO people_phones VALUES('01099998888','pe_2')");p.execute("INSERT INTO people_phones VALUES('123','pe_3')");null } }
+        val numbers=store().use { it.dialNumbers() }
+        assertEquals(mapOf("pe_1" to "0212345678","pe_2" to "0212345678"),numbers) // pe_3's number is too short to dial
     }
 }
