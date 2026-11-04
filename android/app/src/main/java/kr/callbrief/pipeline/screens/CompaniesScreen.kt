@@ -43,7 +43,7 @@ internal class CompaniesScreen(a:MainActivity):AppScreen(a) {
         val target=detailId
         a.lifecycleScope.launch {
             val result=runCatching { withContext(Dispatchers.IO) {
-                CallRecordStore(CallPipelineStartup.storage(a)).use { s ->
+                kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(a)).let { s ->
                     numbers=runCatching { s.dialNumbers() }.getOrDefault(emptyMap())
                     // A company link from a call: find the company by name (spaces ignored) and open it.
                     val id=target ?: wantedName?.let { n -> s.companies().firstOrNull { it.name.filterNot(Char::isWhitespace)==n.filterNot(Char::isWhitespace) }?.id }

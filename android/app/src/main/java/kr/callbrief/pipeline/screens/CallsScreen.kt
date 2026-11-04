@@ -33,14 +33,12 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
     private var calls:List<CallRecord> =emptyList()
     /** The day's call-log lines that have no record of their own ([CallRecordStore.dayLog]). */
     private var logs:List<LoggedCall> =emptyList()
-    /** Read the phone's call log again on the next [load] (once each time the screen comes back). */
-    private var refreshLog=true
     /** Where the list was scrolled when a detail page opened from it; put back once the list is drawn again (design G1). */
     private var listY=0
     /** A scroll position to put back after the next list drawing (and its later parts). */
     private var pendingY=0
 
-    override fun enter() { refreshLog=true;load() }
+    override fun enter() { load() }
     /** The calls tab tapped while calls is in front: today's list from the top, no search. */
     override fun reselect() { detail=null;query="";day=CallUi.today();listY=0;pendingY=0;shown=null;load();CallUi.scrollTo(body,0) }
     override fun back():Boolean { if(detail==null) return false;closeDetail();return true }
@@ -56,13 +54,11 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
     }
 
     private fun load() {
-        val target=day;val refresh=refreshLog;refreshLog=false
-        val app=a.applicationContext
+        val target=day
         a.lifecycleScope.launch {
             val result=runCatching { withContext(Dispatchers.IO) {
-                CallRecordStore(CallPipelineStartup.storage(a)).use { s ->
-                    // A call that just ended (a missed one too) is in the list at once, not only after the next hourly pass.
-                    if(refresh && !kr.callbrief.BuildConfig.LOCAL_PREVIEW) runCatching { s.reconcileCallLog(FirstPass.readCallLog(app,kr.callbrief.SecureSettings(app).snapshot())) }
+                // Reads only (r8-1): the call log is matched in the discovery and upload passes, not at every screen open.
+                kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(a)).let { s ->
                     s.day(target) to runCatching { s.dayLog(target) }.getOrDefault(emptyList()) }
             } }
             if(!live()||target!=day)return@launch

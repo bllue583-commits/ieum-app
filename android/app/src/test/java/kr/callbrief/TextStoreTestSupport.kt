@@ -9,6 +9,8 @@ import java.io.File
 internal object TextStoreTestSupport {
     fun reset() {
         val c=org.robolectric.RuntimeEnvironment.getApplication()
+        // The process store (r8-1) outlives a test in the same sandbox; let it go before its file is removed.
+        IeumApplication.shutdown()
         File(c.noBackupFilesDir,"protected-databases-v1").deleteRecursively()
         File(c.noBackupFilesDir,"eum-accounts").walkTopDown().filter {it.name=="protected-databases-v1"}.toList().forEach {it.deleteRecursively()}
         ShadowTextKeys.KEYS.clear();ShadowTextKeys.CREATES.set(0);ShadowTextKeys.deny=false

@@ -140,6 +140,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         fun canonCompany(name:String?):String=NameKey.canonCompany(name)
         /** Bump when the key rules or the stored data need one more pass in [migrate]. */
         const val MIGRATION_VERSION=3
+        /** Marks the schema pass done on one loaded store state ([AndroidSqlPort.needs]). */
+        private const val SCHEMA_STEP="callRecordStore.schema.v$MIGRATION_VERSION"
         /** Name as stored: trimmed, inner whitespace collapsed; null when empty. */
         fun normName(name:String?):String? = name?.trim()?.replace(Regex("\\s+")," ")?.takeIf { it.isNotEmpty() }
         /** A name with any phone-number-shaped part removed (a filename like "홍길동 010-…"): numbers stay on the phone. */
@@ -162,7 +164,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     private val migrationMerges=mutableListOf<Pair<String,String>>()
     private val port=AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql"))
     init {
-        try { port.transaction { SCHEMA.forEach { port.execute(it) }
+        // The schema check, column additions, migration and repairs run once per loaded store state (r8-1): the state stays
+        // in memory while the app holds its store (IeumApplication.store), so a later open skips this transaction.
+        if(port.needs(SCHEMA_STEP)) try { port.transaction { SCHEMA.forEach { port.execute(it) }
             fun addColumns(table:String,columns:List<Pair<String,String>>) {
                 val have=rows("PRAGMA table_info($table)").mapNotNull { it.str("name") }.toSet()
                 columns.filter { it.first !in have }.forEach { (c,t) -> port.execute("ALTER TABLE $table ADD COLUMN $c $t") }
@@ -186,7 +190,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
                 if(rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name='call_transcription_jobs'").isNotEmpty())
                     port.execute(CallTranscriptionStore.SKIP_BEFORE_START_SQL,clock(),FirstPass.FROM_MS)
             }
-            null } } catch(e:Exception) { port.close();throw e }
+            null };port.markDone(SCHEMA_STEP) } catch(e:Exception) { port.close();throw e }
         flushMigrationMerges()
     }
     /** Brings what older versions stored to the current design (review B9, B10, B20); every step is safe to repeat, and the
@@ -251,6 +255,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         }
     }
     override fun close()=port.close()
+    /** Still open and not held for review (the process store is replaced when it is not). */
+    fun usable():Boolean=port.usable()
     private fun rows(sql:String,vararg args:Any?)=port.query(sql,*args)
     private fun Map<String,Any?>.long(k:String)=(this[k] as? Number)?.toLong()
     private fun Map<String,Any?>.str(k:String)=this[k] as? String
@@ -316,6 +322,10 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     /** When the task's answer for this record was received (null: not yet, or set aside as broken). A received record is not sent again. */
     fun receivedMs(id:String):Long?=rows("SELECT result_ms FROM call_inbox_sent WHERE record_id=?",id).singleOrNull()?.long("result_ms")
     fun setReceived(id:String,ms:Long?)=port.execute("UPDATE call_inbox_sent SET result_ms=? WHERE record_id=?",ms,id)
+    /** When the oldest waiting record (TRANSCRIBED or WAITING_CONSENT) that went up and has no answer yet was sent, or null:
+     * the first-pass stall test in one query (pending JOIN call_inbox_sent) instead of two lookups per record (r8-1). */
+    fun oldestUnansweredSentMs():Long? =rows("""SELECT MIN(s.sent_ms) AS m FROM call_records c JOIN call_inbox_sent s ON s.record_id=c.record_id
+        WHERE c.state IN ('TRANSCRIBED','WAITING_CONSENT') AND s.result_ms IS NULL""").firstOrNull()?.long("m")
     /** A record went up and its answer has not come yet (what the :45 result pass waits for, v2.4). */
     fun awaitingResult():Boolean =rows("SELECT 1 FROM call_records c JOIN call_inbox_sent s ON s.record_id=c.record_id WHERE c.state='TRANSCRIBED' AND s.result_ms IS NULL LIMIT 1").isNotEmpty()
     private val withPerson="SELECT c.*,p.name AS linked_person FROM call_records c LEFT JOIN call_links l ON l.record_id=c.record_id LEFT JOIN people p ON p.id=l.person_id"

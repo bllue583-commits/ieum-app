@@ -32,7 +32,7 @@ internal class TasksScreen(a:MainActivity):AppScreen(a) {
 
     private fun load() {
         a.lifecycleScope.launch {
-            val result=withContext(Dispatchers.IO) { runCatching { CallRecordStore(CallPipelineStartup.storage(a)).use { s ->
+            val result=withContext(Dispatchers.IO) { runCatching { kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(a)).let { s ->
                 Triple(s.openItems(),runCatching { s.doneItems(System.currentTimeMillis()-7*86_400_000L) }.getOrDefault(emptyList()),
                     runCatching { s.companies().map { it.name } }.getOrDefault(emptyList())) } } }
             if(!live())return@launch

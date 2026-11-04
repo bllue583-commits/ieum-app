@@ -62,7 +62,7 @@ class NativeAutomaticDiscoveryTest {
         }
     }
     private val config=Config(10,10000,1000,25000000,2)
-    @Before fun fresh(){context=RuntimeEnvironment.getApplication();File(context.noBackupFilesDir,"protected-databases-v1").deleteRecursively();File(context.noBackupFilesDir,"local-recordings-v2").deleteRecursively();ShadowTextKeys.KEYS.clear();ShadowTextKeys.CREATES.set(0);ShadowTextKeys.deny=false;ShadowTextAtomicFile.failNext=false;keys=Keys()}
+    @Before fun fresh(){context=RuntimeEnvironment.getApplication();IeumApplication.shutdown();File(context.noBackupFilesDir,"protected-databases-v1").deleteRecursively();File(context.noBackupFilesDir,"local-recordings-v2").deleteRecursively();ShadowTextKeys.KEYS.clear();ShadowTextKeys.CREATES.set(0);ShadowTextKeys.deny=false;ShadowTextAtomicFile.failNext=false;keys=Keys()}
     @After fun done(){io.shutdown();assertTrue(io.awaitTermination(5,TimeUnit.SECONDS))}
     private fun store()=GeneralLocalStore(context,{c->
         val root=c.noBackupFilesDir.toPath().resolve("audio-vault-v2")
