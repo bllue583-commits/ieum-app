@@ -174,7 +174,7 @@ internal object FirstPass {
             "${CallLog.Calls.DATE}>=?",arrayOf(FROM_MS.toString()),"${CallLog.Calls.DATE} ASC")?.use { c ->
             while(c.moveToNext() && out.size<20_000) {
                 val number=c.getString(1).orEmpty()
-                out+=LogEntry(c.getLong(0),MessageIntake.phoneKey(number),c.getString(2)?.trim()?.takeIf { it.isNotEmpty() },c.getLong(3),c.getLong(4)*1000,c.getInt(5),
+                out+=LogEntry(c.getLong(0),kr.callbrief.core.PhoneKey.of(number),c.getString(2)?.trim()?.takeIf { it.isNotEmpty() },c.getLong(3),c.getLong(4)*1000,c.getInt(5),
                     number.isNotBlank() && excluded(number))
             }
         }

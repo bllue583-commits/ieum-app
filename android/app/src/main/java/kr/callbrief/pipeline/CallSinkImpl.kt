@@ -9,7 +9,7 @@ import java.util.concurrent.Executors
 internal class CallSinkImpl(context:Context,private val enqueue:(Context)->Unit=CallPipelineStartup::enqueueAnalysis):CallTranscriptSink {
     private val app=context.applicationContext
     override fun onTranscript(transcript:CallTranscript) {
-        CallRecordStore(CallPipelineStartup.storage(app)).use { it.insert(transcript) }
+        kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(app)).let { it.insert(transcript) }
         enqueue(app)
     }
 }
@@ -123,7 +123,7 @@ internal class CallResultsWork(context:Context,params:WorkerParameters):Coroutin
         val attempt=inputData.getInt(ATTEMPT,1)
         val runner=CallRecordAnalysisRunner(app)
         runner.runPending()
-        val waiting=runCatching { CallRecordStore(app).use { it.awaitingResult() } }.getOrDefault(false)
+        val waiting=runCatching { kr.callbrief.IeumApplication.store(app).let { it.awaitingResult() } }.getOrDefault(false)
         // Appended after this one (KEEP would see this work still running and do nothing).
         runCatching { schedule(app,if(runner.sent>0) 1 else attempt+1,ExistingWorkPolicy.APPEND_OR_REPLACE,waiting) }
         Result.success()

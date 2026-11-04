@@ -290,6 +290,14 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
             }
         })
 
+        // Contact cards (v2.8): worked out again from the store when one looks wrong (the call card reads them in v3.0).
+        body.addView(act("상대 카드 다시 만들기","rebuild_cards","다시 만드는 중이에요") { done ->
+            a.lifecycleScope.launch {
+                val n=withContext(Dispatchers.IO) { runCatching { ContactCards.rebuildAll(store()) }.getOrNull() }
+                done()
+                Toast.makeText(a,if(n!=null) "상대 카드 ${n}장을 다시 만들었어요" else "다시 만들지 못했어요",Toast.LENGTH_SHORT).show()
+            }
+        })
         // Sends the heartbeat now so whoever looks after the app sees the phone's state (design B5).
         body.addView(CallUi.divider(a))
         body.addView(act("문제 알리기","report_problem","보내는 중이에요") { done ->

@@ -15,7 +15,9 @@ internal class CallRecordAnalysisRunner(
     private val context:Context,
     private val analyzer:ClaudeCallAnalyzer=ClaudeCallAnalyzer(),
     private val settings:()->JSONObject={ SecureSettings(context).snapshot() },
-    private val clock:()->Long=System::currentTimeMillis,
+    /** The phone's clock: the runner then uses the process store ([kr.callbrief.IeumApplication.store]); a test clock gets
+     * a store of its own with that clock, closed after the pass. */
+    private val clock:()->Long=SYSTEM_CLOCK,
     /** The inbox of the scheduled Claude task; without it (a build with no token) nothing is sent. */
     private val inbox:CallInboxStore?=CallInboxConfig.store(),
     private val save:((JSONObject)->Unit)->Unit={ edit -> runCatching { SecureSettings(context).update { edit(it) } } },
@@ -44,6 +46,13 @@ internal class CallRecordAnalysisRunner(
         internal val PASS=java.util.concurrent.locks.ReentrantLock()
         /** How long a second caller waits for the running pass before giving up for now. */
         const val PASS_WAIT_MS=10*60_000L
+        internal val SYSTEM_CLOCK:()->Long={ System.currentTimeMillis() }
+    }
+    /** The process store (r9-1: opened once, never closed here), or with a test clock a store of the runner's own. */
+    private inline fun <T> withStore(block:(CallRecordStore)->T):T {
+        val shared=clock===SYSTEM_CLOCK
+        val db=if(shared) kr.callbrief.IeumApplication.store(context) else CallRecordStore(context,clock)
+        return try { block(db) } finally { if(!shared) db.close() }
     }
 
     /** One hourly pass (design: 장부의 원본, 처음 정리): the user's corrections go up, results are applied, the repository
@@ -53,10 +62,13 @@ internal class CallRecordAnalysisRunner(
     private fun runInbox(store:CallInboxStore):Boolean = try {
         val s=settings()
         val consent=s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false)
-        CallRecordStore(context,clock).use { db ->
+        withStore { db ->
           try {
             runCatching { db.reconcileCallLog(callLog()) }
-            for((id,json) in db.pendingEdits()) { store.put(CallInbox.EDITS+"/"+id+".json",json);db.editSent(id) }
+            // Each edit goes up first; those that went are then taken off in one transaction (review data #2).
+            val sentEdits=mutableListOf<String>()
+            try { for((id,json) in db.pendingEdits()) { store.put(CallInbox.EDITS+"/"+id+".json",json);sentEdits+=id } }
+            finally { if(sentEdits.isNotEmpty()) db.inTransaction { sentEdits.forEach { db.editSent(it) } } }
             // The ledger first: results then find the names the task used; a broken ledger or proposal stops nothing else.
             runCatching { takeLedger(store,db) }
             // Requests and results name a record by its key (a hash), never by its id, which may hold a phone number.
@@ -68,7 +80,7 @@ internal class CallRecordAnalysisRunner(
             val failedFiles=mutableSetOf<String>()
             // The answer is here: from now on the record is not sent again, whatever the clock says (B17).
             val recordsOf={ g:Got -> g.results!!.mapNotNull { (id,_) -> byKey[id] ?: db.record(id) } }
-            for(g in got.filter { it.results!=null }) recordsOf(g).forEach { r -> if(db.receivedMs(r.recordId)==null) db.setReceived(r.recordId,clock()) }
+            db.inTransaction { for(g in got.filter { it.results!=null }) recordsOf(g).forEach { r -> if(db.receivedMs(r.recordId)==null) db.setReceived(r.recordId,clock()) } }
             // In call-time order, so the ledger and the check items follow the order things happened.
             val items=got.filter { it.results!=null }.flatMap { g -> g.results!!.map { (id,a) -> Triple(g.name,(byKey[id] ?: db.record(id)),a) } }
                 .filter { it.second!=null && it.second!!.state!=CallRecordStore.ANALYZED }.sortedBy { it.second!!.dayMs }
@@ -90,7 +102,7 @@ internal class CallRecordAnalysisRunner(
                 if(g.name !in failedFiles) { store.delete(path,g.sha);continue }
                 // Kept for the next run; after three failed runs it is set aside.
                 val tries=JSONObject(settings().optString(PipelineSettingsKeys.RESULT_FAILS,"{}")).optInt(g.name,0)+1
-                if(tries>=3) { store.put(CallInbox.BAD+"/"+g.name,g.text);store.delete(path,g.sha);recordsOf(g).forEach { r -> db.setReceived(r.recordId,null) } } // set aside: may be sent again
+                if(tries>=3) { store.put(CallInbox.BAD+"/"+g.name,g.text);store.delete(path,g.sha);db.inTransaction { recordsOf(g).forEach { r -> db.setReceived(r.recordId,null) } } } // set aside: may be sent again
                 save { it.put(PipelineSettingsKeys.RESULT_FAILS,JSONObject(it.optString(PipelineSettingsKeys.RESULT_FAILS,"{}")).put(g.name,tries).toString()) }
             }
             runCatching { takeTidy(store,db,consent) }
@@ -109,8 +121,10 @@ internal class CallRecordAnalysisRunner(
             fun request(r:CallRecord,old:Boolean)=db.request(r,old).copy(user=user)
             // Live = the last 7 days (r7-1): one file each, whenever the first pass started; older ones wait for its batches.
             val (old,live)=db.pending().partition { FirstPass.isOld(it.dayMs,s,clock()) }
-            for(record in live.filter(::due)) {
-                db.ledgerIdFor(record)
+            for(record in live) {
+                // One transaction for what the phone decides about the record (state, ledger id), sealed once (review data #2);
+                // a record whose state does not change writes nothing. Sending marks it in one more, after the upload.
+                if(!db.inTransaction { due(record).also { go -> if(go) db.ledgerIdFor(record) } }) continue
                 // atMs: the task works in call-time order. A late old recording keeps the old-record marker.
                 store.put(CallInbox.INBOX+"/"+CallInbox.fileName(record.recordId),CallInbox.job(CallInbox.recordKey(record.recordId),request(record,FirstPass.stale(record.dayMs,clock())),clock(),record.dayMs))
                 db.markSent(record.recordId,clock());sent++
@@ -126,7 +140,7 @@ internal class CallRecordAnalysisRunner(
                 val free=FirstPass.BATCHES_IN_FLIGHT-(inFlight+FirstPass.BATCH-1)/FirstPass.BATCH
                 var slots=batchSlots(s,waitingSince,free)
                 val backoff=slots<=0 && free>0
-                val ready=old.filter(::due).sortedBy { it.dayMs }
+                val ready=db.inTransaction { old.filter(::due) }.sortedBy { it.dayMs }
                 val sendable=ready.filter { bound==null || it.dayMs<bound }
                 // A batch that is not full goes too once its oldest record has waited 6 hours (r7-1): the first pass must
                 // not wait for 15 in a row while the bound moves slowly.
@@ -134,9 +148,9 @@ internal class CallRecordAnalysisRunner(
                 var sentBatches=0
                 for(chunk in sendable.chunked(FirstPass.BATCH)) {
                     if(slots<=0 || (chunk.size<FirstPass.BATCH && bound!=null && !overdue)) break
-                    val items=chunk.map { r -> db.ledgerIdFor(r);CallInbox.recordKey(r.recordId) to request(r,true) }
+                    val items=db.inTransaction { chunk.map { r -> db.ledgerIdFor(r);CallInbox.recordKey(r.recordId) to request(r,true) } }
                     store.put(CallInbox.INBOX+"/"+CallInbox.batchName(chunk.first().dayMs,items.map { it.first }),CallInbox.batch(items,clock(),chunk.map { it.dayMs }))
-                    chunk.forEach { db.markSent(it.recordId,clock()) };sent++;sentBatches++
+                    db.inTransaction { chunk.forEach { db.markSent(it.recordId,clock()) } };sent++;sentBatches++
                     val today=kstDay()
                     save { it.put(PipelineSettingsKeys.FIRST_PASS_BATCHES_TODAY,(if(it.optString(PipelineSettingsKeys.FIRST_PASS_BATCH_DAY)==today) it.optInt(PipelineSettingsKeys.FIRST_PASS_BATCHES_TODAY,0) else 0)+1)
                         .put(PipelineSettingsKeys.FIRST_PASS_BATCH_DAY,today) }
@@ -295,7 +309,9 @@ internal fun tidyHash(state:JSONObject):String {
 internal class CallAnalysisWork(context:Context,params:WorkerParameters):CoroutineWorker(context,params) {
     override suspend fun doWork():Result=withContext(Dispatchers.IO) {
         val storage=CallPipelineStartup.storage(applicationContext)
-        if(CallRecordAnalysisRunner(storage).runPending()) Result.success() else Result.retry()
+        val ok=CallRecordAnalysisRunner(storage).runPending()
+        ContactCards.warm(storage) // r9-2: the hour's touched cards worked out, then all read into memory
+        if(ok) Result.success() else Result.retry()
     }
 }
 

@@ -68,11 +68,14 @@ class CheckCompanySettingsTest:ProtectedTextHostTestBase() {
         val at=listOf("task_title","task_meta","task_done").map { order.indexOf(it) }
         assertTrue(order.toString(),at.all { it>=0 } && at==at.sorted())
         if(call.company!=null) assertTrue(order.indexOf("task_company")<order.indexOf("task_title"))
-        val link=views(row).single { it.tag=="task_who_link" } as TextView
+        val link=views(row).single { it.tag=="task_who_link" || it.tag=="task_who_person" } as TextView
         assertTrue(link.text.toString(),link.text.toString().startsWith(CallUi.who(call.counterpart!!)))
         assertTrue(views(row).filterIsInstance<TextView>().any { it.tag=="task_who" && it.text.toString().endsWith("요청") })
-        // The name opens that call (one Activity: the calls screen with its detail).
+        // v2.8: the name opens the person of that call when one is known (else the call); the row opens the call.
+        val person=link.tag=="task_who_person"
         link.performClick();shadowOf(Looper.getMainLooper()).idle()
+        if(person) { assertEquals(Screen.PERSON,a.screen);a.back();shadowOf(Looper.getMainLooper()).idle();assertEquals(Screen.TASKS,a.screen)
+            settle { tag(a,"task_${call.id}")!=null };pause(700);tag(a,"task_${call.id}").performClick();shadowOf(Looper.getMainLooper()).idle() }
         assertEquals(Screen.CALLS,a.screen);assertEquals(call.recordId,a.detail)
     }
 

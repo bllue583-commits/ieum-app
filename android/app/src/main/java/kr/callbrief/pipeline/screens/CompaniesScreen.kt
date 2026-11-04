@@ -9,6 +9,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** The name sheet shared by a person (the person page) and a company: the name to fix, [저장] that will not close on an empty name. */
+internal object NameSheet {
+    fun show(a:MainActivity,title:String,value:String,tag:String,empty:String,save:(String)->Unit) {
+        val input=CallUi.sheetInput(a,value,tag=tag)
+        CallUi.sheetDialog(a,title,message="바른 이름을 적고 [저장]을 누르세요.",body=input,secondary="취소",primary="저장",
+            validate={ if(input.text.isNullOrBlank()) empty else null },onPrimary={ save(input.text.toString()) })
+    }
+}
+
 /** "업체별 보기": the companies the phone has learned from calls, the most recently called first.
  * Tap one to see its memo, people, open tasks and recent calls. Misheard people names are fixed here. */
 internal class CompaniesScreen(a:MainActivity):AppScreen(a) {
@@ -115,39 +124,11 @@ internal class CompaniesScreen(a:MainActivity):AppScreen(a) {
         if(people.isNotEmpty()) { listBox.addView(CallUi.section(a,"업체 없는 사람 (우리 직원 등)"));listBox.addView(CallUi.list(a,people.map(::personRow))) }
     }
 
-    /** One person: round badge, name, role, a quiet [이름 고치기] for misheard names, and a phone button when the number is known. */
-    private fun personRow(p:PersonRow)=LinearLayout(a).apply {
-        tag="person_${p.id}";orientation=LinearLayout.HORIZONTAL;gravity=android.view.Gravity.CENTER_VERTICAL
-        setPadding(CallUi.dp(a,16),CallUi.dp(a,10),CallUi.dp(a,16),CallUi.dp(a,6))
-        addView(CallUi.avatar(a,p.name))
-        val words=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
-        words.addView(CallUi.text(a,p.name,CallUi.BODY,true).apply { setPadding(0,0,0,0) })
-        listOfNotNull(p.role,"우리 직원".takeIf { p.isStaff }).joinToString(", ").takeIf { it.isNotEmpty() }
-            ?.let { words.addView(CallUi.caption(a,it).apply { setPadding(0,0,0,0) }) }
-        words.addView(CallUi.caption(a,"이름 고치기",CallUi.MUTED,true).apply {
-            tag="person_rename_${p.id}";contentDescription="${p.name} 이름 고치기";isClickable=true;isFocusable=true;background=CallUi.rowRipple()
-            minHeight=CallUi.dp(a,44);gravity=android.view.Gravity.CENTER_VERTICAL;CallUi.onTap(this) { rename(p) }
-        })
-        addView(words,LinearLayout.LayoutParams(0,-2,1f))
-        CallUi.dialButton(a,numbers[p.id],p.name)?.let { addView(it) }
-    }
+    /** One person: round badge, name, role, and a phone button when the number is known. The row opens the person page (v2.8),
+     * where the name is fixed ([이름 고치기] moved there). */
+    private fun personRow(p:PersonRow)=PersonLinks.row(a,p,listOfNotNull(p.role,"우리 직원".takeIf { p.isStaff }).joinToString(", "),CallUi.dialButton(a,numbers[p.id],p.name))
 
-    /** The name sheet shared by a person and a company: the name to fix, [저장] that will not close on an empty name. */
-    private fun nameSheet(title:String,value:String,tag:String,empty:String,save:(String)->Unit) {
-        val input=CallUi.sheetInput(a,value,tag=tag)
-        CallUi.sheetDialog(a,title,message="바른 이름을 적고 [저장]을 누르세요.",body=input,secondary="취소",primary="저장",
-            validate={ if(input.text.isNullOrBlank()) empty else null },onPrimary={ save(input.text.toString()) })
-    }
-
-    /** Speech recognition mishears names; the fix shows everywhere and the old spelling keeps finding this person. */
-    private fun rename(p:PersonRow)=nameSheet("이름 고치기",p.name,"person_name_input","이름을 비워둘 수 없어요") { name ->
-        a.lifecycleScope.launch {
-            val ok=runCatching { withContext(Dispatchers.IO) { kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(a)).renamePerson(p.id,name) } }.getOrDefault(false)
-            if(!live())return@launch
-            Toast.makeText(a,if(ok) "이름을 고쳤어요" else "이름을 고치지 못했어요",Toast.LENGTH_SHORT).show()
-            load()
-        }
-    }
+    private fun nameSheet(title:String,value:String,tag:String,empty:String,save:(String)->Unit)=NameSheet.show(a,title,value,tag,empty,save)
 
     /** "업체 이름 고치기" (r8-5): the same sheet; the old spelling stays as another name of the company (company_aliases), so later
      * calls that still say it land here. A name that is another company's makes the two one company. */
@@ -193,6 +174,6 @@ internal class CompaniesScreen(a:MainActivity):AppScreen(a) {
             // The whole row opens that call.
             CallUi.memoRow(a,CallUi.dayWord(CallRecordStore.kstDay(call.dayMs)),call.person?.let { "$it 님과 통화" } ?: "통화",call.summary?.let(CallUi::firstSentence) ?: "아직 정리 중이에요",call.summary==null,avatarName=call.person) {
                 a.openCall(call.recordId,call.dayMs)
-            }.apply { tag="company_call_${call.recordId}" } }))
+            }.let { PersonLinks.onWho(a,it,call.personId,call.person) }.apply { tag="company_call_${call.recordId}" } }))
     }
 }

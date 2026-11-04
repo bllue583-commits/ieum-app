@@ -71,20 +71,28 @@ class ProtectedStoreAuditRegressionTest:ProtectedTextHostTestBase() {
             evidence("P03","error" to error,"immutable" to (before==after));assertEquals("IMMUTABLE_HISTORY",error);assertEquals(before,after)
         }
     }
-    private fun recoveryCase(id:String,prepare:(File)->Unit) {
-        seedNotes();val main=ProtectedDatabase.file(context,name);prepare(main)
-        val before=witnesses();val creates=ShadowTextKeys.CREATES.get();val error=code {notes().use{}}
-        val after=witnesses();evidence(id,"error" to error,"before" to before,"after" to after,"artifacts_preserved" to (before==after))
-        assertEquals("TEXT_STORE_RECOVERY_REVIEW_REQUIRED",error);assertEquals(before,after);assertEquals(creates,ShadowTextKeys.CREATES.get())
+    /** v2.8 r9-1 (review data #3): left-over files are decided at open, with the key in hand, instead of holding the store. */
+    private fun recoveryCase(id:String,expected:String,prepare:(File)->Unit) {
+        seedNotes();val main=ProtectedDatabase.file(context,name);prepare(main);ProtectedDatabase.takeRecovery()
+        val before=witnesses();val creates=ShadowTextKeys.CREATES.get()
+        val note=notes().use { it.query("SELECT note FROM notes").single()["note"] }
+        val after=witnesses();evidence(id,"recovery" to expected,"before" to before,"after" to after)
+        assertEquals("PUBLIC_SYNTHETIC_MANUAL_NOTE",note);assertEquals(expected,ProtectedDatabase.takeRecovery())
+        assertEquals("ABSENT",after[".bak"]);assertEquals("ABSENT",after[".new"]);assertEquals(creates,ShadowTextKeys.CREATES.get())
     }
-    @Test fun P04ValidBackupCorruptMainIsHeldBeforeNormalization()=io {
-        recoveryCase("P04") {main->File(main.path+".bak").writeBytes(main.readBytes());main.writeBytes(byteArrayOf(1,4,9))}
+    @Test fun P04ValidBackupReplacesACorruptMain()=io {
+        recoveryCase("P04","PROMOTED_BAK") {main->File(main.path+".bak").writeBytes(main.readBytes());main.writeBytes(byteArrayOf(1,4,9))}
     }
-    @Test fun P05PendingNewArtifactIsNotDeletedDuringRead()=io {
-        recoveryCase("P05") {main->File(main.path+".new").writeText("PUBLIC_SYNTHETIC_UNVERIFIED_CIPHERTEXT_STAGE")}
+    @Test fun P05UnverifiedNewArtifactIsDropped()=io {
+        recoveryCase("P05","DROPPED_NEW") {main->File(main.path+".new").writeText("PUBLIC_SYNTHETIC_UNVERIFIED_CIPHERTEXT_STAGE")}
     }
-    @Test fun P06BackupOnlyIsNotPromotedOrDeletedDuringRead()=io {
-        recoveryCase("P06") {main->File(main.path+".bak").writeBytes(main.readBytes());assertTrue(main.delete())}
+    @Test fun P06BackupOnlyIsPromoted()=io {
+        recoveryCase("P06","PROMOTED_BAK") {main->File(main.path+".bak").writeBytes(main.readBytes());assertTrue(main.delete())}
+    }
+    @Test fun P06bUnusableBackupAndMainStayHeld()=io {
+        seedNotes();val main=ProtectedDatabase.file(context,name);main.writeBytes(byteArrayOf(1,4,9));File(main.path+".bak").writeText("PUBLIC_SYNTHETIC_BAD_BACKUP")
+        val before=witnesses();val error=code {notes().use{}}
+        assertEquals("TEXT_STORE_RECOVERY_REVIEW_REQUIRED",error);assertEquals(before,witnesses());assertEquals("FAILED",ProtectedDatabase.takeRecovery())
     }
     @Test fun P07MissingKeyPreservesMainBackupAndPendingStage()=io {
         seedNotes();val main=ProtectedDatabase.file(context,name);File(main.path+".bak").writeBytes(main.readBytes());File(main.path+".new").writeText("PUBLIC_SYNTHETIC_STAGE")

@@ -142,12 +142,14 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
                 val s=kr.callbrief.IeumApplication.store(storage)
                 val from=target.atStartOfDay(CallRecordStore.KST).toInstant().toEpochMilli()
                 val to=target.plusDays(1).atStartOfDay(CallRecordStore.KST).toInstant().toEpochMilli()
-                Read(s.day(target),runCatching { s.dayLog(target) }.getOrDefault(emptyList()),
+                val dayCalls=s.day(target)
+                Read(dayCalls,runCatching { s.dayLog(target) }.getOrDefault(emptyList()),
                     runCatching { s.transcribingStarts(from-NEAR_MS,to+NEAR_MS) }.getOrDefault(emptyList()),
-                    runCatching { SecureSettings(storage).snapshot().optString("treeUri").isNotBlank() }.getOrDefault(false))
+                    runCatching { SecureSettings(storage).snapshot().optString("treeUri").isNotBlank() }.getOrDefault(false),
+                    runCatching { s.personIdsOf(dayCalls.map { it.recordId }) }.getOrDefault(emptyMap()))
             } }
             if(!live()||target!=day)return@launch
-            result.onSuccess { calls=it.calls;logs=it.logs;jobStarts=it.jobs;folder=it.folder;reading=false;pool=null;render() }
+            result.onSuccess { calls=it.calls;logs=it.logs;jobStarts=it.jobs;folder=it.folder;people=people+it.people;reading=false;pool=null;render() }
             result.onFailure {
                 reading=false
                 body.removeAllViews();CallUi.band(body,"${CallUi.dayWord(day)}의 통화")
@@ -155,7 +157,11 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
             }
         }
     }
-    private class Read(val calls:List<CallRecord>,val logs:List<LoggedCall>,val jobs:List<Long>,val folder:Boolean)
+    private class Read(val calls:List<CallRecord>,val logs:List<LoggedCall>,val jobs:List<Long>,val folder:Boolean,val people:Map<String,String>)
+    /** The person each shown call is linked to, by record id: the badge and the name open the person page (v2.8). */
+    private var people:Map<String,String> =emptyMap()
+    /** Named people and their company, read with the search pool: a search shows matching people above the calls (v2.8). */
+    private var peoplePool:List<Pair<PersonRow,String?>> =emptyList()
     /** ‹ ›: the new date and arrows at once with "불러오는 중이에요" in place of the list, then the read (review #16). */
     private fun go(d:LocalDate) {
         if(d>CallUi.today()) return
@@ -222,7 +228,7 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
         // One call: who and when, the first sentence of the summary (or its state). Tap for details; a search stays as typed.
         CallUi.memoRow(a,CallUi.whenLabel(c),c.displayName,c.summary?.let(CallUi::firstSentence) ?: stateWords(c),c.summary==null,
             avatarName=c.linkedPerson ?: c.analysis?.counterpartName) { openDetail(c.recordId) }
-            .apply { tag="call_${c.recordId}" }
+            .apply { tag="call_${c.recordId}" }.also { PersonLinks.onWho(a,it,people[c.recordId],c.linkedPerson) }
 
     /** The calls below the search line: the day with its switcher, or, once something is typed, the matches among all calls. */
     private fun fill() {
@@ -263,6 +269,10 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
         (calls.map { c -> (c.startedMs ?: c.createdMs) to { row(c) } }+logs.map { e -> e.startMs to { logRow(e,now) } }).sortedByDescending { it.first }
 
     internal fun matches(c:CallRecord,q:String)=searchable(c).matches(queryWords(q))
+    /** At most five people whose name, role or company holds every typed word. */
+    private fun peopleMatching(words:List<String>)=peoplePool.filter { (p,co) ->
+        val hay=listOfNotNull(p.name,p.role,co).joinToString(" ").lowercase();val packed=hay.filterNot { it.isWhitespace() }
+        words.all { hay.contains(it) || packed.contains(it) } }.take(5)
 
     private fun fillSearch() {
         ++fills
@@ -273,18 +283,27 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
                 a.lifecycleScope.launch {
                     val found=withContext(Dispatchers.IO) { runCatching { kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(a)).let { s ->
                         val from=CallRecordStore.kstDay(FirstPass.FROM_MS);val to=CallUi.today()
-                        generateSequence(to) { it.minusDays(1) }.takeWhile { !it.isBefore(from) }.flatMap { s.day(it) }
-                            .map(::searchable).toList() } }.getOrNull() }
+                        val all=generateSequence(to) { it.minusDays(1) }.takeWhile { !it.isBefore(from) }.flatMap { s.day(it) }
+                            .map(::searchable).toList()
+                        Triple(all,runCatching { s.personIdsOf(all.filter { it.record.linkedPerson!=null }.map { it.record.recordId }) }.getOrDefault(emptyMap()),
+                            runCatching { s.peopleForSearch() }.getOrDefault(emptyList())) } }.getOrNull() }
                     poolLoading=false
                     if(!live())return@launch
                     if(found==null) { if(query.isNotBlank()&&detail==null) { listBox.removeAllViews()
                         CallUi.retryCard(listBox,"통화를 찾지 못했어요. 잠시 후 다시 해 주세요.") { fill() } };return@launch }
-                    pool=found;if(query.isNotBlank()&&detail==null) fill()
+                    pool=found.first;people=people+found.second;peoplePool=found.third;if(query.isNotBlank()&&detail==null) fill()
                 } }
             return
         }
         val words=queryWords(query)
         val hits=all.filter { it.matches(words) }.map { it.record }.sortedByDescending { it.startedMs ?: it.createdMs }
+        val who=peopleMatching(words)
+        if(who.isNotEmpty()) {
+            listBox.addView(CallUi.section(a,"사람").apply { tag="calls_search_people" })
+            listBox.addView(CallUi.list(a,who.map { (p,co) -> PersonLinks.row(a,p,listOfNotNull(co,p.role,"우리 직원".takeIf { p.isStaff }).joinToString(", ")) }).apply { setPadding(0,0,0,0) })
+            if(hits.isNotEmpty()) listBox.addView(CallUi.section(a,"통화"))
+        }
+        if(hits.isEmpty() && who.isNotEmpty()) return
         if(hits.isEmpty()) listBox.addView(CallUi.card(a).apply { addView(CallUi.text(a,"찾는 통화가 없어요.",CallUi.BODY,color=CallUi.SUBTLE)).also { tag="calls_search_none" } })
         else listBox.addView(CallUi.list(a,hits.take(60).map { row(it) }).apply { setPadding(0,0,0,0) })
     }
@@ -292,6 +311,14 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
     private fun renderDetail(c:CallRecord) {
         CallUi.band(body,c.displayName,"${CallUi.date(CallRecordStore.kstDay(c.dayMs))} ${CallUi.time(c.startedMs)}, "+
             (if(c.kind=="통화") "${CallUi.duration(c.durationMs)} 통화" else c.kind),back={ closeDetail() },trailing=CallUi.dialButton(a,c.counterpartKey,c.displayName))
+        // The name in the title, and a link under it, open the person page (v2.8).
+        people[c.recordId]?.let { pid ->
+            val name=c.linkedPerson ?: c.analysis?.counterpartName ?: "이 사람"
+            (body.parent as? LinearLayout)?.findViewWithTag<TextView>("page_title")?.apply {
+                isClickable=true;isFocusable=true;foreground=CallUi.rowRipple();contentDescription="$name 님 보기";CallUi.onTap(this) { a.openPerson(pid) } }
+            body.addView(CallUi.linkButton(a,"$name 님 보기 ›") { a.openPerson(pid) }.apply { tag="call_person_link" },
+                LinearLayout.LayoutParams(-2,-2).apply { marginStart=-CallUi.dp(a,6) })
+        }
         // The way on to the company (its people, memo and other calls).
         c.analysis?.counterpartCompany?.takeIf { it.isNotBlank() }?.let { co ->
             body.addView(CallUi.linkButton(a,"$co 보기 ›") { a.openCompany(co) }
