@@ -30,7 +30,7 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 70
     env:
       INBOX: bllue583-commits/ieum-inbox
     steps:
@@ -50,8 +50,10 @@ jobs:
         if: steps.need.outputs.run == 'true'
         with:
           packages: 'platforms;android-36 build-tools;35.0.0 ndk;28.2.13676358 cmake;3.22.1'
-      - uses: actions/cache@v4
+      # Restore only (device-test and release-apk save it): gradle-user is deleted below to make room for the emulator.
+      - name: Restore Gradle cache
         if: steps.need.outputs.run == 'true'
+        uses: actions/cache/restore@v4
         with:
           path: |
             gradle-user/caches
@@ -104,14 +106,35 @@ jobs:
           prev=$(bash tools/rotate_signing_key.sh fp "$RUNNER_TEMP/previous.apk")
           bash tools/rotate_signing_key.sh check "$RUNNER_TEMP/rotate" "$RUNNER_TEMP/new.apk" "$prev"
           rm -f "$RUNNER_TEMP/rotate/"*.p12
+      # The emulator needs about 7.4 GB free for its userdata partition; after the SDK, NDK and the Gradle build the
+      # runner had 4.3 GB and the emulator stopped at once ("Not enough space to create userdata partition"), which
+      # showed only as "Timeout waiting for emulator to boot". Same clean-up as device-test.
+      - name: Free runner disk
+        if: steps.need.outputs.run == 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/share/swift /usr/local/share/boost /opt/hostedtoolcache/CodeQL /usr/local/lib/node_modules
+          rm -rf android/app/build/intermediates android/app/build/tmp android/app/build/android-whisper gradle-user || true
+          df -h / | tail -1
       - name: Enable KVM
         if: steps.need.outputs.run == 'true'
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
-      # release-apk checks this step by name: keep the name.
-      - name: Install, update, start
+          ls -l /dev/kvm && [ -r /dev/kvm ] && [ -w /dev/kvm ] || { echo "::error title=kvm::/dev/kvm not usable: the emulator would run without acceleration"; exit 1; }
+      # Same AVD and snapshot as device-test (same cache key, so a snapshot made by either is reused).
+      - name: Restore AVD snapshot
+        id: avd
         if: steps.need.outputs.run == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-34-google_apis-x86_64-c4-r4096-d4G-v1
+      - name: Create AVD snapshot (cache miss only)
+        id: avdmake
+        if: steps.need.outputs.run == 'true' && steps.avd.outputs.cache-hit != 'true'
+        continue-on-error: true # a boot failure here is retried by the attempts below
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -119,10 +142,77 @@ jobs:
           arch: x86_64
           cores: 4
           ram-size: 4096M
-          disk-size: 3G
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          disk-size: 4G
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: false
+          script: echo "AVD snapshot made"
+      - name: Save AVD snapshot
+        if: steps.need.outputs.run == 'true' && steps.avd.outputs.cache-hit != 'true' && steps.avdmake.outcome == 'success'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: ${{ steps.avd.outputs.cache-primary-key }}
+      # The script only runs once the emulator has booted, so smoke-results/booted tells an infrastructure failure
+      # (the emulator never came up: retried once) from an app failure (install, update or start failed: never retried).
+      - name: Emulator attempt 1
+        id: try1
+        if: steps.need.outputs.run == 'true'
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          cores: 4
+          ram-size: 4096M
+          disk-size: 4G
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: bash tools/update_smoke.sh ${{ runner.temp }}/previous.apk ${{ runner.temp }}/new.apk smoke-results
+          script: mkdir -p smoke-results && echo booted > smoke-results/booted && bash tools/update_smoke.sh ${{ runner.temp }}/previous.apk ${{ runner.temp }}/new.apk smoke-results
+      - name: Check whether the emulator booted
+        id: boot1
+        if: steps.need.outputs.run == 'true'
+        run: |
+          if [ -f smoke-results/booted ]; then echo "booted=true" >> "$GITHUB_OUTPUT"
+          else echo "booted=false" >> "$GITHUB_OUTPUT"; echo "::warning title=smoke::emulator did not boot (attempt 1), retrying once"; fi
+      - name: Emulator attempt 2 (emulator did not boot)
+        id: try2
+        if: steps.need.outputs.run == 'true' && steps.boot1.outputs.booted == 'false'
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          cores: 4
+          ram-size: 4096M
+          disk-size: 4G
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: mkdir -p smoke-results && echo booted > smoke-results/booted && bash tools/update_smoke.sh ${{ runner.temp }}/previous.apk ${{ runner.temp }}/new.apk smoke-results
+      # release-apk reads these two step names: keep them.
+      #   "Emulator did not boot (infra)" failed  -> the emulator never came up in two attempts: release-apk only warns.
+      #   "Install, update, start" success        -> the app installed over the previous release and started.
+      #   "Install, update, start" failed         -> the app failed to install, update or start: release-apk stops.
+      - name: Emulator did not boot (infra)
+        if: steps.need.outputs.run == 'true' && !(hashFiles('smoke-results/booted') != '')
+        run: |
+          echo "::error title=smoke::the emulator did not boot in two attempts (runner problem, not the app)"; exit 1
+      - name: Install, update, start
+        if: steps.need.outputs.run == 'true' && hashFiles('smoke-results/booted') != ''
+        env:
+          OUT1: ${{ steps.try1.outcome }}
+          OUT2: ${{ steps.try2.outcome }}
+        run: |
+          r="$OUT1"; [ "$OUT2" = "skipped" ] || [ -z "$OUT2" ] || r="$OUT2"
+          echo "emulator test: $r"; ls smoke-results
+          [ "$r" = "success" ] || { echo "::error title=smoke::the app failed to install over the previous release, update or start (see the emulator attempt log)"; exit 1; }
       - uses: actions/upload-artifact@v4
         if: always() && steps.need.outputs.run == 'true'
         with:
