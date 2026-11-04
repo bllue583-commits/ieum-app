@@ -2,6 +2,7 @@
 
 > 다음 세션은 이 파일부터 읽고 "4-3. v2.0"과 "6. 다음 할 일"부터 진행하세요. 설계도(Claude Docs)가 기준이며, 모든 변경은 설계도를 먼저 고친 뒤 개발합니다(11/4 사용자: "모든 과정에서 설계도를 철저히 반영").
 > 앱의 목적·기능·UX 설계 상세는 [PRODUCT.md](PRODUCT.md)에 있습니다.
+> **11/5 새벽 (v2.2~v2.5 마무리):** "4-4"에 v2.4 배포, v2.5 완성(배포는 GitHub Actions 결제 차단으로 대기), 예약 작업 세 개, 워치독 설치를 적었습니다. 6절 0번(v2.5 배포)부터 하세요.
 > **11/5 (Fable 세션, v2.6~v3.0 설계):** v2.5 이후의 개발 지시는 [DESIGN_V3.md](DESIGN_V3.md)입니다(버전마다 큰 변화 하나: v2.6 처음 정리 관문·무인 설치·정확도, v2.7 Activity 하나와 즉시 반응, v2.8 상대 카드와 사람 화면, v2.9 통화 직후 정리, v3.0 통화 중 이음 카드). 설계도(Claude Docs)의 다른 절과 다르면 이 파일이 우선합니다. 현재 앱 검증 원문은 `docs/reviews/20261105_ui.md`, `20261105_pipeline.md`, `20261105_data.md`입니다. 진행 방식은 DESIGN_V3.md 2절(기기 시험은 v2.7과 v3.0에서만 기다림, 나머지는 ci 통과 후 배포).
 > **11/4 낮 (채팅 세션, 설계도 개정):** 설계도에 "3회차 상세 설계 (11/4 낮, 종합 검토 반영)" 절이 추가됐습니다("남은 일" 바로 앞). 다른 절과 다르면 그 절이 우선하며, 사용자 결정 대기였던 항목(토큰 위치, 개인 문자, 낮 시간 자막, 새벽 Opus 빈도, 18sp 규칙, Activity 구조, promises 삭제)은 그 절의 "결정 사항" 표로 모두 확정됐습니다(사용자: "편리함 중점으로 정하라"). 묶음 r3-1~r3-9의 상세 지시와 묶음별 "확인 기준"이 거기 있으니, 3회차 통합 브랜치(`feature/r3-integrate`)를 합치기 전에 그 절과 대조하고, 사용자가 할 일 두 가지(비밀 `IEUM_SIGNING_SEED`에 현재 토큰 값 복사, "병합 후 브랜치 자동 삭제" 켜기)는 완료 보고에 적어 주세요. 종합 검토 원문은 [REVIEW_20261104_B.md](REVIEW_20261104_B.md)입니다.
 
@@ -42,7 +43,7 @@
 |---|---|
 | 앱 저장소 | `github.com/bllue583-commits/ieum-app` (비공개), 작업 브랜치 `feature/lean-calls` |
 | 우편함 저장소 | `github.com/bllue583-commits/ieum-inbox` (비공개) — `inbox/`, `results/`, `app/version.json`, 릴리스 APK |
-| 예약 작업(루틴) | ① `trig_01F9MoxFQsQrBHKsx1uhQNtd` "이음 통화 분석 (매시간)", `CRON_TZ=Asia/Seoul 0 7-23 * * *`, Sonnet 5.5 ② `trig_012D6jrChQcsxgDG5GEhVgHR` "이음 새벽 정리 (매일)", `CRON_TZ=Asia/Seoul 0 5 * * *`(11/4 생성, 첫 실행 11/4 05:07), Sonnet 5.5. 둘 다 소스 ieum-app + ieum-inbox. 루틴 추가·수정은 사용자 승인됨(11/4), 바꿀 때마다 이름, 실행 시각, 링크를 사용자에게 알리고 이 표와 설계도 "새벽 정리" 절의 표를 고칠 것 |
+| 예약 작업(루틴) | 세 개(매시간 분석 `trig_01WhkNFfBvGYvgaraXKuwL5K` 매시 30분 Sonnet 5.5, 새벽 정리 `trig_01BJ7psN5c92FCshDpqF6maz` 05:16 Opus 5.5, 통화 목록 검증 `trig_01KyuDNZWkmrQpJj8e8cr661` 09:00 Opus 5.5), 소스 ieum-inbox. 상세와 기억 파일은 "4-4"의 표와 OPERATIONS.md 2절. 옛 루틴 셋은 지움. 루틴 추가·수정은 사용자 승인됨(11/4), 바꿀 때마다 이름, 실행 시각, 링크를 사용자에게 알리고 이 표와 OPERATIONS.md를 고칠 것 |
 | 안드로이드 코드 | `android/app/src/main/java/kr/callbrief/` (패키지 `kr.callbrief`), 파이프라인은 `pipeline/` |
 | 장부(DB) | `pipeline/CallRecordStore.kt` — `companies`, `people`, `person_aliases`, `call_links`, `task_companies`, `site_memo` |
 | 분석 요청/결과 | `pipeline/ClaudeCallAnalyzer.kt` (요청 구성, 결과 검증·필터) |
@@ -136,6 +137,36 @@ python run_gradle.py --log local-$(date +%H%M%S).log :app:compileDebugKotlin
 - 워치독 원본은 `tools/inbox/watchdog.yml`·`watchdog.py`(ieum-inbox의 `.github/workflows/`, `tools/`로 복사해야 동작). 폰 하트비트가 올라오기 시작한 뒤 설치.
 - 수동 시험만 있는 것: `update-smoke.yml`(직전 APK 위 덮어 설치). 실기기 미확인: 모델 핸들 유지, 통화기록 URI 트리거, 무인 설치, 알림 단색 아이콘.
 
+## 4-4. v2.2~v2.5 (11/4 오후~밤, 클라우드 세션, 기준 문서 설계도 "v2.2~v2.5 완료 목록")
+- 진행: 설계도(rev 104)와 v2.3 통합 브랜치를 Opus로 대조(차이 51건, 설계도 고침 59곳) → v2.4·v2.5에 모두 구현하거나 설계도에서 이유와 함께 뺌(사용자 11/4 "v2.4~v2.5엔 모두 구현"). 작업자는 Opus 중간, 묶음마다 `feature/r6-<이름>` 브랜치와 `/home/claude/wt-r6-*` 작업 폴더, 공통 지시 `/home/claude/r6-common.md`.
+- 배포 기록:
+
+| 버전 | 빌드 | 날짜 | 사용자에게 보이는 변경 |
+|---|---|---|---|
+| v2.5 | 배포 대기 (`feature/r6-v25` 81f9bd0) | — | 새 버전 받는 진행률(설정 화면 막대와 %), 30분 넘는 긴 통화도 멈추지 않고 자막, 첫 정리 쉬는 중 안내, 금고 정리 |
+| v2.4 | 1033 | 11/4 23:30 | 부재중·거절·녹음 없음·개인 통화까지 모든 통화가 목록에, 자막 21% 빠름(armv8.2 dotprod), 문제 생기면 폰 알림, 저녁 보고에 방금 통화 |
+| v2.3 | (따로 배포 안 함) | — | v2.4에 포함: 하단 시트 확인 창, 자가 진단 알림 |
+| v2.2 | 1031 | 11/4 저녁 | 배터리 덜 씀, 업무 통화가 개인으로 잘못 빠지는 일 줄임 |
+
+- 주요 변경(파일): 통화기록 전부 저장·표시(`CallRecordStore.call_log`, `TodayCallsActivity`, 개인 판정은 저장을 막지 않음), 폰 하트비트에 통화기록 대조 블록과 `status/calllog.txt`(이름·번호 포함, 아내 동의, 비공개 ieum-inbox에만, `CallLogReport.kt`), 개인 번호는 2회 연속 판정일 때만 기억(`personal_streaks`), 열린 할 일에 owner·person·quote 40자(요청 v5, promptVersion 5, 메모 3키는 결과에서 빼고 장부에만), 결과 받기 :45 작업(`ieum.calls.results`), 정리 자료는 내용이 같으면 올리지 않음, 디코더 두 번 읽기 스트리밍(F6, 30분 통화 메모리 ~115MB → 조각 하나), 골든 셋(`androidTest/assets/golden/`, `tools/audio/make_golden.py`·`golden_score.py`), 채널 진단(F1, 하트비트 audioChannels/Corr), 미지원 CPU 거부(`ANDROID_STT_CPU_UNSUPPORTED`), 업데이트 진행률과 sha·크기 불일치 재다운로드(`CallUpdate.kt`), 덮어 설치 시험 수리(`update-smoke.yml`: 디스크 확보·KVM·AVD 캐시·재시도, 첫 성공 41845595967).
+- 골든 셋 결정(v2.5): 바꾸지 않음. 무음 기준 0.006, 프롬프트 없음 그대로. 기기 시험(작은 모델)에서 base 3통화가 757초에 정상으로 끝났고(그 전 "멈춤"은 멈춘 게 아니라 변형 하나에 13분씩 걸려 90분 한도에 걸린 것), 0.0025와 프롬프트 비교는 아직 결과 없음. 비교는 device-test 수동 실행 `golden=compare`, `only=tg_goldenSet`(약 45분, push 실행과 동시 실행 그룹이 달라 서로 취소하지 않음)으로 하고, 결과를 보고 v2.6에서 상수(`PipelineAudioMath.SPEECH_FLOOR`, Whisper 프롬프트)만 바꾼다. push 실행은 이제 `golden=base`.
+- 30분 통화 메모리(F6, t6): 새 방식은 끝까지 갔고(멈춘 뒤 이어 하기 포함, 조각 수 일치) 예전 방식은 192MB 힙에서 메모리 부족. 다만 "예전의 4분의 1 이하" 판정이 98~101MB로 두 번 떨어짐. 원인 둘: ① 시료 스레드가 재는 힙에는 디코더가 그 사이 만든 쓰레기가 섞임 → 이제 조각을 자막으로 넘기는 순간 같은 스레드에서 GC 뒤 잰 값으로 비교(시료 값은 `newSampledMb`로 기록만) ② 보관 사본을 읽는 `PipelineBytesInput.read`가 정확히 크기만큼 읽은 뒤에도 배열을 두 배로 키워 15MB 녹음이 30MB를 잡음(앱 버그, 수리). JVM 시험 `PipelineAudioMemoryTest`(30분 WAV, 조각마다 40MB 미만)를 더함. 수리 뒤 기기 시험은 아직 못 돌림(아래 Actions 결제).
+- 배포가 멈춘 이유(11/5 03시): GitHub Actions가 "recent account payments have failed or your spending limit needs to be increased"로 모든 작업을 시작조차 안 함(ci, device-test, release, ieum-inbox 워치독 모두). 사용자가 GitHub 설정 Billing에서 풀어야 함. 풀리면: `feature/r6-v25`의 ci가 초록인지 확인 → `feature/lean-calls`에 합치고 배포(덮어 설치 시험 관문 엄격) → `app/version.json` 확인 → APK를 사용자에게 보내 아내 폰에서 [지금 받기]/[설치](사이드로드라 무인 설치 안 됨).
+- 덮어 설치 시험 관문: v2.4는 사용자 승인으로 경고만(에뮬레이터가 켜지지 않던 때). v2.5부터 다시 엄격, 단 "Emulator did not boot (infra)"만 경고.
+- 폰 상태(11/4 23:43 하트비트, v2.4 설치 뒤): 동의·폴더·알림·배터리 모두 켜짐, 대기 139건(10/1 이전 옛 녹음 포함, 처음 정리 중), 분석 대기 33건, 10/1 이후 통화기록 979건 = 저장 908건(개인 71건 제외) 빠짐 0·중복 0. 단 녹음과 짝지어진 통화가 0건(`recorded=0`): 옛 버전이 남긴 기록에 통화 시작 시각이 없을 가능성, 새 자막이 쌓인 뒤나 09:00 검증에서 다시 볼 것(v2.6 통화기록 대조 묶음). 설치 전에는: 아내 폰은 v2.0 이전 버전이라 홈 화면을 열 때만 작업을 다시 등록함. 마지막 실제 업로드 11/4 00:50, 하트비트 한 번도 안 옴. 무인 설치는 앱을 직접 설치(사이드로드)해서 설치 주체가 아니라 실패함 → v2.4 APK를 사용자에게 보내 손으로 설치. 설치 뒤 하트비트(`status/phone.json`)와 `status/calllog.txt`가 올라와야 함.
+
+### 예약 작업 (11/4 밤 기준, 모두 "일반" 세션, 소스 ieum-inbox, 알림 켬)
+| 이름 | ID | 시각 | 모델 | 기억 파일 | 보고 |
+|---|---|---|---|---|---|
+| 이음 통화 분석 (매시간) | `trig_01WhkNFfBvGYvgaraXKuwL5K` | 매시 30분 | Sonnet 5.5 | `status/last-run.json` | 세 줄(처리 건수 종류별, 실패, 남은 요청, 폰 요청 형식, 장부 rev) |
+| 이음 새벽 정리 (매일) | `trig_01BJ7psN5c92FCshDpqF6maz` | 05:16 | Opus 5.5 | `tidy/project.md`(공사 전체, 지우지 않음), `tidy/history/YYYY-MM.md`(날짜별 일지, 지우지 않음), `tidy/briefing.md`(오늘 현황판) | 현황 파일 `이음_현황_YYYYMMDD.md` + 다섯 줄 알림(할 일, 전화할 곳, 답 대기, 진행 중, 제안) |
+| 이음 통화 목록 검증 (매일) | `trig_01KyuDNZWkmrQpJj8e8cr661` | 09:00 | Opus 5.5 | `status/verify-log.md`(숫자만) | 검증 파일 `이음_통화목록_검증_YYYYMMDD.txt`(이름·번호 포함) + 다섯 줄 알림 |
+- 지시문 원본: `docs/routines/hourly.md`(v5), `docs/routines/tidy.md`, 검증은 루틴 프롬프트가 원본. `RoutineDocTest`가 hourly·tidy 원본과 앱 상수를 대조.
+- 옛 루틴(`trig_01F9MoxF…`, `trig_012D6jrC…`, `trig_01AK4Fj…`)은 모두 지움.
+- 루틴에 Docs·Drive·Calendar·Code Remote 연결이 붙어 있음. 이 세션에서는 뗄 수 없어 사용자가 루틴 설정에서 떼야 함(안 떼도 동작에는 지장 없음).
+- 워치독: 11/5 ieum-inbox에 설치(커밋 2d121ae, 수동 실행 41853205350 이상 0건). 처음 정리 중에는 옛 대기열을 "자막이 밀려요"로 치지 않고, 마지막 자막이 24시간 넘었을 때만 알림(`tools/inbox/watchdog.py`, 시험 14개).
+- 기기 시험 고침(`tools/run_device_test.sh`): 결과를 logcat에서 실시간으로 모으고(`results.live`), instrument 자체 시간 제한 70분(`IEUM_INSTRUMENT_MIN`), 골든 통화마다 `golden_start` 기록, `IEUM_TESTS`로 시험 골라 돌리기.
+
 ## 5. 현재 UI 상태와 문제점 (S26 스크린샷 기준, 다음 작업의 출발점)
 사용자 평가(10/30): "미관상 너무 엉망", "**깔끔하긴 한데 세련되지 않았다**". 목표는 깔끔함을 넘어 세련됨. 개편 방향은 [PRODUCT.md 4.5](PRODUCT.md). Claude가 본 구체적 문제:
 1. **모든 버튼이 같은 연청색 큰 덩어리** — 전날/다음날, 할 일 전체 보기, 이름 고치기, 완료했어요, 업체 목록으로가 모두 같은 크기·색. 주요 동작과 보조 동작의 구분이 없음.
@@ -177,6 +208,7 @@ python run_gradle.py --log local-$(date +%H%M%S).log :app:compileDebugKotlin
 - 아직: 설정 화면은 제목 띠만 바뀜(카드 묶음 정리 필요), 아침·저녁 알림 문구의 "할 일" → "체크할 일" 통일, 설계도(Claude Docs) "화면 디자인" 절 개정, 앱 아이콘 다듬기, 모모콜에서 본 "전화 올 때 지난 통화 요약 띄우기" 검토.
 
 ## 6. 다음 할 일 (순서대로, 11/5 v2.5 이후 — 상세는 [DESIGN_V3.md](DESIGN_V3.md))
+0. **먼저 v2.5 배포**(코드는 `feature/r6-v25`에 완성): 사용자가 GitHub Actions 결제·한도를 풀면 ci 확인 → lean-calls에 합침 → 배포 → 아내 폰 설치. 이어서 골든 비교 수동 실행 한 번(4-4). v2.6은 v2.5를 합친 lean-calls에서 시작.
 1. **v2.6 제대로 정리되는 이음** (`feature/r7-v26`, 묶음 r7-1~r7-6): 처음 정리 관문(b- 묶음) 풀기와 10/1 이전 대기열 정리, 발견 경량화(2000 한도·이름 시각), 무인 설치, 통화기록 대조와 이름 정규화, 지시문 v6(루틴 교체 포함), 감시 정확화. ci 통과 후 배포.
 2. **v2.7 매끄러운 화면** (`feature/r8-v27`, r8-1~r8-6): 저장소 프로세스 수명 단일 열기, Activity 하나(G1), 즉시 반응 부품, 화면 31건 수정, 아침 알림 [다 됐어요]. **device-test 스크린샷을 보고** 배포.
 3. **v2.8 상대 카드와 사람 화면** (`feature/r9-v28`, r9-1~r9-3): PhoneKey 한 곳, 상대 카드 저장소, 인덱스·복구·용량, 사람 화면. ci 통과 후 배포.
@@ -186,6 +218,8 @@ python run_gradle.py --log local-$(date +%H%M%S).log :app:compileDebugKotlin
 7. 그대로 남는 것: 문자·메일 실제 확인(MMS, RCS), inbox-e2e 정기 점검(main 합칠 때), 우편함 이력 압축(J3), 골든 셋 실험(F3, F4).
 
 ## 7. 알아 둘 함정
+- GitHub Actions 사용량: 에뮬레이터 시험이 한 번에 약 90분을 쓴다. 한도나 결제에 걸리면 모든 워크플로가 몇 초 만에 단계 없이 실패하고 주석에 결제 안내가 뜬다(11/5 03시 발생). 기기 시험은 꼭 필요할 때만, 골든 비교는 `only=tg_goldenSet`으로 따로.
+- 이 클라우드 세션에서는 gh의 GraphQL이 막혀 `gh workflow run`/`gh run list`가 안 됨. REST로: `gh api repos/<owner>/<repo>/actions/workflows/<file>/dispatches -f ref=<branch>`, `.../actions/runs/<id>/jobs`, `.../actions/jobs/<id>/logs`.
 - 루틴 실행 기록: `RemoteTrigger list_runs` → `get_run_log`. 실행 로그에 통화 내용이 남지 않게 프롬프트에 명시돼 있음.
 - ieum-inbox `results/`의 `selftest-*.json`은 inbox-e2e가 검증 후 지움. 폰은 `selftest-`로 시작하는 파일을 무시.
 - Firebase 실기기는 하루 5번 — 화면 확인은 에뮬레이터(device-test)로 먼저.
