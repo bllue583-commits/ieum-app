@@ -23,7 +23,8 @@ import java.util.concurrent.TimeUnit
 /** Notification text composed locally. The expanded notification lists the to-dos (morning) or the
  * calls with their one-line summaries (evening), so the report can be read without opening the app. */
 internal object CallDigestText {
-    data class Message(val title:String,val text:String,val lines:List<String> =emptyList())
+    /** [doneId]/[doneRevision]: the check item the body names, finished by the morning report's [다 됐어요] button (r8-6). */
+    data class Message(val title:String,val text:String,val lines:List<String> =emptyList(),val doneId:String?=null,val doneRevision:Long=0)
     const val MAX_LINES=7
     private fun more(lines:List<String>)=if(lines.size>MAX_LINES) lines.take(MAX_LINES-1)+"외 ${lines.size-MAX_LINES+1}개" else lines
     /** The body's first line is the latest call, one line ("오후 2:10 △△철강 김민수, 단가를 다시 받기로 했어요"), then the waiting count; the expanded
@@ -44,7 +45,14 @@ internal object CallDigestText {
         val lines=issues.take(ISSUE_LINES).map { "진행 중, ${it.title}"+(if(it.status.isBlank()) "" else ": ${it.status}") }+
             items.sortedBy { it.createdMs }.map { "${it.company?.let { c -> "[$c] " } ?: ""}${it.title}"+CallUi.requested(it.createdMs).let { r -> if(r.isEmpty()) "" else ", $r" }+
                 (if(it.status=="needs_confirmation") ", 끝났는지 확인" else "") }
-        return Message("체크할 일 ${items.size}개",if(items.isEmpty()) "체크할 일이 없어요" else lines[minOf(issues.take(ISSUE_LINES).size,lines.size-1)],more(lines))
+        val first=items.minByOrNull { it.createdMs }
+        return Message("체크할 일 ${items.size}개",if(items.isEmpty()) "체크할 일이 없어요" else lines[minOf(issues.take(ISSUE_LINES).size,lines.size-1)],more(lines),
+            first?.id,first?.revision ?: 0)
+    }
+    /** The morning report once its last item was finished from the notification: no button any more. */
+    fun allDone(issues:List<Issue> =emptyList()):Message {
+        val lines=issues.take(ISSUE_LINES).map { "진행 중, ${it.title}"+(if(it.status.isBlank()) "" else ": ${it.status}") }
+        return Message("체크할 일을 다 끝냈어요","남은 체크할 일이 없어요",lines)
     }
     fun evening(store:CallRecordStore,day:LocalDate)=evening(store.day(day),store.newTaskCount(day))
     fun morning(store:CallRecordStore,day:LocalDate)=morning(store.openTodos(),day,store.issues())
@@ -131,7 +139,8 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
         else try {
             val fetched=fetchResults()
             if(fetched!=CallDigestPrefetch.Outcome.DONE) Log.w(TAG,"$kind report without fresh results: $fetched")
-            val message=CallRecordStore(CallPipelineStartup.storage(applicationContext)).use {
+            // The process store (r8-1): not opened again, not closed here.
+            val message=kr.callbrief.IeumApplication.store(applicationContext).let {
                 if(kind==CallDigestSchedule.MORNING) CallDigestText.morning(it,plan.day) else CallDigestText.evening(it,plan.day)
             }
             // The evening report carries its day, so a tap the next morning still opens that day's calls.
@@ -174,7 +183,7 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
         val store=StatusLights.read(app,s,now)
         val queued=store.queue?.newCount ?: 0;val oldestQueued=store.queue?.newOldestMs
         // Recent calls only: old first-pass records may rightly wait for the charger (as the stall notice counts them).
-        val oldestWaiting=runCatching { CallRecordStore(app).use { db -> db.pending().filter { !FirstPass.isOld(it.dayMs,s) }.minOfOrNull { it.createdMs } } }.getOrNull()
+        val oldestWaiting=runCatching { kr.callbrief.IeumApplication.store(app).pending().filter { !FirstPass.isOld(it.dayMs,s) }.minOfOrNull { it.createdMs } }.getOrNull()
         val dbBytes=store.dbBytes
         return SelfCheckNotices.Input(now,tree.isNotBlank(),readable,s.optString(PipelineSettingsKeys.MODEL_STATE),
             queued,oldestQueued,s.optLong(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,0),
@@ -189,8 +198,12 @@ internal object CallDigestNotifier {
     /** False when notifications are not allowed (nothing was posted). */
     /** The screen a notification of [kind] opens: the morning report the check list, the self-check settings, the others the calls. */
     fun screenFor(kind:String)=when(kind) { CallDigestSchedule.MORNING -> Screen.TASKS;CallDigestWork.SELF_CHECK -> Screen.SETTINGS;else -> Screen.CALLS }
-    /** [dayMs]: a moment of the day the evening report tells about (now when not given). */
-    fun post(context:Context,kind:String,m:CallDigestText.Message,dayMs:Long?=null):Boolean {
+    /** The slot of a report of [kind]: one notification per kind (tag "ieum.calls.<kind>", id [ID]); a new one replaces the old. */
+    const val ID=700
+    fun tag(kind:String)="ieum.calls.$kind"
+    /** [dayMs]: a moment of the day the evening report tells about (now when not given). [callId]: a notice about one call opens
+     * that call's page. [refresh]: the same report updated after its button was pressed (quiet, not counted as a new report). */
+    fun post(context:Context,kind:String,m:CallDigestText.Message,dayMs:Long?=null,callId:String?=null,refresh:Boolean=false):Boolean {
         if(Build.VERSION.SDK_INT>=33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) return false
         val manager=context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(CallDigestWork.CHANNEL,"이음 통화 정리",NotificationManager.IMPORTANCE_DEFAULT))
@@ -198,19 +211,24 @@ internal object CallDigestNotifier {
         val channel=if(kind==CallDigestWork.STATUS||kind==CallDigestWork.SELF_CHECK) CallDigestWork.STATUS_CHANNEL else CallDigestWork.CHANNEL
         // One Activity (design G1): the notification names the screen, and the evening report its day, so a tap the next morning
         // still opens that day's calls. Back from there goes home, then out of the app, however the app was opened.
-        val intent=MainActivity.intent(context,screenFor(kind),dayMs=if(kind==CallDigestSchedule.EVENING) dayMs ?: System.currentTimeMillis() else null)
+        val intent=MainActivity.intent(context,screenFor(kind),dayMs=if(kind==CallDigestSchedule.EVENING||callId!=null) dayMs ?: System.currentTimeMillis() else null,callId=callId)
             .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        val pending=PendingIntent.getActivity(context,kind.hashCode(),intent,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val notification=Notification.Builder(context,channel).setSmallIcon(R.drawable.ic_stat_ieum)
+        val pending=PendingIntent.getActivity(context,(kind+(callId ?: "")).hashCode(),intent,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val builder=Notification.Builder(context,channel).setSmallIcon(R.drawable.ic_stat_ieum).setOnlyAlertOnce(refresh)
             .setContentTitle(m.title).setContentText(m.text).setContentIntent(pending).setAutoCancel(true).setLocalOnly(true)
             // Whole lines, wrapped: an inbox style cuts each line with "…" (user rule: nothing cut off).
             .setStyle(Notification.BigTextStyle().setBigContentTitle(m.title).bigText(m.lines.joinToString("\n").ifEmpty { m.text }))
             .setVisibility(Notification.VISIBILITY_PRIVATE)
             // Lock screen shows only the counts; the list appears once unlocked.
             .setPublicVersion(Notification.Builder(context,channel).setSmallIcon(R.drawable.ic_stat_ieum).setContentTitle(m.title).setContentText("잠금을 풀면 내용이 보여요").build())
-            .build()
-        manager.notify("ieum.calls.$kind",700,notification)
-        if(kind==CallDigestSchedule.EVENING||kind==CallDigestSchedule.MORNING) runCatching { SecureSettings(CallPipelineStartup.storage(context)).update { it.put(PipelineSettingsKeys.LAST_DIGEST_MS,System.currentTimeMillis()) } }
+        // The morning report finishes its first item from the notification itself (r8-6); undo is in the app.
+        if(kind==CallDigestSchedule.MORNING) m.doneId?.let { id ->
+            val done=PendingIntent.getBroadcast(context,NotificationActions.requestCode(id),NotificationActions.doneIntent(context,id,m.doneRevision),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            builder.addAction(Notification.Action.Builder(android.graphics.drawable.Icon.createWithResource(context,R.drawable.ic_stat_ieum),"다 됐어요",done).build())
+        }
+        manager.notify(tag(kind),ID,builder.build())
+        if(!refresh && (kind==CallDigestSchedule.EVENING||kind==CallDigestSchedule.MORNING)) runCatching { SecureSettings(CallPipelineStartup.storage(context)).update { it.put(PipelineSettingsKeys.LAST_DIGEST_MS,System.currentTimeMillis()) } }
         return true
     }
 }
