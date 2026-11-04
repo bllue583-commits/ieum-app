@@ -86,7 +86,7 @@ class ReviewRoundTwoTest:ProtectedTextHostTestBase() {
         val id=store().use { it.insert(call("rec1",now-10*day));CallRecordStore.recordId(call("rec1",0)) }
         store().use { it.applyAnalysis(id,analysis(ClaudeCallAnalyzerTest.task("create",null,"견적서 보내기","견적서는 내일까지"))) }
         val old=store().use { it.insert(call("rec2",now-9*day));CallRecordStore.recordId(call("rec2",0)) }
-        store().use { db -> assertTrue(db.request(db.record(old)!!,old=true).let { it.openTasks.isEmpty() && it.otherTasks.isEmpty() && it.recentlyDone.isEmpty() })
+        store().use { db -> assertTrue(db.request(db.record(old)!!,old=true).let { it.openTasks.isEmpty() && it.recentlyDone.isEmpty() })
             assertFalse(db.request(db.record(old)!!).openTasks.isEmpty()) }
     }
 

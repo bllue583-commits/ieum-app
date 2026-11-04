@@ -84,6 +84,15 @@ object PipelineSettingsKeys {
     const val LAST_UPDATE_ERROR="lastUpdateError"
     /** When the evening or morning report was last actually posted (ms). */
     const val LAST_DIGEST_MS="lastDigestMs"
+    /** "내 정보" (design C5 [사용자]): the user's name, company and site, and title. Empty: the request says roles only. */
+    const val MY_NAME="myName"
+    const val MY_COMPANY="myCompany"
+    const val MY_ROLE="myRole"
+    /** Check items the AI proposed that were left out as the same as an existing one: a running count (design E5). */
+    const val DUPLICATE_SKIPPED="duplicateSkipped"
+    /** First-pass batches put up on one KST day (design C7: at most [FirstPass.BATCHES_PER_DAY]): the day and the count. */
+    const val FIRST_PASS_BATCH_DAY="firstPassBatchDay"
+    const val FIRST_PASS_BATCHES_TODAY="firstPassBatchesToday"
 }
 
 /** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets

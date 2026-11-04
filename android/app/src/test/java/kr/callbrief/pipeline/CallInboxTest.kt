@@ -55,7 +55,8 @@ class CallInboxTest:ProtectedTextHostTestBase() {
         assertTrue(runner(inbox).runPending())
         val job=inbox.files.entries.single();assertTrue(job.key.startsWith("inbox/"))
         assertFalse("no names or numbers in paths",job.key.contains("rec1")||job.key.contains("김과장"))
-        val o=JSONObject(job.value);assertEquals(CallInbox.recordKey(id),o.getString("id"));assertFalse(job.value.contains("rec1|"));assertTrue(o.getString("message").contains(text));assertTrue(o.has("schema"))
+        val o=JSONObject(job.value);assertEquals(CallInbox.recordKey(id),o.getString("id"));assertFalse(job.value.contains("rec1|"));assertTrue(o.getString("message").contains(text))
+        assertFalse("v3: no rules in the request",o.has("schema")||o.has("system"));assertEquals(3,o.getInt("format"));assertEquals(ClaudeCallAnalyzer.PROMPT_VERSION,o.getInt("promptVersion"))
         runner(inbox).runPending();assertEquals("not re-sent within 6 h",1,inbox.files.size)
 
         // The scheduled task answers; an invented quote is dropped by the same filter as the API path.

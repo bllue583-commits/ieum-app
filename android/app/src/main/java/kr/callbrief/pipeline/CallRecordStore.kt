@@ -45,8 +45,10 @@ internal object MessageKind {
 /** An open workflow item shown in "오늘 할 일". */
 internal data class OpenItem(val id:String,val title:String,val due:String,val status:String,val revision:Long,val edition:String,val counterpart:String?,val company:String?=null,
                               /** When the to-do was asked for (the call it came from). */ val createdMs:Long=0,
-                              /** One line from a later call about an item the user had changed ("11/5 통화: 끝난 것으로 보여요"); the item itself is untouched. */ val aiNote:String?=null)
-internal data class CallTodoItem(val id:String,val title:String,val due:String,val status:String,val revision:Long,val company:String?=null,val createdMs:Long=0,val aiNote:String?=null)
+                              /** One line from a later call about an item the user had changed ("11/5 통화: 끝난 것으로 보여요"); the item itself is untouched. */ val aiNote:String?=null,
+                              /** Asked for only loosely ("알아볼게요", certainty "tentative"). */ val tentative:Boolean=false)
+internal data class CallTodoItem(val id:String,val title:String,val due:String,val status:String,val revision:Long,val company:String?=null,val createdMs:Long=0,val aiNote:String?=null,
+                                 val tentative:Boolean=false)
 /** One company of the ledger with what the list screen shows. */
 internal data class CompanyRow(val id:String,val name:String,val trade:String?,val openTasks:Int,val lastCallMs:Long?)
 internal data class CompanyCall(val recordId:String,val dayMs:Long,val person:String?,val summary:String?)
@@ -58,7 +60,8 @@ internal data class Issue(val title:String,val status:String,val companies:List<
 
 internal class CallRecordStore(context:Context,private val clock:()->Long=System::currentTimeMillis):AutoCloseable {
     /** [note]: set when the item was the user's own and only got an AI note line (then [applied] is false). */
-    data class Applied(val op:String,val itemId:String,val title:String,val due:String?,val applied:Boolean,val note:String?=null)
+    /** [duplicate]: a create left out because the same item exists (counted in DUPLICATE_SKIPPED, not stored). */
+    data class Applied(val op:String,val itemId:String,val title:String,val due:String?,val applied:Boolean,val note:String?=null,val duplicate:Boolean=false)
     companion object {
         val KST:ZoneId=ZoneId.of("Asia/Seoul")
         const val TRANSCRIBED="TRANSCRIBED";const val ANALYZED="ANALYZED";const val FAILED="FAILED"
@@ -101,11 +104,13 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
             // The user's corrections waiting to go to the repository ledger (ledger/edits/).
             "CREATE TABLE IF NOT EXISTS ledger_edits(id TEXT PRIMARY KEY,json TEXT NOT NULL,created_ms INTEGER NOT NULL)",
             // "진행 중인 일" from the repository ledger (design: 새벽 정리), in the ledger's order.
-            "CREATE TABLE IF NOT EXISTS issues(id TEXT PRIMARY KEY,ord INTEGER NOT NULL,title TEXT NOT NULL,status TEXT NOT NULL,companies TEXT NOT NULL,updated_ms INTEGER NOT NULL,record_keys TEXT NOT NULL DEFAULT '[]')")
+            "CREATE TABLE IF NOT EXISTS issues(id TEXT PRIMARY KEY,ord INTEGER NOT NULL,title TEXT NOT NULL,status TEXT NOT NULL,companies TEXT NOT NULL,updated_ms INTEGER NOT NULL,record_keys TEXT NOT NULL DEFAULT '[]')",
+            // Numbers found personal (a result with business=false, design E9): their calls and texts stay on the phone.
+            "CREATE TABLE IF NOT EXISTS personal_numbers(phone_key TEXT PRIMARY KEY,decided_ms INTEGER NOT NULL)")
         /** Columns added after the first release: the repository-ledger id of a person and the user's name lock. */
         private val PEOPLE_COLUMNS=listOf("ledger_id" to "TEXT","name_locked" to "INTEGER NOT NULL DEFAULT 0","name_key" to "TEXT")
         private val COMPANY_COLUMNS=listOf("name_key" to "TEXT")
-        private val ITEM_COLUMNS=listOf("done_ms" to "INTEGER","ai_note" to "TEXT","source" to "TEXT")
+        private val ITEM_COLUMNS=listOf("done_ms" to "INTEGER","ai_note" to "TEXT","source" to "TEXT","tentative" to "INTEGER NOT NULL DEFAULT 0")
         fun recordId(t:CallTranscript)="${t.recordingId}|${t.sourceVersion}|${t.audioSha256}"
         /** Digits only for a phone number, otherwise the trimmed name; null when unknown. */
         fun counterpartKey(counterpart:String?):String? {
@@ -355,9 +360,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
     fun companyDetail(id:String):CompanyDetail? {
         val co=companyById(id) ?: return null
         val name=co.str("name")!!
-        val tasks=rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.edition,i.created_ms,i.ai_note FROM task_companies tc JOIN workflow_items i ON i.id=tc.item_id
+        val tasks=rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.edition,i.created_ms,i.ai_note,i.tentative FROM task_companies tc JOIN workflow_items i ON i.id=tc.item_id
             WHERE tc.company_id=? AND i.status NOT IN ('done','merged') AND i.kind='TODO' ORDER BY i.created_ms DESC""",id)
-            .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),null,name,it.long("created_ms") ?: 0,it.str("ai_note")) }
+            .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),null,name,it.long("created_ms") ?: 0,it.str("ai_note"),it.long("tentative")==1L) }
         val calls=rows("""SELECT c.record_id,COALESCE(c.started_ms,c.created_ms) AS day_ms,c.summary,p.name AS person FROM call_links l JOIN call_records c ON c.record_id=l.record_id
             LEFT JOIN people p ON p.id=l.person_id WHERE l.company_id=? ORDER BY day_ms DESC LIMIT 10""",id)
             .map { CompanyCall(it.str("record_id")!!,it.long("day_ms") ?: 0,it.str("person"),it.str("summary")) }
@@ -393,19 +398,21 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         val person=personFor(key)
         val company=companyById(person?.str("company_id")?.takeIf { person.long("is_staff")!=1L })
         val companyId=company?.str("id");val trade=company?.str("trade")
+        // Open work of other companies and trades is no longer sent (design C5): this company's and this person's only.
         // Only what existed at this call's time (review B7): a record analysed late must not see what came after it.
         val before=r.dayMs
         val sameCounterpart=if(key==null) emptySet() else rows("SELECT b.item_id FROM call_task_bindings b JOIN call_records c ON c.record_id=b.record_id WHERE c.counterpart_key=?",key).mapNotNull { it.str("item_id") }.toSet()
-        class Open(val task:ClaudeCallRequest.OpenTask,val companyId:String?,val trade:String?)
-        val all=rows("""SELECT i.id,i.title,i.due_text,i.status,i.created_ms,co.id AS cid,co.name AS cname,co.trade AS ctrade FROM workflow_items i
+        class Open(val task:ClaudeCallRequest.OpenTask,val companyId:String?)
+        val all=rows("""SELECT i.id,i.title,i.due_text,i.status,i.created_ms,co.id AS cid,co.name AS cname FROM workflow_items i
             LEFT JOIN task_companies tc ON tc.item_id=i.id LEFT JOIN companies co ON co.id=tc.company_id
             WHERE i.status NOT IN ('done','merged') AND i.kind='TODO' AND i.created_ms<=CAST(? AS INTEGER) ORDER BY i.created_ms DESC LIMIT 300""",before)
-            .map { Open(ClaudeCallRequest.OpenTask(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty(),it.str("status")!!,it.str("cname"),it.long("created_ms")?.let { ms -> kstDay(ms).toString() }),it.str("cid"),it.str("ctrade")) }
+            .map { Open(ClaudeCallRequest.OpenTask(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty(),it.str("status")!!,it.str("cname"),it.long("created_ms")?.let { ms -> kstDay(ms).toString() }),it.str("cid")) }
         val own=if(lean) emptyList() else all.filter { (companyId!=null && it.companyId==companyId) || it.task.id in sameCounterpart }.take(30)
-        val rest=all.filter { o -> own.none { it.task.id==o.task.id } }
-        val tradeTasks=if(trade==null || lean) emptyList() else rest.filter { it.trade==trade }.take(10)
-        val others=if(lean) emptyList() else rest.filter { o -> tradeTasks.none { it.task.id==o.task.id } }.take(40)
-        val summaries=if(key==null) emptyList() else rows("SELECT summary FROM call_records WHERE counterpart_key=? AND state='ANALYZED' AND record_id!=? AND COALESCE(started_ms,created_ms)<CAST(? AS INTEGER) ORDER BY COALESCE(started_ms,created_ms) DESC LIMIT 3",key,r.recordId,before)
+        // The same person's calls (design E4): by the person linked to them, so calls known by name and by number meet; by the key when no person is known.
+        val personId=person?.str("id")
+        val summaries=if(personId!=null) rows("""SELECT c.summary FROM call_links l JOIN call_records c ON c.record_id=l.record_id WHERE l.person_id=? AND c.state='ANALYZED' AND c.record_id!=?
+            AND c.summary IS NOT NULL AND COALESCE(c.started_ms,c.created_ms)<CAST(? AS INTEGER) ORDER BY COALESCE(c.started_ms,c.created_ms) DESC LIMIT 3""",personId,r.recordId,before).mapNotNull { it.str("summary") }
+            else if(key==null) emptyList() else rows("SELECT summary FROM call_records WHERE counterpart_key=? AND state='ANALYZED' AND record_id!=? AND COALESCE(started_ms,created_ms)<CAST(? AS INTEGER) ORDER BY COALESCE(started_ms,created_ms) DESC LIMIT 3",key,r.recordId,before)
             .mapNotNull { it.str("summary") }
         val companyCalls=if(companyId==null) emptyList() else rows("""SELECT COALESCE(c.started_ms,c.created_ms) AS day_ms,c.summary,p.name AS person FROM call_links l JOIN call_records c ON c.record_id=l.record_id
             LEFT JOIN people p ON p.id=l.person_id WHERE l.company_id=? AND c.state='ANALYZED' AND c.record_id!=? AND c.summary IS NOT NULL AND COALESCE(c.started_ms,c.created_ms)<CAST(? AS INTEGER) ORDER BY day_ms DESC LIMIT 5""",companyId,r.recordId,before)
@@ -430,7 +437,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
             siteMemo = siteMemo(),
             person = person?.let { ClaudeCallRequest.PersonCard(it.str("name")!!,it.str("role"),it.long("is_staff")==1L,company?.str("name")) },
             company = company?.let { ClaudeCallRequest.CompanyCard(it.str("name")!!,trade,it.str("memo").orEmpty()) },
-            companyCalls = companyCalls,tradeTasks = tradeTasks.map { it.task },otherTasks = others.map { it.task },todayCalls = todayCalls,
+            companyCalls = companyCalls,todayCalls = todayCalls,
             companyNames = companyNames,personNames = personNames,kind = r.kind,
             direction = rows("SELECT direction FROM call_record_log WHERE record_id=?",r.recordId).firstOrNull()?.str("direction"),firstPass = old,
             counterpartId = person?.str("ledger_id"),
@@ -483,6 +490,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         // Personal, not work: a text or mail is deleted outright; a call keeps only a bare "done" mark (so it is not
         // transcribed again) with its words wiped. Neither reaches the ledger, the lists or the check items.
         if(!a.business) {
+            // A number seen to be personal is remembered: its next calls and texts are not sent (design E9).
+            record.str("counterpart_key")?.takeIf { k -> k.length>=8 && k.all { it.isDigit() } }?.let { port.execute("INSERT OR IGNORE INTO personal_numbers VALUES(?,?)",it,clock()) }
             if(MessageKind.of(recording)!="통화") {
                 port.execute("DELETE FROM call_inbox_sent WHERE record_id=?",id);port.execute("DELETE FROM call_records WHERE record_id=?",id)
                 port.execute("DELETE FROM recordings WHERE recording_id=? AND grant_id='messages'",recording)
@@ -516,10 +525,11 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
                 "create" -> {
                     // The same open item, a near one of the same company, or one finished in the last 14 days is not made again (B11).
                     val named=t.company?.takeIf { normName(it)!=null }?.let { findCompany(it) ?: "?" }
-                    if(!hasRecording || isDuplicate(t.title,if(t.company?.let { normName(it) }!=null) named else companyId,now)) Applied("create","",t.title,t.due,false) else {
+                    if(!hasRecording) Applied("create","",t.title,t.due,false)
+                    else if(isDuplicate(t.title,if(t.company?.let { normName(it) }!=null) named else companyId,now)) Applied("create","",t.title,t.due,false,duplicate=true) else {
                         val item="wf_item_"+UUID.randomUUID().toString().replace("-","")
                         // created_ms is when it was asked for (the call), the "요청 날짜" the screens show.
-                        port.execute("INSERT INTO workflow_items(id,recording_id,case_id,kind,title,edition,due_text,status,revision,source_key,evidence_quote,created_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",item,recording,case,"TODO",t.title.take(240),"",t.due.orEmpty(),"open",1,null,t.quote,callMs)
+                        port.execute("INSERT INTO workflow_items(id,recording_id,case_id,kind,title,edition,due_text,status,revision,source_key,evidence_quote,created_ms,tentative) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",item,recording,case,"TODO",t.title.take(240),"",t.due.orEmpty(),"open",1,null,t.quote,callMs,if(t.tentative) 1 else 0)
                         port.execute("INSERT INTO call_task_bindings VALUES(?,?,?,?)",item,id,1,now)
                         (taskCompany(t.company) ?: companyId)?.let { port.execute("INSERT OR REPLACE INTO task_companies VALUES(?,?)",item,it) }
                         Applied("create",item,t.title,t.due,true)
@@ -541,8 +551,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
                         else -> {
                             val next=row.long("revision")!!+1
                             // No date in an update keeps the date; news on an item marked "끝났는지 확인" opens it again.
-                            if(t.op=="update") port.execute("UPDATE workflow_items SET title=?,due_text=COALESCE(NULLIF(?,''),due_text),evidence_quote=?,revision=?,status=CASE WHEN status='needs_confirmation' THEN 'open' ELSE status END,ai_note=NULL WHERE id=?",
-                                t.title.take(240),t.due.orEmpty(),t.quote,next,item)
+                            if(t.op=="update") port.execute("UPDATE workflow_items SET title=?,due_text=COALESCE(NULLIF(?,''),due_text),evidence_quote=?,revision=?,status=CASE WHEN status='needs_confirmation' THEN 'open' ELSE status END,ai_note=NULL,tentative=? WHERE id=?",
+                                t.title.take(240),t.due.orEmpty(),t.quote,next,if(t.tentative) 1 else 0,item)
                             else port.execute("UPDATE workflow_items SET status='needs_confirmation',revision=? WHERE id=?",next,item)
                             port.execute("UPDATE call_task_bindings SET last_revision=? WHERE item_id=?",next,item)
                             if(t.op=="update") {
@@ -570,21 +580,21 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
 
     /** Every open check item for the morning report, oldest request first. */
     fun openTodos():List<CallTodoItem> =rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.created_ms,
-        (SELECT co.name FROM task_companies tc JOIN companies co ON co.id=tc.company_id WHERE tc.item_id=i.id) AS cname,i.ai_note
+        (SELECT co.name FROM task_companies tc JOIN companies co ON co.id=tc.company_id WHERE tc.item_id=i.id) AS cname,i.ai_note,i.tentative
         FROM workflow_items i WHERE i.status NOT IN ('done','merged') AND i.kind='TODO' ORDER BY i.created_ms""")
-        .map { CallTodoItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("cname"),it.long("created_ms") ?: 0,it.str("ai_note")) }
+        .map { CallTodoItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("cname"),it.long("created_ms") ?: 0,it.str("ai_note"),it.long("tentative")==1L) }
     /** Open items (any source) with an ISO due date on or before [today]. */
     fun dueItems(today:LocalDate):List<CallTodoItem> =rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.created_ms,
-        (SELECT co.name FROM task_companies tc JOIN companies co ON co.id=tc.company_id WHERE tc.item_id=i.id) AS cname,i.ai_note
+        (SELECT co.name FROM task_companies tc JOIN companies co ON co.id=tc.company_id WHERE tc.item_id=i.id) AS cname,i.ai_note,i.tentative
         FROM workflow_items i WHERE i.status NOT IN ('done','merged') AND i.due_text!='' ORDER BY i.due_text,i.created_ms""")
         .filter { val d=it.str("due_text")!!.trim();d.matches(ISO_DATE) && d<=today.toString() }
-        .map { CallTodoItem(it.str("id")!!,it.str("title")!!,it.str("due_text")!!.trim(),it.str("status")!!,it.long("revision")!!,it.str("cname"),it.long("created_ms") ?: 0,it.str("ai_note")) }
+        .map { CallTodoItem(it.str("id")!!,it.str("title")!!,it.str("due_text")!!.trim(),it.str("status")!!,it.long("revision")!!,it.str("cname"),it.long("created_ms") ?: 0,it.str("ai_note"),it.long("tentative")==1L) }
     /** Every open to-do (any source), newest first, with the latest call counterpart of its recording. */
     fun openItems():List<OpenItem> =rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.edition,i.created_ms,
         (SELECT c.counterpart FROM call_records c WHERE c.recording_id=i.recording_id ORDER BY c.created_ms DESC LIMIT 1) AS counterpart,
-        (SELECT co.name FROM task_companies tc JOIN companies co ON co.id=tc.company_id WHERE tc.item_id=i.id) AS cname,i.ai_note
+        (SELECT co.name FROM task_companies tc JOIN companies co ON co.id=tc.company_id WHERE tc.item_id=i.id) AS cname,i.ai_note,i.tentative
         FROM workflow_items i WHERE i.status NOT IN ('done','merged') AND i.kind='TODO' ORDER BY i.created_ms DESC LIMIT 300""")
-        .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),it.str("counterpart"),it.str("cname"),it.long("created_ms") ?: 0,it.str("ai_note")) }
+        .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),it.str("counterpart"),it.str("cname"),it.long("created_ms") ?: 0,it.str("ai_note"),it.long("tentative")==1L) }
     /** The user's "완료했어요": marks one item done and records the edit so analysis never touches it again. */
     fun completeItem(item:String,revision:Long)=port.transaction {
         val old=rows("SELECT * FROM workflow_items WHERE id=?",item).single()
@@ -634,6 +644,16 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         (SELECT co.name FROM task_companies tc JOIN companies co ON co.id=tc.company_id WHERE tc.item_id=i.id) AS cname,i.ai_note,i.done_ms
         FROM workflow_items i WHERE i.status='done' AND i.kind='TODO' AND COALESCE(i.done_ms,0)>=CAST(? AS INTEGER) ORDER BY i.done_ms DESC LIMIT 100""",sinceMs)
         .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),it.str("counterpart"),it.str("cname"),it.long("created_ms") ?: 0,it.str("ai_note")) }
+    // ---- personal numbers (design E9) ----------------------------------------------------------------------------
+    /** Whether [key] (a counterpart key) is a number found personal: its records are kept on the phone and not sent. */
+    fun isPersonal(key:String?):Boolean=key!=null && rows("SELECT 1 FROM personal_numbers WHERE phone_key=?",key).isNotEmpty()
+    /** Numbers found personal, the latest first: (key, when). For the settings line "개인으로 둔 번호 n개". */
+    fun personalNumbers():List<Pair<String,Long>> =rows("SELECT phone_key,decided_ms FROM personal_numbers ORDER BY decided_ms DESC").map { it.str("phone_key")!! to (it.long("decided_ms") ?: 0) }
+    /** Takes a number back from personal: its later records are sent again (earlier ones stay as they were). */
+    fun forgetPersonal(key:String)=port.execute("DELETE FROM personal_numbers WHERE phone_key=?",key)
+    /** A waiting record with a personal number: kept as personal here, exactly as a business=false result would leave it. */
+    fun keepPersonal(id:String)=applyAnalysis(id,ClaudeCallAnalysis("개인 내용",emptyList(),null,null,emptyList(),emptyList(),business=false))
+
     /** When the oldest call still waiting for its summary was stored, or null when none waits (settings: "지금 상태"). */
     fun oldestWaitingMs():Long? =rows("SELECT MIN(created_ms) AS m FROM call_records WHERE state IN ('TRANSCRIBED','WAITING_CONSENT')").firstOrNull()?.long("m")
 

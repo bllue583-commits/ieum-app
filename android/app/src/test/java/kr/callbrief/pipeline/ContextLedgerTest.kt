@@ -99,12 +99,12 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         assertEquals("△△철강",req.company!!.name);assertEquals("철근",req.company!!.trade)
         assertEquals(listOf("박대리","김민수"),req.companyCalls.map { it.who }) // across people, newest first
         assertEquals(listOf("단가 재견적 받기"),req.openTasks.map { it.title })
-        assertEquals(listOf("납품 일정 확인"),req.tradeTasks.map { it.title });assertEquals("□□철근",req.tradeTasks.single().company)
-        assertEquals(listOf("분전반 점검"),req.otherTasks.map { it.title });assertEquals("◇◇전기",req.otherTasks.single().company)
         assertTrue(req.companyNames.containsAll(listOf("△△철강","□□철근","◇◇전기")));assertTrue(req.personNames.containsAll(listOf("김민수","박대리","한소장")))
         val message=ClaudeCallAnalyzer.userMessage(req)
-        listOf("[현장 상황 메모]","[상대]","[업체]","[이 업체와의 최근 통화","[이 업체의 열린 체크할 일(JSON)]","[같은 공종(철근)","[그 밖의 열린 체크할 일(JSON)]","[이름 목록]").forEach { assertTrue(it,message.contains(it)) }
-        val all=req.openTasks+req.tradeTasks+req.otherTasks
+        listOf("[현장 상황 메모]","[상대]","[업체]","[이 업체와의 최근 통화","[이 업체의 열린 체크할 일(JSON)]","[이름 목록]","[달력]","[용어]","[공종 목록]").forEach { assertTrue(it,message.contains(it)) }
+        // v3 (design C5): other companies' open work is not sent.
+        listOf("[같은 공종","[그 밖의 열린 체크할 일","납품 일정 확인","분전반 점검").forEach { assertFalse(it,message.contains(it)) }
+        val all=req.openTasks
         all.forEach { assertTrue(message.contains("\"taskId\":\"${it.id}\"")) }
         assertEquals(all.map { it.id }.toSet(),req.knownTaskIds)
     }
@@ -115,7 +115,7 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         val req=store().use { it.request(unknown) }
         assertNull(req.person);assertNull(req.company);assertEquals("현장 메모",req.siteMemo)
         assertEquals(listOf("오전 통화 요약"),req.todayCalls.map { it.summary })
-        assertEquals(listOf("단가 재견적 받기"),req.otherTasks.map { it.title });assertTrue(req.openTasks.isEmpty())
+        assertTrue(req.openTasks.isEmpty())
         assertEquals(listOf("△△철강"),req.companyNames)
         val m=ClaudeCallAnalyzer.userMessage(req)
         assertTrue(m.contains("[오늘 다른 통화 요약]"));assertTrue(m.contains("아직 모르는 상대"));assertTrue(m.contains("[이름 목록]"))
@@ -125,9 +125,9 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         val big=(1..60).map { ClaudeCallRequest.OpenTask("wf_$it","일 $it","","open","업체$it") }
         val req=ClaudeCallRequest("t","시각",null,0,big,emptyList(),siteMemo="가".repeat(2000),
             company=ClaudeCallRequest.CompanyCard("A","철근","나".repeat(2000)),companyCalls=(1..9).map { ClaudeCallRequest.PastCall("2026-10-0$it","누구","다".repeat(900)) },
-            tradeTasks=big,otherTasks=big,companyNames=(1..200).map { "업체이름$it" },personNames=(1..200).map { "사람이름$it" })
+            companyNames=(1..200).map { "업체이름$it" },personNames=(1..200).map { "사람이름$it" })
         val m=ClaudeCallAnalyzer.userMessage(req)
-        assertEquals(30+10+40,Regex("\"taskId\"").findAll(m).count())
+        assertEquals(30,Regex("\"taskId\"").findAll(m).count())
         assertEquals(5,m.lines().count { it.startsWith("- 2026-10-0") })
         assertFalse(m.contains("가".repeat(601)));assertFalse(m.contains("나".repeat(401)));assertFalse(m.contains("다".repeat(241)))
         val names=m.lines().first { it.startsWith("[이름 목록]") }
