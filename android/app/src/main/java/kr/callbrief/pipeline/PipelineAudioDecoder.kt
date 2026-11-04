@@ -5,48 +5,74 @@ import android.media.MediaCodec
 import android.media.MediaDataSource
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import org.json.JSONObject
 import java.nio.ByteOrder
+import kotlin.math.roundToLong
 
 /** On-device decoder for call recordings: WAV is parsed directly; m4a/AAC, amr/3gp and anything else
  * MediaExtractor understands go through MediaCodec to PCM. Output is 16 kHz mono, chunked at quiet
- * points into pieces of at most two minutes. Long silences are dropped ([PipelineAudioMath.speechOnly]); each chunk's offset is the original
+ * points into pieces of at most two minutes, with long silences dropped; each piece's offset is the original
  * position of its first sample.
+ *
+ * F6 memory: the recording is decoded twice, both times as a stream of raw two-minute chunks. The first pass only notes
+ * where the speech is ([PipelineSpeechPlan]); the second copies it out piece by piece ([PipelineSpeechAssembler]) and
+ * hands each piece to the sink before decoding on. So about one piece of PCM is held, never the whole call (a 30-minute
+ * call used to be ~115 MB of 16 kHz floats plus a copy). The pieces are exactly those of decoding all at once.
  * Audio stays in memory on this device; nothing is written to disk or sent anywhere. */
-internal class PipelineAudioDecoder:PipelineAudioSource {
-    override fun decode(bytes:ByteArray,mime:String):PipelineDecodedAudio {
-        check(bytes.isNotEmpty()){"PIPELINE_AUDIO_EMPTY"}
-        if(PipelineAudioMath.isWav(bytes))return PipelineAudioMath.speechOnly(PipelineAudioMath.decodeWav(bytes))
-        check(!mime.lowercase().let{it=="audio/wav"||it=="audio/x-wav"||it=="audio/wave"}){"PIPELINE_AUDIO_WAV_HEADER"}
-        return PipelineAudioMath.speechOnly(decodeWithMediaCodec(bytes))
+internal class PipelineAudioDecoder(
+    /** F3 silence floor; the golden set compares [PipelineAudioMath.SPEECH_FLOOR_LOW]. */
+    private val speechFloor:Float=PipelineAudioMath.SPEECH_FLOOR,
+    /** F1: channel count and left/right numbers of each decoded recording (first pass only). */
+    private val channels:(PipelineChannelStats.Result)->Unit={},
+):PipelineAudioSource {
+    override fun decode(input:PipelineAudioInput,mime:String,sink:PipelineChunkSink):PipelineAudioInfo {
+        check(input.size>0){"PIPELINE_AUDIO_EMPTY"}
+        val wav=PipelineAudioMath.isWav(input)
+        if(!wav)check(!mime.lowercase().let{it=="audio/wav"||it=="audio/x-wav"||it=="audio/wave"}){"PIPELINE_AUDIO_WAV_HEADER"}
+        fun pass(onChunk:(Long,FloatArray)->Unit):PipelineAudioStream = decodeRaw(input,wav,onChunk)
+        val plan=PipelineSpeechPlan(floor=speechFloor)
+        val first=pass{ms,pcm->plan.add(ms,pcm)}
+        runCatching{channels(first.channelStats.result())}
+        val vad=plan.applies()
+        var index=0;var raw=0
+        val assembler=if(vad) PipelineSpeechAssembler(plan){ms,x->sink.chunk(index++,ms,x)} else null
+        pass{ms,pcm->
+            plan.verify(raw,pcm)
+            if(assembler!=null)assembler.raw(raw,pcm) else sink.chunk(index++,ms,pcm)
+            raw++
+        }
+        plan.verifyCount(raw);assembler?.finish()
+        return PipelineAudioInfo(first.durationMs,vad,index)
     }
 
-    private class Source(private val bytes:ByteArray):MediaDataSource() {
-        override fun readAt(position:Long,buffer:ByteArray,offset:Int,size:Int):Int {
-            if(position>=bytes.size)return -1
-            val n=minOf(size.toLong(),bytes.size-position).toInt()
-            System.arraycopy(bytes,position.toInt(),buffer,offset,n);return n
-        }
-        override fun getSize():Long=bytes.size.toLong()
+    /** One pass without silence skipping: raw two-minute chunks as they are decoded (device tests measure the old way with it). */
+    internal fun decodeRaw(input:PipelineAudioInput,wav:Boolean=PipelineAudioMath.isWav(input),onChunk:(Long,FloatArray)->Unit):PipelineAudioStream =
+        if(wav) PipelineAudioMath.streamWav(input,onChunk) else decodeWithMediaCodec(input,onChunk)
+
+    /** MediaExtractor reads the recording where it is (no copy of the file). */
+    private class Source(private val input:PipelineAudioInput):MediaDataSource() {
+        override fun readAt(position:Long,buffer:ByteArray,offset:Int,size:Int):Int=if(size==0)0 else input.readAt(position,buffer,offset,size)
+        override fun getSize():Long=input.size
         override fun close(){}
     }
 
-    private fun decodeWithMediaCodec(bytes:ByteArray):PipelineDecodedAudio {
+    private fun decodeWithMediaCodec(input:PipelineAudioInput,onChunk:(Long,FloatArray)->Unit):PipelineAudioStream {
         val extractor=MediaExtractor()
         var codec:MediaCodec?=null
         try {
-            extractor.setDataSource(Source(bytes))
+            extractor.setDataSource(Source(input))
             val track=(0 until extractor.trackCount).firstOrNull{
                 extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("audio/")==true
             } ?: error("PIPELINE_AUDIO_NO_TRACK")
             extractor.selectTrack(track)
-            val input=extractor.getTrackFormat(track)
-            val mime=input.getString(MediaFormat.KEY_MIME)!!
-            var rate=input.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-            var channels=input.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            val format=extractor.getTrackFormat(track)
+            val mime=format.getString(MediaFormat.KEY_MIME)!!
+            var rate=format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            var channels=format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
             var floatPcm=false
             var stream:PipelineAudioStream?=null
             codec=MediaCodec.createDecoderByType(mime)
-            codec.configure(input,null,null,0)
+            codec.configure(format,null,null,0)
             codec.start()
             val info=MediaCodec.BufferInfo()
             var inputDone=false;var outputDone=false;var idle=0
@@ -72,7 +98,7 @@ internal class PipelineAudioDecoder:PipelineAudioSource {
                     o>=0 -> {
                         idle=0
                         if(info.size>0){
-                            val s=stream ?: PipelineAudioStream(rate,channels).also{stream=it}
+                            val s=stream ?: PipelineAudioStream(rate,channels,onChunk=onChunk).also{stream=it}
                             val buffer=codec.getOutputBuffer(o)!!
                             buffer.position(info.offset);buffer.limit(info.offset+info.size)
                             if(floatPcm){
@@ -89,11 +115,32 @@ internal class PipelineAudioDecoder:PipelineAudioSource {
                 }
             }
             scratch.fill(0)
-            return (stream ?: error("PIPELINE_AUDIO_NO_SAMPLES")).finish()
+            return (stream ?: error("PIPELINE_AUDIO_NO_SAMPLES")).also{it.finish()}
         } finally {
             runCatching{codec?.stop()};runCatching{codec?.release()};runCatching{extractor.release()}
         }
     }
 
-    private companion object { const val TIMEOUT_US=10_000L; const val MAX_IDLE_POLLS=500 }
+    companion object {
+        private const val TIMEOUT_US=10_000L; private const val MAX_IDLE_POLLS=500
+        /** F1 settings (the heartbeat reads them by these names): channel count of the last recording, and the running
+         * mean of left/right correlation and energy ratio over the stereo recordings measured so far. */
+        const val AUDIO_CHANNELS="audioChannels"
+        const val AUDIO_CHANNEL_CORR="audioChannelCorr"
+        const val AUDIO_CHANNEL_ENERGY="audioChannelEnergyRatio"
+        const val AUDIO_CHANNEL_MEASURED="audioChannelMeasured"
+        private fun round3(x:Double)=(x*1000).roundToLong()/1000.0
+        /** Adds one recording's numbers to the settings snapshot [s] (in place). */
+        fun accumulate(s:JSONObject,r:PipelineChannelStats.Result):JSONObject {
+            if(r.channels<1)return s
+            s.put(AUDIO_CHANNELS,r.channels)
+            val corr=r.correlation ?: return s
+            val n=s.optLong(AUDIO_CHANNEL_MEASURED,0)+1
+            fun mean(key:String,x:Double):Double { val old=s.optDouble(key,Double.NaN).takeUnless{it.isNaN()} ?: x;return round3(old+(x-old)/n) }
+            s.put(AUDIO_CHANNEL_CORR,mean(AUDIO_CHANNEL_CORR,corr))
+            r.energyRatio?.let{s.put(AUDIO_CHANNEL_ENERGY,mean(AUDIO_CHANNEL_ENERGY,it))}
+            s.put(AUDIO_CHANNEL_MEASURED,n)
+            return s
+        }
+    }
 }

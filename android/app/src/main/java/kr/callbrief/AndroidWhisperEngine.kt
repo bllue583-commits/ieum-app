@@ -13,20 +13,21 @@ internal object AndroidWhisperNative {
     external fun open(model:String,threads:Int):Long
     external fun cancel(handle:Long)
     external fun close(handle:Long)
-    external fun transcribeChunk(handle:Long,pcm:FloatArray,language:String,seconds:Int):ByteArray
+    /** [prompt]: Whisper's initial prompt (F4), "" for none. */
+    external fun transcribeChunk(handle:Long,pcm:FloatArray,language:String,seconds:Int,prompt:String):ByteArray
 }
 /** Test seam for the five JNI calls (the real ones need the .so). */
 internal interface WhisperNativeApi {
     fun open(model:String,threads:Int):Long
     fun cancel(handle:Long)
     fun close(handle:Long)
-    fun transcribeChunk(handle:Long,pcm:FloatArray,language:String,seconds:Int):ByteArray
+    fun transcribeChunk(handle:Long,pcm:FloatArray,language:String,seconds:Int,prompt:String):ByteArray
 }
 internal object RealWhisperNative:WhisperNativeApi {
     override fun open(model:String,threads:Int)=AndroidWhisperNative.open(model,threads)
     override fun cancel(handle:Long)=AndroidWhisperNative.cancel(handle)
     override fun close(handle:Long)=AndroidWhisperNative.close(handle)
-    override fun transcribeChunk(handle:Long,pcm:FloatArray,language:String,seconds:Int)=AndroidWhisperNative.transcribeChunk(handle,pcm,language,seconds)
+    override fun transcribeChunk(handle:Long,pcm:FloatArray,language:String,seconds:Int,prompt:String)=AndroidWhisperNative.transcribeChunk(handle,pcm,language,seconds,prompt)
 }
 /** [dropped] counts segments that were left out because they were malformed (never their text). */
 internal data class AndroidWhisperOutput(val raw:ByteArray,val text:String,val segments:JSONArray,val dropped:Int=0)
@@ -51,10 +52,10 @@ internal class AndroidWhisperEngine(private val context:Context,private val api:
     /** One loaded model for one recording. [transcribe] per piece, [close] always (normal end, error, stop). */
     inner class Session internal constructor(private val handle:Long,private val model:File,private val stillVerified:()->Boolean):AutoCloseable {
         @Volatile private var closed=false
-        fun transcribe(pcm:FloatArray,language:String,timeoutSeconds:Int,stopped:()->Boolean):ByteArray=synchronized(EXECUTION_LOCK) {
-            check(language in setOf("ko","en","auto")){"ANDROID_STT_LANGUAGE"}
+        fun transcribe(pcm:FloatArray,language:String,timeoutSeconds:Int,prompt:String=defaultPrompt(),stopped:()->Boolean):ByteArray=synchronized(EXECUTION_LOCK) {
+            check(language in setOf("ko","en","auto")){"ANDROID_STT_LANGUAGE"};check(prompt.length<=MAX_PROMPT_CHARS){"ANDROID_STT_PROMPT"}
             check(!closed){"ANDROID_STT_STOPPED"};check(!stopped()){"ANDROID_STT_STOPPED"};check(stillVerified()&&model.isFile){"PIPELINE_STT_MODEL_UNVERIFIED"}
-            val raw=api.transcribeChunk(handle,pcm,language,timeoutSeconds.coerceIn(30,3600))
+            val raw=api.transcribeChunk(handle,pcm,language,timeoutSeconds.coerceIn(30,3600),prompt)
             check(!stopped()){"ANDROID_STT_STOPPED"};check(stillVerified()){"PIPELINE_STT_MODEL_UNVERIFIED"};raw
         }
         override fun close() { if(closed)return;closed=true;active.compareAndSet(handle,0);api.close(handle) }
@@ -67,12 +68,20 @@ internal class AndroidWhisperEngine(private val context:Context,private val api:
     }
     /** One piece with its own model load (settings screen, device tests). */
     fun transcribeVerifiedModel(model:File,stillVerified:()->Boolean,pcm:FloatArray,language:String,threads:Int,timeoutSeconds:Int,stopped:()->Boolean):ByteArray =
-        openVerifiedModel(model,stillVerified,threads,stopped).use { it.transcribe(pcm,language,timeoutSeconds,stopped) }
+        openVerifiedModel(model,stillVerified,threads,stopped).use { it.transcribe(pcm,language,timeoutSeconds,stopped=stopped) }
     companion object {
         private val LOAD_LOCK=Any();private val EXECUTION_LOCK=Any();private var loadedSha:String?=null
         /** Same segment limit and output size as the native side (ieum_whisper.cpp). */
         const val MAX_SEGMENTS=2048
         const val MAX_OUTPUT_BYTES=1048576
+        /** F4 initial prompt (site vocabulary). Off: a prompt can make Whisper repeat itself or write the listed words where
+         * they were not said, so it is switched on only if the golden set (v2.4-2) shows better term accuracy without CER
+         * getting more than 2 points worse; otherwise this code is removed (v2.5-4). */
+        const val PROMPT_ENABLED=false
+        const val SITE_PROMPT="건설 현장 통화입니다. 견적서, 철근, 레미콘, 타설, 거푸집, 슬래브, 단가, 납품, 발주, 현장 소장."
+        /** Same limit as the native side (1024 UTF-8 bytes; Korean is 3 bytes a character). */
+        const val MAX_PROMPT_CHARS=300
+        fun defaultPrompt()=if(PROMPT_ENABLED) SITE_PROMPT else ""
         /** A malformed segment is dropped on its own; the rest of the piece is kept. An empty result is silence. */
         fun decodeOutput(raw:ByteArray):AndroidWhisperOutput {
             check(raw.size in 1..MAX_OUTPUT_BYTES){"ANDROID_STT_OUTPUT_LIMIT"};val a=JSONObject(String(raw,Charsets.UTF_8)).getJSONArray("transcription");check(a.length()<=MAX_SEGMENTS){"ANDROID_STT_SEGMENTS"}

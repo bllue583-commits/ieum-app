@@ -50,6 +50,13 @@ class CallPipelineDeviceTest {
     private val out get()=File(context.getExternalFilesDir(null),"device-test").apply{mkdirs()}
     private fun report(name:String,x:JSONObject){Log.i("IEUM_RESULT","$name ${x}");File(out,"$name.json").writeText(x.toString(2))}
 
+    /** A short recording's pieces all at once (through the same streaming decoder the app uses). */
+    private fun decodeAll(bytes:ByteArray,mime:String):PipelineDecodedAudio {
+        val chunks=ArrayList<Pair<Long,FloatArray>>()
+        val info=PipelineAudioDecoder().decode(PipelineBytesInput(bytes),mime){_,offset,pcm->chunks+=offset to pcm}
+        return PipelineDecodedAudio(info.durationMs,chunks,info.vadApplied)
+    }
+
     private fun publicKorean():FloatArray=PipelineAudioMath.decodeWav(context.assets.open("local-stt/public-ko.wav").use{it.readBytes()}).chunks.flatMap{it.second.asList()}.toFloatArray()
 
     @Test fun t1_modelDownloadsAndVerifies() {
@@ -112,7 +119,7 @@ class CallPipelineDeviceTest {
     /** The transcription side hands a real transcript to the app's sink; without a key the call waits, plainly worded. */
     @Test fun t3_transcriptReachesTodayScreen() {
         val model=model();val file=checkNotNull(model.verifiedModelFile())
-        val decoded=PipelineAudioDecoder().decode(context.assets.open("local-stt/public-ko.wav").use{it.readBytes()},"audio/wav")
+        val decoded=decodeAll(context.assets.open("local-stt/public-ko.wav").use{it.readBytes()},"audio/wav")
         val segments=decoded.chunks.flatMap{(offset,pcm)->WhisperCallTranscriber(AndroidWhisperEngine(storage),model,deadlineSeconds=TEST_DEADLINE).transcribe(file,pcm){false}
             .map{CallTranscript.Segment(it.startMs+offset,it.endMs+offset,it.text)}}
         val text=segments.joinToString(""){it.text}.trim();assertTrue(text.isNotEmpty())
@@ -145,7 +152,7 @@ class CallPipelineDeviceTest {
     /** Samsung recordings are m4a/AAC at 44.1 kHz: MediaCodec decode, resample, transcribe. */
     @Test fun t3b_m4aRecordingDecodesAndTranscribes() {
         val model=model();val file=checkNotNull(model.verifiedModelFile())
-        val decoded=PipelineAudioDecoder().decode(inst.context.assets.open("public-ko.m4a").use{it.readBytes()},"audio/mp4")
+        val decoded=decodeAll(inst.context.assets.open("public-ko.m4a").use{it.readBytes()},"audio/mp4")
         val text=decoded.chunks.flatMap{(_,pcm)->WhisperCallTranscriber(AndroidWhisperEngine(storage),model,deadlineSeconds=TEST_DEADLINE).transcribe(file,pcm){false}}.joinToString(""){it.text}.trim()
         report("t3b_m4a",JSONObject().put("durationMs",decoded.durationMs).put("chunks",decoded.chunks.size).put("text",text.take(200)))
         assertTrue(decoded.durationMs in 6000..10000);assertTrue("no Korean: $text",text.any{it in '가'..'힣'})
@@ -194,6 +201,117 @@ class CallPipelineDeviceTest {
         val lines=posted?.notification?.extras?.getCharSequence(android.app.Notification.EXTRA_BIG_TEXT)?.toString()?.lines().orEmpty()
         report("t5_notification",JSONObject().put("posted",posted!=null).put("title",message.title).put("lines",org.json.JSONArray(lines)))
         assertNotNull("morning notification not shown",posted);assertTrue(lines.any{it.contains("견적서")})
+    }
+
+    /** F6: a 30-minute synthetic call (the public TTS sentence with pauses, encoded on the device as m4a/AAC like a Samsung
+     * recording) goes through the app's own runner piece by piece, with one stop part way (the worker being stopped) and a
+     * resume. The model is stood in for (the emulator runs Whisper large ~60x slower than a phone; memory is what is checked
+     * here). Peak Java heap is logged for the new path and for the v2.3 way (whole file copied, every 16 kHz piece kept,
+     * then the speech copied out); the new peak must be at most a quarter. No real recording is used. */
+    @Test fun t6_longCallStreamsWithoutRunningOutOfMemory() {
+        val minutes=args.getString("longCallMinutes")?.toIntOrNull() ?: 30
+        val file=File(context.cacheDir,"device-test-long-call.m4a")
+        val started=System.currentTimeMillis()
+        val audioMs=synthCallM4a(file,minutes*60)
+        val made=System.currentTimeMillis()-started
+        val result=JSONObject().put("minutes",minutes).put("fileBytes",file.length()).put("encodeSeconds",made/1000)
+            .put("heapLimitMb",Runtime.getRuntime().maxMemory()/1048576)
+        try {
+            assertTrue("synthetic file over the vault limit",file.length() in 1..25_000_000)
+            // New path: the bytes held as the app holds the vault copy, the real runner, a stand-in model.
+            val key=CallTranscriptionStore.Key("device-test-long-$started",1,"a".repeat(64))
+            val transcribed=ArrayList<Int>();var stopAt=7
+            val transcriber=CallTranscriber { _,pcm,_ -> transcribed+=pcm.size;Thread.sleep(150);listOf(CallTranscript.Segment(0,pcm.size*1000L/16000,"조각")) }
+            val fake=object:PipelineSttModel { override val modelSha256="a".repeat(64);override val runtimeSha256="b".repeat(64);override val modelName="stand-in";override fun verifiedModelFile()=file }
+            var info:PipelineAudioInfo?=null;var segments=0;var stopped=false;var resumedPieces=0
+            val newPeak=HeapPeak.measure {
+                CallTranscriptionStore(storage).use { store ->
+                    fun runner()=CallTranscriptionRunner(store,fake,PipelineAudioDecoder(),transcriber,read={error("unused")},skipReason={null},sink={null},stopped={transcribed.size>stopAt})
+                    fun input()=file.inputStream().use{PipelineBytesInput.read(it,file.length())}
+                    try { input().use{runner().transcribeRecording(key,it,"audio/mp4",file)} } catch(_:CallTranscriptionRunner.Stopped) { stopped=true }
+                    val before=transcribed.size;stopAt=Int.MAX_VALUE
+                    val (i,s)=input().use{runner().transcribeRecording(key,it,"audio/mp4",file)}
+                    info=i;segments=s.size;resumedPieces=transcribed.size-before
+                    store.clearParts(key)
+                }
+            }
+            val pieces=checkNotNull(info).chunks
+            result.put("pieces",pieces).put("segments",segments).put("vadApplied",info!!.vadApplied).put("durationMs",info!!.durationMs)
+                .put("stoppedOnce",stopped).put("piecesAfterResume",resumedPieces).put("newPeakMb",newPeak/1048576.0)
+            Log.i("IEUM_HEAP","long call new path peak ${newPeak/1048576} MB for $minutes min, $pieces pieces")
+            // The v2.3 way, for comparison (it may run out of memory: that counts as the whole heap).
+            var oldOom=false
+            val oldPeak=try { HeapPeak.measure {
+                val bytes=java.io.ByteArrayOutputStream().also{ out -> file.inputStream().use{it.copyTo(out)} }.toByteArray()
+                val all=ArrayList<Pair<Long,FloatArray>>()
+                PipelineAudioDecoder().decodeRaw(PipelineBytesInput(bytes),false){ms,x->all+=ms to x}
+                val kept=PipelineAudioMath.speechOnly(PipelineDecodedAudio(audioMs,all,false))
+                result.put("oldPieces",kept.chunks.size);bytes.size+all.size+kept.chunks.size
+            } } catch(e:OutOfMemoryError) { oldOom=true;System.gc();Runtime.getRuntime().maxMemory() }
+            result.put("oldPeakMb",oldPeak/1048576.0).put("oldOutOfMemory",oldOom).put("ratio",newPeak.toDouble()/oldPeak)
+            Log.i("IEUM_HEAP","long call old path peak ${oldPeak/1048576} MB${if(oldOom)" (out of memory)" else ""}")
+            report("t6_long_call",result)
+            assertTrue("stop part way did not happen",stopped);assertTrue(info!!.durationMs in audioMs-1000..audioMs+1000)
+            assertEquals("every piece transcribed once, the stopped one again",pieces+1,transcribed.size)
+            if(!oldOom)assertEquals(result.getInt("oldPieces"),pieces)
+            assertTrue("new peak ${newPeak/1048576} MB is over a quarter of the old ${oldPeak/1048576} MB",newPeak*4<=oldPeak)
+        } finally { file.delete() }
+    }
+
+    /** Peak used Java heap above the start, sampled every 10 ms while [block] runs. */
+    private object HeapPeak {
+        private fun used()=Runtime.getRuntime().let{it.totalMemory()-it.freeMemory()}
+        fun measure(block:()->Any?):Long {
+            repeat(3){System.gc();System.runFinalization()};Thread.sleep(200)
+            val base=used();val peak=java.util.concurrent.atomic.AtomicLong(base);val running=java.util.concurrent.atomic.AtomicBoolean(true)
+            val sampler=Thread{ while(running.get()){ peak.accumulateAndGet(used(),::maxOf);Thread.sleep(10) } }.apply{isDaemon=true;start()}
+            try { block() } finally { running.set(false);sampler.join() }
+            return maxOf(0L,maxOf(peak.get(),used())-base)
+        }
+    }
+
+    /** [seconds] of synthetic call audio as m4a/AAC 44.1 kHz mono 64 kbit/s (MediaCodec + MediaMuxer, moov at the end like a
+     * recorder): the public TTS sentence, quieter or louder each time, then 4 s of faint noise. Returns the length in ms. */
+    private fun synthCallM4a(file:File,seconds:Int,rate:Int=44100):Long {
+        val one=publicKorean();val cycle=one.size+16000*4
+        fun at16(i:Long):Float { val c=i/cycle;val j=(i%cycle).toInt()
+            return if(j<one.size) one[j]*(0.6f+0.04f*((c*7919)%10)) else (((i*7919)%200)-100)/100000f }
+        val total=rate.toLong()*seconds
+        val format=android.media.MediaFormat.createAudioFormat(android.media.MediaFormat.MIMETYPE_AUDIO_AAC,rate,1).apply {
+            setInteger(android.media.MediaFormat.KEY_AAC_PROFILE,android.media.MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+            setInteger(android.media.MediaFormat.KEY_BIT_RATE,64000);setInteger(android.media.MediaFormat.KEY_MAX_INPUT_SIZE,16384) }
+        val codec=android.media.MediaCodec.createEncoderByType(android.media.MediaFormat.MIMETYPE_AUDIO_AAC)
+        codec.configure(format,null,null,android.media.MediaCodec.CONFIGURE_FLAG_ENCODE);codec.start()
+        val muxer=android.media.MediaMuxer(file.path,android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        var track=-1;var written=0L;var inputDone=false;var outputDone=false
+        val info=android.media.MediaCodec.BufferInfo()
+        try {
+            while(!outputDone){
+                if(!inputDone){
+                    val i=codec.dequeueInputBuffer(10_000)
+                    if(i>=0){
+                        val buf=codec.getInputBuffer(i)!!;buf.clear();buf.order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                        val frames=minOf((buf.remaining()/2).toLong(),total-written).toInt()
+                        if(frames<=0){codec.queueInputBuffer(i,0,0,written*1_000_000/rate,android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM);inputDone=true}
+                        else {
+                            for(k in 0 until frames){ val p=(written+k)*16000.0/rate;val i0=p.toLong();val a=at16(i0);val v=a+(at16(i0+1)-a)*(p-i0).toFloat()
+                                buf.putShort((v.coerceIn(-1f,1f)*32767).toInt().toShort()) }
+                            codec.queueInputBuffer(i,0,frames*2,written*1_000_000/rate,0);written+=frames
+                        }
+                    }
+                }
+                val o=codec.dequeueOutputBuffer(info,10_000)
+                if(o==android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED){track=muxer.addTrack(codec.outputFormat);muxer.start()}
+                else if(o>=0){
+                    val buf=codec.getOutputBuffer(o)!!
+                    if(info.flags and android.media.MediaCodec.BUFFER_FLAG_CODEC_CONFIG!=0)info.size=0
+                    if(info.size>0&&track>=0){buf.position(info.offset);buf.limit(info.offset+info.size);muxer.writeSampleData(track,buf,info)}
+                    codec.releaseOutputBuffer(o,false)
+                    if(info.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM!=0)outputDone=true
+                }
+            }
+        } finally { runCatching{codec.stop()};codec.release();runCatching{muxer.stop()};muxer.release() }
+        return total*1000/rate
     }
 
     /** For the report: where the model came from. A full-size partial file is the runner's cached copy;

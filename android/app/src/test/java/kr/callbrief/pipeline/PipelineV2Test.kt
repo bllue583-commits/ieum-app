@@ -56,7 +56,7 @@ class PipelineV2Test:ProtectedTextHostTestBase() {
         override fun open(model:String,threads:Int):Long {log+="open:$threads";return next++}
         override fun cancel(handle:Long){log+="cancel:$handle"}
         override fun close(handle:Long){log+="close:$handle"}
-        override fun transcribeChunk(handle:Long,pcm:FloatArray,language:String,seconds:Int):ByteArray {
+        override fun transcribeChunk(handle:Long,pcm:FloatArray,language:String,seconds:Int,prompt:String):ByteArray {
             log+="chunk:$handle:$seconds"
             if(transcribed++==failOn)throw IllegalStateException("ANDROID_STT_NOT_COMPLETED")
             return """{"transcription":[{"offsets":{"from":0,"to":1000},"text":" 가"}]}""".toByteArray()

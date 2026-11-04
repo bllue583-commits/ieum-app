@@ -77,8 +77,9 @@ extern "C" JNIEXPORT jlong JNICALL Java_kr_callbrief_AndroidWhisperNative_open(J
 }
 // A silent chunk is valid here (0 segments); the pipeline drops it and keeps exact offsets.
 // [seconds] is the deadline of this chunk alone; cancel() ends it at once.
+// [prompt] (F4): Whisper's initial prompt (vocabulary hint); empty = none, as before. Off by default on the Kotlin side.
 extern "C" JNIEXPORT jbyteArray JNICALL Java_kr_callbrief_AndroidWhisperNative_transcribeChunk(
-        JNIEnv * env, jobject, jlong handle, jfloatArray pcm, jstring language, jint seconds) {
+        JNIEnv * env, jobject, jlong handle, jfloatArray pcm, jstring language, jint seconds, jstring prompt) {
     const int min_segments = 0, max_segments = 2048; const size_t max_output = 1048576;
     if (seconds < 30) seconds = 30; if (seconds > 3600) seconds = 3600;
     auto h = find_handle(handle);
@@ -87,17 +88,21 @@ extern "C" JNIEXPORT jbyteArray JNICALL Java_kr_callbrief_AndroidWhisperNative_t
     if (stopped(h.get())) { fail(env,"ANDROID_STT_STOPPED"); return nullptr; }
     auto count = env->GetArrayLength(pcm);
     if (count < 1600 || count > 5242880) { fail(env,"ANDROID_STT_PCM_SIZE"); return nullptr; }
+    if (prompt && env->GetStringUTFLength(prompt) > 1024) { fail(env,"ANDROID_STT_PROMPT"); return nullptr; }
     const char * lang = env->GetStringUTFChars(language,nullptr);
     if (!lang) { fail(env,"ANDROID_STT_NOT_COMPLETED"); return nullptr; }
+    const char * hint = prompt ? env->GetStringUTFChars(prompt,nullptr) : nullptr;
+    if (prompt && !hint) { env->ReleaseStringUTFChars(language,lang); fail(env,"ANDROID_STT_NOT_COMPLETED"); return nullptr; }
     auto params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     params.n_threads = h->threads; params.language = lang; params.translate = false;
     params.print_realtime = false; params.print_progress = false; params.print_timestamps = false; params.print_special = false;
-    params.no_context = true; params.single_segment = false; params.initial_prompt = nullptr;
+    params.no_context = true; params.single_segment = false; params.initial_prompt = (hint && *hint) ? hint : nullptr;
     params.abort_callback = stopped; params.abort_callback_user_data = h.get();
     auto * samples = env->GetFloatArrayElements(pcm,nullptr);
-    if (!samples) { env->ReleaseStringUTFChars(language,lang); fail(env,"ANDROID_STT_NOT_COMPLETED"); return nullptr; }
+    if (!samples) { if (hint) env->ReleaseStringUTFChars(prompt,hint); env->ReleaseStringUTFChars(language,lang); fail(env,"ANDROID_STT_NOT_COMPLETED"); return nullptr; }
     int status = whisper_full(h->ctx,params,samples,count);
     env->ReleaseFloatArrayElements(pcm,samples,JNI_ABORT);
+    if (hint) env->ReleaseStringUTFChars(prompt,hint);
     env->ReleaseStringUTFChars(language,lang);
     if (status != 0 || stopped(h.get())) { fail(env,"ANDROID_STT_NOT_COMPLETED"); return nullptr; }
     int segments = whisper_full_n_segments(h->ctx);
