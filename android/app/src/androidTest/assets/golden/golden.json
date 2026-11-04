@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "about": "이음 자막 골든 셋(F5, v2.4). 건설 현장 업무 통화를 흉내 낸 합성 한국어 통화 3건. 음성은 tools/audio/make_golden.py가 오프라인 TTS(piper, ko_KR-kss-medium)로 만들며 실제 사람 녹음은 없다. 업체와 사람 이름은 모두 가상이다. 정답은 turns[].say(읽은 그대로의 한글)를 이은 글이고, entities는 숫자·날짜·업체명·규격·이름. 채점은 tools/audio/golden_score.py.",
+  "voice": {
+    "engine": "piper-tts 1.8.0",
+    "model": "ko_KR-kss-medium",
+    "sha256": "624fd774e26895f24bebae1bd9a3379e3394baeade4b584924f83e414096e2c9",
+    "source": "https://huggingface.co/rhasspy/piper-voices/tree/main/ko/ko_KR/kss/medium",
+    "license": "음성 모델은 KSS 데이터셋(CC BY-NC-SA 4.0)으로 학습됨. 합성 결과는 시험용으로만 쓴다."
+  },
+  "prompt": "건설 현장 업무 통화. 철근, 레미콘, 슬래브, 타설, 루베, 펌프카, 슬럼프, 견적서, 세금계산서, 스퀘어, 모래내철강, 푸른들레미콘.",
+  "promptNote": "F4 prompt 켬 비교용. 장부에 있는 업체(모래내철강, 푸른들레미콘)만 넣고 한결전기는 새 업체로 일부러 뺐다.",
+  "calls": [
+    {
+      "id": "call1",
+      "file": "call1.m4a",
+      "topic": "철근 견적과 납품 일정",
+      "farGainDb": -8,
+      "turns": [
+        {"who": "me", "say": "여보세요, 네 말씀하세요."},
+        {"who": "far", "say": "안녕하세요, 모래내철강 박준호 과장입니다. 지난번에 요청하신 철근 견적 때문에 전화드렸어요."},
+        {"who": "me", "say": "아 네, 과장님. 디 십삼 철근 이십 톤 맞으시죠?"},
+        {"who": "far", "say": "네, 디 십삼 이십 톤하고 디 십 십오 톤까지 같이 넣었습니다. 톤당 단가는 팔십칠만 원으로 잡았어요.", "pauseMs": 2200},
+        {"who": "me", "say": "생각보다 좀 높네요. 지난달에는 팔십삼만 원이었잖아요."},
+        {"who": "far", "say": "요즘 원자재 가격이 올라서요. 대신 운반비는 저희가 부담하겠습니다."},
+        {"who": "me", "say": "그럼 납품은 언제 가능하세요?"},
+        {"who": "far", "say": "십일 월 십팔 일 수요일 오전 일곱 시까지 현장에 넣어 드릴 수 있습니다.", "pauseMs": 2000},
+        {"who": "me", "say": "좋아요. 견적서는 오늘 중으로 메일로 보내 주세요. 검토하고 내일 오후에 연락드릴게요."},
+        {"who": "far", "say": "네, 알겠습니다. 오늘 다섯 시 전에 보내 드리겠습니다."}
+      ],
+      "entities": [
+        {"type": "company", "text": "모래내철강"},
+        {"type": "name", "text": "박준호"},
+        {"type": "spec", "text": "D13", "variants": ["디십삼", "D-13"]},
+        {"type": "number", "text": "20톤"},
+        {"type": "spec", "text": "D10", "variants": ["디십", "D-10"]},
+        {"type": "number", "text": "15톤"},
+        {"type": "number", "text": "87만 원", "variants": ["870000원", "87만원"]},
+        {"type": "number", "text": "83만 원", "variants": ["830000원", "83만원"]},
+        {"type": "date", "text": "11월 18일"},
+        {"type": "date", "text": "수요일"},
+        {"type": "date", "text": "7시", "variants": ["일곱시"]},
+        {"type": "date", "text": "5시", "variants": ["다섯시"]}
+      ]
+    },
+    {
+      "id": "call2",
+      "file": "call2.m4a",
+      "topic": "레미콘 타설 물량과 시간",
+      "farGainDb": -10,
+      "turns": [
+        {"who": "far", "say": "소장님, 푸른들레미콘 이서연 대리입니다. 내일 삼 층 슬래브 타설 건으로 확인 전화드렸어요."},
+        {"who": "me", "say": "네, 대리님. 물량은 백이십 루베로 잡아 주세요."},
+        {"who": "far", "say": "강도는 이십사 메가, 슬럼프는 백오십으로 들어가면 될까요?"},
+        {"who": "me", "say": "네, 그렇게 해 주세요. 펌프카는 오십이 미터짜리 한 대 필요합니다.", "pauseMs": 2400},
+        {"who": "far", "say": "타설 시작은 몇 시로 할까요?"},
+        {"who": "me", "say": "아침 여덟 시부터 시작해서 오후 세 시 전에 끝내려고요."},
+        {"who": "far", "say": "알겠습니다. 차는 십오 분 간격으로 보내 드리겠습니다."},
+        {"who": "me", "say": "그리고 비 소식이 있으면 십일 월 이십 일 금요일로 미룰 수도 있어요.", "pauseMs": 1800},
+        {"who": "far", "say": "네, 전날 오후 네 시까지만 말씀해 주시면 됩니다."},
+        {"who": "me", "say": "네, 고맙습니다. 수고하세요."}
+      ],
+      "entities": [
+        {"type": "company", "text": "푸른들레미콘"},
+        {"type": "name", "text": "이서연"},
+        {"type": "number", "text": "3층"},
+        {"type": "number", "text": "120루베", "variants": ["120㎥", "120m3"]},
+        {"type": "spec", "text": "24메가", "variants": ["24MPa", "24mpa"]},
+        {"type": "spec", "text": "슬럼프는 150", "variants": ["슬럼프 150"]},
+        {"type": "spec", "text": "52미터", "variants": ["52m"]},
+        {"type": "number", "text": "한 대", "variants": ["1대"]},
+        {"type": "date", "text": "8시", "variants": ["여덟시"]},
+        {"type": "date", "text": "3시", "variants": ["세시"]},
+        {"type": "number", "text": "15분"},
+        {"type": "date", "text": "11월 20일"},
+        {"type": "date", "text": "금요일"},
+        {"type": "date", "text": "4시", "variants": ["네시"]}
+      ]
+    },
+    {
+      "id": "call3",
+      "file": "call3.m4a",
+      "topic": "전기 자재 분할 납품(상대 목소리가 작음: 침묵 하한 비교용)",
+      "farGainDb": -30,
+      "turns": [
+        {"who": "far", "say": "최동욱입니다. 한결전기요. 사 스퀘어 전선 오백 미터 주문 넣으셨죠?"},
+        {"who": "me", "say": "네, 실장님. 그거 언제 와요?"},
+        {"who": "far", "say": "재고가 삼백 미터밖에 없어서 나머지 이백 미터는 다음 주 월요일에 보내 드릴게요.", "pauseMs": 2000},
+        {"who": "me", "say": "그럼 먼저 삼백 미터만 금요일 오전에 보내 주세요. 배관용 파이프 백 에이 열 개도 같이요."},
+        {"who": "far", "say": "파이프는 길이 육 미터짜리로 보내면 되죠?"},
+        {"who": "me", "say": "네, 맞아요. 금액은 얼마예요?"},
+        {"who": "far", "say": "부가세 포함해서 이백사십만 오천 원입니다.", "pauseMs": 2200},
+        {"who": "me", "say": "알겠어요. 세금계산서는 십일 월 말일에 끊어 주세요."},
+        {"who": "far", "say": "네, 소장님. 감사합니다."}
+      ],
+      "entities": [
+        {"type": "name", "text": "최동욱"},
+        {"type": "company", "text": "한결전기"},
+        {"type": "spec", "text": "4스퀘어", "variants": ["4sq", "4SQ", "4제곱"]},
+        {"type": "number", "text": "500미터", "variants": ["500m"]},
+        {"type": "number", "text": "300미터", "variants": ["300m"]},
+        {"type": "number", "text": "200미터", "variants": ["200m"]},
+        {"type": "date", "text": "월요일"},
+        {"type": "date", "text": "금요일"},
+        {"type": "spec", "text": "100A", "variants": ["백에이", "100에이"]},
+        {"type": "number", "text": "10개", "variants": ["열개"]},
+        {"type": "spec", "text": "6미터", "variants": ["6m"]},
+        {"type": "number", "text": "240만 5천 원", "variants": ["2405000원", "240만5천원", "2,405,000원"]},
+        {"type": "date", "text": "11월 말일"}
+      ]
+    }
+  ]
+}

@@ -9,6 +9,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kr.callbrief.AndroidWhisperEngine
 import kr.callbrief.SecureSettings
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
@@ -194,6 +195,80 @@ class CallPipelineDeviceTest {
         val lines=posted?.notification?.extras?.getCharSequence(android.app.Notification.EXTRA_BIG_TEXT)?.toString()?.lines().orEmpty()
         report("t5_notification",JSONObject().put("posted",posted!=null).put("title",message.title).put("lines",org.json.JSONArray(lines)))
         assertNotNull("morning notification not shown",posted);assertTrue(lines.any{it.contains("견적서")})
+    }
+
+    // ---- Golden set (v24-2, design F5; decides #4 silence floor and #5 prompt in v2.5-4) ----
+
+    /** Three synthetic Korean site calls (offline TTS, made by tools/audio/make_golden.py; fictional companies and people) are
+     * transcribed the way the app does it (decode with speech-only cutting, one model session per call, chunks, TranscriptClean).
+     * The text of every call and variant goes to logcat (IEUM_RESULT golden_text) and device-test/golden_runs.json;
+     * tools/audio/golden_score.py on the runner turns that into CER, entity accuracy and the comparison table (one scorer, host-tested).
+     *
+     * Argument `golden`: `base` (default: today's code only), `compare` (also the [GoldenSwitches] variants), `off`.
+     * The large model on the emulator is far too slow for three one-minute calls; it runs only with `goldenLarge=true` (real devices). */
+    @Test fun tg_goldenSet() {
+        val mode=args.getString("golden") ?: "base"
+        if(mode=="off"){report("golden",JSONObject().put("skipped","golden=off"));return}
+        if(large&&args.getString("goldenLarge")!="true"){report("golden",JSONObject().put("skipped","large model on an emulator is too slow for the golden set (goldenLarge=true on a real device)"));return}
+        val set=JSONObject(inst.context.assets.open("golden/golden.json").bufferedReader().use{it.readText()})
+        val model=model();val file=checkNotNull(model.verifiedModelFile())
+        val variants=if(mode=="compare") GoldenSwitches.VARIANTS else GoldenSwitches.VARIANTS.take(1)
+        val runs=JSONArray();val summary=JSONObject().put("model",spec.name).put("mode",mode)
+        for(v in variants) {
+            val row=JSONObject().put("variant",v.name).put("floor",v.floor ?: JSONObject.NULL).put("prompt",v.prompt).put("available",v.available)
+            if(!v.available) {
+                row.put("why",v.why);runs.put(row);Log.i("IEUM_RESULT","golden_variant $row");summary.put(v.name,"not available");continue
+            }
+            val calls=JSONArray();val started=System.currentTimeMillis()
+            for(i in 0 until set.getJSONArray("calls").length()) {
+                val call=set.getJSONArray("calls").getJSONObject(i)
+                val t0=System.currentTimeMillis()
+                val decoded=GoldenSwitches.decode(inst.context.assets.open("golden/"+call.getString("file")).use{it.readBytes()},v.floor)
+                val prompt=if(v.prompt) set.getString("prompt") else null
+                val segments=GoldenSwitches.transcriber(storage,model,prompt,TEST_DEADLINE).open(file){false}.use { session ->
+                    decoded.chunks.flatMap{(offset,pcm)->session.transcribe(pcm){false}.map{CallTranscript.Segment(it.startMs+offset,it.endMs+offset,it.text)}} }
+                val cleaned=TranscriptClean.clean(segments)
+                val x=JSONObject().put("variant",v.name).put("id",call.getString("id")).put("seconds",(System.currentTimeMillis()-t0)/1000.0)
+                    .put("audioSeconds",decoded.durationMs/1000.0).put("speechSeconds",decoded.chunks.sumOf{it.second.size}/16000.0).put("cleaned",cleaned.removed)
+                    .put("text",cleaned.segments.joinToString(""){it.text}.trim())
+                Log.i("IEUM_RESULT","golden_text $x");calls.put(x)
+            }
+            row.put("seconds",(System.currentTimeMillis()-started)/1000).put("calls",calls);runs.put(row)
+            Log.i("IEUM_RESULT","golden_variant ${JSONObject().put("variant",v.name).put("floor",v.floor ?: JSONObject.NULL).put("prompt",v.prompt).put("available",true).put("seconds",row.getLong("seconds"))}")
+            summary.put(v.name,"${row.getLong("seconds")} s")
+        }
+        File(out,"golden_runs.json").writeText(JSONObject().put("model",spec.name).put("threads",(Runtime.getRuntime().availableProcessors()-1).coerceIn(1,6)).put("variants",runs).toString(2))
+        report("golden",summary)
+        // Scores are measurements, not pass/fail; only check that every call produced Korean text.
+        for(i in 0 until runs.length()) runs.getJSONObject(i).optJSONArray("calls")?.let { c -> for(j in 0 until c.length())
+            assertTrue("no Korean in ${c.getJSONObject(j).getString("id")}",c.getJSONObject(j).getString("text").any{it in '가'..'힣'}) }
+    }
+
+    /** The two switches the golden set compares belong to the v24-stt work (feature/r6-v24-stt): F3 silence floor as a
+     * parameter of the speech-only cut, F4 initial prompt on the Whisper session. They are not in this code yet, so the
+     * variants are listed but marked unavailable (no reflection). When that work is merged, set [FLOOR] / [PROMPT] to true
+     * and fill in the two marked lines below; nothing else in the test changes. */
+    private object GoldenSwitches {
+        /** F3 (#4): true once the floor can be passed to the speech-only cut. */
+        const val FLOOR=false
+        /** F4 (#5): true once the Whisper session takes an initial prompt. */
+        const val PROMPT=false
+        class Variant(val name:String,val floor:Float?,val prompt:Boolean,val available:Boolean,val why:String)
+        /** "base" first (today's defaults: floor 0.006 in PipelineAudioMath, no prompt), then one change at a time. */
+        val VARIANTS=listOf(
+            Variant("base",null,false,true,""),
+            Variant("floor0025",0.0025f,false,FLOOR,"silence floor switch not in this build yet (v24-stt)"),
+            Variant("prompt",null,true,PROMPT,"prompt switch not in this build yet (v24-stt)"))
+        /** null = the app's own decode. With [FLOOR]: decode without the cut, then PipelineAudioMath.speechOnly(audio, floor) (fill in). */
+        fun decode(bytes:ByteArray,floor:Float?):PipelineDecodedAudio {
+            check(floor==null||FLOOR){"floor switch missing"}
+            return PipelineAudioDecoder().decode(bytes,"audio/mp4")
+        }
+        /** null = no prompt. With [PROMPT]: pass [prompt] to the transcriber/session (fill in). */
+        fun transcriber(context:android.content.Context,model:PipelineSttModel,prompt:String?,deadline:Int):CallTranscriber {
+            check(prompt==null||PROMPT){"prompt switch missing"}
+            return WhisperCallTranscriber(AndroidWhisperEngine(context),model,deadlineSeconds=deadline)
+        }
     }
 
     /** For the report: where the model came from. A full-size partial file is the runner's cached copy;

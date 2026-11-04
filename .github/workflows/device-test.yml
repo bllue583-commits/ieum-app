@@ -8,13 +8,19 @@ name: device-test
 # Full run (about 40 minutes): the app's own large model and the speed test. Runs when a push changes speech
 # recognition files (native code, AndroidWhisper*, CallTranscription*, PipelineAudio*, PipelineModel*, the native
 # build script or the whisper.cpp source), or by hand with full=true.
+#
+# Golden set (tg_goldenSet, v2.4): three synthetic one-minute Korean site calls scored by tools/audio/golden_score.py
+# (per-call CER, entity accuracy, comparison table in the log and device-results/golden-score.*). Quick runs score
+# today's code (golden=base, about 10 more minutes); golden=compare (by hand) adds the silence-floor and prompt variants
+# where this build has them. The full run skips it (the large model on the emulator is far too slow for it).
 on:
   push:
     branches: ['feature/**']
-    paths: ['android/**', 'tools/run_device_test.sh', 'tools/build_android_whisper.py', 'third_party/whisper.cpp-*', '.github/workflows/device-test.yml']
+    paths: ['android/**', 'tools/run_device_test.sh', 'tools/audio/**', 'tools/build_android_whisper.py', 'third_party/whisper.cpp-*', '.github/workflows/device-test.yml']
   workflow_dispatch:
     inputs:
       full: {description: 'Full run: large model + speed test (about 40 minutes)', type: boolean, default: false}
+      golden: {description: 'Golden set: base (today''s code), compare (+ floor/prompt variants, about 10 minutes each), off', type: choice, options: [base, compare, off], default: base}
 
 concurrency:
   group: device-${{ github.ref }}
@@ -72,7 +78,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: android/app/build/generated/ieum-whisper
-          key: native-${{ hashFiles('android/app/src/main/cpp/**', 'tools/build_android_whisper.py', 'third_party/whisper.cpp-*', 'tools/audio/**') }}
+          key: native-${{ hashFiles('android/app/src/main/cpp/**', 'tools/build_android_whisper.py', 'third_party/whisper.cpp-*', 'tools/audio/*.wav') }}
       - uses: android-actions/setup-android@v3
         with:
           packages: 'platforms;android-36 build-tools;35.0.0'
@@ -187,12 +193,13 @@ jobs:
           force-avd-creation: false
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: IEUM_MODEL=${{ steps.mode.outputs.model }} IEUM_MODEL_FILE=model-cache/${{ steps.mode.outputs.name }}.bin IEUM_REPEAT=1 IEUM_THREADS=6 IEUM_CALL_LIKE=false bash tools/run_device_test.sh
+          script: IEUM_MODEL=${{ steps.mode.outputs.model }} IEUM_MODEL_FILE=model-cache/${{ steps.mode.outputs.name }}.bin IEUM_REPEAT=1 IEUM_THREADS=6 IEUM_CALL_LIKE=false IEUM_GOLDEN=${{ inputs.golden || 'base' }} bash tools/run_device_test.sh
       - name: Summarize
         if: always()
         run: |
           echo "::notice title=device::model=${{ steps.mode.outputs.model }}"
-          [ -f device-results/results.txt ] && sed 's/^/::notice title=device::/' device-results/results.txt | cut -c1-900 || true
+          [ -f device-results/results.txt ] && grep -v ' golden_text ' device-results/results.txt | sed 's/^/::notice title=device::/' | cut -c1-900 || true
+          [ -f device-results/golden-score.txt ] && sed 's/^/::notice title=golden::/' device-results/golden-score.txt | cut -c1-900 || true
           grep -E 'FAILURES|Error in|^OK|AssertionError|Exception' device-results/instrument.txt 2>/dev/null | head -20 | sed 's/^/::warning title=instrument::/' || true
       - uses: actions/upload-artifact@v4
         if: always()
