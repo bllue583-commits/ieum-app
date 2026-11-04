@@ -105,12 +105,21 @@ public final class RecordingDiscovery {
         if(stopped.get())return "DISCOVERY_RUN_STOPPED";
         if(!docs.hasReadGrant(selection)){pauseGrant();return "FOLDER_READ_GRANT_MISSING";}
         Moment now=clock.now();Claim claim=store.transact(s->{requireSelection(s);if(s.grantPaused)return null;
-            List<String> ids=new ArrayList<>(s.rows.keySet());java.util.Collections.sort(ids);int start=0;
+            List<String> ids=new ArrayList<>(s.rows.keySet());java.util.Collections.sort(ids);
+            // A file never stored comes first, the most recently modified first (a call that just ended beats the backlog).
+            // One that already failed is left to the round robin below so it cannot hold the line.
+            String best=null;long bestModified=Long.MIN_VALUE;
+            for(String id:ids){Row r=s.rows.get(id);
+                if(r.current()!=null||r.error!=null||!eligible(r,now))continue;
+                long modified=r.metadata.modifiedMs==null?0:r.metadata.modifiedMs;
+                if(best==null||modified>bestModified){best=id;bestModified=modified;}}
+            if(best!=null){Row r=s.rows.get(best);return claim(s,r,best,now);}
+            int start=0;
             if(s.claimCursor!=null){while(start<ids.size()&&ids.get(start).compareTo(s.claimCursor)<=0)start++;if(start==ids.size())start=0;}
             for(int step=0;step<ids.size();step++){
                 String id=ids.get((start+step)%ids.size());Row r=s.rows.get(id);
-                boolean eligible=r.status==Status.READY||r.status==Status.RETRY||(r.status==Status.READING&&expired(r,now));
-                if(!eligible)continue;r.leaseEpoch++;r.leaseBoot=now.bootId;r.leaseUntil=Math.addExact(now.elapsedMs,config.leaseMs);r.status=Status.READING;r.error=null;s.claimCursor=id;return new Claim(r.copy());}
+                if(!eligible(r,now))continue;
+                return claim(s,r,id,now);}
             return null;});
         if(claim==null)return "NO_READY_JOB";
         byte[] bytes=null;
@@ -150,6 +159,15 @@ public final class RecordingDiscovery {
                 (e instanceof java.io.FileNotFoundException||e instanceof java.nio.file.NoSuchFileException?"SOURCE_UNAVAILABLE":"LOCAL_IO_FAILED");fail(claim,code);return code;}
         finally{if(bytes!=null)Arrays.fill(bytes,(byte)0);}
     }
+    private boolean eligible(Row r,Moment now){return r.status==Status.READY||r.status==Status.RETRY||(r.status==Status.READING&&expired(r,now));}
+    private Claim claim(DiscoveryStore.State s,Row r,String id,Moment now){
+        r.leaseEpoch++;r.leaseBoot=now.bootId;r.leaseUntil=Math.addExact(now.elapsedMs,config.leaseMs);r.status=Status.READING;r.error=null;s.claimCursor=id;return new Claim(r.copy());
+    }
+    /** True while a metadata round is still half way (the next page continues it). */
+    public boolean scanOpen(){return store.snapshot().scanCursor!=null;}
+    /** True while some file only waits for its second look or the quiet time. */
+    public boolean hasStableWait(){for(Row r:store.snapshot().rows.values())if(r.status==Status.WAITING_STABLE)return true;return false;}
+    public boolean isStopped(){return stopped.get();}
     private byte[] read(Claim claim)throws Exception{
         long length=claim.row.metadata.bytes;if(length>config.maxBytes)throw new Failure("SOURCE_TOO_LARGE");byte[] bytes=new byte[(int)length];int offset=0;
         requireAllowed(claim);

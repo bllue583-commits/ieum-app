@@ -41,7 +41,8 @@ public final class DiscoveryTypes {
                 throw new Failure("INVALID_DISCOVERY_CONFIG");
             this.quietMs=quietMs;this.leaseMs=leaseMs;this.recheckMs=recheckMs;this.maxBytes=maxBytes;this.pageSize=pageSize;
         }
-        public static Config conservative(){return new Config(20000,120000,900000,25000000,128);}
+        /** Files already stored are looked at again at most once a day; the page is large so one inventory covers a big folder. */
+        public static Config conservative(){return new Config(20000,120000,86_400_000L,25000000,512);}
     }
     public static final class Metadata {
         public final String documentId, displayName, mimeType;

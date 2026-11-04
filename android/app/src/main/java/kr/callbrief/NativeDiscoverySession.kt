@@ -18,10 +18,13 @@ internal class NativeDiscoverySession(
     private val now:()->Long={System.currentTimeMillis()},
     private val syntheticFixture:Boolean=false,
     private val config:Config=Config.conservative(),
-    private val fault:FaultHook=FaultHook {}
+    private val fault:FaultHook=FaultHook {},
+    /** Files last modified before this are never looked at (the first pass reaches back to 10/1 only). */
+    private val minModifiedMs:Long=0L
 ) : AutoCloseable {
     private val queue=store.discoveryQueue(selection)
     private var lastDocuments=emptyMap<String,SourceDocument>()
+    private fun skipped(d:SourceDocument)=source.excluded(d) || (d.modified in 1 until minModifiedMs)
     private fun document(m:Metadata):SourceDocument=lastDocuments[m.documentId] ?: store.discoveryDocument(selection,m)
     private val documents=object:Documents {
         override fun hasReadGrant(s:Selection):Boolean=s==selection && runCatching { source.checkSelected() }.isSuccess
@@ -35,7 +38,7 @@ internal class NativeDiscoverySession(
         override fun acceptPage(s:Selection,page:Page) {
             check(s==selection);source.checkSelected()
             val accepted=page.documents.map { m->checkNotNull(lastDocuments[m.documentId]).also{check(metadata(it)==m) { "SOURCE_METADATA_CHANGED" }} }
-            store.rememberDiscoveryDocuments(selection,accepted.filter { !source.excluded(it) })
+            store.rememberDiscoveryDocuments(selection,accepted.filter { !skipped(it) })
         }
         override fun stat(s:Selection,id:String):Metadata {
             check(s==selection);val d=lastDocuments[id] ?: store.discoveryDocumentById(selection,id,queue.snapshot())
@@ -55,7 +58,7 @@ internal class NativeDiscoverySession(
         d.size.takeIf { it>=0 },d.modified.takeIf { it>0 },d.partial || d.modified>now()-120000,d.virtual)
     private val policy=Policy { selected,m ->
         check(selected==selection);source.checkSelected();val d=document(m)
-        val permission=if(source.excluded(d))Permission.EXCLUDED else try {source.checkReadable(d);Permission.CONFIRMED_ALLOWED}
+        val permission=if(skipped(d))Permission.EXCLUDED else try {source.checkReadable(d);Permission.CONFIRMED_ALLOWED}
             catch(error:Exception){source.checkSelected();Permission.UNCONFIRMED}
         // Only privacy fields are inspected; account tokens and other settings are not copied.
         val state=privacySnapshot();val privacy=JSONObject()
@@ -84,7 +87,8 @@ internal class NativeDiscoverySession(
     }
     val engine=RecordingDiscovery(queue,documents,policy,sink,selection,clock,config,fault,
         Bootstrap { selected,m,_ ->store.discoverySeed(selected,m) })
-    fun cycle(pages:Int=4,jobs:Int=4):DiscoveryPump.Cycle {
+    /** [budgetMs]>0: keep going until the line is empty or the time is up; otherwise one bounded pass of [pages] and [jobs]. */
+    fun cycle(pages:Int=4,jobs:Int=4,budgetMs:Long=0L):DiscoveryPump.Cycle {
         if(!source.collectionAccepted) {
             val result=DiscoveryPump.Cycle();repeat(pages){result.observed+=engine.scanPage()};result.localOutcomes.add("PERSONAL_DATA_COLLECTION_NOT_ACCEPTED");return result
         }
@@ -95,7 +99,7 @@ internal class NativeDiscoverySession(
             // Metadata queue can work without login or an initialized audio key. No auto key creation.
             val result=DiscoveryPump.Cycle();repeat(pages){result.observed+=engine.scanPage()};result.localOutcomes.add("AUDIO_STORE_INITIALIZATION_REQUIRED");return result
         }
-        return DiscoveryPump(engine).run(pages,jobs)
+        return if(budgetMs>0) DiscoveryPump(engine).runBudget(pages,budgetMs,config.quietMs) else DiscoveryPump(engine).run(pages,jobs)
     }
     fun cancel(){engine.cancelRun();store.cancel()}
     override fun close(){engine.cancelRun();store.close()}

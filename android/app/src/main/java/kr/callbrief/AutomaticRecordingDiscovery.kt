@@ -13,6 +13,8 @@ import java.util.concurrent.*
 /** Periodic scan of the selected recording folder into the encrypted vault, then hands new recordings to transcription. */
 internal object AutomaticRecordingDiscovery {
     const val TAG="ieum.local.recording.discovery"
+    /** One pass keeps working until the line is empty, but at most this long (inside WorkManager's 10 minute limit). */
+    const val CYCLE_BUDGET_MS=75_000L
     private val running=ConcurrentHashMap.newKeySet<String>()
     @Volatile private var hostStore:((Context)->GeneralLocalStore)?=null
     @Volatile private var hostWork:((String,PeriodicWorkRequest)->Unit)?=null
@@ -61,7 +63,7 @@ internal object AutomaticRecordingDiscovery {
             val local=open(context){!cancelled()} ?: return outcome("WAITING_LOCAL_SOURCE","SELECTED_FOLDER_REQUIRED")
             local.use { session ->
                 active(session)
-                try {if(cancelled())session.cancel();scan=session.cycle()}finally{active(null)}
+                try {if(cancelled())session.cancel();scan=session.cycle(32,4,CYCLE_BUDGET_MS)}finally{active(null)}
             }
             if(!cancelled())runCatching{kr.callbrief.pipeline.CallTranscriptionWork.enqueue(context)} // new recordings -> transcribe soon
             blocked(context,binding,stopped)?.let{return it}
@@ -96,7 +98,7 @@ internal object AutomaticRecordingDiscovery {
         val store=hostStore?.invoke(context) ?: GeneralLocalStore(context) // Received protected SQL implementation is mandatory.
         return try {
             NativeDiscoverySession(store,source,selected,settings::snapshot,
-                kr.co.ieum.discovery.DiscoveryTypes.Clock { Moment("boot_"+Settings.Global.getInt(context.contentResolver,Settings.Global.BOOT_COUNT),SystemClock.elapsedRealtime()) },syntheticFixture=source.explicitlySyntheticScope)
+                kr.co.ieum.discovery.DiscoveryTypes.Clock { Moment("boot_"+Settings.Global.getInt(context.contentResolver,Settings.Global.BOOT_COUNT),SystemClock.elapsedRealtime()) },syntheticFixture=source.explicitlySyntheticScope,minModifiedMs=kr.callbrief.pipeline.FirstPass.FROM_MS)
         }catch(error:Exception){store.close();throw error}
     }
     fun ensure(context:Context) {

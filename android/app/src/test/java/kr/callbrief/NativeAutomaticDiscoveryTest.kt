@@ -177,5 +177,29 @@ class NativeAutomaticDiscoveryTest {
             n.use{assertEquals(0,n.engine.scanPage());assertEquals(0,n.engine.rows().size);assertEquals(0,rows("SELECT name FROM sqlite_master WHERE type='table' AND name='discovery_documents'").size);assertEquals(0,s.snapshot().length());assertEquals(0,src.opens)}
         }
     }
-
+    @Test fun N25FilesBeforeTheCutoffAreNeverSeenAndTheNewestUnstoredFileGoesFirst()=worker {
+        val src=Source().apply{put("a",modified=now-900000);put("b",modified=now-300000);put("old",modified=now-5000000)};val t=Time();val wide=Config(10,10000,1000,25000000,10)
+        store().use{s->s.initializeEmpty()
+            NativeDiscoverySession(s,src,selected(src),{JSONObject()},t,{now},true,wide,FaultHook{},now-1000000).use{n->
+                n.cycle(1,1);t.elapsed+=10;n.cycle(1,1)
+                assertEquals(setOf("a","b"),n.engine.rows().map{it.metadata.documentId}.toSet())
+                assertEquals(Status.STORED,n.engine.rows().single{it.metadata.documentId=="b"}.status)
+                assertEquals(Status.READY,n.engine.rows().single{it.metadata.documentId=="a"}.status)}}
+    }
+    @Test fun N26AStoredFileWaitsForTheRecheckInterval()=worker {
+        val day=Config(10,10000,86_400_000L,25000000,10);val src=Source().apply{put(modified=now-300000)};val t=Time()
+        store().use{s->s.initializeEmpty()
+            NativeDiscoverySession(s,src,selected(src),{JSONObject()},t,{now},true,day).use{n->
+                n.cycle(1,1);t.elapsed+=10;n.cycle(1,1);val opens=src.opens;assertEquals(1,opens)
+                t.elapsed+=3_600_000;n.cycle(1,1);n.cycle(1,1);assertEquals(opens,src.opens)
+                t.elapsed+=86_400_000;n.cycle(1,1);n.cycle(1,1);assertTrue(src.opens>opens)}}
+    }
+    @Test fun N27TimeBudgetKeepsGoingUntilTheLineIsEmpty()=worker {
+        val src=Source().apply{put("a",modified=now-900000);put("b",modified=now-600000);put("c",modified=now-300000)};val t=Time();val wide=Config(10,10000,1000,25000000,10)
+        src.onInventory={t.elapsed+=50}
+        store().use{s->s.initializeEmpty()
+            NativeDiscoverySession(s,src,selected(src),{JSONObject()},t,{now},true,wide).use{n->
+                n.cycle(1,1,8000L)
+                assertEquals(3,s.snapshot().length());assertTrue(n.engine.rows().all{it.status==Status.STORED})}}
+    }
 }
