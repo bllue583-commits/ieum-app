@@ -16,8 +16,6 @@ SDK/NDK는 OS별 공식 Android 설치 패키지를 준비합니다. Mac r28c �
 
 Robolectric JAR는 준비 후 `python3 tools/prepare_host_tests.py <local-jar>`로 SHA 검증·복사합니다. 현재 코드의 offline dependency 경로를 바꾸지 않고 생성 `build/synthetic-test-home/`에 둡니다. `clean`으로 지워지면 다시 준비합니다.
 
-`local_stt/adapter.py`의 과거 small 모델/Linux x86_64 runtime은 별개 역사 경로입니다. 위 Android tiny 모델로 대신하지 않습니다. `tests/test_local_stt.py`의 외부 관측 두 시험에는 승인된 `raw.json/raw.txt`가 필요하며 `IEUM_PRIOR_OBSERVED_DIR`로 지정합니다. 기본 Git clone에는 해당 과거 관측 자료를 넣지 않았고 미준비 시 두 시험이 SKIP됩니다.
-
 기존 서명키는 Mac의 기존 승인 위치에서만 참조하고 복사·업로드하지 않습니다. 기존 APK와 개발용 새 서명이 다르면 기존 설치에 업데이트할 수 없습니다. 이관에서 서명키 생성/교체·휴대폰 자료 삭제를 수행하지 않았습니다.
 
 ## 과거 합성 입력의 외부 준비

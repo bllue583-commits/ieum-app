@@ -121,6 +121,8 @@ class EncryptedRecordingStore(
             mark(ref, "VERIFIED")
         } catch (error: VaultException) { mark(ref, error.code); throw error }
     }
+    /** Removes the encrypted original from the phone. The immutable reference row stays; the caller records that it was pruned. */
+    fun deleteBlob(ref: VaultReference): Boolean { requireIo();return vault.deleteBlob(ref.ciphertextSha256, token) }
     private fun preRead(observation: FileCollector.Observation, excluded: () -> Boolean) {
         val p = observation.metadata
         repository.checkSelectedFolder(p["owner_key"].toString(), p["grant_id"].toString(),

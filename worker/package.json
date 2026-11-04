@@ -1,8 +1,0 @@
-{
-  "name": "ieum-automation-worker",
-  "version": "0.1.0-local-candidate",
-  "private": true,
-  "type": "module",
-  "engines": {"node": ">=22.13"},
-  "scripts": {"test": "node --test tests/*.test.mjs", "check": "node src/cli.mjs --check config.example.json"}
-}

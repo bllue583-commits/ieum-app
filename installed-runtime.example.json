@@ -1,6 +1,0 @@
-{
-  "binary": "/path/to/approved/pinned/whisper-cli",
-  "model": "/path/to/approved/pinned/model.bin",
-  "audio": "/path/to/approved/public-synthetic.wav",
-  "observed_index": "/path/to/approved/prior-observation-index.json"
-}

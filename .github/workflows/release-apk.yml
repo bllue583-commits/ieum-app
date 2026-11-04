@@ -68,6 +68,25 @@ jobs:
             IEUM_SIGNING_KEYSTORE="$RUNNER_TEMP/ieum.p12" IEUM_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))
           python3 run_gradle.py --log release-build.log :app:assembleDebug
           cp android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/ieum.apk"
+      # An update only installs over the old app when both APKs carry the same signing certificate.
+      - name: Compare signing certificate with the previous release
+        env:
+          GH_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
+        run: |
+          apksigner="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          fp() { "$apksigner" verify --print-certs "$1" 2>/dev/null | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1; }
+          new=$(fp "$RUNNER_TEMP/ieum.apk")
+          [ -n "$new" ] || { echo "::error title=release::could not read the new APK's signing certificate"; exit 1; }
+          asset=$(gh api "repos/$INBOX/contents/app/version.json" --jq .content 2>/dev/null | base64 -d 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['apk'].rsplit('/',1)[-1])" 2>/dev/null || true)
+          if [ -z "$asset" ] || ! gh api -H "Accept: application/octet-stream" "repos/$INBOX/releases/assets/$asset" > "$RUNNER_TEMP/previous.apk" 2>/dev/null; then
+            echo "::warning title=release::previous APK could not be downloaded: signing certificate not compared"; exit 0
+          fi
+          old=$(fp "$RUNNER_TEMP/previous.apk")
+          if [ -z "$old" ]; then echo "::warning title=release::previous APK certificate unreadable: not compared"; exit 0; fi
+          if [ "$old" != "$new" ]; then
+            echo "::error title=release::signing certificate differs from the previous release (old $old, new $new): not publishing, phones could not update"; exit 1
+          fi
+          echo "signing certificate unchanged ($new)"
       - name: Publish to the inbox repo
         env:
           GH_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
@@ -75,7 +94,8 @@ jobs:
           code=$((1000 + GITHUB_RUN_NUMBER)); tag="v$code"
           sha=$(sha256sum "$RUNNER_TEMP/ieum.apk" | cut -d' ' -f1)
           # The phone shows this to the user: plain Korean from docs/UPDATE_NOTE.txt, never the developer commit message.
-          notes=$(head -n 1 docs/UPDATE_NOTE.txt 2>/dev/null | cut -c1-120)
+          # Cut by characters, not bytes: a byte cut breaks Korean text in the middle of a letter.
+          notes=$(head -n 1 docs/UPDATE_NOTE.txt 2>/dev/null | python3 -c "import sys; sys.stdout.write(sys.stdin.buffer.read().decode('utf-8','ignore').strip()[:120])")
           [ -n "$notes" ] || notes="더 안정적으로 고쳤어요"
           # An empty repository cannot hold releases: give it a first file.
           gh api "repos/$INBOX/contents/README.md" >/dev/null 2>&1 || gh api -X PUT "repos/$INBOX/contents/README.md" -f message="init" \

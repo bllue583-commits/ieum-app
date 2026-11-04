@@ -118,3 +118,7 @@ class LocalRecordingCatalog(
              "manual_text" to recording["manual_text"], "user_revision" to recording["user_revision"])
     }
 }
+
+/** Test-only reader of the store's recordings (the product has no list screen over this projection any more). */
+fun GeneralLocalStore.snapshot(): JSONArray =
+    LocalRecordingCatalog(org.robolectric.RuntimeEnvironment.getApplication(), GeneralLocalStore.DATABASE, GeneralLocalStore.OWNER, true).listFiles()

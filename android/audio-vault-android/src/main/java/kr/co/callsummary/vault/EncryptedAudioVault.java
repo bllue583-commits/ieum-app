@@ -225,6 +225,12 @@ public final class EncryptedAudioVault implements AutoCloseable {
             if(e.code.equals("UNSUPPORTED_ENVELOPE_VERSION"))return Status.UNSUPPORTED_FORMAT;
             if(e.code.equals("CORRUPT_STORAGE")||e.code.equals("INVALID_ENVELOPE"))return Status.CORRUPT_STORAGE;throw e;}
     }
+    /** Deletes one finished blob (the encrypted original recording) once nothing needs it any more. False when it was already gone. */
+    public boolean deleteBlob(String ciphertextHash,Cancellation token){return locked(token,()->{
+        Path p=file(ciphertextHash);
+        if(!Files.exists(p,LinkOption.NOFOLLOW_LINKS))return false;
+        if(!Files.isRegularFile(p,LinkOption.NOFOLLOW_LINKS))throw new VaultException("CORRUPT_STORAGE");
+        Files.delete(p);sync.sync(root);return true;});}
     /** Exclusively locked startup cleanup: encrypted stages only; no final blobs, history, or original files. */
     public int cleanupAbandonedStages(Cancellation token){return locked(token,()->{int deleted=0;
         try(java.util.stream.Stream<Path> paths=Files.list(root)){for(Path p:(Iterable<Path>)paths::iterator){check(token);

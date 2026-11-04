@@ -42,6 +42,7 @@ internal object CallPipelineStartup {
         step("analysis") { enqueueAnalysis(app,ExistingWorkPolicy.KEEP) }
         step("update") { CallUpdate.schedule(app) }
         step("messages") { MessageWork.schedule(app) }
+        step("vault") { VaultPruneWork.schedule(app) }
         if(!kr.callbrief.BuildConfig.LOCAL_PREVIEW) {
             step("discovery") { kr.callbrief.AutomaticRecordingDiscovery.ensure(app) }
             step("transcription") { CallTranscriptionWork.schedule(app) }
