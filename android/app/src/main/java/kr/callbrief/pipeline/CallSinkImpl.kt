@@ -30,6 +30,7 @@ internal object CallPipelineStartup {
             runCatching { enqueueAnalysis(app) }
             runCatching { CallUpdate.schedule(app) }
             runCatching { MessageWork.schedule(app) }
+            runCatching { VaultPruneWork.schedule(app) }
             if(CallInboxConfig.enabled) runCatching {
                 // Collect the scheduled task's results every hour even when no new call arrives.
                 // The hourly tick only queues the one analysis work, so two passes never apply results side by side.

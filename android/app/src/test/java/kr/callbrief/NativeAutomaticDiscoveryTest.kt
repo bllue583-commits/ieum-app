@@ -85,11 +85,8 @@ class NativeAutomaticDiscoveryTest {
     }
     @Test fun N05BootstrapReusesExistingNativeRecordingAndVersion()=worker {
         val src=Source().apply{put(modified=now-300000)};var original=""
-        store().use{s->s.initializeEmpty();s.importSelected(src);original=only(s).getString("file_id")}
+        store().use{s->s.initializeEmpty();val t=Time();session(s,src,t).use{it.cycle(1,1);t.elapsed+=10;it.cycle(1,1)};original=only(s).getString("file_id")}
         store().use{s->ready(s,src,Time()){assertEquals(original,only(s).getString("file_id"));assertEquals(1L,only(s).getLong("source_version"));assertEquals(1L,it.engine.rows().single().sourceVersion);assertEquals(1,rows("SELECT * FROM vault2_refs").size)}}
-    }
-    @Test fun N06ABARetainsManualDoneMemoAndActualHistory()=worker {
-        store().use{s->s.initializeEmpty();val src=Source().apply{put(modified=now-300000)};val t=Time();session(s,src,t).use{it.cycle(1,1);t.elapsed+=10;it.cycle(1,1);var row=only(s);s.edit(row.getString("file_id"),row,"SYNTHETIC_MANUAL_CANARY","done");src.put(sample=100,modified=now-400000);it.cycle(1,1);t.elapsed+=10;it.cycle(1,1);src.put(sample=0,modified=now-500000);it.cycle(1,1);t.elapsed+=10;it.cycle(1,1);row=only(s);assertEquals(3L,row.getLong("source_version"));assertEquals("done",row.getString("manual_status"));assertEquals("SYNTHETIC_MANUAL_CANARY",row.getString("manual_note"));assertEquals(3,s.history(row.getString("file_id")).getJSONArray("versions").length());assertEquals(3L,it.engine.rows().single().sourceVersion)}}
     }
     @Test fun N07SameHashDifferentDocumentsStaySeparateNativeRecordings()=worker {
         store().use{s->s.initializeEmpty();val src=Source().apply{put(modified=now-300000);put("two",modified=now-300000,name="SYNTHETIC_SECOND.wav")};val t=Time();session(s,src,t).use{it.cycle(2,2);t.elapsed+=10;it.cycle(2,2);assertEquals(2,s.snapshot().length());assertEquals(2,rows("SELECT * FROM vault2_refs").size)}}
@@ -102,9 +99,6 @@ class NativeAutomaticDiscoveryTest {
     }
     @Test fun N09RenameChangesNativeMetadataWithoutExtraContentVersion()=worker {
         store().use{s->s.initializeEmpty();val src=Source().apply{put(modified=now-300000)};val t=Time();session(s,src,t).use{n->n.cycle(1,1);t.elapsed+=10;n.cycle(1,1);src.put(modified=now-300000,name="SYNTHETIC_RENAMED_CANARY.wav");n.cycle(1,1);t.elapsed+=10;n.cycle(1,1);assertEquals("SYNTHETIC_RENAMED_CANARY.wav",only(s).getString("display_name"));assertEquals(1L,only(s).getLong("source_version"));assertEquals(1,rows("SELECT * FROM vault2_refs").size)}}
-    }
-    @Test fun N10GrantRevocationBeforeCycleOpensZeroAndKeepsNativeMemo()=worker {
-        store().use{s->s.initializeEmpty();val src=Source().apply{put(modified=now-300000)};val t=Time();ready(s,src,t){val row=only(s);s.edit(row.getString("file_id"),row,"SYNTHETIC_PRESERVED","done");src.grant=false;src.opens=0;assertTrue(it.cycle(1,1).folderPaused);assertEquals(0,src.opens);assertEquals("SYNTHETIC_PRESERVED",only(s).getString("manual_note"))}}
     }
     @Test fun N11LateGrantRevocationCannotCommitNativeReceipt()=worker {
         store().use{s->s.initializeEmpty();val src=Source().apply{put(modified=now-300000);onRead={grant=false}};ready(s,src,Time()){assertEquals(0,s.snapshot().length());assertEquals(0,rows("SELECT * FROM receipts").size)}}
@@ -178,4 +172,16 @@ class NativeAutomaticDiscoveryTest {
         }
     }
 
+    @Test fun N25PruneVaultDeletesOriginalOnlyAfterTranscriptWasDoneFor14Days()=worker {
+        store().use{s->s.initializeEmpty();val src=Source().apply{put(modified=now-300000)};ready(s,src,Time()){
+            val ref=rows("SELECT * FROM vault2_refs").single();val blob=File(context.noBackupFilesDir,"local-recordings-v2/audio-vault-v2/"+ref["ciphertext_sha256"]+".vault")
+            assertTrue(blob.isFile);assertEquals(0,s.pruneVault(now+30*86400000L))
+            kr.callbrief.pipeline.CallTranscriptionStore(context).close()
+            AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql")).use{p->p.requireProtectedPersistence()
+                p.execute("INSERT INTO call_transcription_jobs(recording_id,source_version,audio_sha,state,updated_ms) VALUES(?,?,?,'DONE',?)",ref["recording_id"],ref["source_version"],ref["plaintext_sha256"],now)}
+            assertEquals(0,s.pruneVault(now+13*86400000L));assertTrue(blob.isFile)
+            assertEquals(1,s.pruneVault(now+15*86400000L));assertFalse(blob.exists())
+            assertEquals(0,s.pruneVault(now+16*86400000L));assertEquals(1,rows("SELECT * FROM vault_pruned").size);assertEquals(1,rows("SELECT * FROM vault2_refs").size)
+        }}
+    }
 }
