@@ -248,4 +248,45 @@ class NativeAutomaticDiscoveryTest {
             assertEquals(0,s.pruneVault(now+16*86400000L));assertEquals(1,rows("SELECT * FROM vault_pruned").size);assertEquals(1,rows("SELECT * FROM vault2_refs").size)
         }}
     }
+
+    @Test fun N32PruneVaultAlsoDeletesRecordingsSkippedForGoodAndTheLedgerMatchesTheFiles()=worker {
+        val ids=listOf("a","b","c","d","e")
+        val src=Source().apply{ids.forEachIndexed{i,id->put(id,sample=i+1,modified=now-900000+i*1000L,name="SYNTHETIC_$id.wav")}}
+        val t=Time();val paged=Config(10,10000,1000,25000000,1)
+        store().use{s->s.initializeEmpty()
+            NativeDiscoverySession(s,src,selected(src),{JSONObject()},t,{now},true,paged).use{n->n.cycle(10,1);t.elapsed+=10;n.cycle(10,5) // closing the session ends the store's work
+            val refs=rows("SELECT * FROM vault2_refs");assertEquals(5,refs.size)
+            val vaultDir=File(context.noBackupFilesDir,"local-recordings-v2/audio-vault-v2")
+            fun blob(r:Map<String,Any?>)=File(vaultDir,r["ciphertext_sha256"].toString()+".vault")
+            // a: before 10/1, b: no speech, c: archived (the user can undo it), d: transcribed, e: no speech later on.
+            val byName=refs.associateBy { r -> rows("SELECT display_name FROM recordings WHERE recording_id='${r["recording_id"]}'").single()["display_name"].toString().removePrefix("SYNTHETIC_").removeSuffix(".wav") }
+            assertEquals(ids.toSet(),byName.keys)
+            val day=86_400_000L
+            kr.callbrief.pipeline.CallTranscriptionStore(context).close()
+            fun job(id:String,state:String,reason:String,at:Long)=AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql")).use{p->p.requireProtectedPersistence()
+                val r=byName.getValue(id);p.execute("INSERT INTO call_transcription_jobs(recording_id,source_version,audio_sha,state,reason,updated_ms) VALUES(?,?,?,?,?,?)",r["recording_id"],r["source_version"],r["plaintext_sha256"],state,reason,at)}
+            job("a","SKIPPED","BEFORE_START",now);job("b","SKIPPED","NO_SPEECH",now);job("c","SKIPPED","ARCHIVED",now)
+            job("d","DONE","",now+5*day);job("e","SKIPPED","NO_SPEECH",now+10*day)
+            assertEquals("nothing is 14 days old yet",0,s.pruneVault(now+13*day));assertTrue(ids.all{blob(byName.getValue(it)).isFile})
+            assertEquals(2,s.pruneVault(now+15*day))
+            assertFalse(blob(byName.getValue("a")).exists());assertFalse(blob(byName.getValue("b")).exists())
+            assertTrue("an undoable skip keeps its original",blob(byName.getValue("c")).isFile)
+            assertTrue(blob(byName.getValue("d")).isFile);assertTrue(blob(byName.getValue("e")).isFile)
+            kr.callbrief.pipeline.CallTranscriptionStore(context).use{ts->
+                val offered=ts.candidates()
+                assertEquals("a pruned recording is not offered again",setOf("c","d","e").map{byName.getValue(it)["recording_id"]}.toSet(),offered.map{it.key.recordingId}.toSet())
+                // "No speech" came from the audio: offering it again as eligible must not queue it (it was queued on every pass before).
+                ts.offer(offered.single{it.key.recordingId==byName.getValue("e")["recording_id"]},true,"")
+                assertEquals(null,ts.nextQueued())}
+            assertEquals("SKIPPED",rows("SELECT state FROM call_transcription_jobs WHERE recording_id='${byName.getValue("e")["recording_id"]}'").single()["state"])
+            assertEquals(2,s.pruneVault(now+30*day))
+            assertEquals(0,s.pruneVault(now+60*day))
+            // The ledger and the vault agree: every reference row stays, the pruned ones are noted, and exactly the rest have a file.
+            assertEquals(5,rows("SELECT * FROM vault2_refs").size)
+            val pruned=rows("SELECT * FROM vault_pruned").onEach{assertTrue((it["at_ms"] as Number).toLong()>0)}.map{it["ciphertext_sha256"].toString()}.toSet()
+            assertEquals(setOf("a","b","d","e").map{byName.getValue(it)["ciphertext_sha256"].toString()}.toSet(),pruned)
+            val files=vaultDir.listFiles{f->f.name.endsWith(".vault")}!!.map{it.name.removeSuffix(".vault")}.toSet()
+            assertEquals(refs.map{it["ciphertext_sha256"].toString()}.toSet()-pruned,files)
+        }}
+    }
 }

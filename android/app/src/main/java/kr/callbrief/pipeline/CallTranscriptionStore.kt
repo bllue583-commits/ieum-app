@@ -29,7 +29,9 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
                 db.execute("""CREATE TABLE IF NOT EXISTS call_transcription_jobs(recording_id TEXT NOT NULL,source_version INTEGER NOT NULL,
                     audio_sha TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('QUEUED','RUNNING','DONE','FAILED','SKIPPED')),
                     reason TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,updated_ms INTEGER NOT NULL,
-                    PRIMARY KEY(recording_id,source_version,audio_sha))""");null
+                    PRIMARY KEY(recording_id,source_version,audio_sha))""")
+                // Encrypted originals deleted by GeneralLocalStore.pruneVault (#39); a recording whose blob is gone is not offered again.
+                db.execute("CREATE TABLE IF NOT EXISTS vault_pruned(ciphertext_sha256 TEXT PRIMARY KEY,at_ms INTEGER NOT NULL)");null
             }
         } catch(e:Exception){db.close();throw e}
     }
@@ -41,22 +43,24 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         FROM recordings r JOIN source_versions v ON v.recording_id=r.recording_id AND v.source_version=r.source_version
         JOIN local_files l ON l.recording_id=r.recording_id JOIN local_visibility a ON a.recording_id=r.recording_id
         JOIN folder_grants g ON g.grant_id=r.grant_id
-        JOIN vault2_refs q ON q.recording_id=r.recording_id AND q.source_version=r.source_version AND q.owner_key=r.owner_key AND q.plaintext_sha256=v.audio_sha256"""
+        JOIN vault2_refs q ON q.recording_id=r.recording_id AND q.source_version=r.source_version AND q.owner_key=r.owner_key AND q.plaintext_sha256=v.audio_sha256
+        LEFT JOIN vault_pruned gone ON gone.ciphertext_sha256=q.ciphertext_sha256 AND gone.at_ms>0"""
     private fun candidate(r:Map<String,Any?>)=Candidate(Key(r["recording_id"].toString(),(r["source_version"] as Number).toLong(),r["audio_sha256"].toString()),
         r["display_name"].toString(),r["actual_uri"].toString(),r["mime_type"].toString(),(r["original_started_at_ms"] as Number?)?.toLong(),
         (r["archived"] as Number).toInt()==1,(r["grant_active"] as Number).toInt()==1,
         (r["byte_count"] as Number?)?.toLong() ?: 0,(r["modified_at_ms"] as Number?)?.toLong() ?: 0)
 
     /** The owner's current recording versions with encrypted audio, newest first. */
-    fun candidates():List<Candidate> = db.query("$select WHERE r.owner_key=? AND r.presence='PRESENT' ORDER BY coalesce(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0) DESC",
+    fun candidates():List<Candidate> = db.query("$select WHERE r.owner_key=? AND r.presence='PRESENT' AND gone.ciphertext_sha256 IS NULL ORDER BY coalesce(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0) DESC",
         GeneralLocalStore.OWNER).map(::candidate)
 
-    /** Idempotent: new versions are inserted; rows that have not started or finished follow the current eligibility. */
+    /** Idempotent: new versions are inserted; rows that have not started or finished follow the current eligibility.
+     * "No speech" was found by transcribing, not by eligibility, so it stays (it was queued again on every pass before). */
     fun offer(c:Candidate,eligible:Boolean,reason:String)=db.transaction {
         val state=if(eligible)"QUEUED" else "SKIPPED"
         db.execute("INSERT OR IGNORE INTO call_transcription_jobs(recording_id,source_version,audio_sha,state,reason,updated_ms) VALUES(?,?,?,?,?,?)",
             c.key.recordingId,c.key.sourceVersion,c.key.audioSha,state,reason,now())
-        db.execute("UPDATE call_transcription_jobs SET state=?,reason=?,updated_ms=? WHERE recording_id=? AND source_version=? AND audio_sha=? AND state IN('QUEUED','SKIPPED') AND (state!=? OR reason!=?)",
+        db.execute("UPDATE call_transcription_jobs SET state=?,reason=?,updated_ms=? WHERE recording_id=? AND source_version=? AND audio_sha=? AND state IN('QUEUED','SKIPPED') AND (state!=? OR reason!=?) AND NOT (state='SKIPPED' AND reason='NO_SPEECH')",
             state,reason,now(),c.key.recordingId,c.key.sourceVersion,c.key.audioSha,state,reason);null
     }
 
@@ -75,7 +79,7 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
 
     /** Newest first; with [oldBefore] (처음 정리) recordings before it come after all newer ones, oldest first, so the
      * old ones reach the analysis in time order. */
-    fun nextQueued(oldBefore:Long?=null):Job? = db.query("""SELECT j.state,j.reason,j.attempts,x.* FROM call_transcription_jobs j JOIN ($select WHERE r.owner_key=?) x
+    fun nextQueued(oldBefore:Long?=null):Job? = db.query("""SELECT j.state,j.reason,j.attempts,x.* FROM call_transcription_jobs j JOIN ($select WHERE r.owner_key=? AND gone.ciphertext_sha256 IS NULL) x
         ON x.recording_id=j.recording_id AND x.source_version=j.source_version AND x.audio_sha256=j.audio_sha
         WHERE j.state='QUEUED' ORDER BY CASE WHEN coalesce(x.original_started_at_ms,x.modified_at_ms,0)<CAST(? AS INTEGER) THEN 1 ELSE 0 END,
         CASE WHEN coalesce(x.original_started_at_ms,x.modified_at_ms,0)<CAST(? AS INTEGER) THEN coalesce(x.original_started_at_ms,x.modified_at_ms,0) ELSE -coalesce(x.original_started_at_ms,0) END,
