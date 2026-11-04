@@ -132,7 +132,7 @@ internal object MessageIntake {
                 (t.startsWith("On ") && t.endsWith("wrote:")) || t.matches(Regex("^(보낸 사람|From)\\s*:.*")) }
         return (if(cut>0) lines.take(cut) else lines).joinToString("\n").replace(Regex("\n{3,}"),"\n\n").trim()
     }
-    /** "첨부: 견적서.pdf, 도면.dwg" under the body (design C4 rule 18: a sent file is a sign the "보내기" item is done); empty without files. */
+    /** "첨부: 견적서.pdf, 도면.dwg" under the body (design C4 rule 17: a sent file is a sign the "보내기" item is done); empty without files. */
     internal fun attachedLine(names:List<String>)=names.map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(10)
         .takeIf { it.isNotEmpty() }?.joinToString(", ",prefix="\n첨부: ") { it.take(80) } ?: ""
     private fun attachments(part:javax.mail.Part):List<String> = when {

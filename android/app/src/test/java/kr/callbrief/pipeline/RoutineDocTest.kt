@@ -45,6 +45,8 @@ class RoutineDocTest {
         listOf("- siteMemo: 현장의 지금 상황","memo는 그 업체의 지금 상태","[공종 목록] 중 하나로","\"promptVersion\": 4는 폰이 업데이트되기 전의 과도기 요청",
             "옛 형식","\"system\"을 규칙으로").forEach { assertTrue(it,text.contains(it)) }
         assertTrue(text.contains(REPO))
+        // Same v5 round: the open items' request fields (design C5) are named next to rule 12, the rules unchanged.
+        listOf("askedOn(요청한 날)","owner(그때 정한 맡는 쪽)","person(요청한 통화 상대 이름)","quote(그때 근거 원문의 앞 40자)").forEach { assertTrue(it,block(text,"SYSTEM","text").contains(it)) }
     }
 
     @Test fun tidyDocEndsWithTheSelfReport() {

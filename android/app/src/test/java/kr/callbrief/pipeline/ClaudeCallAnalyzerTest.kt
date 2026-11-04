@@ -46,6 +46,29 @@ class ClaudeCallAnalyzerTest {
         listOf("audio","base64","wav","m4a").forEach { assertFalse(it,content.lowercase().contains(it)) }
     }
 
+    /** Design C5: an open item carries who does it, who asked for it (by name) and the head of its evidence; numbers masked, unknown keys left out. */
+    @Test fun openItemsCarryOwnerPersonAndQuoteHeadOnlyWhenKnown() {
+        val quote="견적서는 010-1234-5678로 연락 주시면 내일까지 메일로 다시 보내드리겠습니다 꼭이요"
+        val open=listOf(ClaudeCallRequest.OpenTask("wf_item_1","견적서 회신 확인","2026-10-30","open","△△철강","2026-10-27",owner="them",person="김민수",quote=quote),
+            ClaudeCallRequest.OpenTask("wf_item_2","직접 적은 일","","open",owner=null,person=null,quote=""),
+            ClaudeCallRequest.OpenTask("wf_item_3","번호만 아는 사람","","open",owner="boss",person="010-9999-8888",quote="  "))
+        val m=ClaudeCallAnalyzer.userMessage(request(open))
+        val json=Regex("\\[이 상대의 열린 체크할 일\\(JSON\\)\\] (\\[.*])").find(m)!!.groupValues[1]
+        val items=JSONArray(json);assertEquals(3,items.length())
+        val a=items.getJSONObject(0)
+        assertEquals("them",a.getString("owner"));assertEquals("김민수",a.getString("person"));assertEquals("2026-10-27",a.getString("askedOn"))
+        val sent=a.getString("quote")
+        assertEquals(ClaudeCallAnalyzer.maskNumbers(quote).take(ClaudeCallAnalyzer.QUOTE_HEAD),sent);assertEquals(40,sent.length)
+        assertTrue(sent.startsWith("견적서는 [번호]로"));assertFalse(m.contains("1234"));assertFalse(m.contains("5678"))
+        listOf(items.getJSONObject(1),items.getJSONObject(2)).forEach { o -> listOf("owner","person","quote","askedOn").forEach { k -> assertFalse("${o.getString("taskId")} $k",o.has(k)) } }
+        assertFalse(m.contains("9999"))
+        // The open item limit stays.
+        val many=(1..45).map { ClaudeCallRequest.OpenTask("wf_$it","일 $it","","open",owner="me",quote="근거 원문 $it 번째입니다") }
+        val n=JSONArray(Regex("\\[이 상대의 열린 체크할 일\\(JSON\\)\\] (\\[.*])").find(ClaudeCallAnalyzer.userMessage(request(many)))!!.groupValues[1]).length()
+        assertEquals(30,n)
+        assertTrue(ClaudeCallAnalyzer.SYSTEM.contains("owner(그때 정한 맡는 쪽), person(요청한 통화 상대 이름), quote(그때 근거 원문의 앞 40자)"))
+    }
+
     @Test fun instructionsAreGroupedHaveTwoExamplesAndTellWhoSpoke() {
         val sys=ClaudeCallAnalyzer.SYSTEM
         listOf("[데이터]","[출력 형식]","[근거와 인용]","[누가 말했나]","[날짜]","[숫자와 용어]","[체크할 일]","[이름]","[문자와 메일]","[개인 내용]","[예시 1","[예시 2").forEach { assertTrue(it,sys.contains(it)) }
