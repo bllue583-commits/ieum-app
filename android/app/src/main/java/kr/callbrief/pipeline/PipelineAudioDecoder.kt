@@ -29,16 +29,16 @@ internal class PipelineAudioDecoder(
         check(input.size>0){"PIPELINE_AUDIO_EMPTY"}
         val wav=PipelineAudioMath.isWav(input)
         if(!wav)check(!mime.lowercase().let{it=="audio/wav"||it=="audio/x-wav"||it=="audio/wave"}){"PIPELINE_AUDIO_WAV_HEADER"}
-        fun pass(onChunk:(Long,FloatArray)->Unit):PipelineAudioStream = decodeRaw(input,wav,onChunk)
+        fun pass(onChunk:PipelineAudioView):PipelineAudioStream = decodeRaw(input,wav,onChunk)
         val plan=PipelineSpeechPlan(floor=speechFloor)
-        val first=pass{ms,pcm->plan.add(ms,pcm)}
+        val first=pass{ms,x,from,to->plan.add(ms,x,from,to)} // nothing is copied in the first pass
         runCatching{channels(first.channelStats.result())}
         val vad=plan.applies()
         var index=0;var raw=0
         val assembler=if(vad) PipelineSpeechAssembler(plan){ms,x->sink.chunk(index++,ms,x)} else null
-        pass{ms,pcm->
-            plan.verify(raw,pcm)
-            if(assembler!=null)assembler.raw(raw,pcm) else sink.chunk(index++,ms,pcm)
+        pass{ms,x,from,to->
+            plan.verify(raw,x,from,to)
+            if(assembler!=null)assembler.raw(raw,x,from,to) else sink.chunk(index++,ms,x.copyOfRange(from,to))
             raw++
         }
         plan.verifyCount(raw);assembler?.finish()
@@ -46,7 +46,7 @@ internal class PipelineAudioDecoder(
     }
 
     /** One pass without silence skipping: raw two-minute chunks as they are decoded (device tests measure the old way with it). */
-    internal fun decodeRaw(input:PipelineAudioInput,wav:Boolean=PipelineAudioMath.isWav(input),onChunk:(Long,FloatArray)->Unit):PipelineAudioStream =
+    internal fun decodeRaw(input:PipelineAudioInput,wav:Boolean=PipelineAudioMath.isWav(input),onChunk:PipelineAudioView):PipelineAudioStream =
         if(wav) PipelineAudioMath.streamWav(input,onChunk) else decodeWithMediaCodec(input,onChunk)
 
     /** MediaExtractor reads the recording where it is (no copy of the file). */
@@ -56,7 +56,7 @@ internal class PipelineAudioDecoder(
         override fun close(){}
     }
 
-    private fun decodeWithMediaCodec(input:PipelineAudioInput,onChunk:(Long,FloatArray)->Unit):PipelineAudioStream {
+    private fun decodeWithMediaCodec(input:PipelineAudioInput,onChunk:PipelineAudioView):PipelineAudioStream {
         val extractor=MediaExtractor()
         var codec:MediaCodec?=null
         try {

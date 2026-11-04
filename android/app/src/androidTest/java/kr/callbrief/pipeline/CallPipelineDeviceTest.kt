@@ -244,7 +244,7 @@ class CallPipelineDeviceTest {
             val oldPeak=try { HeapPeak.measure {
                 val bytes=java.io.ByteArrayOutputStream().also{ out -> file.inputStream().use{it.copyTo(out)} }.toByteArray()
                 val all=ArrayList<Pair<Long,FloatArray>>()
-                PipelineAudioDecoder().decodeRaw(PipelineBytesInput(bytes),false){ms,x->all+=ms to x}
+                PipelineAudioDecoder().decodeRaw(PipelineBytesInput(bytes),false){ms,x,from,to->all+=ms to x.copyOfRange(from,to)} // v2.3 kept every piece
                 val kept=PipelineAudioMath.speechOnly(PipelineDecodedAudio(audioMs,all,false))
                 result.put("oldPieces",kept.chunks.size);bytes.size+all.size+kept.chunks.size
             } } catch(e:OutOfMemoryError) { oldOom=true;System.gc();Runtime.getRuntime().maxMemory() }
@@ -273,9 +273,12 @@ class CallPipelineDeviceTest {
     /** [seconds] of synthetic call audio as m4a/AAC 44.1 kHz mono 64 kbit/s (MediaCodec + MediaMuxer, moov at the end like a
      * recorder): the public TTS sentence, quieter or louder each time, then 4 s of faint noise. Returns the length in ms. */
     private fun synthCallM4a(file:File,seconds:Int,rate:Int=44100):Long {
-        val one=publicKorean();val cycle=one.size+16000*4
-        fun at16(i:Long):Float { val c=i/cycle;val j=(i%cycle).toInt()
-            return if(j<one.size) one[j]*(0.6f+0.04f*((c*7919)%10)) else (((i*7919)%200)-100)/100000f }
+        // One sentence + pause cycle, resampled to [rate] once (the per-sample loop was too slow on the emulator).
+        val one=publicKorean();val cycle16=one.size+16000*4
+        fun at16(i:Int):Float=if(i<one.size) one[i] else (((i.toLong()*7919)%200)-100)/100000f
+        val cycle=(cycle16.toLong()*rate/16000).toInt();val speech=(one.size.toLong()*rate/16000).toInt()
+        val base=FloatArray(cycle){ k -> val p=k*16000.0/rate;val i0=p.toInt();val a=at16(i0);a+(at16(minOf(i0+1,cycle16-1))-a)*(p-i0).toFloat() }
+        val block=ShortArray(8192)
         val total=rate.toLong()*seconds
         val format=android.media.MediaFormat.createAudioFormat(android.media.MediaFormat.MIMETYPE_AUDIO_AAC,rate,1).apply {
             setInteger(android.media.MediaFormat.KEY_AAC_PROFILE,android.media.MediaCodecInfo.CodecProfileLevel.AACObjectLC)
@@ -290,12 +293,14 @@ class CallPipelineDeviceTest {
                 if(!inputDone){
                     val i=codec.dequeueInputBuffer(10_000)
                     if(i>=0){
-                        val buf=codec.getInputBuffer(i)!!;buf.clear();buf.order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                        val frames=minOf((buf.remaining()/2).toLong(),total-written).toInt()
+                        val buf=codec.getInputBuffer(i)!!;buf.clear();buf.order(java.nio.ByteOrder.nativeOrder())
+                        val frames=minOf(minOf(buf.remaining()/2,block.size).toLong(),total-written).toInt()
                         if(frames<=0){codec.queueInputBuffer(i,0,0,written*1_000_000/rate,android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM);inputDone=true}
                         else {
-                            for(k in 0 until frames){ val p=(written+k)*16000.0/rate;val i0=p.toLong();val a=at16(i0);val v=a+(at16(i0+1)-a)*(p-i0).toFloat()
-                                buf.putShort((v.coerceIn(-1f,1f)*32767).toInt().toShort()) }
+                            for(k in 0 until frames){ val t=written+k;val j=(t%cycle).toInt();val c=t/cycle
+                                val v=if(j<speech) base[j]*(0.6f+0.04f*((c*7919)%10)) else base[j]
+                                block[k]=(v.coerceIn(-1f,1f)*32767).toInt().toShort() }
+                            buf.asShortBuffer().put(block,0,frames)
                             codec.queueInputBuffer(i,0,frames*2,written*1_000_000/rate,0);written+=frames
                         }
                     }

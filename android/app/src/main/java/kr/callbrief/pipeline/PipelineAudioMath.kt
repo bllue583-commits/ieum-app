@@ -11,11 +11,11 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /** Growable float buffer. */
-internal class PipelineAudioFloats(initial:Int=16384) {
-    private var data=FloatArray(max(16,initial));var size=0;private set
+internal class PipelineAudioFloats(initial:Int=16384,/** growth stops here (more is still taken when needed) */ private val limit:Int=Int.MAX_VALUE-8) {
+    private var data=FloatArray(max(16,min(initial,limit)));var size=0;private set
     fun add(values:FloatArray,from:Int=0,to:Int=values.size) {
         val n=to-from;if(n<=0)return
-        if(size+n>data.size)data=data.copyOf(max(size+n,(data.size.toLong()*2).coerceAtMost(Int.MAX_VALUE-8L).toInt()))
+        if(size+n>data.size)data=data.copyOf(max(size+n,(data.size.toLong()*2).coerceAtMost(limit.toLong()).toInt()))
         System.arraycopy(values,from,data,size,n);size+=n
     }
     fun toArray():FloatArray=data.copyOf(size)
@@ -126,11 +126,11 @@ internal object PipelineAudioMath {
     }
 
     /** RMS of consecutive non-overlapping windows; a trailing partial window is included. */
-    fun rmsWindows(samples:FloatArray,rate:Int,windowMs:Long=CUT_WINDOW_MS):FloatArray {
+    fun rmsWindows(samples:FloatArray,rate:Int,windowMs:Long=CUT_WINDOW_MS,from:Int=0,to:Int=samples.size):FloatArray {
         val w=max(1L,rate*windowMs/1000).toInt()
-        val count=(samples.size+w-1)/w
+        val count=(to-from+w-1)/w
         return FloatArray(count){i->
-            val start=i*w;val end=min(samples.size,start+w);var s=0.0
+            val start=from+i*w;val end=min(to,start+w);var s=0.0
             for(j in start until end)s+=samples[j].toDouble()*samples[j]
             sqrt(s/(end-start)).toFloat()
         }
@@ -247,7 +247,7 @@ internal object PipelineAudioMath {
     }
 
     /** Streams a WAV's samples through a [PipelineAudioStream] in bounded blocks; returns the finished stream. */
-    fun streamWav(input:PipelineAudioInput,onChunk:(Long,FloatArray)->Unit):PipelineAudioStream {
+    fun streamWav(input:PipelineAudioInput,onChunk:PipelineAudioView):PipelineAudioStream {
         val info=parseWavHeader(input)
         val stream=PipelineAudioStream(info.sampleRate,info.channels,onChunk=onChunk)
         val block=ByteArray(8192*info.channels*2);var done=0L
@@ -262,7 +262,7 @@ internal object PipelineAudioMath {
     /** A short WAV fully in memory, without silence skipping (tests, the settings screen check). */
     fun decodeWav(bytes:ByteArray):PipelineDecodedAudio {
         val chunks=ArrayList<Pair<Long,FloatArray>>()
-        val s=streamWav(PipelineBytesInput(bytes)){ms,x->chunks+=ms to x}
+        val s=streamWav(PipelineBytesInput(bytes)){ms,x,from,to->chunks+=ms to x.copyOfRange(from,to)}
         return PipelineDecodedAudio(s.durationMs,chunks,vadApplied=false)
     }
 
@@ -271,11 +271,11 @@ internal object PipelineAudioMath {
     fun speechOnly(audio:PipelineDecodedAudio,rate:Int=TARGET_RATE,keepGapMs:Long=1500,padMs:Long=300,minSavedRatio:Double=0.1,
                    floor:Float=SPEECH_FLOOR):PipelineDecodedAudio {
         val plan=PipelineSpeechPlan(rate,keepGapMs,padMs,floor)
-        for((offset,pcm) in audio.chunks)plan.add(offset,pcm)
+        for((offset,pcm) in audio.chunks)plan.add(offset,pcm,0,pcm.size)
         if(!plan.applies(minSavedRatio))return audio
         val out=ArrayList<Pair<Long,FloatArray>>()
         val assembler=PipelineSpeechAssembler(plan,rate){ms,x->out+=ms to x}
-        audio.chunks.forEachIndexed{i,(_,pcm)->assembler.raw(i,pcm)}
+        audio.chunks.forEachIndexed{i,(_,pcm)->assembler.raw(i,pcm,0,pcm.size)}
         assembler.finish()
         return PipelineDecodedAudio(audio.durationMs,out,vadApplied=true)
     }
@@ -283,15 +283,19 @@ internal object PipelineAudioMath {
 
 internal class PipelineAudioWavInfo(val sampleRate:Int,val channels:Int,val dataOffset:Long,val dataBytes:Long)
 
+/** A chunk lent for the length of the call only: samples data[from until to] (copy them to keep them). */
+internal fun interface PipelineAudioView { fun chunk(offsetMs:Long,data:FloatArray,from:Int,to:Int) }
+
 /** 16 kHz mono samples in, chunks out: exactly the cuts of [PipelineAudioMath.split] on the whole signal, made as soon
- * as enough audio past a boundary has arrived. Holds about one chunk (read in place, no copy of the buffer per cut). */
+ * as enough audio past a boundary has arrived. Holds one chunk's buffer and lends each chunk out of it ([emit] gets the
+ * first sample index and a view), so there is no new array per chunk unless the receiver copies. */
 internal class PipelineChunker(private val rate:Int=PipelineAudioMath.TARGET_RATE,private val maxChunkMs:Long=PipelineAudioMath.MAX_CHUNK_MS,
-                               /** (first sample index, samples) */ private val emit:(Long,FloatArray)->Unit) {
-    private val current=PipelineAudioFloats(1 shl 16)
-    private var start=0L
-    private var finished=false
+                               /** (first sample index, data, from, to): valid during the call only */ private val emit:(Long,FloatArray,Int,Int)->Unit) {
     /** Samples needed past a chunk start before its cut is final (max length + half window + 1). */
     private val ready=rate*maxChunkMs/1000+maxOf(1L,rate*PipelineAudioMath.CUT_WINDOW_MS/2000)+1
+    private val current=PipelineAudioFloats(1 shl 16,limit=ready.toInt())
+    private var start=0L
+    private var finished=false
     fun add(x:FloatArray,from:Int=0,to:Int=x.size) {
         check(!finished){"PIPELINE_AUDIO_STREAM_FINISHED"}
         var i=from
@@ -300,17 +304,17 @@ internal class PipelineChunker(private val rate:Int=PipelineAudioMath.TARGET_RAT
             val n=minOf(to-i,maxOf(1L,ready-current.size).toInt());current.add(x,i,i+n);i+=n
             while(current.size>=ready){
                 val cut=PipelineAudioMath.cutPoints(current.array(),rate,maxChunkMs,length=current.size)[1]
-                out(current.array().copyOfRange(0,cut));current.dropFirst(cut)
+                out(current.array(),0,cut);current.dropFirst(cut)
             }
         }
     }
-    private fun out(chunk:FloatArray){val s=start;start+=chunk.size;emit(s,chunk)}
+    private fun out(data:FloatArray,from:Int,to:Int){val s=start;start+=to-from;emit(s,data,from,to)}
     fun finish() {
         check(!finished){"PIPELINE_AUDIO_STREAM_FINISHED"};finished=true
         val size=current.size
         if(size>0){
             val cuts=PipelineAudioMath.cutPoints(current.array(),rate,maxChunkMs,length=size)
-            for(i in cuts.indices)out(current.array().copyOfRange(cuts[i],if(i+1<cuts.size)cuts[i+1] else size))
+            for(i in cuts.indices)out(current.array(),cuts[i],if(i+1<cuts.size)cuts[i+1] else size)
         }
         current.dropFirst(current.size)
     }
@@ -337,13 +341,13 @@ internal class PipelineChannelStats {
     }
 }
 
-/** Interleaved PCM of any rate/channel count in, 16 kHz mono chunks out ([PipelineChunker] cuts), each handed to
- * [onChunk] as (original start ms, samples) as soon as it is final. No full-rate or full-length copy is kept. */
+/** Interleaved PCM of any rate/channel count in, 16 kHz mono chunks out ([PipelineChunker] cuts), each lent to
+ * [onChunk] with its original start ms as soon as it is final. No full-rate or full-length copy is kept. */
 internal class PipelineAudioStream(val sampleRate:Int,val channels:Int,maxChunkMs:Long=PipelineAudioMath.MAX_CHUNK_MS,
-                                   private val onChunk:(Long,FloatArray)->Unit) {
+                                   private val onChunk:PipelineAudioView) {
     private val target=PipelineAudioMath.TARGET_RATE
     private val resampler=PipelineAudioResampler(sampleRate,target)
-    private val chunker=PipelineChunker(target,maxChunkMs){s,x->onChunk(s*1000/target,x)}
+    private val chunker=PipelineChunker(target,maxChunkMs){s,x,from,to->onChunk.chunk(s*1000/target,x,from,to)}
     val channelStats=PipelineChannelStats()
     private var pending=FloatArray(0)
     private var frames=0L
@@ -391,10 +395,12 @@ internal class PipelineSpeechPlan(private val rate:Int=PipelineAudioMath.TARGET_
     var total=0L;private set
     val chunks get()=sizes.size
 
-    fun add(offsetMs:Long,pcm:FloatArray) {
-        val index=sizes.size;sizes+=pcm.size;sums+=checksum(pcm);total+=pcm.size
+    /** One raw chunk, data[from until to]; parts are kept relative to [from]. */
+    fun add(offsetMs:Long,data:FloatArray,from:Int,to:Int) {
+        val size=to-from
+        val index=sizes.size;sizes+=size;sums+=checksum(data,from,to);total+=size
         val win=rate*30/1000
-        val rms=PipelineAudioMath.rmsWindows(pcm,rate,30)
+        val rms=PipelineAudioMath.rmsWindows(data,rate,30,from,to)
         if(rms.isEmpty())return
         val sorted=rms.sorted();val low=sorted[rms.size/5];val loud=sorted[rms.size*9/10]
         val threshold=max(floor,min(low*3,loud*0.3f)) // continuous speech: the floor is speech itself
@@ -405,7 +411,7 @@ internal class PipelineSpeechPlan(private val rate:Int=PipelineAudioMath.TARGET_
             if(rms[i]<threshold){i++;continue}
             var end=i;var quiet=0;var j=i
             while(j<rms.size&&quiet<=gap){ if(rms[j]>=threshold){end=j;quiet=0} else quiet++; j++ }
-            val a=max(0,(i-pad)*win);val b=min(pcm.size,(end+1+pad)*win)
+            val a=max(0,(i-pad)*win);val b=min(size,(end+1+pad)*win)
             val last=pieces.lastOrNull()
             if(last!=null&&last.origin+last.length>=start+a) {
                 val from=max(a.toLong(),last.origin+last.length-start).toInt() // continues the previous piece (no copy now or later)
@@ -418,9 +424,9 @@ internal class PipelineSpeechPlan(private val rate:Int=PipelineAudioMath.TARGET_
     /** Nothing is removed if little is silent. */
     fun applies(minSavedRatio:Double=0.1):Boolean { val k=kept;return !(total==0L||k==0L||k>total*(1-minSavedRatio)) }
     /** The second decode must give the same chunks as the first. */
-    fun verify(index:Int,pcm:FloatArray) { check(index<sizes.size&&sizes[index]==pcm.size&&sums[index]==checksum(pcm)){"PIPELINE_AUDIO_DECODE_UNSTABLE"} }
+    fun verify(index:Int,data:FloatArray,from:Int,to:Int) { check(index<sizes.size&&sizes[index]==to-from&&sums[index]==checksum(data,from,to)){"PIPELINE_AUDIO_DECODE_UNSTABLE"} }
     fun verifyCount(count:Int) { check(count==sizes.size){"PIPELINE_AUDIO_DECODE_UNSTABLE"} }
-    private fun checksum(x:FloatArray):Int { var h=x.size;for(v in x)h=31*h+java.lang.Float.floatToRawIntBits(v);return h }
+    private fun checksum(x:FloatArray,from:Int,to:Int):Int { var h=to-from;for(i in from until to)h=31*h+java.lang.Float.floatToRawIntBits(x[i]);return h }
 }
 
 /** Second pass: copies the planned speech out of the raw chunks as they are decoded again and packs it into pieces of at
@@ -447,16 +453,17 @@ internal class PipelineSpeechAssembler(plan:PipelineSpeechPlan,private val rate:
     private var packed:FloatArray?=null;private var filled=0
     private var chunker:PipelineChunker?=null
 
-    fun raw(index:Int,pcm:FloatArray) {
+    /** Raw chunk [index], data[from until to] (lent: only what is needed is copied out). */
+    fun raw(index:Int,data:FloatArray,from:Int,to:Int) {
         while(g<groups.size){
             val group=groups[g]
             while(part<group.parts.size&&group.parts[part].chunk==index){
                 val p=group.parts[part]
                 if(group.long){
-                    (chunker ?: PipelineChunker(rate){s,x->emit(group.origin*1000/rate+s*1000/rate,x)}.also{chunker=it}).add(pcm,p.from,p.to)
+                    (chunker ?: PipelineChunker(rate){s,x,a,b->emit(group.origin*1000/rate+s*1000/rate,x.copyOfRange(a,b))}.also{chunker=it}).add(data,from+p.from,from+p.to)
                 } else {
                     val buf=packed ?: FloatArray(group.length.toInt()).also{packed=it;filled=0}
-                    System.arraycopy(pcm,p.from,buf,filled,p.to-p.from);filled+=p.to-p.from
+                    System.arraycopy(data,from+p.from,buf,filled,p.to-p.from);filled+=p.to-p.from
                 }
                 part++
             }

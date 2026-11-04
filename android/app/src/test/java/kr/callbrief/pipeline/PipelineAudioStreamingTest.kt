@@ -93,7 +93,7 @@ class PipelineAudioStreamingTest {
         val expected=PipelineAudioMath.split(pcm)
         for(step in listOf(1013,16000,rate*125,pcm.size)) {
             val got=ArrayList<Pair<Long,FloatArray>>()
-            val c=PipelineChunker{s,x->got+=(s*1000/rate) to x}
+            val c=PipelineChunker{s,x,from,to->got+=(s*1000/rate) to x.copyOfRange(from,to)}
             var i=0;while(i<pcm.size){val n=min(step,pcm.size-i);c.add(pcm,i,i+n);i+=n}
             c.finish()
             assertSame(expected,got,"add size $step")
@@ -105,7 +105,7 @@ class PipelineAudioStreamingTest {
         val stereo=FloatArray(mono44.size*2){mono44[it/2]}
         val whole=PipelineAudioResampler(44100,rate).let{ it.push(mono44)+it.finish() }
         val got=ArrayList<Pair<Long,FloatArray>>()
-        val s=PipelineAudioStream(44100,2){ms,x->got+=ms to x}
+        val s=PipelineAudioStream(44100,2){ms,x,from,to->got+=ms to x.copyOfRange(from,to)}
         var i=0;while(i<stereo.size){val n=min(7777,stereo.size-i);s.push(stereo.copyOfRange(i,i+n));i+=n}
         assertEquals(300_000L,s.finish())
         assertSame(PipelineAudioMath.split(whole),got,"44.1 kHz stereo")
