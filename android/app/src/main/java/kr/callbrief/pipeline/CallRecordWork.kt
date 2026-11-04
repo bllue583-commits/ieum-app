@@ -295,7 +295,9 @@ internal fun tidyHash(state:JSONObject):String {
 internal class CallAnalysisWork(context:Context,params:WorkerParameters):CoroutineWorker(context,params) {
     override suspend fun doWork():Result=withContext(Dispatchers.IO) {
         val storage=CallPipelineStartup.storage(applicationContext)
-        if(CallRecordAnalysisRunner(storage).runPending()) Result.success() else Result.retry()
+        val ok=CallRecordAnalysisRunner(storage).runPending()
+        ContactCards.warm(storage) // r9-2: the hour's touched cards worked out, then all read into memory
+        if(ok) Result.success() else Result.retry()
     }
 }
 

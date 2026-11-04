@@ -305,6 +305,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         }
         val sha=java.security.MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
         return insert(CallTranscript(id,1,sha,atMs,0,counterpart,text,emptyList(),"text","0".repeat(64),false)) // text once, not twice (16 MB store)
+            .also { if(it) ContactCards.touch(this) { listOf(counterpartKey(counterpart)) } }
     }
     /** Phone numbers (digits only) of business contacts: everyone the ledger has a number for, and every caller. */
     fun knownPhones():Set<String> =(rows("SELECT phone_key AS k FROM people_phones")+rows("SELECT DISTINCT counterpart_key AS k FROM call_records WHERE counterpart_key IS NOT NULL"))
@@ -508,7 +509,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         port.execute("DELETE FROM person_aliases WHERE name_key=?",personKey(clean))
         if(personKey(old)!=personKey(clean)) port.execute("INSERT OR REPLACE INTO person_aliases VALUES(?,?)",personKey(old),id)
         true
-    }
+    }.also { if(it) ContactCards.touch(this) { cardKeysOfPerson(id) } }
 
     /** Everything the model should know, because it remembers nothing between calls: the site memo, who is calling
      * (person and company cards), that company's latest calls and open work, related work of the same trade,
@@ -621,8 +622,10 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     /** Stores the result and applies tasks in one transaction. User-edited and finished items are never changed. */
     fun applyAnalysis(id:String,a:ClaudeCallAnalysis):List<Applied> {
         skippedNear.clear()
+        val cardKeys=runCatching { cardKeysOfRecord(id) }.getOrDefault(emptySet()) // before: a personal text is deleted
         val out=applyInTransaction(id,a)
         flushMergeCandidates()
+        ContactCards.touch(this) { cardKeys+cardKeysOfRecord(id) }
         return out
     }
     private fun applyInTransaction(id:String,a:ClaudeCallAnalysis):List<Applied> =port.transaction {
@@ -754,7 +757,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         val before=JSONObject().apply { old.forEach { (k,v)->put(k,v ?: JSONObject.NULL) } }
         port.execute("INSERT INTO workflow_item_history VALUES(?,?,?,?)","wf_"+UUID.randomUUID().toString().replace("-",""),item,revision+1,before.toString())
         port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER);null
-    }
+    }.also { ContactCards.touch(this) { cardKeysOfItem(item) } }
     // ---- screens (round 3): undo of "다 됐어요", dial numbers, oldest waiting call ---------------------------------------------
     /** Takes a [completeItem] back: the item gets its earlier [status] again (it stays marked as touched by the user, so analysis leaves it alone).
      * [revision] is the revision [completeItem] left it at (its old revision plus one); anything else means it changed since. */
@@ -763,7 +766,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         require(now.long("revision")==revision && now.str("status")=="done") { "ITEM_REVISION_CONFLICT" }
         port.execute("UPDATE workflow_items SET status=?,revision=revision+1 WHERE id=?",status,item)
         port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER);null
-    }
+    }.also { ContactCards.touch(this) { cardKeysOfItem(item) } }
     /** Phone numbers (digits, maybe a leading plus) of the people the phone knows, by person id, for the dial buttons: the person's own
      * number, else the first of the numbers they answer (an office line shared by several people counts for each, review L6). Read only; never leaves the phone. */
     fun dialNumbers():Map<String,String> {
@@ -788,7 +791,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         company?.takeIf { normName(it)!=null }?.let { port.execute("INSERT OR REPLACE INTO task_companies VALUES(?,?)",item,upsertCompany(it,now)) }
         port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER)
         item
-    }
+    }.also { ContactCards.touch(this) { cardKeysOfItem(it) } }
     /** Check items the user finished at or after [sinceMs], the latest first (the folded "끝낸 일 보기"). Undo works on them like on open ones. */
     fun doneItems(sinceMs:Long):List<OpenItem> =rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.edition,i.created_ms,
         (SELECT c.counterpart FROM call_records c WHERE c.recording_id=i.recording_id ORDER BY c.created_ms DESC LIMIT 1) AS counterpart,
@@ -802,6 +805,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     fun personalNumbers():List<Pair<String,Long>> =rows("SELECT phone_key,decided_ms FROM personal_numbers ORDER BY decided_ms DESC").map { it.str("phone_key")!! to (it.long("decided_ms") ?: 0) }
     /** Takes a number back from personal: its later records are sent again (earlier ones stay as they were). */
     fun forgetPersonal(key:String)=port.transaction { port.execute("DELETE FROM personal_numbers WHERE phone_key=?",key);port.execute("DELETE FROM personal_streaks WHERE phone_key=?",key);null }
+        .also { ContactCards.touch(this,listOf(key)) }
     /** Personal verdicts in a row so far for [key] (0 after a work one). */
     fun personalStreak(key:String):Int=(rows("SELECT streak FROM personal_streaks WHERE phone_key=?",key).firstOrNull()?.long("streak") ?: 0).toInt()
     /** One personal verdict for [key]: the run grows, and at [PERSONAL_STREAK] in a row the number is remembered, unless
@@ -902,7 +906,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
                 val title=x.text("title") ?: continue
                 port.execute("INSERT OR REPLACE INTO issues(id,ord,title,status,companies,updated_ms,record_keys) VALUES(?,?,?,?,?,?,?)",x.text("id") ?: "i_$i",i,title.take(80),x.text("status").orEmpty().take(160),
                     (x.optJSONArray("companies") ?: JSONArray()).toString(),now,(x.optJSONArray("recordKeys") ?: JSONArray()).toString()) } };null
-    }
+    }.also { ContactCards.touchAll(this) }
 
     /** Person [a] becomes [b]: calls, numbers and wrong spellings move over (review 13), [a]'s name stays as a spelling of [b]. */
     private fun mergePerson(a:Map<String,Any?>,b:Map<String,Any?>) {
@@ -1007,7 +1011,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         }
         if(n>0) port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER)
         n
-    }
+    }.also { if(it>0) ContactCards.touchAll(this) }
 
     // ---- 처음 정리 -------------------------------------------------------------------------------------------------
     /** Stores the call log and ties each recorded call to its entry. A call known only by a phone-book name gets
@@ -1015,6 +1019,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     fun reconcileCallLog(log:List<FirstPass.LogEntry>) {
         var stats:FirstPass.MatchStats?=null
         reconcileInTransaction(log) { stats=it }
+        ContactCards.touch(this) { log.map { it.numberKey } }
         // Why recordings did or did not pair, for the heartbeat's callLog.match (design 3.4).
         stats?.let { st -> settingsEdit { s -> s.put(PipelineSettingsKeys.CALLLOG_MATCH_STATS,st.mergeInto(s.optString(PipelineSettingsKeys.CALLLOG_MATCH_STATS,""),clock())) } }
     }
@@ -1153,6 +1158,29 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         return FirstPassProgress((jobs?.long("n") ?: 0).toInt(),jobs?.long("b") ?: 0,rate,waiting,unrecordedCalls())
     }
 
+    // ---- 상대 카드 (r9-2, ContactCards): read only ------------------------------------------------------------------
+    /** The context the card file is opened with. */
+    internal val cardContext:Context=context.applicationContext ?: context
+    /** One read for [ContactCards]; nothing is written through it. */
+    internal fun cardRows(sql:String,vararg args:Any?)=rows(sql,*args)
+    /** Stored numbers whose cards show person [id]. */
+    internal fun cardKeysOfPerson(id:String?):Set<String> =personById(id)?.let(::numbersOf).orEmpty()
+    /** Stored numbers of a company's people and calls (its open work and issues are on all their cards). */
+    internal fun cardKeysOfCompany(id:String?):Set<String> =if(id==null) emptySet() else
+        (rows("SELECT x.phone_key AS k FROM people p JOIN people_phones x ON x.person_id=p.id WHERE p.company_id=?",id)+
+         rows("SELECT phone_key AS k FROM people WHERE company_id=? AND phone_key IS NOT NULL",id)+
+         rows("SELECT c.counterpart_key AS k FROM call_links l JOIN call_records c ON c.record_id=l.record_id WHERE l.company_id=? AND c.counterpart_key IS NOT NULL",id)).mapNotNull { it.str("k") }.toSet()
+    /** Stored numbers whose cards show record [id]: its own number, its person's and its company's. */
+    internal fun cardKeysOfRecord(id:String):Set<String> {
+        val r=rows("SELECT c.counterpart_key,l.person_id,l.company_id FROM call_records c LEFT JOIN call_links l ON l.record_id=c.record_id WHERE c.record_id=?",id).firstOrNull() ?: return emptySet()
+        return setOfNotNull(r.str("counterpart_key"))+cardKeysOfPerson(r.str("person_id"))+cardKeysOfCompany(r.str("company_id"))
+    }
+    /** Stored numbers whose cards show check item [item]: the calls that made it and its company. */
+    internal fun cardKeysOfItem(item:String?):Set<String> {
+        if(item==null) return emptySet()
+        val records=rows("SELECT record_id FROM call_task_bindings WHERE item_id=? UNION SELECT c.record_id FROM workflow_items i JOIN call_records c ON c.recording_id=i.recording_id WHERE i.id=?",item,item).mapNotNull { it.str("record_id") }
+        return records.flatMap(::cardKeysOfRecord).toSet()+rows("SELECT company_id FROM task_companies WHERE item_id=?",item).flatMap { cardKeysOfCompany(it.str("company_id")) }
+    }
 }
 
 /** A call-log entry the call list shows as its own line (no record to open): a missed or rejected call, an answered one

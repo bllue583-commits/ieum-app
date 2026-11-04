@@ -14,7 +14,8 @@ class IeumApplication : Application() {
         CallPipelineStartup.init(this)
         kr.callbrief.pipeline.CallUpdate.checkSoon(this)
         // The schema check and migration run once, here, off the main thread; screens then only read (r8-1).
-        Thread({ runCatching { store(this) }.onFailure { Log.w(TAG,"store not opened: ${it.javaClass.simpleName}") } },"ieum-store-open").start()
+        Thread({ runCatching { store(this) }.onFailure { Log.w(TAG,"store not opened: ${it.javaClass.simpleName}") }
+            kr.callbrief.pipeline.ContactCards.warm(this) },"ieum-store-open").start() // r9-2: cards into memory for the call card
     }
     @Suppress("DEPRECATION")
     override fun onTrimMemory(level:Int) {
@@ -48,6 +49,6 @@ class IeumApplication : Application() {
             }
         }
         /** Lets the process store go (memory trim, tests). The next [store] reads the sealed file again. */
-        fun shutdown() { synchronized(lock) { held?.let { runCatching { it.close() } };held=null;heldFor=null } }
+        fun shutdown() { synchronized(lock) { held?.let { runCatching { it.close() } };held=null;heldFor=null };kr.callbrief.pipeline.ContactCards.shutdown() }
     }
 }
