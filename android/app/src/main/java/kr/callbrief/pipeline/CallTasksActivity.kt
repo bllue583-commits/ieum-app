@@ -30,7 +30,7 @@ class CallTasksActivity:ComponentActivity() {
 
     private fun load() {
         lifecycleScope.launch {
-            val result=withContext(Dispatchers.IO) { runCatching { CallRecordStore(CallPipelineStartup.storage(this@CallTasksActivity)).use { s ->
+            val result=withContext(Dispatchers.IO) { runCatching { kr.callbrief.IeumApplication.store(this@CallTasksActivity).let { s ->
                 Triple(s.openItems(),runCatching { s.doneItems(System.currentTimeMillis()-7*86_400_000L) }.getOrDefault(emptyList()),
                     runCatching { s.companies().map { it.name } }.getOrDefault(emptyList())) } } }
             if(isFinishing||isDestroyed)return@launch

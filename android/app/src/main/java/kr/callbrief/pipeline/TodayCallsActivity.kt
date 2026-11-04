@@ -37,7 +37,6 @@ class TodayCallsActivity:ComponentActivity() {
     /** The day's call-log lines that have no record of their own ([CallRecordStore.dayLog]). */
     private var logs:List<LoggedCall> =emptyList()
     /** Read the phone's call log again on the next [load] (once each time the screen comes back). */
-    private var refreshLog=true
 
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
@@ -50,17 +49,15 @@ class TodayCallsActivity:ComponentActivity() {
     /** Opened from another screen (a home memo, a company, a to-do): back returns there. Otherwise detail goes back to the list, the list to home. */
     private fun fromOutside()=intent?.hasExtra(EXTRA_CALL)==true
     private fun closeDetail() { if(detail!=null && !fromOutside()) { detail=null;render() } else if(fromOutside()) finish() else CallUi.go(this,CallUi.Tab.HOME) }
-    override fun onResume() { super.onResume();refreshLog=true;load() }
+    override fun onResume() { super.onResume();load() }
     override fun onSaveInstanceState(out:Bundle) { super.onSaveInstanceState(out);out.putString("day",day.toString());detail?.let { out.putString("detail",it) } }
 
     private fun load() {
-        val target=day;val refresh=refreshLog;refreshLog=false
-        val app=applicationContext
+        val target=day
         lifecycleScope.launch {
             val result=runCatching { withContext(Dispatchers.IO) {
-                CallRecordStore(CallPipelineStartup.storage(this@TodayCallsActivity)).use { s ->
-                    // A call that just ended (a missed one too) is in the list at once, not only after the next hourly pass.
-                    if(refresh && !kr.callbrief.BuildConfig.LOCAL_PREVIEW) runCatching { s.reconcileCallLog(FirstPass.readCallLog(app,kr.callbrief.SecureSettings(app).snapshot())) }
+                // Reads only (r8-1): the call log is matched in the discovery and upload passes, not at every screen open.
+                kr.callbrief.IeumApplication.store(this@TodayCallsActivity).let { s ->
                     s.day(target) to runCatching { s.dayLog(target) }.getOrDefault(emptyList()) }
             } }
             if(isFinishing||isDestroyed||target!=day)return@launch

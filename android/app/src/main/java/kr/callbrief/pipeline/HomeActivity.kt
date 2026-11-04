@@ -74,7 +74,16 @@ class HomeActivity:ComponentActivity() {
         }
     }
 
-    private fun read():Snapshot {
+    internal fun read():Snapshot {
+        val t0=System.nanoTime()
+        try { return readOnce() } finally {
+            // Measurement only (r8-1): how long one home read took, no content.
+            val ms=(System.nanoTime()-t0)/1_000_000L;android.util.Log.i("HomeActivity","read ms=$ms")
+            runCatching { SecureSettings(CallPipelineStartup.storage(this)).update { it.put(kr.callbrief.IeumApplication.HOME_READ_MS,ms) } }
+        }
+    }
+    /** One store for the whole read (r8-1): the process store, opened once and not closed here. */
+    private fun readOnce():Snapshot {
         val storage=CallPipelineStartup.storage(this)
         if(kr.callbrief.BuildConfig.LOCAL_PREVIEW) PreviewSeed.ensure(storage)
         val s=SecureSettings(storage).snapshot()
@@ -84,10 +93,11 @@ class HomeActivity:ComponentActivity() {
             runCatching { CallTranscriptionWork.schedule(storage) }
         }
         val today=CallUi.today()
-        val (calls,due,newTasks)=CallRecordStore(storage).use { Triple(it.day(today),it.dueItems(today),it.newTaskCount(today)) }
-        val companies=runCatching { CallRecordStore(storage).use { it.companyCount() } }.getOrDefault(0)
-        val week=runCatching { CallRecordStore(storage).use { s -> (6 downTo 0).map { s.day(today.minusDays(it.toLong())).size } } }.getOrDefault(emptyList())
-        val open=runCatching { CallRecordStore(storage).use { it.openItems() } }.getOrDefault(emptyList())
+        val db=kr.callbrief.IeumApplication.store(storage)
+        val (calls,due,newTasks)=Triple(db.day(today),db.dueItems(today),db.newTaskCount(today))
+        val companies=runCatching { db.companyCount() }.getOrDefault(0)
+        val week=runCatching { (6 downTo 0).map { db.day(today.minusDays(it.toLong())).size } }.getOrDefault(emptyList())
+        val open=runCatching { db.openItems() }.getOrDefault(emptyList())
         val byCompany=open.groupingBy { it.company ?: "업체 없음" }.eachCount().entries.sortedByDescending { it.value }.map { it.key to it.value }
         val mm=PipelineModelManager(storage)
         val percent=if(mm.partFile.isFile) (mm.partFile.length()*100/574041195L).toInt().coerceIn(0,99) else -1
@@ -96,19 +106,18 @@ class HomeActivity:ComponentActivity() {
             s.optString(PipelineSettingsKeys.MODEL_STATE),calls.size,calls.count{it.state!=CallRecordStore.ANALYZED},newTasks,
             due.size,due.count{CallUi.overdue(it.due)},s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),batteryFree(),percent,next,companies,
             week,byCompany,calls.sortedByDescending { it.startedMs ?: 0 }.take(4),
-            granted(android.Manifest.permission.READ_SMS),granted(android.Manifest.permission.READ_CALL_LOG),firstPass(storage,s),TaskActions.ordered(open))
+            granted(android.Manifest.permission.READ_SMS),granted(android.Manifest.permission.READ_CALL_LOG),firstPass(storage,db,s),TaskActions.ordered(open))
     }
-    private fun firstPass(storage:android.content.Context,s:org.json.JSONObject):FirstPassView? {
+    private fun firstPass(storage:android.content.Context,db:CallRecordStore,s:org.json.JSONObject):FirstPassView? {
         val start=FirstPass.start(s) ?: return null
         if(FirstPass.done(s) || !s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false)) return null
-        val p=runCatching { CallRecordStore(storage).use { it.firstPassProgress(start) } }.getOrNull() ?: return null
+        val p=runCatching { db.firstPassProgress(start) }.getOrNull() ?: return null
         val msPerMinute=s.optLong(PipelineSettingsKeys.LAST_MS_PER_AUDIO_MINUTE,72_000L)
         val perMinute=p.bytesPerMinute?.takeIf { it>0 && p.bytesLeft>0 }
         val hours=perMinute?.let { p.bytesLeft.toDouble()/it*msPerMinute/3_600_000.0 }
         val now=System.currentTimeMillis()
         // The same test as CallRecordWork.batchSlots: something sent waits for STALL_MS and no result came in that long.
-        val stalled=p.waiting>0 && runCatching { CallRecordStore(storage).use { db ->
-            db.pending().mapNotNull { r -> db.sentMs(r.recordId)?.takeIf { db.receivedMs(r.recordId)==null } }.minOrNull() } }.getOrNull()
+        val stalled=p.waiting>0 && runCatching { db.oldestUnansweredSentMs() }.getOrNull()
             ?.let { since -> now-since>=FirstPass.STALL_MS && now-s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0)>=FirstPass.STALL_MS } ?: false
         return FirstPassView(p.toTranscribe,hours,p.waiting,p.unrecorded,s.optString(PipelineSettingsKeys.MAIL_HOST).isNotBlank(),
             perMinute?.let { (p.bytesLeft+it/2)/it },p.toTranscribe>0 && !FirstPass.powerOk(storage),stalled)

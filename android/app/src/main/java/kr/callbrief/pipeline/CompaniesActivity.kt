@@ -45,7 +45,7 @@ class CompaniesActivity:ComponentActivity() {
         val target=detailId
         lifecycleScope.launch {
             val result=runCatching { withContext(Dispatchers.IO) {
-                CallRecordStore(CallPipelineStartup.storage(this@CompaniesActivity)).use { s ->
+                kr.callbrief.IeumApplication.store(this@CompaniesActivity).let { s ->
                     numbers=runCatching { s.dialNumbers() }.getOrDefault(emptyMap())
                     // A company link from a call: find the company by name (spaces ignored) and open it.
                     val id=target ?: wantedName?.let { n -> s.companies().firstOrNull { it.name.filterNot(Char::isWhitespace)==n.filterNot(Char::isWhitespace) }?.id }

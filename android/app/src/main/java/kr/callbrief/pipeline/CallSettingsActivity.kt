@@ -132,13 +132,15 @@ class CallSettingsActivity:ComponentActivity() {
         lifecycleScope.launch {
             val result=runCatching { withContext(Dispatchers.IO) {
                 val s=runCatching { settings().snapshot() }.getOrDefault(JSONObject())
-                val counts=runCatching { CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.counts() } }.getOrDefault(emptyMap())
-                val memo=runCatching { CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.siteMemo() } }.getOrNull()
-                oldestWaiting=runCatching { CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.oldestWaitingMs() } }.getOrNull()
+                // One store for the whole refresh (r8-1): the process store, not closed here.
+                val db=runCatching { kr.callbrief.IeumApplication.store(this@CallSettingsActivity) }.getOrNull()
+                val counts=runCatching { db!!.counts() }.getOrDefault(emptyMap())
+                val memo=runCatching { db!!.siteMemo() }.getOrNull()
+                oldestWaiting=runCatching { db!!.oldestWaitingMs() }.getOrNull()
                 watch=StatusLights.read(CallPipelineStartup.storage(this@CallSettingsActivity),s,System.currentTimeMillis())
                 folderReadable=StatusLights.folderReadable(this@CallSettingsActivity,s)
                 storagePercent=watch?.dbPercent
-                personal=runCatching { CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.personalNumbers() } }.getOrDefault(emptyList())
+                personal=runCatching { db!!.personalNumbers() }.getOrDefault(emptyList())
                 Triple(s,counts,memo)
             } }
             if(isFinishing||isDestroyed)return@launch

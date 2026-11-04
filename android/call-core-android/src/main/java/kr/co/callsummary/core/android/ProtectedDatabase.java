@@ -14,6 +14,7 @@ import java.nio.channels.FileLock;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
@@ -33,6 +34,16 @@ public final class ProtectedDatabase implements AutoCloseable {
     private static final Map<SQLiteDatabase,State> BY_DATABASE=new IdentityHashMap<>();
     public static final int MAX_PLAIN_BYTES=16*1024*1024;
     public static final int MAX_ROW_BYTES=1024*1024;
+    private static final String TAG="ProtectedDatabase";
+    /** Measurement only (no content): every open call, every decrypt-and-restore of a sealed file, every Keystore lookup. */
+    private static final AtomicInteger OPENS=new AtomicInteger(),RESTORES=new AtomicInteger(),KEY_CHECKS=new AtomicInteger();
+    private static volatile long lastStateMs=-1,lastTransactionMs=-1;
+    public static int openCount(){return OPENS.get();}
+    public static int restoreCount(){return RESTORES.get();}
+    public static int keyCheckCount(){return KEY_CHECKS.get();}
+    /** How long the last State creation (read, decrypt, restore or first schema) took, or -1 before any. */
+    public static long lastStateMs(){return lastStateMs;}
+    public static long lastTransactionMs(){return lastTransactionMs;}
     private final State state;
     private boolean closed;
     private ProtectedDatabase(State state){this.state=state;}
@@ -52,14 +63,25 @@ public final class ProtectedDatabase implements AutoCloseable {
             try{
                 for(File old:legacyFiles(app,name))if(old.exists())throw error("TEXT_STORE_LEGACY_REVIEW_REQUIRED");
                 String identity=path.getCanonicalPath();State s=STORES.get(identity);
+                OPENS.incrementAndGet();
                 if(s==null){
+                    long t0=System.nanoTime();
                     s=new State(path,schema);s.requireReady();STORES.put(identity,s);BY_DATABASE.put(s.db,s);
+                    lastStateMs=(System.nanoTime()-t0)/1_000_000L;android.util.Log.i(TAG,"state ms="+lastStateMs);
                 }
+                // The key was proved when this state was made; a later open does not ask the Keystore again (r8-1).
                 s.requireReady();s.refs++;return new ProtectedDatabase(s);
             }catch(CoreException e){throw e;}catch(Exception e){throw error("TEXT_STORE_OPEN_FAILED");}
         }
     }
     public SQLiteDatabase database(){if(closed)throw error("TEXT_STORE_CLOSED");return state.db;}
+    /** Still usable: not closed, not held for review. A process-lifetime holder drops a handle that is not. */
+    public boolean usable(){synchronized(STORES){if(closed)return false;}return !state.held&&state.db.isOpen();}
+    /** True the first time [tag] is asked for on this in-memory state (schema checks once per loaded state, r8-1).
+     * A state read again from disk starts with none. [markDone] after the step succeeded. */
+    public boolean needs(String tag){synchronized(state){return !state.done.contains(tag);}}
+    /** Inside a transaction the mark counts only when the outer transaction commits (a rolled-back CREATE is not "done"). */
+    public void markDone(String tag){synchronized(state){if(state.depth>0)state.pendingDone.add(tag);else state.done.add(tag);}}
     public <T>T transaction(Work<T> work){if(closed)throw error("TEXT_STORE_CLOSED");return state.transaction(work);}
     /** Shared transaction boundary for relay modules that use the same SQLiteDatabase handle. */
     public static <T>T transaction(SQLiteDatabase database,Work<T> work){
@@ -83,7 +105,7 @@ public final class ProtectedDatabase implements AutoCloseable {
     public static void requireSealedPersistence(SQLiteDatabase database){
         State s;synchronized(STORES){s=BY_DATABASE.get(database);}
         if(s==null)throw error("TEXT_STORE_PROTECTED_PORT_REQUIRED");
-        synchronized(s){s.requireReady();}
+        synchronized(s){s.requireReadyFull();}
     }
     @Override public void close(){
         synchronized(STORES){if(closed)return;closed=true;if(--state.refs==0){
@@ -104,6 +126,11 @@ public final class ProtectedDatabase implements AutoCloseable {
         final SQLiteDatabase db;final KeystoreTextKeys keys=new KeystoreTextKeys();
         final RandomAccessFile lockFile;final FileChannel lockChannel;final FileLock lock;
         int refs,depth;volatile boolean held;boolean rollbackOnly;byte[] lastPlain,keyProof;String cipherHash;
+        /** Key proved for this state; reads then do not ask the Keystore again. Cleared when a write finds the key gone or changed. */
+        volatile boolean verified;
+        /** total_changes() and main schema_version when the memory DB last matched [lastPlain]: equal means no snapshot is needed. */
+        long sealedChanges=-1,sealedSchema=-1;
+        final Set<String> done=new HashSet<>(),pendingDone=new HashSet<>();
         State(File path,String schema)throws Exception{
             this.path=path;identity=path.getCanonicalPath();alias="callsummary.text.v1."+sha(identity.getBytes(StandardCharsets.UTF_8));
             aad=("IEUM_SQL_SNAPSHOT_V1\n"+identity).getBytes(StandardCharsets.UTF_8);
@@ -119,13 +146,14 @@ public final class ProtectedDatabase implements AutoCloseable {
                 db.execSQL("PRAGMA recursive_triggers=ON");
                 boolean existing=path.exists()||new File(path+".bak").exists()||new File(path+".new").exists();
                 if(existing){
-                    SecretKey key=keys.existing(alias);if(key==null)throw error("TEXT_STORE_KEY_UNAVAILABLE");
+                    SecretKey key=existingKey();if(key==null)throw error("TEXT_STORE_KEY_UNAVAILABLE");
                     byte[] encoded;try(InputStream in=readMainPreservingArtifacts()){encoded=readBounded(in,MAX_PLAIN_BYTES+128);}
-                    byte[] plain=unseal(encoded,key);try{restore(db,plain);lastPlain=plain.clone();keyProof=sealProof(key);cipherHash=sha(encoded);}finally{Arrays.fill(plain,(byte)0);Arrays.fill(encoded,(byte)0);}
+                    RESTORES.incrementAndGet();
+                    byte[] plain=unseal(encoded,key);try{restore(db,plain);lastPlain=plain.clone();keyProof=sealProof(key);cipherHash=sha(encoded);verified=true;sealedNow();}finally{Arrays.fill(plain,(byte)0);Arrays.fill(encoded,(byte)0);}
                 }else{
                     if(schema==null)throw error("TEXT_STORE_NOT_INITIALIZED");
                     for(String statement:schema.split("\n-- statement-break\n"))db.execSQL(statement);
-                    byte[] plain=snapshot(db);try{SecretKey key=keys.existing(alias);if(key==null)key=keys.createForEmptyStore(alias);if(key==null)throw error("TEXT_STORE_KEY_UNAVAILABLE");persist(plain,key);lastPlain=plain.clone();keyProof=sealProof(key);}finally{Arrays.fill(plain,(byte)0);}
+                    byte[] plain=snapshot(db);try{SecretKey key=keys.existing(alias);if(key==null)key=keys.createForEmptyStore(alias);if(key==null)throw error("TEXT_STORE_KEY_UNAVAILABLE");persist(plain,key);lastPlain=plain.clone();keyProof=sealProof(key);verified=true;sealedNow();}finally{Arrays.fill(plain,(byte)0);}
                 }
             }catch(Exception e){close();if(e instanceof CoreException)throw e;throw error("TEXT_STORE_AUTHENTICATION_OR_OPEN_FAILED");}
         }
@@ -134,7 +162,17 @@ public final class ProtectedDatabase implements AutoCloseable {
             byte[] encrypted=cipher.doFinal("IEUM_TEXT_KEY_CHECK".getBytes(StandardCharsets.UTF_8));byte[] proof=new byte[13+encrypted.length];proof[0]=1;System.arraycopy(cipher.getIV(),0,proof,1,12);System.arraycopy(encrypted,0,proof,13,encrypted.length);return proof;
         }
         void prove(SecretKey key){if(keyProof==null)return;byte[] proof=unseal(keyProof,key);try{if(!Arrays.equals(proof,"IEUM_TEXT_KEY_CHECK".getBytes(StandardCharsets.UTF_8)))throw error("TEXT_STORE_KEY_UNAVAILABLE");}finally{Arrays.fill(proof,(byte)0);}}
-        void requireReady(){if(held||!db.isOpen())throw error("TEXT_STORE_REVIEW_REQUIRED");try{SecretKey key=keys.existing(alias);if(key==null)throw error("TEXT_STORE_KEY_UNAVAILABLE");prove(key);}catch(CoreException e){throw e;}catch(Exception e){throw error("TEXT_STORE_KEY_UNAVAILABLE");}}
+        /** Open and not held; the Keystore is asked only until the key was proved once (r8-1). Writes still fetch and prove the key. */
+        void requireReady(){if(held||!db.isOpen())throw error("TEXT_STORE_REVIEW_REQUIRED");if(!verified)requireReadyFull();}
+        /** Asks the Keystore now (the explicit capability gate and the first use). */
+        void requireReadyFull(){if(held||!db.isOpen())throw error("TEXT_STORE_REVIEW_REQUIRED");
+            try{SecretKey key=existingKey();if(key==null)throw error("TEXT_STORE_KEY_UNAVAILABLE");prove(key);verified=true;}
+            catch(CoreException e){verified=false;throw e;}catch(Exception e){verified=false;throw error("TEXT_STORE_KEY_UNAVAILABLE");}}
+        SecretKey existingKey()throws Exception{KEY_CHECKS.incrementAndGet();return keys.existing(alias);}
+        long number(String sql){try(Cursor c=db.rawQuery(sql,null)){return c.moveToFirst()?c.getLong(0):-1;}}
+        long changes(){return number("SELECT total_changes()");}
+        long schemaVersion(){return number("PRAGMA schema_version");}
+        void sealedNow(){sealedChanges=changes();sealedSchema=schemaVersion();}
         /** AtomicFile.openRead normalizes .bak/.new before our AEAD check. Preserve and hold
          * ambiguous recovery artifacts instead; no promotion, deletion, reset or key creation. */
         InputStream readMainPreservingArtifacts()throws IOException{
@@ -147,19 +185,27 @@ public final class ProtectedDatabase implements AutoCloseable {
         synchronized <T>T transaction(Work<T> work,CommitDecider<T> decider){
             requireReady();
             if(depth>0){depth++;try{T r=work.run();if(!decider.commit(r))rollbackOnly=true;return r;}catch(RuntimeException e){rollbackOnly=true;throw e;}finally{depth--;}}
-            boolean outer=true;depth=1;rollbackOnly=false;db.beginTransaction();
-            byte[] plain=null;boolean durable=false;
+            boolean outer=true;depth=1;rollbackOnly=false;pendingDone.clear();long t0=System.nanoTime();db.beginTransaction();
+            byte[] plain=null;boolean durable=false;long changesAfter=-1,schemaAfter=-1;
             try{
                 T result=work.run();
                 if(!decider.commit(result))return result;
                 if(rollbackOnly)throw error("TEXT_STORE_TRANSACTION_ROLLED_BACK");
-                if(outer){plain=snapshot(db);if(!Arrays.equals(lastPlain,plain)){
-                    SecretKey key;try{key=keys.existing(alias);}catch(Exception e){throw error("TEXT_STORE_KEY_UNAVAILABLE");}
-                    if(key==null)throw error("TEXT_STORE_KEY_UNAVAILABLE");persist(plain,key);durable=true;
+                // Nothing written since the memory DB last matched the sealed file (no row change, no schema change):
+                // the whole-store snapshot is skipped (r8-1). Any change, even one rolled back, takes the snapshot as before.
+                changesAfter=changes();schemaAfter=schemaVersion();
+                boolean unchanged=changesAfter==sealedChanges&&schemaAfter==sealedSchema&&changesAfter>=0;
+                if(outer&&!unchanged){plain=snapshot(db);if(!Arrays.equals(lastPlain,plain)){
+                    SecretKey key;try{key=existingKey();}catch(Exception e){verified=false;throw error("TEXT_STORE_KEY_UNAVAILABLE");}
+                    if(key==null){verified=false;throw error("TEXT_STORE_KEY_UNAVAILABLE");}
+                    try{persist(plain,key);}catch(CoreException e){if(e.code.startsWith("TEXT_STORE_KEY")||e.code.equals("TEXT_STORE_AUTHENTICATION_FAILED"))verified=false;throw e;}
+                    durable=true;
                 }}
-                db.setTransactionSuccessful();if(outer&&plain!=null){if(lastPlain!=null)Arrays.fill(lastPlain,(byte)0);lastPlain=plain.clone();}return result;
+                db.setTransactionSuccessful();if(outer&&plain!=null){if(lastPlain!=null)Arrays.fill(lastPlain,(byte)0);lastPlain=plain.clone();sealedChanges=changesAfter;sealedSchema=schemaAfter;}
+                done.addAll(pendingDone);return result;
             }catch(CoreException e){throw e;}catch(RuntimeException e){if(durable)held=true;throw e;}
-            finally{try{db.endTransaction();}catch(RuntimeException e){held=true;throw error("TEXT_STORE_COMMIT_REVIEW_REQUIRED");}finally{depth--;if(plain!=null)Arrays.fill(plain,(byte)0);}}
+            finally{try{db.endTransaction();}catch(RuntimeException e){held=true;throw error("TEXT_STORE_COMMIT_REVIEW_REQUIRED");}finally{depth--;pendingDone.clear();if(plain!=null)Arrays.fill(plain,(byte)0);
+                lastTransactionMs=(System.nanoTime()-t0)/1_000_000L;if(lastTransactionMs>=100)android.util.Log.i(TAG,"transaction ms="+lastTransactionMs);}}
         }
         byte[] unseal(byte[] encoded,SecretKey key){try{
             if(encoded.length<34||encoded[0]!=1)throw error("TEXT_STORE_FORMAT_REQUIRES_REVIEW");

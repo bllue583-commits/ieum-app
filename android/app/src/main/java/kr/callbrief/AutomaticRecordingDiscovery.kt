@@ -224,6 +224,9 @@ class CallLogDiscoveryWorker(context:Context,parameters:WorkerParameters):Worker
     override fun doWork():Result {
         // The folder may have changed since this work was registered: the binding is taken fresh, not from the input.
         val code=AutomaticRecordingDiscovery.runCallLogTrigger(applicationContext,{isStopped},{active=it})
+        // A call that just ended (a missed one too) is in the call list soon, without the screen matching the log (r8-1).
+        if(!isStopped && !BuildConfig.LOCAL_PREVIEW) runCatching { val app=applicationContext
+            kr.callbrief.IeumApplication.store(app).reconcileCallLog(kr.callbrief.pipeline.FirstPass.readCallLog(app,SecureSettings(app).snapshot())) }
         // Success even on a failed pass: the next trigger is appended to this work and would fail with it. The code stays.
         return Result.success(workDataOf("automation_state" to code))
     }

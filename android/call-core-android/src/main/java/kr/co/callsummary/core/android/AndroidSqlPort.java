@@ -31,6 +31,11 @@ public final class AndroidSqlPort implements SqlPort {
     }
     public void execute(String sql,Object...args){protectedStore.transaction(()->{try{db.execSQL(sql,args);}catch(android.database.SQLException e){throw new CoreException(code(e.getMessage()));}return null;});}
     public void requireProtectedPersistence(){ProtectedDatabase.requireSealedPersistence(db);}
+    /** Schema and repair steps run once per loaded store state, not at every open (r8-1); see ProtectedDatabase.needs. */
+    public boolean needs(String step){return protectedStore.needs(step);}
+    public void markDone(String step){protectedStore.markDone(step);}
+    /** False once closed or held for review: a long-lived holder then opens a new port. */
+    public boolean usable(){return protectedStore.usable();}
     public List<Map<String,Object>> query(String sql,Object...args){
         return ProtectedDatabase.read(db,()->queryInside(sql,args));
     }

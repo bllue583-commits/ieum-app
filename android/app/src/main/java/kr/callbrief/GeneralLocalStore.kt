@@ -39,7 +39,12 @@ CREATE TABLE IF NOT EXISTS local_intakes(event_id TEXT PRIMARY KEY,root_uri TEXT
             val keys=AndroidVaultKeys();val vault=AndroidVaultFactory.open(context,keys)
             return VaultAccess(vault,context.noBackupFilesDir.toPath().resolve("audio-vault-v2"),keys::createNewKey)
         }
-        internal fun overlay(port: AndroidSqlPort) = port.transaction { OVERLAY.split(';').filter { it.isNotBlank() }.forEach { port.execute(it) } }
+        /** Once per loaded store state (r8-1): a later open of the same in-memory store skips it. */
+        internal fun overlay(port: AndroidSqlPort) { if(port.needs(OVERLAY_STEP)) port.transaction { OVERLAY.split(';').filter { it.isNotBlank() }.forEach { port.execute(it) };port.markDone(OVERLAY_STEP) } }
+        private const val OVERLAY_STEP="generalLocalStore.overlay"
+        private const val DISCOVERY_STEP="generalLocalStore.discoveryTables"
+        private const val WIDEN_STEP="generalLocalStore.vaultSizeLimit"
+        private const val SCOPE_STEP="generalLocalStore.localScope"
         private fun id(prefix: String)=prefix+"_"+UUID.randomUUID().toString().replace("-","")
         private fun signature(d: SourceDocument)=JsonCanonical.digest(SqlCallRepository.map("document_id",d.documentId,"uri",d.uri,"name",d.name,"size",d.size,"mime",d.mime,"modified",d.modified))
     }
@@ -50,7 +55,8 @@ CREATE TABLE IF NOT EXISTS local_intakes(event_id TEXT PRIMARY KEY,root_uri TEXT
     init {
         check(Looper.myLooper()!=Looper.getMainLooper()) { "LOCAL_IO_THREAD_REQUIRED" }
         port=AndroidSqlPort(context,DATABASE,context.assets.open("call_core_schema.sql"));port.requireProtectedPersistence();overlay(port)
-        repository=SqlCallRepository(port,OWNER);repository.initializeLocalScope()
+        repository=SqlCallRepository(port,OWNER)
+        if(port.needs(SCOPE_STEP)) { repository.initializeLocalScope();port.markDone(SCOPE_STEP) }
         val privateContext=object:ContextWrapper(context) { override fun getNoBackupFilesDir()=File(super.getNoBackupFilesDir(),"local-recordings-v2").apply { mkdirs() } }
         try {
             val v=factory(privateContext)
@@ -61,7 +67,7 @@ CREATE TABLE IF NOT EXISTS local_intakes(event_id TEXT PRIMARY KEY,root_uri TEXT
                 if((row?.get("archived") as? Number)?.toInt()==1) null else (row?.get("revision") as? Number)?.toLong() ?: 0L
             }
             // v2.6: 25 MB -> 60 MB in a store made before (only the CHECK number). A failure keeps 25 MB (audioByteLimit).
-            runCatching { VaultSizeLimit.widen(port,ledger) }
+            if(port.needs(WIDEN_STEP)) runCatching { VaultSizeLimit.widen(port,ledger);port.markDone(WIDEN_STEP) }
         } catch(error: Exception) { port.close();throw error }
     }
     /** Largest recording this store's database accepts (discovery holds bigger ones as HELD_UNSUPPORTED). */
@@ -78,13 +84,13 @@ CREATE TABLE IF NOT EXISTS local_intakes(event_id TEXT PRIMARY KEY,root_uri TEXT
     private fun number(row:Map<String,Any?>,key:String)=(row[key] as Number).toLong()
     // Automatic discovery uses the SAME protected port and canonical receipt/source CAS.
     internal fun discoveryQueue(selection:kr.co.ieum.discovery.DiscoveryTypes.Selection)=ProtectedDiscoveryQueue(port,selection)
-    private fun discoveryTables()=port.transaction {
+    private fun discoveryTables() { if(port.needs(DISCOVERY_STEP)) port.transaction {
         port.requireProtectedPersistence()
         port.execute("CREATE TABLE IF NOT EXISTS discovery_documents(root TEXT NOT NULL,document_id TEXT NOT NULL,uri TEXT NOT NULL,name TEXT NOT NULL,size INTEGER NOT NULL,mime TEXT NOT NULL,modified INTEGER NOT NULL,partial INTEGER NOT NULL,virtual INTEGER NOT NULL,PRIMARY KEY(root,document_id))")
         port.execute("CREATE TABLE IF NOT EXISTS discovery_intake_requests(operation_id TEXT PRIMARY KEY,owner_key TEXT NOT NULL,commit_payload TEXT NOT NULL,metadata_json TEXT NOT NULL,request_digest TEXT NOT NULL,root TEXT NOT NULL,document_id TEXT NOT NULL)")
         port.execute("CREATE TRIGGER IF NOT EXISTS discovery_request_update BEFORE UPDATE ON discovery_intake_requests BEGIN SELECT RAISE(ABORT,'IMMUTABLE_DISCOVERY_REQUEST');END")
         port.execute("CREATE TRIGGER IF NOT EXISTS discovery_request_delete BEFORE DELETE ON discovery_intake_requests BEGIN SELECT RAISE(ABORT,'IMMUTABLE_DISCOVERY_REQUEST');END")
-    }
+        port.markDone(DISCOVERY_STEP) } }
     internal fun rememberDiscoveryDocuments(selection:kr.co.ieum.discovery.DiscoveryTypes.Selection,documents:List<SourceDocument>)=port.transaction {
         discoveryTables()
         documents.forEach { d ->
