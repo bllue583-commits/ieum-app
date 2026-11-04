@@ -18,8 +18,11 @@ import kotlinx.coroutines.withContext
  * ("김민수 님, 오늘 요청"), the AI's note, then [다 됐어요] at the end. Only an item a call made opens anything: the whole row and the
  * person's name in the META line open that call. An item the user wrote or the morning tidy made shows no press at all. */
 internal object CheckRows {
-    fun row(a:MainActivity,item:OpenItem,status:String=item.status,company:String?=item.company,onDone:((View)->Unit)?=null):LinearLayout {
+    /** [personId]: the person of the call that made the item (v2.8): the name in the META line then opens the person page
+     * instead of the call (the rest of the row still opens the call). */
+    fun row(a:MainActivity,item:OpenItem,status:String=item.status,company:String?=item.company,onDone:((View)->Unit)?=null,personId:String?=null):LinearLayout {
         val open:(()->Unit)?=item.recordId?.let { id -> { a.openCall(id,item.callMs ?: item.createdMs) } }
+        val openWho:(()->Unit)?=personId?.let { id -> { a.openPerson(id) } } ?: open
         val outer=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;setPadding(CallUi.dp(a,16),CallUi.dp(a,14),CallUi.dp(a,16),CallUi.dp(a,14)) }
         if(open!=null) outer.apply { isClickable=true;isFocusable=true;background=CallUi.rowRipple();CallUi.onTap(this,action=open) }
         else outer.apply { isClickable=false;isFocusable=false;background=null }
@@ -37,14 +40,14 @@ internal object CheckRows {
         val asked=CallUi.requested(item.createdMs)
         if(person!=null || asked.isNotEmpty()) {
             val meta=CallUi.FitRow(a,flex=if(person!=null && asked.isNotEmpty()) 1 else 0,minFraction=0.3f,gapDp=0).apply { tag="task_meta" }
-            if(person!=null) meta.addView(CallUi.caption(a,if(asked.isNotEmpty()) "$person," else person,if(open!=null) CallUi.ACCENT else CallUi.SUBTLE,open!=null).apply {
-                tag=if(open!=null) "task_who_link" else "task_who_name";setPadding(0,0,CallUi.dp(a,4),0)
-                if(open!=null) { isClickable=true;isFocusable=true;background=CallUi.rowRipple();minHeight=CallUi.dp(a,40);gravity=Gravity.CENTER_VERTICAL
-                    contentDescription="$person 통화 보기";CallUi.onTap(this,action=open) }
+            if(person!=null) meta.addView(CallUi.caption(a,if(asked.isNotEmpty()) "$person," else person,if(openWho!=null) CallUi.ACCENT else CallUi.SUBTLE,openWho!=null).apply {
+                tag=when { personId!=null -> "task_who_person";open!=null -> "task_who_link";else -> "task_who_name" };setPadding(0,0,CallUi.dp(a,4),0)
+                if(openWho!=null) { isClickable=true;isFocusable=true;background=CallUi.rowRipple();minHeight=CallUi.dp(a,40);gravity=Gravity.CENTER_VERTICAL
+                    contentDescription=if(personId!=null) "$person 보기" else "$person 통화 보기";CallUi.onTap(this,action=openWho) }
             },LinearLayout.LayoutParams(-2,-2))
             if(asked.isNotEmpty()) meta.addView(CallUi.caption(a,asked,CallUi.SUBTLE).apply { tag="task_who";setPadding(0,0,0,0);gravity=Gravity.CENTER_VERTICAL
-                if(open!=null) minHeight=CallUi.dp(a,40) },LinearLayout.LayoutParams(-2,-2))
-            outer.addView(meta,LinearLayout.LayoutParams(-1,-2).apply { topMargin=CallUi.dp(a,if(open!=null) 0 else 6) })
+                if(openWho!=null) minHeight=CallUi.dp(a,40) },LinearLayout.LayoutParams(-2,-2))
+            outer.addView(meta,LinearLayout.LayoutParams(-1,-2).apply { topMargin=CallUi.dp(a,if(openWho!=null) 0 else 6) })
         }
         // 4. The AI's note.
         CallUi.aiNoteRow(a,item.aiNote)?.let { outer.addView(it) }
@@ -89,7 +92,9 @@ internal class TasksScreen(a:MainActivity):AppScreen(a) {
     private fun load() {
         a.lifecycleScope.launch {
             val result=withContext(Dispatchers.IO) { runCatching { kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(a)).let { s ->
-                Triple(s.openItems(),runCatching { s.doneItems(System.currentTimeMillis()-7*86_400_000L) }.getOrDefault(emptyList()),
+                val open=s.openItems()
+                people=runCatching { s.personIdsOf(open.mapNotNull { it.recordId }) }.getOrDefault(emptyMap())
+                Triple(open,runCatching { s.doneItems(System.currentTimeMillis()-7*86_400_000L) }.getOrDefault(emptyList()),
                     runCatching { s.companies().map { it.name } }.getOrDefault(emptyList())) } } }
             if(!live())return@launch
             result.onSuccess { (i,d,c) -> items=i;done=d;companies=c;loaded=true }
@@ -111,8 +116,10 @@ internal class TasksScreen(a:MainActivity):AppScreen(a) {
     /** Asked for more than this many days ago: folded into one "오래된 일 n개 보기" line. */
     internal val OLD_DAYS=14L
     internal fun isOld(i:OpenItem)=CallRecordStore.kstDay(i.createdMs)<CallUi.today().minusDays(OLD_DAYS)
+    /** The person of each item's call, by record id: "김민수 님" opens their page (v2.8). */
+    @Volatile private var people:Map<String,String> =emptyMap()
     private fun taskView(item:OpenItem,check:Boolean)=CheckRows.row(a,item,status=if(check) "" else item.status,
-        onDone={ row -> TaskActions.complete(a,item,row) { load() } }).apply { tag="task_${item.id}" }
+        onDone={ row -> TaskActions.complete(a,item,row) { load() } },personId=item.recordId?.let(people::get)).apply { tag="task_${item.id}" }
     /** A folded line that opens in place: [label] is a quiet link, the rows below it appear when it is tapped. */
     private fun fold(label:String,tag:String,rows:()->List<View>):View {
         val box=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }

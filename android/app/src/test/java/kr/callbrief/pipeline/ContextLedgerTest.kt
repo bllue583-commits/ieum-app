@@ -335,7 +335,10 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         assertTrue(texts(a).any { it.text.toString()=="박영희" })
         views(a.window.decorView).first { (it.tag as? String)?.startsWith("company_")==true }.performClick()
         settle { texts(a).any { it.text.toString()=="사람 (1)" } }
-        views(a.window.decorView).first { (it.tag as? String)?.startsWith("person_rename_")==true }.performClick()
+        // v2.8: the person row opens the person page, and the name is fixed there.
+        views(a.window.decorView).first { (it.tag as? String)?.startsWith("person_")==true && it.isClickable }.performClick()
+        settle { a.window.decorView.findViewWithTag<View>("person_rename")!=null }
+        a.window.decorView.findViewWithTag<View>("person_rename").performClick()
         val dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog()
         assertTrue(dialog.isShowing)
         assertNotNull(dialog.window!!.decorView.findViewWithTag<View>("sheet_root")) // a bottom sheet, not an AlertDialog
