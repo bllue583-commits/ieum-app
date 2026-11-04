@@ -29,7 +29,10 @@ adb logcat -c
 # that hangs still leaves what ran before it and where it stopped (the job's own limit would cancel the step with nothing).
 adb logcat -s IEUM_RESULT:I > "$out/results.live" 2>/dev/null &
 live=$!
-timeout "${IEUM_INSTRUMENT_MIN:-70}m" adb shell am instrument -w -r -e class kr.callbrief.pipeline.CallPipelineDeviceTest -e model "${IEUM_MODEL:-large}" \
+# IEUM_TESTS=name[,name] runs only those tests (e.g. tg_goldenSet for a golden-only run).
+cls=kr.callbrief.pipeline.CallPipelineDeviceTest
+if [ -n "${IEUM_TESTS:-}" ]; then cls=$(echo "$IEUM_TESTS" | tr ',' '\n' | sed "s/^/$cls#/" | paste -sd, -); fi
+timeout "${IEUM_INSTRUMENT_MIN:-70}m" adb shell am instrument -w -r -e class "$cls" -e model "${IEUM_MODEL:-large}" \
   -e repeat "${IEUM_REPEAT:-3}" -e threads "${IEUM_THREADS:-6,8}" -e callLike "${IEUM_CALL_LIKE:-true}" -e golden "${IEUM_GOLDEN:-compare}" \
   kr.callbrief.test/androidx.test.runner.AndroidJUnitRunner > "$out/instrument.txt" 2>&1
 code=$?
