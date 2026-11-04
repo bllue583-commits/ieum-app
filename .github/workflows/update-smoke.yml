@@ -5,6 +5,8 @@ name: update-smoke
 # Runs on every push that release-apk runs on; the emulator part only when tools/needs_update_smoke.sh says the push
 # changed, since the last release, a manifest, IeumApplication, StartupReceiver, CallSinkImpl or the build settings.
 # For those pushes release-apk waits for the step "Install, update, start" here to pass; other pushes finish at once.
+# An emulator that does not boot (runner problem) is retried once; if it still does not boot, the step
+# "Emulator did not boot (infra)" fails instead, and release-apk only warns. An app failure always stops the release.
 # Needs the secrets IEUM_INBOX_TOKEN (and IEUM_SIGNING_SEED if release-apk uses it; IEUM_SIGNING_SEED_V2 once IEUM_ROTATE=1).
 # Manual run with rotate_test=true: rehearses key rotation (tools/rotate_signing_key.sh) on the emulator.
 on:
