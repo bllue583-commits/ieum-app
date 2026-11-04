@@ -26,6 +26,7 @@
             </intent-filter>
         </activity>
         <receiver android:name=".pipeline.UpdateStatusReceiver" android:exported="false" />
+        <receiver android:name=".pipeline.NotificationActionReceiver" android:exported="false" />
         <receiver android:name=".pipeline.StartupReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
