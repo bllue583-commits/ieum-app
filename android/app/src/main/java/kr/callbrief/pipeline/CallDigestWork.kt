@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.util.Log
 import androidx.work.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -58,17 +59,34 @@ internal object CallDigestTime {
         if(!target.toInstant().isAfter(now)) target=target.plusDays(1)
         return target.toInstant()
     }
+    /** The latest time at or before [now] that is [hour] o'clock in KST (stands in for the target of work queued by an older version). */
+    fun previous(now:Instant,hour:Int):Instant {
+        var target=now.atZone(CallRecordStore.KST).toLocalDate().atTime(hour.coerceIn(0,23),0).atZone(CallRecordStore.KST)
+        if(target.toInstant().isAfter(now)) target=target.minusDays(1)
+        return target.toInstant()
+    }
+    /** Work that runs later than this after its target is skipped: a 7 pm report read after midnight would only confuse. */
+    const val MAX_LATE_HOURS=6L
+    /** [day] is the day of the target, not of whenever the work happened to run; [skip] when it ran too late. */
+    data class Plan(val day:LocalDate,val skip:Boolean)
+    fun plan(now:Instant,target:Instant):Plan =
+        Plan(target.atZone(CallRecordStore.KST).toLocalDate(),Duration.between(target,now)>Duration.ofHours(MAX_LATE_HOURS))
 }
 
 internal object CallDigestSchedule {
     const val EVENING="evening";const val MORNING="morning"
+    fun hoursOf(context:Context)=hours(context)
     private fun hours(context:Context):Pair<Int,Int> {
         val s=runCatching { SecureSettings(CallPipelineStartup.storage(context)).snapshot() }.getOrNull()
         return (s?.optInt(PipelineSettingsKeys.EVENING_HOUR,19) ?: 19) to (s?.optInt(PipelineSettingsKeys.MORNING_HOUR,6) ?: 6)
     }
-    fun request(kind:String,now:Instant,hour:Int):OneTimeWorkRequest=OneTimeWorkRequestBuilder<CallDigestWork>()
-        .setInitialDelay(Duration.between(now,CallDigestTime.next(now,hour)).toMillis(),TimeUnit.MILLISECONDS)
-        .setInputData(workDataOf("kind" to kind)).build()
+    /** The input carries the target time, so a run that happens late still reports for the right day. */
+    fun request(kind:String,now:Instant,hour:Int):OneTimeWorkRequest {
+        val at=CallDigestTime.next(now,hour)
+        return OneTimeWorkRequestBuilder<CallDigestWork>()
+            .setInitialDelay(Duration.between(now,at).toMillis(),TimeUnit.MILLISECONDS)
+            .setInputData(workDataOf("kind" to kind,"targetMs" to at.toEpochMilli())).build()
+    }
     private fun enqueue(context:Context,kind:String,policy:ExistingWorkPolicy) {
         val wm=WorkManager.getInstance(context.applicationContext)
         val (evening,morning)=hours(context)
@@ -82,16 +100,20 @@ internal object CallDigestSchedule {
 }
 
 internal class CallDigestWork(context:Context,params:WorkerParameters):CoroutineWorker(context,params) {
-    companion object { const val CHANNEL="ieum.calls.digest" }
+    companion object { const val CHANNEL="ieum.calls.digest";private const val TAG="ieum.digest" }
     override suspend fun doWork():Result=withContext(Dispatchers.IO) {
         val kind=inputData.getString("kind") ?: CallDigestSchedule.EVENING
-        runCatching {
-            val today=CallRecordStore.kstDay(System.currentTimeMillis())
+        val now=Instant.now()
+        val target=inputData.getLong("targetMs",0L).takeIf { it>0 }?.let(Instant::ofEpochMilli)
+            ?: CallDigestSchedule.hoursOf(applicationContext).let { (evening,morning) -> CallDigestTime.previous(now,if(kind==CallDigestSchedule.MORNING) morning else evening) }
+        val plan=CallDigestTime.plan(now,target)
+        if(plan.skip) Log.w(TAG,"$kind report skipped: ran ${Duration.between(target,now).toHours()} hours after its time")
+        else try {
             val message=CallRecordStore(CallPipelineStartup.storage(applicationContext)).use {
-                if(kind==CallDigestSchedule.MORNING) CallDigestText.morning(it,today) else CallDigestText.evening(it,today)
+                if(kind==CallDigestSchedule.MORNING) CallDigestText.morning(it,plan.day) else CallDigestText.evening(it,plan.day)
             }
             post(kind,message)
-        }
+        } catch(e:Exception) { Log.w(TAG,"$kind report not posted: ${e.javaClass.simpleName}") } // class only, never a message with names
         CallDigestSchedule.next(applicationContext,kind)
         Result.success()
     }

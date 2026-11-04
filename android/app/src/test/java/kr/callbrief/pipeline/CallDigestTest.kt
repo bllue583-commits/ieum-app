@@ -100,4 +100,18 @@ class CallDigestTest:ProtectedTextHostTestBase() {
         assertEquals(Instant.parse("2026-10-30T10:00:00Z"),CallDigestTime.next(Instant.parse("2026-10-29T10:00:00Z"),19))
         assertEquals(Instant.parse("2026-10-29T21:00:00Z"),CallDigestTime.next(Instant.parse("2026-10-29T10:00:00Z"),6))
     }
+    @Test fun aLateRunKeepsTheDayOfItsTargetAndAVeryLateOneIsSkipped() {
+        val target=Instant.parse("2026-10-29T10:00:00Z") // 19:00 KST on the 29th
+        // Ran at 00:30 KST on the 30th (5.5 hours late): still the 29th.
+        val late=CallDigestTime.plan(Instant.parse("2026-10-29T15:30:00Z"),target)
+        assertEquals(java.time.LocalDate.of(2026,10,29),late.day);assertFalse(late.skip)
+        // 7 hours late: skipped.
+        assertTrue(CallDigestTime.plan(Instant.parse("2026-10-29T17:00:01Z"),target).skip)
+        assertFalse(CallDigestTime.plan(Instant.parse("2026-10-29T16:00:00Z"),target).skip)
+        // Morning 06:00 KST target of the 30th, run on time.
+        assertEquals(java.time.LocalDate.of(2026,10,30),CallDigestTime.plan(Instant.parse("2026-10-29T21:05:00Z"),Instant.parse("2026-10-29T21:00:00Z")).day)
+        assertEquals(Instant.parse("2026-10-29T10:00:00Z"),CallDigestTime.previous(Instant.parse("2026-10-29T15:30:00Z"),19))
+        assertEquals(Instant.parse("2026-10-28T10:00:00Z"),CallDigestTime.previous(Instant.parse("2026-10-29T09:00:00Z"),19))
+        assertEquals("2026-10-29T10:00:00Z",java.time.Instant.ofEpochMilli(CallDigestSchedule.request("evening",Instant.parse("2026-10-29T09:00:00Z"),19).workSpec.input.getLong("targetMs",0)).toString())
+    }
 }
