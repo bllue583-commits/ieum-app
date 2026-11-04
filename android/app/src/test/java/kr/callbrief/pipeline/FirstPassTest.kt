@@ -56,7 +56,7 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         val batches=inbox.files.keys.filter { it.startsWith("inbox/b-") }.sorted()
         assertEquals(2,batches.size);assertEquals(1,inbox.files.keys.count { !it.startsWith("inbox/b-") })
         val first=JSONObject(inbox.files.getValue(batches[0]));val second=JSONObject(inbox.files.getValue(batches[1]))
-        assertTrue(first.getString("id").startsWith(FirstPass.BATCH_PREFIX));assertTrue(first.has("schema"))
+        assertTrue(first.getString("id").startsWith(FirstPass.BATCH_PREFIX));assertFalse(first.has("schema")||first.has("system"));assertEquals(ClaudeCallAnalyzer.PROMPT_VERSION,first.getInt("promptVersion"))
         val items=first.getJSONArray("items");assertEquals(15,items.length());assertEquals(7,second.getJSONArray("items").length())
         // Time order: oldest first inside a batch and across batch names.
         assertEquals(CallInbox.recordKey(CallRecordStore.recordId(transcript("old22",0))),items.getJSONObject(0).getString("id"))

@@ -31,7 +31,7 @@ class ClaudeCallAnalyzerTest {
         assertEquals(setOf("summary","keyPoints","counterpartName","counterpartCompany","counterpart","siteMemo","companyMemo","companyTrade","business","tasks"),
             (0 until schema.getJSONArray("required").length()).map { schema.getJSONArray("required").getString(it) }.toSet())
         val item=schema.getJSONObject("properties").getJSONObject("tasks").getJSONObject("items").getJSONObject("properties")
-        assertEquals(setOf("op","taskId","title","due","quote","company","owner","from"),item.keys().asSequence().toSet())
+        assertEquals(setOf("op","taskId","title","due","quote","company","owner","certainty"),item.keys().asSequence().toSet())
         assertFalse(schema.toString().contains("maxItems"))
     }
 

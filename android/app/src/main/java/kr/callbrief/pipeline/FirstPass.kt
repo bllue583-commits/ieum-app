@@ -18,6 +18,10 @@ internal object FirstPass {
     /** Old records per batch file, and batches in the inbox at once (the task takes two per run). */
     const val BATCH=15
     const val BATCHES_IN_FLIGHT=2
+    /** At most this many batches a day, and none while no result came for [STALL_MS] (design C7: the first pass steps
+     * back by itself when the routine is held by the subscription limit). */
+    const val BATCHES_PER_DAY=4
+    const val STALL_MS=6*3_600_000L
     /** Old records make check items only when this recent; older work is long settled. */
     const val TASK_DAYS=7L
     const val BATCH_PREFIX="batch:"
