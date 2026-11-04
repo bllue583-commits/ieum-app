@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS vault2_refs(
  key_alias TEXT NOT NULL, ciphertext_sha256 TEXT NOT NULL, storage_bytes INTEGER NOT NULL,
  PRIMARY KEY(recording_id,source_version), UNIQUE(ciphertext_sha256),
  FOREIGN KEY(recording_id,source_version) REFERENCES source_versions(recording_id,source_version),
- CHECK(plaintext_bytes>0 AND plaintext_bytes<=25000000),
+ CHECK(plaintext_bytes>0 AND plaintext_bytes<=60000000),
  CHECK(storage_bytes>plaintext_bytes AND storage_bytes<=plaintext_bytes+1052),
  CHECK(length(plaintext_sha256)=64 AND plaintext_sha256 NOT GLOB '*[^0-9a-f]*'),
  CHECK(length(ciphertext_sha256)=64 AND ciphertext_sha256 NOT GLOB '*[^0-9a-f]*'));

@@ -23,29 +23,37 @@ internal class ProtectedDiscoveryQueue(private val port: AndroidSqlPort, private
         check(it.length<900000) { "DISCOVERY_ROW_CAPACITY_REVIEW_REQUIRED" }
     }
     private fun decode(text:String)=DiscoveryStateCodec.decode(Base64.getDecoder().decode(text))
-    private fun load():DiscoveryStore.State {
+    /** Loaded state plus the stored text of the header and of every row, so a transaction writes only what changed. */
+    private class Loaded(val state:DiscoveryStore.State,val header:String?,val payloads:Map<String,String>)
+    private fun loadStored():Loaded {
         port.requireProtectedPersistence()
-        val header=port.query("SELECT header FROM discovery_queue_roots WHERE scope=?",scope).singleOrNull()
-        val state=if(header==null)DiscoveryStore.State() else decode(header["header"].toString())
+        val header=port.query("SELECT header FROM discovery_queue_roots WHERE scope=?",scope).singleOrNull()?.get("header")?.toString()
+        val state=if(header==null)DiscoveryStore.State() else decode(header)
         check(state.selection==null || state.selection==selection) { "DISCOVERY_SCOPE_MISMATCH" }
+        val payloads=LinkedHashMap<String,String>()
         for(row in port.query("SELECT document_id,payload FROM discovery_queue_rows WHERE scope=? ORDER BY document_id",scope)) {
-            val part=decode(row["payload"].toString())
+            val text=row["payload"].toString();val part=decode(text)
             check(part.selection==selection && part.rows.size==1 && part.rows.containsKey(row["document_id"])) { "DISCOVERY_QUEUE_CORRUPT" }
-            state.rows.putAll(part.rows)
+            state.rows.putAll(part.rows);payloads[row["document_id"].toString()]=text
         }
-        return state
+        return Loaded(state,header,payloads)
     }
+    private fun load():DiscoveryStore.State=loadStored().state
+    /** Design 3.2 #3 (review pipeline #7): rows are written only when their encoded text changed, a removed row is
+     * deleted, and the header keeps the latest [kr.co.ieum.discovery.RecordingDiscovery.AUDIT_KEEP] audit notes. */
     override fun <T> transact(action:DiscoveryStore.Transaction<T>):T=port.transaction {
-        val state=load();val result=action.run(state);port.requireProtectedPersistence()
-        val header=state.copy().apply { rows.clear() }
-        val existing=port.query("SELECT scope FROM discovery_queue_roots WHERE scope=?",scope).isNotEmpty()
-        if(existing)port.execute("UPDATE discovery_queue_roots SET header=? WHERE scope=?",encode(header),scope)
-        else port.execute("INSERT INTO discovery_queue_roots VALUES(?,?)",scope,encode(header))
+        val loaded=loadStored();val state=loaded.state;val result=action.run(state);port.requireProtectedPersistence()
+        kr.co.ieum.discovery.RecordingDiscovery.trimAudit(state)
+        val header=encode(state.copy().apply { rows.clear() })
+        if(loaded.header==null)port.execute("INSERT INTO discovery_queue_roots VALUES(?,?)",scope,header)
+        else if(loaded.header!=header)port.execute("UPDATE discovery_queue_roots SET header=? WHERE scope=?",header,scope)
         // These are only private queue projections. No source/version/history or audio is deleted.
-        port.execute("DELETE FROM discovery_queue_rows WHERE scope=?",scope)
+        loaded.payloads.keys.filter { it !in state.rows }.forEach { port.execute("DELETE FROM discovery_queue_rows WHERE scope=? AND document_id=?",scope,it) }
         state.rows.forEach { (id,row) ->
-            val part=DiscoveryStore.State().apply { this.selection=state.selection;rows[id]=row.copy() }
-            port.execute("INSERT INTO discovery_queue_rows VALUES(?,?,?)",scope,id,encode(part))
+            val part=encode(DiscoveryStore.State().apply { this.selection=state.selection;rows[id]=row.copy() })
+            val old=loaded.payloads[id]
+            if(old==null)port.execute("INSERT INTO discovery_queue_rows VALUES(?,?,?)",scope,id,part)
+            else if(old!=part)port.execute("UPDATE discovery_queue_rows SET payload=? WHERE scope=? AND document_id=?",part,scope,id)
         }
         result
     }

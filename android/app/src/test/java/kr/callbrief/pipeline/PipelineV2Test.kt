@@ -113,7 +113,7 @@ class PipelineV2Test:ProtectedTextHostTestBase() {
         assertTrue(spec.hasContentUriTriggers())
         val trigger=spec.contentUriTriggers.single()
         assertEquals(android.provider.CallLog.Calls.CONTENT_URI,trigger.uri);assertTrue(trigger.isTriggeredForDescendants)
-        assertEquals(45_000L,spec.contentTriggerUpdateDelayMillis)
+        assertEquals(140_000L,spec.contentTriggerUpdateDelayMillis) // r7-2: 45 s -> 140 s (design 3.2 #4)
         val follow=AutomaticRecordingDiscovery.followupRequest(AutomaticRecordingDiscovery.Binding("a".repeat(64))).workSpec
         assertEquals(150_000L,follow.initialDelay)
         assertEquals("ieum.discovery.followup",AutomaticRecordingDiscovery.FOLLOWUP_NAME);assertEquals("ieum.discovery.calllog",AutomaticRecordingDiscovery.CALLLOG_NAME)
