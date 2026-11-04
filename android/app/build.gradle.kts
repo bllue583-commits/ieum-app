@@ -6,7 +6,8 @@ android {
     providers.gradleProperty("eumExistingDebugKeystore").orNull?.let { existing ->
         signingConfigs.getByName("debug").storeFile = file(existing)
     }
-    // CI: a stable key derived from a repository secret (tools/derive_signing_key.py), so updates install over the old app.
+    // CI: a stable key derived from the secret IEUM_SIGNING_SEED, or from IEUM_INBOX_TOKEN while that secret is empty
+    // (tools/derive_signing_key.py), so updates install over the old app. The seed itself never reaches Gradle.
     System.getenv("IEUM_SIGNING_KEYSTORE")?.takeIf { it.isNotBlank() }?.let { ks ->
         signingConfigs.getByName("debug").apply { storeFile=file(ks);storeType="pkcs12";storePassword="ieum-signing";keyAlias="ieum";keyPassword="ieum-signing" }
     }

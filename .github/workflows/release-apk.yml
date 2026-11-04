@@ -55,10 +55,14 @@ jobs:
       - name: Build signed APK
         env:
           IEUM_INBOX_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
+          # Optional. When set, the signing key comes from it, so the mailbox token can change without breaking updates.
+          # When empty, the key is derived from IEUM_INBOX_TOKEN as before (same certificate for the same value).
+          IEUM_SIGNING_SEED: ${{ secrets.IEUM_SIGNING_SEED }}
         run: |
           [ -n "$IEUM_INBOX_TOKEN" ] || { echo "::error title=release::IEUM_INBOX_TOKEN secret is not set"; exit 1; }
+          [ -z "$IEUM_SIGNING_SEED" ] || echo "::add-mask::$IEUM_SIGNING_SEED"
           pip install --quiet 'cryptography>=44'
-          IEUM_SIGNING_SEED="$IEUM_INBOX_TOKEN" python3 tools/derive_signing_key.py "$RUNNER_TEMP/ieum.p12"
+          python3 tools/derive_signing_key.py "$RUNNER_TEMP/ieum.p12"
           export ANDROID_SDK_ROOT="$ANDROID_HOME" IEUM_NODE_BINARY="$(command -v node)" \
             IEUM_ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/28.2.13676358" IEUM_CMAKE_BINARY="$ANDROID_HOME/cmake/3.22.1/bin/cmake" \
             IEUM_SIGNING_KEYSTORE="$RUNNER_TEMP/ieum.p12" IEUM_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))
