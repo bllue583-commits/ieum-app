@@ -38,20 +38,20 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
     }
 
     @Test fun homeShowsTodayCardThreeDoorsAndSetupUntilDone() {
-        val a=home(HomeActivity.Snapshot(folder=true,key=false,consent=false,model="DOWNLOADING",calls=3,working=1,newTasks=2,due=4,overdue=1,lastAnalyzedMs=0))
+        val a=home(HomeActivity.Snapshot(folder=true,consent=false,model="DOWNLOADING",calls=3,working=1,newTasks=2,due=4,overdue=1,lastAnalyzedMs=0))
         val root=a.window.decorView
         for(tag in listOf("home_today","home_calls_button","home_tasks_button","home_settings_button","home_setup"))assertNotNull(tag,root.findViewWithTag<View>(tag))
         val all=texts(a).joinToString("\n"){it.text.toString()}
-        assertTrue(all,all.contains("오늘 통화"));assertTrue(all.contains("정리 중 1건"));assertTrue(all.contains("새 체크"));assertTrue(all,all.contains("처음 설정") && all.contains("5/8"))
+        assertTrue(all,all.contains("오늘 통화"));assertTrue(all.contains("정리 중 1건"));assertTrue(all.contains("새 체크"));assertTrue(all,all.contains("처음 설정") && all.contains("5/7"))
         assertFalse(all,english.containsMatchIn(all))
         val buttons=views(root).filterIsInstance<Button>().filter{(it.tag as? String)?.startsWith("home_")==true}
         assertTrue(buttons.all{ it.minHeight>=(56*it.resources.displayMetrics.density).toInt() })
-        val done=home(HomeActivity.Snapshot(true,true,true,"READY",0,0,0,0,0,0))
+        val done=home(HomeActivity.Snapshot(true,true,"READY",0,0,0,0,0,0))
         assertNull(done.window.decorView.findViewWithTag<View>("home_setup"))
     }
 
     @Test fun mainScreensUseLargeTextAndPlainWords() {
-        val a=home(HomeActivity.Snapshot(true,true,true,"READY",1,0,1,1,0,1_793_300_000_000))
+        val a=home(HomeActivity.Snapshot(true,true,"READY",1,0,1,1,0,1_793_300_000_000))
         assertTrue(texts(a).filter{it !is Button}.filterNot(::sizeOk).joinToString { "${it.text} ${sp(it)}" },texts(a).filter{it !is Button}.all(::sizeOk))
         val today=Robolectric.buildActivity(TodayCallsActivity::class.java).setup().get()
         settle(today) { texts(today).any { it.text.toString().endsWith("의 통화") } }

@@ -29,10 +29,8 @@ data class CallTranscript(
  * and schedule its analysis. Called on a background thread right after transcription. */
 interface CallTranscriptSink { fun onTranscript(transcript:CallTranscript) }
 
-/** SecureSettings keys. Secrets are only written by explicit user action in the settings screen. */
+/** SecureSettings keys. Written only by explicit user action in the settings screen. */
 object PipelineSettingsKeys {
-    /** Anthropic API key entered by the user. SecureSettings is Keystore-encrypted; never logged or shown again. */
-    const val CLAUDE_API_KEY="callsClaudeApiKey"
     /** User consent to send transcript TEXT (not audio) to the Claude API. Nothing is sent while false. */
     const val CONSENT_GRANTED="callsConsentGranted"
     /** Transcription side status: NOT_DOWNLOADED | DOWNLOADING | READY | FAILED | UNSUPPORTED. */

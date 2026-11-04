@@ -27,7 +27,7 @@ internal fun interface CallTranscriber { fun transcribe(model:File,pcm:FloatArra
 internal class WhisperCallTranscriber(private val engine:AndroidWhisperEngine,private val model:PipelineSttModel,private val threadCount:Int?=null):CallTranscriber {
     override fun transcribe(model:File,pcm:FloatArray,stopped:()->Boolean):List<CallTranscript.Segment> {
         val threads=threadCount ?: (Runtime.getRuntime().availableProcessors()-1).coerceIn(1,6) // S26: 6 threads 85 s/min, 8 threads ~3x slower
-        val raw=engine.transcribeVerifiedModel(model,{this.model.verifiedModelFile()!=null},pcm,"ko",threads,1800,stopped)
+        val raw=engine.transcribeVerifiedModel(model,{this.model.verifiedModelFile()!=null},pcm,"ko",threads,CallTranscriptionRunner.NATIVE_DEADLINE_SECONDS,stopped)
         val output=AndroidWhisperEngine.decodeOutput(raw) // no segments = silence; a malformed segment is dropped alone
         if(output.dropped>0)android.util.Log.w("ieum.stt","dropped ${output.dropped} malformed segment(s) of ${output.dropped+output.segments.length()}")
         return (0 until output.segments.length()).map { i -> val s=output.segments.getJSONObject(i)
@@ -53,17 +53,23 @@ internal class CallTranscriptionRunner(
     /** The first-pass start while it runs: older recordings are done after newer ones, oldest first. */
     private val oldBefore:()->Long?={null},
 ) {
-    data class Pass(val state:String,val done:Int,val failed:Int)
+    data class Pass(val state:String,val done:Int,val failed:Int,val pieces:Int=0)
     private class Stopped:RuntimeException()
+
+    /** A stopped run gives its attempt back, unless the recording keeps stalling: then the attempt counts and, at the limit, it fails. */
+    private fun endStopped(k:CallTranscriptionStore.Key) {
+        val refund=refundStop(store.totalStalls(k))
+        if(!refund&&store.attempts(k)>=MAX_ATTEMPTS)store.finish(k,"FAILED","STALLED") else store.finish(k,"QUEUED","STOPPED",refundAttempt=refund)
+    }
 
     fun run(maxJobs:Int=10):Pass {
         store.recoverRunning(MAX_ATTEMPTS);store.skipSuperseded()
         for(c in store.candidates()){val reason=skipReason(c);store.offer(c,reason==null,reason ?: "")}
         val target=sink() ?: return Pass("NO_SINK",0,0)
         val file=model.verifiedModelFile() ?: return Pass("NO_MODEL",0,0)
-        var done=0;var failed=0
+        var done=0;var failed=0;var pieces=0 // pieces: chunks finished in this run
         repeat(maxJobs) {
-            if(stopped())return Pass("STOPPED",done,failed)
+            if(stopped())return Pass("STOPPED",done,failed,pieces)
             val job=store.nextQueued(oldBefore()) ?: return Pass("IDLE",done,failed)
             val c=job.candidate
             if(holdOld(c))return Pass("WAIT_POWER",done,failed) // new ones come first: everything after this is old too
@@ -81,7 +87,7 @@ internal class CallTranscriptionRunner(
                         catch(e:Exception) { if(stopped()){store.noteStall(c.key,stallId);throw Stopped()};throw e } // cancel() ends the native run with an error
                     if(stopped()){store.noteStall(c.key,stallId);throw Stopped()} // a piece cut short is not kept
                     val shifted=raw.map { CallTranscript.Segment(it.startMs+offset,it.endMs+offset,it.text) }
-                    store.savePart(c.key,partId,shifted);return shifted
+                    store.savePart(c.key,partId,shifted);pieces++;return shifted
                 }
                 for((index,chunk) in decoded.chunks.withIndex()) {
                     val (offset,pcm)=chunk
@@ -103,9 +109,9 @@ internal class CallTranscriptionRunner(
                 store.finish(c.key,"DONE","")
                 if(decoded.durationMs>0)speed((now()-started)*60000/decoded.durationMs)
                 done++
-            } catch(e:Stopped) { store.finish(c.key,"QUEUED","STOPPED",refundAttempt=true);return Pass("STOPPED",done,failed) }
+            } catch(e:Stopped) { endStopped(c.key);return Pass("STOPPED",done,failed,pieces) }
             catch(e:Exception) {
-                if(stopped()){store.finish(c.key,"QUEUED","STOPPED",refundAttempt=true);return Pass("STOPPED",done,failed)}
+                if(stopped()){endStopped(c.key);return Pass("STOPPED",done,failed,pieces)}
                 val code=e.message?.takeIf{it.matches(Regex("[A-Z0-9_]{1,80}"))} ?: e.javaClass.simpleName
                 if(store.attempts(c.key)>=MAX_ATTEMPTS){store.finish(c.key,"FAILED",code);failed++} else store.finish(c.key,"QUEUED",code)
             }
@@ -115,6 +121,13 @@ internal class CallTranscriptionRunner(
 
     companion object {
         const val MAX_ATTEMPTS=3
+        /** The native run ends by itself after this long (the work limit is 10 minutes; one piece must not outlast it). */
+        const val NATIVE_DEADLINE_SECONDS=540
+        /** From this many stops on one recording the stopped attempt is no longer refunded, so it ends in FAILED instead of looping. */
+        const val MAX_REFUNDED_STALLS=6
+        fun refundStop(totalStalls:Int)=totalStalls<MAX_REFUNDED_STALLS
+        /** Queue the next pass at once only when this one made progress; otherwise the hourly job takes over. */
+        fun requeueNow(state:String,pieces:Int)=state=="MORE"||(state=="STOPPED"&&pieces>0)
         /** The same piece stopped this many times in a row is halved; not worth halving under ten seconds. */
         const val SPLIT_AFTER_STOPS=3
         const val MIN_SPLIT_SAMPLES=PipelineAudioMath.TARGET_RATE*10
@@ -162,7 +175,7 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                     oldBefore={ settings.snapshot().let { s -> FirstPass.start(s).takeUnless { FirstPass.done(s) } } }
                 ).run()
                 // Stopped part way: queue the next pass at once (the finished pieces are kept) instead of waiting for the hourly one.
-                if(pass.state=="MORE"||pass.state=="STOPPED")enqueue(applicationContext)
+                if(CallTranscriptionRunner.requeueNow(pass.state,pass.pieces))enqueue(applicationContext)
                 Result.success()
             } }
         } catch(_:Exception) { if(runAttemptCount<3)Result.retry() else Result.failure() }

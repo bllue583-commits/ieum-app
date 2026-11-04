@@ -10,7 +10,7 @@ internal class VaultPruneWork(context:Context,params:WorkerParameters):Worker(co
     override fun doWork():Result = try {
         GeneralLocalStore(CallPipelineStartup.storage(applicationContext)).use { it.pruneVault() }
         Result.success()
-    } catch(e:Exception) { Result.retry() }
+    } catch(e:Exception) { Result.failure() } // the next daily run tries again; no retry loop on a stuck row
 
     companion object {
         const val NAME="ieum.calls.vault-prune"
