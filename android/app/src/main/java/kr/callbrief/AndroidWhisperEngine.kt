@@ -9,10 +9,8 @@ import java.util.concurrent.atomic.AtomicLong
 
 /** JNI entry points (libieum_whisper.so), internal, with no intent/JSON mechanism for asserting execution. */
 internal object AndroidWhisperNative {
-    external fun begin():Long
     external fun cancel(id:Long)
     external fun release(id:Long)
-    external fun transcribe(id:Long,model:String,pcm:FloatArray,language:String):ByteArray
     external fun beginTimed(seconds:Int):Long
     external fun transcribeModel(id:Long,model:String,pcm:FloatArray,language:String,threads:Int):ByteArray
 }

@@ -10,11 +10,6 @@ import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-/** Interleaved float PCM at its source rate, as parsed from a container. */
-internal class PipelineAudioPcm(val sampleRate:Int,val channels:Int,val interleaved:FloatArray) {
-    val frames:Int get()=interleaved.size/channels
-}
-
 /** Growable float buffer. */
 internal class PipelineAudioFloats(initial:Int=16384) {
     private var data=FloatArray(max(16,initial));var size=0;private set
@@ -108,13 +103,6 @@ internal object PipelineAudioMath {
         val out=FloatArray(frames)
         for(f in 0 until frames){var s=0f;val base=f*channels;for(c in 0 until channels)s+=interleaved[base+c];out[f]=s/channels}
         return out
-    }
-
-    /** Linear-interpolation resampler (see [PipelineAudioResampler]). Output length is floor(input.size * to / from). */
-    fun resample(input:FloatArray,from:Int,to:Int=TARGET_RATE):FloatArray {
-        if(from==to)return input.copyOf()
-        val r=PipelineAudioResampler(from,to);val out=PipelineAudioFloats()
-        out.add(r.push(input));out.add(r.finish());return out.toArray()
     }
 
     /** Hamming-windowed sinc FIR taps, [cutoff] as a fraction of the input sample rate, unity DC gain. */
@@ -245,12 +233,6 @@ internal object PipelineAudioMath {
         }
     }
 
-    /** Mono PCM at any rate -> 16 kHz chunks. Silence skipping is not applied (vadApplied=false),
-     * so every chunk offset is exactly its position in the original recording. */
-    fun build(mono:FloatArray,rate:Int):PipelineDecodedAudio {
-        val stream=PipelineAudioStream(rate,1);stream.push(mono);return stream.finish()
-    }
-
     fun isWav(bytes:ByteArray):Boolean=bytes.size>=12&&
         String(bytes,0,4,Charsets.US_ASCII)=="RIFF"&&String(bytes,8,4,Charsets.US_ASCII)=="WAVE"
 
@@ -288,12 +270,6 @@ internal object PipelineAudioMath {
             pos=body+declared.toInt()+(declared.toInt() and 1)
         }
         error("PIPELINE_AUDIO_WAV_DATA")
-    }
-
-    /** Whole WAV as interleaved floats (small inputs and tests; the decoder streams instead). */
-    fun parseWav(bytes:ByteArray):PipelineAudioPcm {
-        val info=parseWavHeader(bytes);val b=ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
-        return PipelineAudioPcm(info.sampleRate,info.channels,FloatArray(info.dataBytes/2){b.getShort(info.dataOffset+it*2)/32768f})
     }
 
     /** Streams a WAV's samples through [PipelineAudioStream] in bounded blocks. */

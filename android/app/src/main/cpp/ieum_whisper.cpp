@@ -40,10 +40,6 @@ static std::string quote(const char * text) {
     }
     return out + '"';
 }
-extern "C" JNIEXPORT jlong JNICALL Java_kr_callbrief_AndroidWhisperNative_begin(JNIEnv *, jobject) {
-    auto id = next_id.fetch_add(1); std::lock_guard<std::mutex> guard(runs_mutex);
-    runs.emplace(id, std::make_shared<Run>()); return id;
-}
 extern "C" JNIEXPORT void JNICALL Java_kr_callbrief_AndroidWhisperNative_cancel(JNIEnv *, jobject, jlong id) {
     auto run = find_run(id); if (run) run->cancelled.store(true);
 }
@@ -91,10 +87,6 @@ static jbyteArray run_transcribe(JNIEnv * env, jlong id, jstring model, jfloatAr
     return result;
 }
 
-extern "C" JNIEXPORT jbyteArray JNICALL Java_kr_callbrief_AndroidWhisperNative_transcribe(
-        JNIEnv * env, jobject, jlong id, jstring model, jfloatArray pcm, jstring language) {
-    return run_transcribe(env, id, model, pcm, language, 2, 1, 256, 262144);
-}
 // Pipeline additions: caller-chosen deadline and thread count; same quiet, CPU-only engine.
 extern "C" JNIEXPORT jlong JNICALL Java_kr_callbrief_AndroidWhisperNative_beginTimed(JNIEnv *, jobject, jint seconds) {
     if (seconds < 30) seconds = 30; if (seconds > 3600) seconds = 3600;
