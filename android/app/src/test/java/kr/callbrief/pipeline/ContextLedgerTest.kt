@@ -167,7 +167,7 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         val english=Regex("[A-Z]{3,}_[A-Z_]+|\\b(WAITING|FAILED|TRANSCRIBED|ANALYZED|null)\\b")
         fun check() {
             val tv=texts(a)
-            assertTrue(tv.filter { it !is android.widget.Button }.all { it.textSize/it.resources.displayMetrics.scaledDensity>=18f })
+            assertTrue(tv.filter { it !is android.widget.Button }.all { it.textSize/it.resources.displayMetrics.scaledDensity>=((it.getTag(kr.callbrief.R.id.ui_min_sp) as? Float) ?: 18f) }) // round 3: read 18+, asides 16+, badges 15+
             assertFalse(english.containsMatchIn(tv.joinToString("\n") { it.text }))
         }
         check()

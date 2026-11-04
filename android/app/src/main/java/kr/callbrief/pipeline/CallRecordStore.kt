@@ -440,6 +440,21 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         port.execute("INSERT INTO workflow_item_history VALUES(?,?,?,?)","wf_"+UUID.randomUUID().toString().replace("-",""),item,revision+1,before.toString())
         port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER);null
     }
+    // ---- screens (round 3): undo of "다 됐어요", dial numbers, oldest waiting call ---------------------------------------------
+    /** Takes a [completeItem] back: the item gets its earlier [status] again (it stays marked as touched by the user, so analysis leaves it alone).
+     * [revision] is the revision [completeItem] left it at (its old revision plus one); anything else means it changed since. */
+    fun undoDone(item:String,status:String,revision:Long)=port.transaction {
+        val now=rows("SELECT revision,status FROM workflow_items WHERE id=?",item).single()
+        require(now.long("revision")==revision && now.str("status")=="done") { "ITEM_REVISION_CONFLICT" }
+        port.execute("UPDATE workflow_items SET status=?,revision=revision+1 WHERE id=?",status,item)
+        port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER);null
+    }
+    /** Phone numbers (digits, maybe a leading plus) of the people the phone knows, by person id, for the dial buttons. Read only; never leaves the phone. */
+    fun dialNumbers():Map<String,String> =rows("SELECT id,phone_key FROM people WHERE phone_key IS NOT NULL").mapNotNull { r ->
+        val k=r.str("phone_key")?.trim().orEmpty();if(k.length>=6 && k.all { it.isDigit() || it=='+' }) r.str("id")!! to k else null }.toMap()
+    /** When the oldest call still waiting for its summary was stored, or null when none waits (settings: "지금 상태"). */
+    fun oldestWaitingMs():Long? =rows("SELECT MIN(created_ms) AS m FROM call_records WHERE state IN ('TRANSCRIBED','WAITING_CONSENT','WAITING_KEY')").firstOrNull()?.long("m")
+
     /** AI-created items created during one KST day. */
     fun newTaskCount(day:LocalDate):Int=(rows("SELECT COUNT(*) AS n FROM call_task_bindings WHERE created_ms>=CAST(? AS INTEGER) AND created_ms<CAST(? AS INTEGER)",startOf(day),startOf(day.plusDays(1))).single().long("n") ?: 0).toInt()
 

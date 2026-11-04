@@ -2,9 +2,17 @@
 <resources>
     <style name="Theme.CallBrief" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
-        <item name="android:colorAccent">#176D64</item>
+        <item name="android:colorAccent">#3268F0</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowActionModeOverlay">true</item>
-        <item name="android:windowBackground">#F5F7F6</item>
+        <item name="android:windowBackground">#F2F4F6</item>
+        <item name="android:windowAnimationStyle">@style/Animation.Ieum</item>
+    </style>
+    <!-- The only motion between screens: a 120 ms fade, in both directions. -->
+    <style name="Animation.Ieum" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@anim/ieum_fade_in</item>
+        <item name="android:activityOpenExitAnimation">@anim/ieum_fade_out</item>
+        <item name="android:activityCloseEnterAnimation">@anim/ieum_fade_in</item>
+        <item name="android:activityCloseExitAnimation">@anim/ieum_fade_out</item>
     </style>
 </resources>

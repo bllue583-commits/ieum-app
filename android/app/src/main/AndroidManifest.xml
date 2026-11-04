@@ -13,7 +13,7 @@
     <application android:allowBackup="false" android:fullBackupContent="@xml/vault_full_backup_rules"
         android:dataExtractionRules="@xml/vault_data_extraction_rules"
         android:usesCleartextTraffic="false" android:networkSecurityConfig="@xml/network_security_config"
-        android:label="이음" android:icon="@drawable/ic_callbrief" android:theme="@style/Theme.CallBrief">
+        android:label="이음" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher" android:theme="@style/Theme.CallBrief">
         <activity android:name=".pipeline.HomeActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
