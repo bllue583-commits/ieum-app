@@ -1,6 +1,7 @@
 package kr.callbrief.pipeline
 
 import android.content.Context
+import android.util.Log
 import androidx.work.*
 import java.util.concurrent.Executors
 
@@ -20,31 +21,50 @@ internal object CallPipelineStartup {
     /** Same account scope as the main screen's local store. */
     fun storage(context:Context):Context=context.applicationContext
 
-    fun init(context:Context) {
+    /** Safe to call any number of times (app start, boot, update, the hourly tick): every registration below keeps or updates
+     * the one unique work of its name, and nothing here collects anything. Real collection still waits for the consent the
+     * workers check themselves. [done] runs after the registrations (a boot receiver waits for it). */
+    fun init(context:Context,done:()->Unit={}) {
         CallTranscriptSinks.factory={ ctx -> CallSinkImpl(ctx) }
         val app=context.applicationContext
         executor.execute {
-            // 처음 정리 starts with the first run of this version; records older than this are summarised first.
-            runCatching { kr.callbrief.SecureSettings(app).update { if(FirstPass.start(it)==null) it.put(PipelineSettingsKeys.FIRST_PASS_START_MS,System.currentTimeMillis()) } }
-            runCatching { CallDigestSchedule.ensure(app) }
-            runCatching { enqueueAnalysis(app) }
-            runCatching { CallUpdate.schedule(app) }
-            runCatching { MessageWork.schedule(app) }
-            if(CallInboxConfig.enabled) runCatching {
-                // Collect the scheduled task's results every hour even when no new call arrives.
-                // The hourly tick only queues the one analysis work, so two passes never apply results side by side.
-                // (Replacing, not keeping: phones from before v1026 have the old periodic analysis registered here.)
-                WorkManager.getInstance(app).enqueueUniquePeriodicWork("ieum.calls.inbox",ExistingPeriodicWorkPolicy.CANCEL_AND_REENQUEUE,
-                    PeriodicWorkRequestBuilder<CallAnalysisTick>(1,java.util.concurrent.TimeUnit.HOURS)
-                        .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build())
-            }
+            try {
+                // 처음 정리 starts with the first run of this version; records older than this are summarised first.
+                runCatching { kr.callbrief.SecureSettings(app).update { if(FirstPass.start(it)==null) it.put(PipelineSettingsKeys.FIRST_PASS_START_MS,System.currentTimeMillis()) } }
+                    .onFailure { Log.w(TAG,"first pass start not saved: ${it.javaClass.simpleName}") }
+                ensureWork(app)
+            } finally { done() }
         }
     }
-    fun enqueueAnalysis(context:Context) {
+    /** The registrations only; also run by the hourly tick so a lost one comes back within the hour. */
+    fun ensureWork(app:Context,includeInbox:Boolean=true) {
+        step("digest") { CallDigestSchedule.ensure(app) }
+        step("analysis") { enqueueAnalysis(app,ExistingWorkPolicy.KEEP) }
+        step("update") { CallUpdate.schedule(app) }
+        step("messages") { MessageWork.schedule(app) }
+        if(!kr.callbrief.BuildConfig.LOCAL_PREVIEW) {
+            step("discovery") { kr.callbrief.AutomaticRecordingDiscovery.ensure(app) }
+            step("transcription") { CallTranscriptionWork.schedule(app) }
+        }
+        if(includeInbox && CallInboxConfig.enabled) step("inbox") {
+            // Collect the scheduled task's results every hour even when no new call arrives.
+            // The hourly tick only queues the one analysis work, so two passes never apply results side by side.
+            // UPDATE, not cancel and re-enqueue: starting the app must not push the next tick back. (Phones from before
+            // v1026 have the old periodic analysis registered under this name; the update replaces its worker.)
+            WorkManager.getInstance(app).enqueueUniquePeriodicWork("ieum.calls.inbox",ExistingPeriodicWorkPolicy.UPDATE,
+                PeriodicWorkRequestBuilder<CallAnalysisTick>(1,java.util.concurrent.TimeUnit.HOURS)
+                    .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build())
+        }
+    }
+    private const val TAG="ieum.startup"
+    private inline fun step(name:String,block:()->Unit) {
+        try { block() } catch(e:Exception) { Log.w(TAG,"$name not registered: ${e.javaClass.simpleName}") }
+    }
+    fun enqueueAnalysis(context:Context,policy:ExistingWorkPolicy=ExistingWorkPolicy.APPEND_OR_REPLACE) {
         val request=OneTimeWorkRequestBuilder<CallAnalysisWork>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL,1,java.util.concurrent.TimeUnit.MINUTES).build()
-        WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(ANALYSIS_WORK,ExistingWorkPolicy.APPEND_OR_REPLACE,request)
+        WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(ANALYSIS_WORK,policy,request)
     }
     /** Called by the settings screen after the key, consent or hours change. */
     fun settingsChanged(context:Context,hoursChanged:Boolean=false) {
@@ -59,5 +79,5 @@ internal object CallPipelineStartup {
 
 /** Hourly: queues [CallAnalysisWork] under its one unique name. */
 internal class CallAnalysisTick(context:Context,params:WorkerParameters):Worker(context,params) {
-    override fun doWork():Result { CallPipelineStartup.enqueueAnalysis(applicationContext);return Result.success() }
+    override fun doWork():Result { CallPipelineStartup.enqueueAnalysis(applicationContext);CallPipelineStartup.ensureWork(applicationContext,includeInbox=false);return Result.success() }
 }
