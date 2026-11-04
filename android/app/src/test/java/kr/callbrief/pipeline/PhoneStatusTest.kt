@@ -64,7 +64,7 @@ class PhoneStatusHealthTest {
     @Test fun callLogWindowCountsByTypeAndPersonal() {
         fun e(id:Long,at:Long,type:Int,dur:Long=60_000,key:String?="k$id",personal:Boolean=false)=FirstPass.LogEntry(id,key,"홍길동",at,dur,type,personal)
         val log=listOf(e(1,100,1),e(2,200,2),e(3,300,3,0),e(4,400,5,0),e(5,500,6,0),e(6,600,1,key="01099998888"),e(7,700,2,personal=true),e(8,50,1))
-        val w=PhoneStatus.window(log,100,{ it.personal || it.numberKey=="01099998888" },CallRecordStore.LogTally(7,700,2,1))
+        val w=PhoneStatus.window(log,100,{ it.excluded || it.numberKey=="01099998888" },CallRecordStore.LogTally(7,700,2,1))
         assertEquals(PhoneStatus.CallLogWindow(7,2,2,1,1,1,2,1,2),w)
         val status=PhoneStatus.CallLogStatus(true,100,600,w,PhoneStatus.window(log,600,{ false },CallRecordStore.LogTally(2,700,0,0)),700,700,8,7,555)
         val o=PhoneStatus.build(base().copy(callLog=status)).getJSONObject("callLog")

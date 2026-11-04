@@ -149,13 +149,15 @@ internal object PhoneStatus {
         val from=FirstPass.FROM_MS
         CallRecordStore(CallPipelineStartup.storage(app)).use { db ->
             val personalKeys=db.personalNumbers().map { it.first }.toSet()
-            val personal={ e:FirstPass.LogEntry -> e.personal || e.numberKey!=null && e.numberKey in personalKeys }
+            val personal={ e:FirstPass.LogEntry -> e.excluded || e.numberKey!=null && e.numberKey in personalKeys }
             val all=db.callLogTally(from)
-            val deviceTotal=if(allowed) entries.size else null
+            // Numbers the user excluded are never stored (E9), so they are not expected in the app's count.
+            val kept=entries.filterNot { it.excluded }
+            val deviceTotal=if(allowed) kept.size else null
             val since=mismatchSince(s.optLong(CALL_LOG_MISMATCH_SINCE,0L),deviceTotal,all.total,now)
             if(since!=s.optLong(CALL_LOG_MISMATCH_SINCE,0L)) kr.callbrief.SecureSettings(app).update { it.put(CALL_LOG_MISMATCH_SINCE,since) }
             CallLogStatus(allowed,from,today,window(entries,from,personal,all),window(entries,today,personal,db.callLogTally(today)),
-                entries.maxOfOrNull { it.startMs },all.latestMs,deviceTotal,all.total,since)
+                kept.maxOfOrNull { it.startMs },all.latestMs,deviceTotal,all.total,since)
         }
     }.onFailure { Log.w(TAG,"call log not read: ${it.javaClass.simpleName}") }.getOrNull()
     private fun health(app:Context,s:JSONObject):Health {

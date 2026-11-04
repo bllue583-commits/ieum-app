@@ -57,7 +57,7 @@ internal object CallLogReport {
             when { excluded || s.business==false || s.numberKey in personalKeys -> "개인";s.recordId==null -> "없음";s.state==CallRecordStore.ANALYZED -> "완료";else -> "대기" },
             shortId(s.recordId)).joinToString(" | ")
 
-        val missing=calls.filter { it.id !in byId }
+        val missing=calls.filter { it.id !in byId && !it.excluded } // excluded numbers are never stored by design
         val appOnly=if(device==null) emptyList() else stored.filter { it.logId !in deviceIds }.sortedByDescending { it.startMs }
         // Doubled: same number, same second and same length more than once; or one recording tied to two calls.
         val sameCall=calls.groupBy { Triple(it.number,it.startMs/1000,it.durationSec) }.values.filter { it.size>1 }.flatten()
