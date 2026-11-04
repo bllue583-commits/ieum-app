@@ -24,6 +24,12 @@ import java.util.concurrent.TimeUnit
  * The phone checks every few hours on Wi-Fi, downloads a newer APK, verifies its SHA-256 and shows
  * "새 버전" (home banner + notification). One tap installs it (Android always asks once to confirm). */
 internal object CallUpdate {
+    /** "앱 버전 v2.0 (빌드 1050)", plus the downloaded next version: the name from docs/VERSION, the build number to tell builds apart. */
+    fun versionLine(name:String,code:Int,next:Info?):String {
+        fun label(n:String,c:Int)=if(Regex("""\d+\.\d+""").matches(n)) "v$n (빌드 $c)" else "v$c"
+        val nextName=next?.let { if(it.versionName.startsWith("v") && Regex("""v\d+\.\d+""").matches(it.versionName)) "${it.versionName} (빌드 ${it.versionCode})" else "v${it.versionCode}" }
+        return "앱 버전 "+label(name,code)+(nextName?.let { ", 새 버전 $it 준비됨" } ?: "")
+    }
     data class Info(val versionCode:Int,val versionName:String,val apk:String,val sha256:String,val notes:String)
     private const val PREFS="ieum.update";private const val CHANNEL="ieum.update"
     fun parse(text:String):Info { val o=JSONObject(text);return Info(o.getInt("versionCode"),o.optString("versionName"),o.getString("apk"),o.getString("sha256").lowercase(),o.optString("notes")) }

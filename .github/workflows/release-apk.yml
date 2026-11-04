@@ -106,7 +106,10 @@ jobs:
           python3 - "$code" "$asset" "$sha" "$notes" > version.json <<'EOF'
           import json, sys
           code, asset, sha, notes = sys.argv[1:]
-          print(json.dumps({"versionCode": int(code), "versionName": "v" + code, "apk": "releases/assets/" + asset, "sha256": sha, "notes": notes}, ensure_ascii=False))
+          import pathlib
+          v = pathlib.Path("docs/VERSION")
+          name = "v" + v.read_text(encoding="utf-8").strip() if v.is_file() and v.read_text(encoding="utf-8").strip() else "v" + code
+          print(json.dumps({"versionCode": int(code), "versionName": name, "apk": "releases/assets/" + asset, "sha256": sha, "notes": notes}, ensure_ascii=False))
           EOF
           old=$(gh api "repos/$INBOX/contents/app/version.json" --jq .sha 2>/dev/null || true)
           gh api -X PUT "repos/$INBOX/contents/app/version.json" -f message="app $tag" -f content="$(base64 -w0 version.json)" ${old:+-f sha="$old"} > /dev/null
