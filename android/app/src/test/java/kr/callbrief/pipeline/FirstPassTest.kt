@@ -36,7 +36,7 @@ class FirstPassTest:ProtectedTextHostTestBase() {
     private fun transcript(id:String,startedMs:Long,counterpart:String?="김과장")=
         CallTranscript(id,1,"a".repeat(64),startedMs,60_000,counterpart,ClaudeCallAnalyzerTest.TRANSCRIPT,emptyList(),"m","b".repeat(64),true)
     private fun runner(inbox:FakeInbox,s:JSONObject,log:List<FirstPass.LogEntry> =emptyList(),at:Long=now)=CallRecordAnalysisRunner(context,
-        ClaudeCallAnalyzer({ _,_ -> error("API must not be used") }) {},{ s },{ at },inbox,save={ edit -> edit(s) },callLog={ log },smsAllowed={ false })
+        ClaudeCallAnalyzer(),{ s },{ at },inbox,save={ edit -> edit(s) },callLog={ log },smsAllowed={ false })
     /** The scheduled task answers every request in the inbox. */
     private fun answer(inbox:FakeInbox,analysis:(String)->JSONObject={ ClaudeCallAnalyzerTest.analysis() }) {
         inbox.files.keys.filter { it.startsWith("inbox/") }.toList().forEach { k ->
@@ -60,7 +60,7 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         val items=first.getJSONArray("items");assertEquals(15,items.length());assertEquals(7,second.getJSONArray("items").length())
         // Time order: oldest first inside a batch and across batch names.
         assertEquals(CallInbox.recordKey(CallRecordStore.recordId(transcript("old22",0))),items.getJSONObject(0).getString("id"))
-        assertTrue(items.getJSONObject(0).getString("message").startsWith("[처음 정리]"))
+        assertTrue(items.getJSONObject(0).getString("message").let { it.startsWith("[사용자]") && it.contains("\n[처음 정리]") })
         assertTrue(items.getJSONObject(0).getString("counterpartId").startsWith("p_"))
         val single=JSONObject(inbox.files.entries.first { !it.key.startsWith("inbox/b-") }.value)
         assertFalse(single.getString("message").contains("[처음 정리]"))
@@ -142,8 +142,9 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         // Lengths must agree within 20% or 15 s.
         assertEquals(1L,FirstPass.match(listOf(r("a",t,null,null,dur=70_000)),listOf(e(1,null,null,t,dur=60_000)))["a"]?.id)
         assertNull(FirstPass.match(listOf(r("a",t,null,null,dur=120_000)),listOf(e(1,null,null,t,dur=60_000)))["a"])
-        // Two candidates in the same window: left unlinked.
-        assertNull(FirstPass.match(listOf(r("a",t,null,null)),listOf(e(1,"01011112222",null,t),e(2,"01033334444",null,t+30_000)))["a"])
+        // Two candidates in the same window: the better score wins (start gap in 30 s, length gap in 5%), no longer a give-up.
+        assertEquals(1L,FirstPass.match(listOf(r("a",t,null,null)),listOf(e(1,"01011112222",null,t),e(2,"01033334444",null,t+30_000)))["a"]?.id)
+        assertEquals(2L,FirstPass.match(listOf(r("a",t,null,null,dur=60_000)),listOf(e(1,"01011112222",null,t,dur=50_000),e(2,"01033334444",null,t+10_000,dur=60_000)))["a"]?.id)
         // A number in the filename picks its entry even with another call nearby; a name picks the phone-book name.
         assertEquals(2L,FirstPass.match(listOf(r("a",t,"010-3333-4444","01033334444")),listOf(e(1,"01011112222",null,t),e(2,"01033334444",null,t+30_000)))["a"]?.id)
         assertEquals(1L,FirstPass.match(listOf(r("a",t,"홍 길동","홍 길동")),listOf(e(1,"01011112222","홍길동",t),e(2,"01033334444","김민수",t)))["a"]?.id)
@@ -151,6 +152,22 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         // Missed and rejected calls are never candidates.
         assertNull(FirstPass.match(listOf(r("a",t,null,null)),listOf(e(1,null,null,t,dur=0,type=3),e(2,null,null,t,type=5)))["a"])
         assertEquals("받은 전화",e(1,null,null,t).direction);assertEquals("건 전화",e(1,null,null,t,type=2).direction)
+    }
+
+    @Test fun callsPlacedAgainWithinTwoMinutesAreAssignedAcrossAllRecordingsAndEntries() {
+        val t=now;val min=60_000L
+        fun e(id:Long,at:Long,dur:Long)=FirstPass.LogEntry(id,"01011112222",null,at,dur,2)
+        fun r(id:String,at:Long,dur:Long)=FirstPass.RecordForMatch(id,at,"홍길동","01011112222",dur)
+        // The same person called twice a minute apart: both recordings fit both entries in time, the lengths tell them apart.
+        val redial=FirstPass.match(listOf(r("a",t,30_000),r("b",t+min,90_000)),listOf(e(1,t,30_000),e(2,t+min,90_000)))
+        assertEquals(mapOf("a" to 1L,"b" to 2L),redial.mapValues { it.value.id })
+        // Equal lengths: the best pairs are taken first across everything, not recording by recording.
+        val swap=FirstPass.match(listOf(r("a",t,60_000),r("b",t+min,60_000)),listOf(e(1,t+min,60_000),e(2,t-30_000,60_000)))
+        assertEquals(mapOf("b" to 1L,"a" to 2L),swap.mapValues { it.value.id })
+        // One entry, two recordings: it goes to the closer one, the other stays unlinked.
+        val one=FirstPass.match(listOf(r("a",t+90_000,60_000),r("b",t+10_000,60_000)),listOf(e(1,t,60_000)))
+        assertEquals(mapOf("b" to 1L),one.mapValues { it.value.id })
+        assertTrue(FirstPass.match(emptyList(),listOf(e(1,t,1))).isEmpty());assertTrue(FirstPass.match(listOf(r("a",t,1)),emptyList()).isEmpty())
     }
 
     @Test fun callsWithoutARecordingAreCountedButNotMissedOrRejectedOnes() {
