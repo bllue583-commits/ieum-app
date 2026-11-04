@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Themed (monochrome) layer of the 이음 icon: the same chained ㅇ+ㅁ mark as ic_launcher_foreground.xml. The launcher
+     tints it with the wallpaper colours at low contrast, so the strokes are a touch heavier (9dp). The colour here is
+     ignored; only the alpha is used. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <path android:pathData="M41.8,69 A15,15 0 0 1 31.46,43.32 A15,15 0 0 1 57,54" android:strokeColor="#FFFFFF" android:strokeWidth="9" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M62.56,39 L74.5,39 A6.5,6.5 0 0 1 81,45.5 L81,62.5 A6.5,6.5 0 0 1 74.5,69 L57.5,69 A6.5,6.5 0 0 1 51,62.5 L51,53.96" android:strokeColor="#FFFFFF" android:strokeWidth="9" android:strokeLineCap="round" android:strokeLineJoin="round" />
+</vector>

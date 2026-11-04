@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- ic_stat_ieum: the white single-colour 이음 mark for the status bar (Android only uses the shape): the two strokes of the app icon, 12% line. -->
+<!-- ic_stat_ieum: the 이음 mark (chained ㅇ+ㅁ) as the status-bar small icon, 24dp, white on transparent (Android only
+     uses the alpha). Same geometry as ic_launcher_foreground.xml scaled to 24; strokes 2.6dp so the two links still read
+     at 1x in the status bar. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
-    <path android:pathData="M3.5,8H9C13,8 9.5,16 13.5,16H20.5" android:strokeColor="#FFFFFF" android:strokeWidth="2.9" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M7.7,16.77 A4.8,4.8 0 0 1 4.99,8.43 A4.8,4.8 0 0 1 13,12" android:strokeColor="#FFFFFF" android:strokeWidth="2.6" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M15.2,7.2 L18.5,7.2 A2.1,2.1 0 0 1 20.6,9.3 L20.6,14.7 A2.1,2.1 0 0 1 18.5,16.8 L13.1,16.8 A2.1,2.1 0 0 1 11,14.7 L11,11.99" android:strokeColor="#FFFFFF" android:strokeWidth="2.6" android:strokeLineCap="round" android:strokeLineJoin="round" />
 </vector>
