@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 이음 mark: two white strokes that run into each other. Adaptive icon foreground (inside the 66dp safe zone). -->
+<!-- 이음 mark: a round link (ㅇ) and a square link (ㅁ) chained through each other, the initials of 이/음 joined like
+     two links of a chain. Adaptive-icon foreground on the 108dp canvas; the mark sits inside the 66dp safe zone
+     (x 27..81, y 35..73) so no launcher mask clips it. Strokes 8dp, round ends; the gaps at the two crossings make the
+     over/under reading. Keep in step with ic_launcher_monochrome.xml and ic_stat_ieum.xml. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <path android:pathData="M31,43H50C61,43 47,65 58,65H77" android:strokeColor="#FFFFFF" android:strokeWidth="9" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M41.8,69 A15,15 0 0 1 31.46,43.32 A15,15 0 0 1 57,54" android:strokeColor="#FFFFFF" android:strokeWidth="8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M62.56,39 L74.5,39 A6.5,6.5 0 0 1 81,45.5 L81,62.5 A6.5,6.5 0 0 1 74.5,69 L57.5,69 A6.5,6.5 0 0 1 51,62.5 L51,53.96" android:strokeColor="#FFFFFF" android:strokeWidth="8" android:strokeLineCap="round" android:strokeLineJoin="round" />
 </vector>
