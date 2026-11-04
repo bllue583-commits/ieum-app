@@ -233,4 +233,27 @@ class UiV2Test:ProtectedTextHostTestBase() {
         assertTrue(SecureSettings(app).snapshot().optString("lastUpdateError").isNotEmpty())
         CallUpdate.saveError(app,null);assertEquals("",SecureSettings(app).snapshot().optString("lastUpdateError"))
     }
+
+    // ---- v2.5 #20: 처음 정리 rests (battery under half and not charging, or no result for six hours) and says so ----
+    @Test fun firstPassRestSaysWhyAndWhatIsLeft() {
+        val home=Robolectric.buildActivity(HomeActivity::class.java).setup().get()
+        settle { tag(home,"home_calls_button")!=null }
+        fun show(f:HomeActivity.FirstPassView):String { home.render(HomeActivity.Snapshot(true,true,"READY",2,0,1,0,0,1_793_300_000_000,firstPass=f))
+            return views(tag(home,"home_first_pass")).filterIsInstance<TextView>().joinToString("\n") { it.text.toString() } }
+        val low=show(HomeActivity.FirstPassView(37,9.0,4,2,audioMinutesLeft=190,lowBattery=true))
+        assertTrue(low,low.contains("잠시 쉬고 있어요") && low.contains("충전기에 꽂으면 이어서 정리해요"))
+        assertTrue(low,low.contains("남은 녹음") && low.contains("37개") && low.contains("남은 녹음 시간") && low.contains("3시간"))
+        assertTrue(low,low.contains("요약을 기다리는 기록 4건"))
+        assertFalse("no processing estimate while resting",low.contains("글자로 바꿀 녹음"))
+        val stalled=show(HomeActivity.FirstPassView(0,null,6,0,stalled=true))
+        assertTrue(stalled,stalled.contains("잠시 쉬고 있어요") && stalled.contains("결과가 오면 이어서 정리해요") && !stalled.contains("충전기"))
+        val running=show(HomeActivity.FirstPassView(37,9.0,4,2,audioMinutesLeft=190))
+        assertNull(tag(home,"home_first_pass_rest"));assertTrue(running,running.contains("글자로 바꿀 녹음 37개"))
+        for(t in listOf(low,stalled)) { assertFalse(t,t.contains("·"));assertFalse(t,Regex("[A-Za-z]").containsMatchIn(t)) }
+        // 50대 기준: the rest line is a heading, the reason reading size, the numbers big.
+        show(HomeActivity.FirstPassView(37,9.0,4,2,audioMinutesLeft=190,lowBattery=true))
+        assertTrue((tag(home,"home_first_pass_rest") as TextView).textSize/home.resources.displayMetrics.scaledDensity>=CallUi.HEADING)
+        assertTrue(views(tag(home,"home_first_pass")).filterIsInstance<TextView>().all { it.textSize/it.resources.displayMetrics.scaledDensity>=16f })
+        assertEquals("40" to "분",HomeActivity.roughLength(40));assertEquals("3" to "시간",HomeActivity.roughLength(190));assertEquals("1" to "분",HomeActivity.roughLength(0))
+    }
 }

@@ -5,7 +5,9 @@ import androidx.work.*
 import kr.callbrief.GeneralLocalStore
 import java.util.concurrent.TimeUnit
 
-/** Once a day: deletes the encrypted original recordings whose transcript finished 14 days ago (review B21). */
+/** Once a day: deletes the encrypted original recordings whose transcript finished 14 days ago (review B21), and the ones
+ * skipped for good 14 days ago (before 10/1, excluded, no speech, an older version: #39), so nothing stays in the vault
+ * forever. The ledger keeps the reference rows and notes each deleted blob ([GeneralLocalStore.pruneVault]). */
 internal class VaultPruneWork(context:Context,params:WorkerParameters):Worker(context,params) {
     override fun doWork():Result = try {
         GeneralLocalStore(CallPipelineStartup.storage(applicationContext)).use { it.pruneVault() }

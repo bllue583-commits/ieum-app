@@ -121,8 +121,13 @@ class EncryptedRecordingStore(
             mark(ref, "VERIFIED")
         } catch (error: VaultException) { mark(ref, error.code); throw error }
     }
-    /** Removes the encrypted original from the phone. The immutable reference row stays; the caller records that it was pruned. */
-    fun deleteBlob(ref: VaultReference): Boolean { requireIo();return vault.deleteBlob(ref.ciphertextSha256, token) }
+    /** Removes the encrypted original from the phone. The immutable reference row stays; the caller records that it was pruned.
+     * Only a blob this owner's ledger references is touched; false when it was already gone (the ledger may still note it). */
+    fun deleteBlob(ref: VaultReference): Boolean {
+        requireIo()
+        if (port.query("SELECT 1 FROM vault2_refs WHERE ciphertext_sha256=? AND owner_key=?", ref.ciphertextSha256, owner).isEmpty()) fail("ENCRYPTED_REFERENCE_REQUIRED")
+        return vault.deleteBlob(ref.ciphertextSha256, token)
+    }
     private fun preRead(observation: FileCollector.Observation, excluded: () -> Boolean) {
         val p = observation.metadata
         repository.checkSelectedFolder(p["owner_key"].toString(), p["grant_id"].toString(),
