@@ -34,7 +34,9 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
                                  /** Notifications refused twice, or switched off: the step opens the app's notification settings. */
                                  val notifyBlocked:Boolean=false,
                                  /** The model file being downloaded, for the percent shown every second. */
-                                 val modelPart:String="")
+                                 val modelPart:String="",
+                                 /** The person of each memo's and check item's call, by record id: the name opens the person page (v2.8). */
+                                 val people:Map<String,String> =emptyMap())
     /** [audioMinutesLeft]: how long the recordings still to transcribe are, together. [lowBattery]: not charging and under half
      * the battery, so old recordings wait ([FirstPass.powerOk]). [stalled]: nothing came back for [FirstPass.STALL_MS], so no
      * new batch goes up (design C7). Either one shows the "잠시 쉬고 있어요" line (#20). */
@@ -150,12 +152,14 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
         val next=CallUi.nextReport(s.optInt(PipelineSettingsKeys.EVENING_HOUR,19),s.optInt(PipelineSettingsKeys.MORNING_HOUR,6))
         val model=s.optString(PipelineSettingsKeys.MODEL_STATE)
         if(model=="READY") ModelWish.clear(a)
+        val memos=calls.sortedByDescending { it.startedMs ?: 0 }.take(4);val first=firstLook(open,today)
+        val people=runCatching { db.personIdsOf(memos.map { it.recordId }+first.take(FIRST_TASKS).mapNotNull { it.recordId }) }.getOrDefault(emptyMap())
         return Snapshot(folder,s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false),
             model,CallsScreen.callCount(calls,logs),calls.count{it.state!=CallRecordStore.ANALYZED},newTasks,
             due.size,due.count{CallUi.overdue(it.due)},s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),batteryFree(),percent,next,companies,
-            week,byCompany,calls.sortedByDescending { it.startedMs ?: 0 }.take(4),
-            granted(android.Manifest.permission.READ_SMS),granted(android.Manifest.permission.READ_CALL_LOG),firstPass(storage,db,s),firstLook(open,today),
-            ModelWish.wanted(a),NotifyAsk.blocked(a),mm.partFile.path)
+            week,byCompany,memos,
+            granted(android.Manifest.permission.READ_SMS),granted(android.Manifest.permission.READ_CALL_LOG),firstPass(storage,db,s),first,
+            ModelWish.wanted(a),NotifyAsk.blocked(a),mm.partFile.path,people)
     }
     private fun firstPass(storage:android.content.Context,db:CallRecordStore,s:org.json.JSONObject):FirstPassView? {
         val start=FirstPass.start(s) ?: return null
@@ -333,8 +337,8 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
             addView(CallUi.text(a,if(left>0) "오늘 요청된 체크할 일이 없어요" else "체크할 일이 없어요",CallUi.BODY,color=CallUi.SUBTLE)) })
         // The same row as the check tab (G3): only an item from a call opens that call, the rest show no press (r8-5).
         else body.addView(CallUi.list(a,first.map { item ->
-            CheckRows.row(a,item,status=if(item.status=="needs_confirmation") "" else item.status,onDone={ row -> TaskActions.complete(a,item,row) { load() } })
-                .apply { tag="home_task_${item.id}" }
+            CheckRows.row(a,item,status=if(item.status=="needs_confirmation") "" else item.status,onDone={ row -> TaskActions.complete(a,item,row) { load() } },
+                personId=item.recordId?.let(s.people::get)).apply { tag="home_task_${item.id}" }
         },inset=16).apply { tag="home_tasks" })
 
         // Today's call memos: who, when, one sentence. Tap a memo for the whole call.
@@ -345,7 +349,7 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
         else body.addView(CallUi.list(a,s.memos.map { c ->
             CallUi.memoRow(a,CallUi.whenLabel(c),c.displayName,c.summary?.let(CallUi::firstSentence) ?: CallsScreen.stateWords(c),c.summary==null) {
                 a.openCall(c.recordId,c.dayMs)
-            }.apply { tag="home_memo_${c.recordId}" }
+            }.apply { tag="home_memo_${c.recordId}" }.also { PersonLinks.onWho(a,it,s.people[c.recordId],c.linkedPerson) }
         }).apply { tag="home_memos" })
 
         // Open to-dos per company: one bar each, the busiest on top.

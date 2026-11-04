@@ -12,9 +12,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 
-/** The five places of the app (design G1). Each one is drawn by its own [AppScreen] into the one content column of [MainActivity]. */
-enum class Screen { HOME,CALLS,TASKS,COMPANIES,SETTINGS;
-    internal val tab:CallUi.Tab get()=CallUi.Tab.valueOf(name)
+/** The five places of the app (design G1), and the person page (v2.8 r9-3), which has no tab of its own: it opens from a name
+ * and back goes to where it was opened from. Each one is drawn by its own [AppScreen] into the one content column of [MainActivity]. */
+enum class Screen { HOME,CALLS,TASKS,COMPANIES,SETTINGS,PERSON;
+    /** The tab marked while this screen is in front; the person page marks the tab it was opened from (see [MainActivity.barTab]). */
+    internal val tab:CallUi.Tab get()=CallUi.Tab.valueOf(if(this==PERSON) HOME.name else name)
 }
 
 /** One screen of [MainActivity]: draws into [body] (the page column, shared by all screens), reads in the background and draws
@@ -59,12 +61,21 @@ class MainActivity:ComponentActivity() {
     internal val tasks=TasksScreen(this)
     internal val companies=CompaniesScreen(this)
     internal val settings=SettingsScreen(this)
+    internal val person=PersonScreen(this)
+    /** The screen the person page was opened from: back (and its marked tab) go there. */
+    internal var personFrom=Screen.HOME
+        private set
+    /** Where that screen was scrolled, put back when the person page closes. */
+    private var personFromY=0
     internal var screen=Screen.HOME
         private set
     internal val current:AppScreen get()=of(screen)
     /** The detail page open in front: a call id on calls, a company id on companies, else null. */
     internal val detail:String? get()=current.detail
-    private fun of(s:Screen):AppScreen=when(s) { Screen.HOME -> home;Screen.CALLS -> calls;Screen.TASKS -> tasks;Screen.COMPANIES -> companies;Screen.SETTINGS -> settings }
+    private fun of(s:Screen):AppScreen=when(s) { Screen.HOME -> home;Screen.CALLS -> calls;Screen.TASKS -> tasks;Screen.COMPANIES -> companies;Screen.SETTINGS -> settings;Screen.PERSON -> person }
+    private val all:List<AppScreen> get()=listOf(home,calls,tasks,companies,settings,person)
+    /** The tab the bottom bar marks: the screen's own, or on the person page the one it was opened from. */
+    internal fun barTab(s:Screen=screen):CallUi.Tab=if(s==Screen.PERSON) personFrom.tab else s.tab
     private var resumed=false
 
     // Results come back to the Activity; the screen in front reads again (the folder, a permission).
@@ -87,13 +98,17 @@ class MainActivity:ComponentActivity() {
 
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
-        column=CallUi.page(this,screen.tab) { t -> tab(Screen.valueOf(t.name)) }
-        onBackPressedDispatcher.addCallback(this,object:OnBackPressedCallback(true) { override fun handleOnBackPressed() { back() } })
         if(savedInstanceState!=null) {
             savedInstanceState.getString("screen")?.let { n -> runCatching { Screen.valueOf(n) }.getOrNull() }?.let { screen=it }
-            listOf(home,calls,tasks,companies,settings).forEach { it.restore(savedInstanceState) }
+            savedInstanceState.getString("person_from")?.let { n -> runCatching { Screen.valueOf(n) }.getOrNull() }?.takeIf { it!=Screen.PERSON }?.let { personFrom=it }
+        }
+        column=CallUi.page(this,barTab()) { t -> tab(Screen.valueOf(t.name)) }
+        onBackPressedDispatcher.addCallback(this,object:OnBackPressedCallback(true) { override fun handleOnBackPressed() { back() } })
+        if(savedInstanceState!=null) {
+            all.forEach { it.restore(savedInstanceState) }
+            if(screen==Screen.PERSON && person.personId==null) screen=personFrom
         } else take(intent)
-        CallUi.markTab(this,window.decorView.findViewWithTag("bottom_bar"),screen.tab)
+        CallUi.markTab(this,window.decorView.findViewWithTag("bottom_bar"),barTab())
         // The pipeline is registered by IeumApplication (app start), the boot and update receivers, and the hourly tick.
         if(LaunchIntro.claim(this,intent?.action==Intent.ACTION_MAIN,savedInstanceState!=null)) LaunchIntro.show(this)
     }
@@ -110,13 +125,13 @@ class MainActivity:ComponentActivity() {
         if(take(intent) && resumed) current.enter()
     }
     override fun onSaveInstanceState(out:Bundle) {
-        super.onSaveInstanceState(out);out.putString("screen",screen.name)
-        listOf(home,calls,tasks,companies,settings).forEach { it.save(out) }
+        super.onSaveInstanceState(out);out.putString("screen",screen.name);out.putString("person_from",personFrom.name)
+        all.forEach { it.save(out) }
     }
 
     /** Reads a notification's extras: the screen, the day of calls, the call to open. False when the Intent names no screen. */
     private fun take(i:Intent?):Boolean {
-        val target=i?.getStringExtra(EXTRA_SCREEN)?.let { n -> runCatching { Screen.valueOf(n) }.getOrNull() }
+        val target=i?.getStringExtra(EXTRA_SCREEN)?.let { n -> runCatching { Screen.valueOf(n) }.getOrNull() }?.takeIf { it!=Screen.PERSON }
         val call=i?.getStringExtra(EXTRA_CALL_ID);val day=i?.getLongExtra(EXTRA_DAY_MS,0L)?.takeIf { it>0 }
         if(target==null && call==null) {
             // The "new version" notification opens home (its install Intent is unchanged).
@@ -134,10 +149,12 @@ class MainActivity:ComponentActivity() {
     /** A tap on the bottom bar: another screen comes to the front; the screen's own tab goes back to the top of its list. */
     internal fun tab(s:Screen) { lastOpen=null;if(s==screen) current.reselect() else switchTo(s) }
 
-    /** Back: a detail page closes, then home, then the app leaves (back from home always ends, design G1). */
+    /** Back: a detail page closes, the person page goes back to where it was opened from, then home, then the app leaves
+     * (back from home always ends, design G1). */
     internal fun back() {
         lastOpen=null // what was closed can be opened again at once
         if(current.back()) return
+        if(screen==Screen.PERSON) { val y=personFromY;switchTo(personFrom);putBack(y);return }
         if(screen!=Screen.HOME) { switchTo(Screen.HOME);return }
         finish()
     }
@@ -145,7 +162,7 @@ class MainActivity:ComponentActivity() {
     /** Brings [s] to the front: the old screen stops, the column is drawn again for the new one and fades in. */
     internal fun switchTo(s:Screen,enter:Boolean=true) {
         if(s!=screen) { current.leave();screen=s }
-        CallUi.markTab(this,window.decorView.findViewWithTag("bottom_bar"),s.tab)
+        CallUi.markTab(this,window.decorView.findViewWithTag("bottom_bar"),barTab(s))
         if(!enter) return
         // The old screen goes at once (its title too); the new one is drawn when its read is back, fading in over 120 ms.
         (column.parent as? LinearLayout)?.let { h -> h.removeViewAt(0);h.addView(LinearLayout(this).apply { tag="page_band" },0) }
@@ -181,6 +198,15 @@ class MainActivity:ComponentActivity() {
         if(!once("call:$recordId")) return
         calls.show(CallRecordStore.kstDay(dayMs),recordId)
         if(screen==Screen.CALLS) calls.enter() else switchTo(Screen.CALLS)
+    }
+    /** Opens the person page of [personId] (v2.8 r9-3) from a name anywhere: a call row or a call's title, a company's people,
+     * a check row's "김민수 님", a home memo. Back goes to the screen it came from, as it was; a person picked on the page
+     * itself (a shared number's chips) takes its place. */
+    internal fun openPerson(personId:String) {
+        if(!once("person:$personId")) return
+        if(screen!=Screen.PERSON) { personFrom=screen;personFromY=CallUi.scrollY(column) }
+        person.show(personId)
+        if(screen==Screen.PERSON) { CallUi.scrollTo(column,0);person.enter() } else switchTo(Screen.PERSON)
     }
     /** Opens a company's detail page by its name (a call's company link). */
     internal fun openCompany(name:String) {

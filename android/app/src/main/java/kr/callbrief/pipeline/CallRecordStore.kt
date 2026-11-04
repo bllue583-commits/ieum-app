@@ -1258,6 +1258,55 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         rows("SELECT id,companies FROM issues").forEach { r -> linkIssue(r.str("id")!!,runCatching { JSONArray(r.str("companies") ?: "[]") }.getOrNull()) }
     }
 
+    // ---- v2.8 사람 화면 (r9-3): read only, the person page and the name links to it ----------------------------------------
+    /** The last call with a person: when, how long, which way ("받은 전화", "건 전화", "부재중 전화"; null when not known). */
+    data class LastCall(val atMs:Long,val durationMs:Long,val direction:String?)
+    /** Everything the person page shows (r9-3). [number]: the number the call and text buttons use (never drawn); [sharers]: the
+     * people who answer that number, this one too, when there are two or more (a shared office line), the latest first;
+     * [personal]: that number was set aside as personal. [recent]: business calls, texts and mail, newest first. */
+    data class PersonCard(val id:String,val name:String,val role:String?,val isStaff:Boolean,val companyId:String?,val company:String?,val trade:String?,
+                          val number:String?,val sharers:List<PersonRow>,val lastCall:LastCall?,val tasks:List<OpenItem>,val issues:List<Issue>,
+                          val recent:List<CallRecord>,val personal:Boolean)
+    private fun marks(n:Int)=List(n) { "?" }.joinToString(",")
+    /** The person page of [personId], or null when there is no such person. A call counts as theirs when it is linked to them,
+     * or when it is not linked to anyone and came from one of their numbers. */
+    fun personCard(personId:String):PersonCard? {
+        val p=personById(personId) ?: return null
+        val numbers=numbersOf(p).toList()
+        val dialable=listOfNotNull(p.str("phone_key"))+rows("SELECT phone_key FROM people_phones WHERE person_id=? ORDER BY rowid",personId).mapNotNull { it.str("phone_key") }
+        val number=dialable.map { it.trim() }.firstOrNull { k -> k.length>=6 && k.all { c -> c.isDigit() || c=='+' } }
+        val mine=if(numbers.isEmpty()) "l.person_id=?" else "(l.person_id=? OR (l.person_id IS NULL AND c.counterpart_key IN (${marks(numbers.size)})))"
+        val args=arrayOf<Any?>(personId,*numbers.toTypedArray())
+        val all=rows("$withPerson WHERE $mine ORDER BY COALESCE(c.started_ms,c.created_ms) DESC,c.created_ms DESC",*args).map(::map)
+        val work=all.filter { it.analysis?.business!=false }
+        // Check items made by their calls (any of them, personal ones make none).
+        val recordings=all.map { it.recordingId }.toSet()
+        val tasks=if(recordings.isEmpty()) emptyList() else openItems().filter { it.recordingId in recordings }
+        // "진행 중인 일": the threads holding one of their calls, then those naming their company.
+        val keys=all.map { CallInbox.recordKey(it.recordId) }.toSet()
+        val companyName=companyById(p.str("company_id"))?.let { it.str("name") to it.str("trade") }
+        val issues=rows("SELECT * FROM issues ORDER BY ord").mapNotNull { r ->
+            val names=JSONArray(r.str("companies") ?: "[]").let { a -> (0 until a.length()).map { a.optString(it) } }
+            val held=JSONArray(r.str("record_keys") ?: "[]").let { a -> (0 until a.length()).any { a.optString(it) in keys } }
+            val named=companyName!=null && p.long("is_staff")!=1L && names.any { n -> companyKey(n)==companyKey(companyName.first) }
+            if(held || named) (if(held) 0 else 1) to Issue(r.str("title")!!,r.str("status").orEmpty(),names) else null
+        }.sortedBy { it.first }.map { it.second }
+        // The last call: the phone's call log of their numbers, or their latest recorded call, whichever is later.
+        val logged=if(numbers.isEmpty()) null else rows("SELECT start_ms,duration_ms,type FROM call_log WHERE number_key IN (${marks(numbers.size)}) ORDER BY start_ms DESC LIMIT 1",*numbers.toTypedArray())
+            .firstOrNull()?.let { r -> val type=(r.long("type") ?: 0).toInt();val d=r.long("duration_ms") ?: 0
+                LastCall(r.long("start_ms") ?: 0,d,when { d>0 && type==1 -> "받은 전화";d>0 && type==2 -> "건 전화";type==2 -> "건 전화, 연결 안 됨";type==3 || type==5 -> "부재중 전화";else -> null }) }
+        val recorded=all.firstOrNull { it.kind=="통화" && it.startedMs!=null }?.let { c ->
+            LastCall(c.startedMs!!,c.durationMs,rows("SELECT direction FROM call_record_log WHERE record_id=?",c.recordId).firstOrNull()?.str("direction")) }
+        val last=listOfNotNull(logged,recorded).maxByOrNull { it.atMs }
+        val sharers=number?.let { n -> peopleByNumber(n).filter { it.str("name").orEmpty().isNotBlank() }.map(::personRow) }?.takeIf { it.size>=2 }.orEmpty()
+        return PersonCard(personId,p.str("name").orEmpty(),p.str("role"),p.long("is_staff")==1L,p.str("company_id"),companyName?.first,companyName?.second,
+            number,sharers,last,tasks,issues,work.take(10),number!=null && isPersonal(number))
+    }
+    /** The person each call is linked to, by record id (the name links of the call rows, home memos and check rows). */
+    fun personIdsOf(recordIds:Collection<String>):Map<String,String> =recordIds.distinct().chunked(400).flatMap { part ->
+        rows("SELECT record_id,person_id FROM call_links WHERE person_id IS NOT NULL AND record_id IN (${marks(part.size)})",*part.toTypedArray())
+            .mapNotNull { r -> r.str("record_id")?.let { id -> r.str("person_id")?.let { id to it } } } }.toMap()
+
 }
 
 /** A call-log entry the call list shows as its own line (no record to open): a missed or rejected call, an answered one
