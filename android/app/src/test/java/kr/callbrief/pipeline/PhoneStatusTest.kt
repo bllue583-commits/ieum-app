@@ -65,6 +65,7 @@ class PhoneStatusHealthTest {
     @Test fun bucketIsAFixedCode() {
         assertEquals("ACTIVE",PhoneStatus.bucketCode(android.app.usage.UsageStatsManager.STANDBY_BUCKET_ACTIVE))
         assertEquals("RESTRICTED",PhoneStatus.bucketCode(45));assertEquals("B99",PhoneStatus.bucketCode(99))
+        assertEquals("EXEMPTED",PhoneStatus.bucketCode(5));assertEquals("NEVER",PhoneStatus.bucketCode(50))
         assertEquals("ACTIVE",PhoneStatus.build(base().copy(health=PhoneStatus.Health(standbyBucket="ACTIVE 김부장"))).getString("standbyBucket"))
     }
     @Test fun callLogWindowCountsByTypeAndPersonal() {
@@ -79,6 +80,38 @@ class PhoneStatusHealthTest {
         assertEquals(555L,o.getLong("mismatchSinceMs"))
         assertFalse(o.toString().contains("9999"));assertFalse(Regex("[가-힣]").containsMatchIn(o.toString()))
         assertFalse(PhoneStatus.build(base()).has("callLog"))
+    }
+    /** Design 3.6 item 2: the new heartbeat fields, null when the phone does not know yet; counts and codes only. */
+    @Test fun watchFieldsAreThereAndHoldNoContent() {
+        val keys=listOf("newQueuedCount","newOldestQueuedMs","oldQueuedCount","lastDiscoveryAttemptMs","lastDiscoveryOutcome","inventoryTruncated",
+            "heldUnsupported","dbPercent","updateAvailableCode","updateReadySinceMs","callLogMatch")
+        val empty=PhoneStatus.build(base())
+        for(k in keys) assertTrue(k,empty.has(k))
+        for(k in keys.drop(3)) assertTrue(k,empty.isNull(k))
+        assertEquals(0,empty.getInt("newQueuedCount"));assertFalse(empty.has("dbRecovery"));assertFalse(empty.has("lastInboxErrorSinceMs"))
+        val match=org.json.JSONObject().put("success",12).put("noCandidate",3).put("name","홍길동").put("01012345678",1)
+            .put("startGapHistogram",org.json.JSONArray().put(4).put(2).put("010-1111-2222")).put("nested",org.json.JSONObject().put("x",1).put("y","김"))
+        val o=PhoneStatus.build(base().copy(lastInboxError="INBOX_HTTP_401",watch=PhoneStatus.Watch(3,900,40,950,"TIME_LIMIT 김부장",true,2,83,1050,800,match,"PROMOTED_NEW",700),
+            callLog=PhoneStatus.CallLogStatus(true,0,0,PhoneStatus.CallLogWindow(),PhoneStatus.CallLogWindow(),null,null,null,0,0)))
+        assertEquals(3,o.getInt("newQueuedCount"));assertEquals(900L,o.getLong("newOldestQueuedMs"));assertEquals(40,o.getInt("oldQueuedCount"))
+        assertEquals(950L,o.getLong("lastDiscoveryAttemptMs"));assertEquals("TIME_LIMIT",o.getString("lastDiscoveryOutcome"))
+        assertTrue(o.getBoolean("inventoryTruncated"));assertEquals(2,o.getInt("heldUnsupported"));assertEquals(83,o.getInt("dbPercent"))
+        assertEquals(1050L,o.getLong("updateAvailableCode"));assertEquals(800L,o.getLong("updateReadySinceMs"))
+        assertEquals("PROMOTED_NEW",o.getString("dbRecovery"));assertEquals(700L,o.getLong("lastInboxErrorSinceMs"))
+        val m=o.getJSONObject("callLogMatch")
+        assertEquals(12,m.getInt("success"));assertEquals(3,m.getInt("noCandidate"));assertFalse(m.has("name"));assertFalse(m.has("01012345678"))
+        assertEquals(2,m.getJSONArray("startGapHistogram").length());assertEquals(1,m.getJSONObject("nested").getInt("x"))
+        assertEquals(12,o.getJSONObject("callLog").getJSONObject("match").getInt("success"))
+        val text=o.toString()
+        assertFalse(text,Regex("[가-힣]").containsMatchIn(text));assertFalse(text.contains("0101"));assertFalse(text.contains("1111"))
+        // No error now: the since time is not sent either.
+        assertFalse(PhoneStatus.build(base().copy(watch=PhoneStatus.Watch(lastInboxErrorSinceMs=700))).has("lastInboxErrorSinceMs"))
+    }
+    @Test fun sameErrorKeepsItsStart() {
+        assertEquals(1_000L,PhoneStatus.sameErrorSince("",0,"INBOX_HTTP_401",1_000))
+        assertEquals(1_000L,PhoneStatus.sameErrorSince("INBOX_HTTP_401",1_000,"INBOX_HTTP_401",9_000))
+        assertEquals(9_000L,PhoneStatus.sameErrorSince("INBOX_HTTP_401",1_000,"INBOX_HTTP_403",9_000))
+        assertEquals(0L,PhoneStatus.sameErrorSince("INBOX_HTTP_401",1_000,"",9_000))
     }
     @Test fun mismatchKeepsItsStart() {
         assertEquals(1_000L,PhoneStatus.mismatchSince(0,5,4,1_000))
@@ -139,6 +172,10 @@ class PhoneStatusPublishTest:kr.callbrief.ProtectedTextHostTestBase() {
         assertFalse(c.getBoolean("allowed"));assertTrue(c.isNull("deviceTotal"));assertEquals(0L,c.getLong("mismatchSinceMs"))
         assertFalse(text,Regex("[가-힣]").containsMatchIn(text))
         for(bad in listOf("010","1111","2222","3333","4444","rec1","content://","treeUri")) assertFalse(bad,text.contains(bad))
+        // v2.6 fields are there: the queue split, the store share from the sealed file, unknown keys as null.
+        for(k in listOf("newQueuedCount","newOldestQueuedMs","oldQueuedCount","lastDiscoveryAttemptMs","inventoryTruncated","heldUnsupported","updateReadySinceMs","callLogMatch"))
+            assertTrue(k,o.has(k))
+        assertTrue(o.getInt("dbPercent") in 0..100);assertTrue(o.isNull("lastDiscoveryAttemptMs"))
         // The expiry is kept for the next heartbeat after a restart.
         assertEquals(o.getLong("tokenExpiresMs"),kr.callbrief.SecureSettings(context).snapshot().optLong(PhoneStatus.TOKEN_EXPIRES_MS))
     }

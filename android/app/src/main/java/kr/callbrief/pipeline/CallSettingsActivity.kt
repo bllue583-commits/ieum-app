@@ -34,8 +34,10 @@ class CallSettingsActivity:ComponentActivity() {
     private var busy=false
     /** When the oldest call still waiting for its summary was stored (for the status lights). */
     @Volatile private var oldestWaiting:Long?=null
-    /** Recordings still to turn into text (first pass only) and the share of the 16 MB store in use, for the status lights and the storage line. */
-    @Volatile private var backlog=0
+    /** What the status lights read from the store (queue by entry time, late live calls, failures) and the share of the
+     * protected store in use (sealed file and rows, design 3.6), for the status lights and the storage line. */
+    @Volatile private var watch:StatusLights.Store?=null
+    @Volatile private var folderReadable=false
     @Volatile private var storagePercent:Int?=null
     /** Numbers found personal (design E9), the latest first: their records stay on the phone. */
     @Volatile private var personal:List<Pair<String,Long>> =emptyList()
@@ -133,8 +135,9 @@ class CallSettingsActivity:ComponentActivity() {
                 val counts=runCatching { CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.counts() } }.getOrDefault(emptyMap())
                 val memo=runCatching { CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.siteMemo() } }.getOrNull()
                 oldestWaiting=runCatching { CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.oldestWaitingMs() } }.getOrNull()
-                backlog=runCatching { FirstPass.start(s)?.takeIf { !FirstPass.done(s) }?.let { st -> CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.firstPassProgress(st).toTranscribe } } ?: 0 }.getOrDefault(0)
-                storagePercent=runCatching { getDatabasePath(kr.callbrief.GeneralLocalStore.DATABASE).takeIf { it.isFile }?.let { (it.length()*100/CallRecordStore.DB_LIMIT_BYTES).toInt().coerceIn(0,100) } }.getOrNull()
+                watch=StatusLights.read(CallPipelineStartup.storage(this@CallSettingsActivity),s,System.currentTimeMillis())
+                folderReadable=StatusLights.folderReadable(this@CallSettingsActivity,s)
+                storagePercent=watch?.dbPercent
                 personal=runCatching { CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.personalNumbers() } }.getOrDefault(emptyList())
                 Triple(s,counts,memo)
             } }
@@ -265,11 +268,13 @@ class CallSettingsActivity:ComponentActivity() {
     private fun notifyAllowed()=android.os.Build.VERSION.SDK_INT<33||checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)==android.content.pm.PackageManager.PERMISSION_GRANTED
     /** "지금 상태": five lights (green "정상" or amber with the reason and what to do, never red) at the top of the last group. */
     private fun statusLights(s:JSONObject,counts:Map<String,Int>) {
-        val input=StatusLights.Input(System.currentTimeMillis(),s.optString("treeUri").isNotBlank(),s.optString(PipelineSettingsKeys.MODEL_STATE),
-            backlog,s.optLong(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,0),s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false),
-            (counts[CallRecordStore.TRANSCRIBED] ?: 0)+(counts[CallRecordStore.WAITING_CONSENT] ?: 0),counts[CallRecordStore.FAILED] ?: 0,
-            oldestWaiting?.let { System.currentTimeMillis()-it },s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),
-            s.optString(PipelineSettingsKeys.LAST_UPDATE_ERROR),CallUpdate.ready(this)!=null)
+        val now=System.currentTimeMillis();val w=watch
+        val input=StatusLights.Input(now,s.optString("treeUri").isNotBlank(),s.optString(PipelineSettingsKeys.MODEL_STATE),
+            w?.queue?.count ?: 0,s.optLong(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,0),s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false),
+            w?.lateLive ?: 0,w?.failed ?: (counts[CallRecordStore.FAILED] ?: 0),w?.oldestLateMs,s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),
+            s.optString(PipelineSettingsKeys.LAST_UPDATE_ERROR),CallUpdate.ready(this)!=null,
+            folderReadable=folderReadable,lastDiscoveryMs=s.optLong(kr.callbrief.AutomaticRecordingDiscovery.LAST_DISCOVERY_MS,0L),
+            oldestQueuedMs=w?.queue?.oldestMs,updateReadySinceMs=s.optLong(PhoneStatus.UPDATE_READY_SINCE_MS,0L))
         val card=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL;tag="settings_status" }
         card.addView(CallUi.text(this,"지금 상태",CallUi.HEADING,true).apply { setPadding(0,0,0,CallUi.dp(this@CallSettingsActivity,4)) })
         StatusLights.lights(input).forEach { l -> card.addView(CallUi.signalRow(this,l.label,l.words,l.ok).apply { tag=l.tag }) }

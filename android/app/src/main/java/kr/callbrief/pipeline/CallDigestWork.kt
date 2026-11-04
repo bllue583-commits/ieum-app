@@ -168,21 +168,18 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
     }
     private fun selfCheckInput(app:Context,s:org.json.JSONObject,now:Long):SelfCheckNotices.Input {
         val tree=s.optString("treeUri")
-        val readable=tree.isNotBlank() && runCatching { app.contentResolver.persistedUriPermissions.any { it.uri.toString()==tree && it.isReadPermission } }.getOrDefault(true)
-        var queued=0;var oldestQueued:Long?=null
-        runCatching { CallTranscriptionStore(app).use { t ->
-            val waiting=t.rows().filter { it.second=="QUEUED" }.map { it.first }.toSet()
-            queued=waiting.size
-            if(waiting.isNotEmpty()) oldestQueued=t.candidates().filter { it.key in waiting }.mapNotNull { (it.startedAtMs ?: it.modifiedMs).takeIf { ms -> ms>0 } }.minOrNull()
-        } }.onFailure { Log.w(TAG,"queue not read: ${it.javaClass.simpleName}") }
+        val readable=StatusLights.folderReadable(app,s)
+        // B4 (review data #4): the queue by entry time, recent recordings only, and the store's real sealed file and row count.
+        val store=StatusLights.read(app,s,now)
+        val queued=store.queue?.newCount ?: 0;val oldestQueued=store.queue?.newOldestMs
         // Recent calls only: old first-pass records may rightly wait for the charger (as the stall notice counts them).
         val oldestWaiting=runCatching { CallRecordStore(app).use { db -> db.pending().filter { !FirstPass.isOld(it.dayMs,s) }.minOfOrNull { it.createdMs } } }.getOrNull()
-        val dbBytes=runCatching { app.getDatabasePath(kr.callbrief.GeneralLocalStore.DATABASE).takeIf { it.isFile }?.length() }.getOrNull()
+        val dbBytes=store.dbBytes
         return SelfCheckNotices.Input(now,tree.isNotBlank(),readable,s.optString(PipelineSettingsKeys.MODEL_STATE),
             queued,oldestQueued,s.optLong(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,0),
             s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false) && CallInboxConfig.enabled && !kr.callbrief.BuildConfig.LOCAL_PREVIEW,
             oldestWaiting,s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),dbBytes,
-            s.optString(PipelineSettingsKeys.STALL_WARNED_DAY),s.optString(PipelineSettingsKeys.DISCONNECT_WARNED_DAY))
+            s.optString(PipelineSettingsKeys.STALL_WARNED_DAY),s.optString(PipelineSettingsKeys.DISCONNECT_WARNED_DAY),store.dbRows)
     }
 }
 

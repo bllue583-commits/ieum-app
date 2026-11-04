@@ -78,6 +78,50 @@ class UiV2Test:ProtectedTextHostTestBase() {
         StatusLights.lights(ok.copy(folderConnected=false,consent=false)).forEach { assertFalse(it.words.contains("·")) }
     }
 
+    /** Design 3.6 (review #9, #10, #11): the lights follow the permission, the discovery age and the queue by entry time. */
+    @Test fun statusLightsAreNoLongerFalselyGreen() {
+        val h=3_600_000L
+        val t=FirstPass.FROM_MS+40*24*h // a day in November: after 10/1
+        val ok=StatusLights.Input(now=t,folderConnected=true,modelState="READY",consent=true,lastTranscribedMs=t-h,
+            folderReadable=true,lastDiscoveryMs=t-h)
+        fun bad(i:StatusLights.Input,tag:String)=StatusLights.lights(i).single { !it.ok }.also { assertEquals(tag,it.tag) }.words
+        // Normal: all green.
+        assertTrue(StatusLights.lights(ok).all { it.ok })
+        // Folder chosen but the permission is gone: amber, pointing up to the connection group.
+        val lost=bad(ok.copy(folderReadable=false),"status_import")
+        assertTrue(lost,lost.contains("풀렸어요") && lost.contains("위 연결 묶음에서"))
+        assertTrue(bad(ok.copy(folderConnected=false,folderReadable=false),"status_import").contains("위 연결 묶음에서"))
+        // Permission kept but no good discovery cycle for a day (or never): amber.
+        assertTrue(bad(ok.copy(lastDiscoveryMs=ok.now-25*h),"status_import").contains("하루"))
+        assertTrue(bad(ok.copy(lastDiscoveryMs=0),"status_import").contains("하루"))
+        assertTrue(StatusLights.lights(ok.copy(lastDiscoveryMs=ok.now-23*h)).all { it.ok })
+        // The first pass is over and a new call has waited 7 hours in the queue: amber (it used to stay green).
+        val s=org.json.JSONObject().put(PipelineSettingsKeys.FIRST_PASS_START_MS,FirstPass.FROM_MS+86_400_000L).put(PipelineSettingsKeys.FIRST_PASS_DONE,true)
+        val q=StatusLights.queue(listOf(StatusLights.QueuedRow(ok.now-8*h,ok.now-7*h)),s)
+        assertEquals(1,q.newCount);assertEquals(ok.now-7*h,q.newOldestMs)
+        assertTrue(bad(ok.copy(transcribeBacklog=q.count,oldestQueuedMs=q.oldestMs,lastTranscribedMs=ok.now-8*h),"status_transcribe").contains("1개"))
+        // A recording that just entered the queue is no backlog, even if the call itself is old; a pre-10/1 one is not counted.
+        val fresh=StatusLights.queue(listOf(StatusLights.QueuedRow(ok.now-30*h,ok.now-h),StatusLights.QueuedRow(FirstPass.FROM_MS-86_400_000L,ok.now-90*h)),s)
+        assertEquals(1,fresh.count);assertEquals(ok.now-h,fresh.oldestMs)
+        assertTrue(StatusLights.lights(ok.copy(transcribeBacklog=fresh.count,oldestQueuedMs=fresh.oldestMs,lastTranscribedMs=ok.now-8*h)).all { it.ok })
+        // While the first pass runs, recordings before its start are old.
+        val running=org.json.JSONObject().put(PipelineSettingsKeys.FIRST_PASS_START_MS,ok.now-10*h)
+        val split=StatusLights.queue(listOf(StatusLights.QueuedRow(ok.now-20*h,ok.now-9*h),StatusLights.QueuedRow(ok.now-2*h,ok.now-2*h)),running)
+        assertEquals(StatusLights.Queue(1,ok.now-2*h,1,ok.now-9*h),split)
+        // Analysis: only live calls without a result for over 6 hours; old first-pass records may wait.
+        val (late,age)=StatusLights.lateLive(listOf(StatusLights.WaitingRow(ok.now-7*h,ok.now-7*h),StatusLights.WaitingRow(ok.now-2*h,ok.now-2*h),
+            StatusLights.WaitingRow(ok.now-30*h,ok.now-40*h)),running,ok.now)
+        assertEquals(1,late);assertEquals(7*h,age)
+        assertTrue(bad(ok.copy(waiting=late,oldestWaitMs=age),"status_analyze").contains("7시간"))
+        // Update: ready for over a day is its own sentence.
+        assertTrue(bad(ok.copy(updateReady=true,updateReadySinceMs=ok.now-25*h),"status_update").contains("하루 넘게"))
+        assertFalse(bad(ok.copy(updateReady=true,updateReadySinceMs=ok.now-2*h),"status_update").contains("하루 넘게"))
+        // Store fill: the fuller of the sealed file and the rows.
+        assertEquals(50,StatusLights.dbPercent(CallRecordStore.DB_LIMIT_BYTES/2,10));assertEquals(90,StatusLights.dbPercent(1024,90_000))
+        assertNull(StatusLights.dbPercent(null,null));assertEquals(100,StatusLights.dbPercent(CallRecordStore.DB_LIMIT_BYTES*2,null))
+        StatusLights.lights(ok.copy(folderReadable=false,updateReady=true,updateReadySinceMs=1)).forEach { assertFalse(it.words,Regex("[·…]").containsMatchIn(it.words)) }
+    }
+
     @Test fun settingsKeepThreeGroupsMailGuideAndMarkers() {
         seeded()
         SecureSettings(app).update { it.put(PipelineSettingsKeys.LAST_UPDATE_ERROR,"STATUS_FAILURE_STORAGE (6): 공간 부족") }
