@@ -101,7 +101,7 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
         val root=a.window.decorView
         val order=listOf("home_today","home_tasks","home_memos").map { t -> views(root).indexOfFirst { it.tag==t } }
         assertTrue(order.toString(),order.all { it>=0 } && order==order.sorted())
-        assertTrue(homeTasks().size<=3)
+        assertTrue(homeTasks().size<=HomeScreen.FIRST_TASKS)
         val first=homeTasks().first()
         val done=views(first).first { it.tag=="task_done" }
         done.performClick()

@@ -102,6 +102,8 @@ class UpdateFetchTest:ProtectedTextHostTestBase() {
         settle { tag(home,"home_update_button")!=null }
         assertEquals("새 버전 v2.5 받을 수 있어요",(tag(home,"home_update_state") as TextView).text.toString())
         tag(home,"home_update_button").performClick()
+        // The check runs off the main thread (r8-4); the button says so meanwhile.
+        settle { home.screen==Screen.SETTINGS }
         assertEquals(1,starts)
         assertEquals(CallUpdate.Stage.WAITING,CallUpdate.fetchState(app).stage)
         assertTrue("installs when done",CallUpdate.wantsInstall(app))

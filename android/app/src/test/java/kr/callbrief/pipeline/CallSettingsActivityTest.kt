@@ -36,7 +36,8 @@ class CallSettingsActivityTest:ProtectedTextHostTestBase() {
 
     @Test fun todayCallsOpensEmpty() {
         val a=launchMain(Screen.CALLS)
-        until(a) { views(root(a)).filterIsInstance<TextView>().any { it.text.toString().endsWith("의 통화") } }
+        // The title shows at once with "불러오는 중이에요" (r8-4); the empty day once it is read.
+        until(a) { views(root(a)).filterIsInstance<TextView>().any { it.text.toString().endsWith("의 통화") } && root(a).findViewWithTag<View>("loading")==null }
         assertTrue(views(root(a)).filterIsInstance<TextView>().any { it.text.toString().contains("이 날짜에 통화가 없어요") })
     }
 

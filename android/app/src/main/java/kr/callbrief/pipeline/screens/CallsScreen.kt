@@ -1,30 +1,84 @@
 package kr.callbrief.pipeline
 
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.widget.*
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kr.callbrief.SecureSettings
 import java.time.LocalDate
 
 /** "통화": one KST day of calls (time, who, the first sentence of the summary), one tap to a detail page. Every call of
  * the phone's call log is listed with them in time order (v2.4, 11/4 user): a missed or rejected call as "부재중 전화"
- * with 다시 걸기, an answered call without a recording as "녹음 없음", a call with a number found personal as "개인 통화"
- * (who and when only). */
+ * with 다시 걸기, an answered call without a recording as "녹음 없음" (or, right after the call, "녹음을 글자로 바꾸는 중이에요"),
+ * a call with a number found personal as "개인 통화" (who and when only). */
 internal class CallsScreen(a:MainActivity):AppScreen(a) {
     companion object {
         /** Lines built at once, then per later part (see [fill]). */
         const val FIRST_ROWS=30;const val MORE_ROWS=40
+        /** Typing in the search line waits this long before the calls are searched again (design r8-4). */
+        const val SEARCH_WAIT_MS=250L
+        /** A call-log line within this of a recording's time is that recording. */
+        const val NEAR_MS=2*60_000L
+        /** An answered call this recent, with the recording folder connected, is still being turned into text. */
+        const val FRESH_MS=12*3_600_000L
+        /** A call waiting this long for its result says it is late. */
+        const val LATE_MS=6*3_600_000L
+        const val TRANSCRIBING="녹음을 글자로 바꾸는 중이에요"
+        const val NO_SPEECH="녹음에서 말소리를 찾지 못했어요"
+        /** The time the call screens measure against; tests set it. */
+        @Volatile internal var clock:()->Long={ System.currentTimeMillis() }
+
         /** The line under the title: "통화 7건, 부재중 2건, 문자 1건". Personal calls and calls without a recording count as calls. */
         internal fun counts(calls:List<CallRecord>,logs:List<LoggedCall>):String {
-            val missed=logs.count { !it.personal && it.kind in setOf(FirstPass.LogKind.MISSED,FirstPass.LogKind.BLOCKED) }
+            val missed=missedCount(logs)
             val n=calls.groupingBy { it.kind }.eachCount().toMutableMap()
             n["통화"]=(n["통화"] ?: 0)+logs.size-missed
             if(missed>0) n["부재중"]=missed
             return n.entries.filter { it.value>0 }.sortedBy { listOf("통화","부재중","문자","메일").indexOf(it.key) }.joinToString(", ") { "${it.key} ${it.value}건" }.ifEmpty { "통화 0건" }
         }
+        private fun missedCount(logs:List<LoggedCall>)=logs.count { !it.personal && it.kind in setOf(FirstPass.LogKind.MISSED,FirstPass.LogKind.BLOCKED) }
+        /** "오늘 통화" on home: the same "통화 n건" as the call list's line ([counts] of [visibleLogs]), records and call-log lines. */
+        internal fun callCount(calls:List<CallRecord>,logs:List<LoggedCall>):Int {
+            val shown=visibleLogs(calls,logs)
+            return calls.count { it.kind=="통화" }+shown.size-missedCount(shown)
+        }
+        /** The call-log lines the list shows: an answered call already stored as a record (within [NEAR_MS], and not yet tied
+         * to it by the next pass) is that record's line, not a second one. */
+        internal fun visibleLogs(calls:List<CallRecord>,logs:List<LoggedCall>):List<LoggedCall> {
+            val starts=calls.filter { it.kind=="통화" }.mapNotNull { it.startedMs }
+            if(starts.isEmpty()) return logs
+            return logs.filterNot { e -> !e.personal && e.kind==FirstPass.LogKind.NO_RECORDING && starts.any { Math.abs(it-e.startMs)<=NEAR_MS } }
+        }
+        /** An answered or made call with no record yet that is being turned into text: a transcription job of that time
+         * (within [NEAR_MS]), or, without one, a call of the last [FRESH_MS] while the recording folder is connected. */
+        internal fun transcribing(e:LoggedCall,now:Long,folder:Boolean,jobStarts:List<Long>):Boolean {
+            if(e.personal || e.kind!=FirstPass.LogKind.NO_RECORDING) return false
+            if(jobStarts.any { Math.abs(it-e.startMs)<=NEAR_MS }) return true
+            return folder && now-e.startMs in 0 until FRESH_MS
+        }
+        /** A record's state in plain words (design r8-4): being sorted out, late after [LATE_MS], or a recording with no
+         * speech in it, which trying again cannot change. */
+        internal fun stateWords(c:CallRecord,now:Long=clock()):String = when {
+            c.state==CallRecordStore.FAILED && c.error=="EMPTY_TRANSCRIPT" -> NO_SPEECH
+            c.state==CallRecordStore.TRANSCRIBED && now-c.createdMs>LATE_MS -> "정리가 늦어지고 있어요"
+            c.state==CallRecordStore.TRANSCRIBED -> "정리하고 있어요"
+            else -> CallUi.state(c.state)
+        }
+        /** Whether [다시 정리하기] can help: a failed call, except one whose recording had no speech. */
+        internal fun canRetry(c:CallRecord)=c.state==CallRecordStore.FAILED && c.error!="EMPTY_TRANSCRIPT"
+        /** One call made searchable once: its record, all its words in lower case, and the same without spaces. */
+        internal class Searchable(val record:CallRecord,val words:String,val packed:String) {
+            constructor(c:CallRecord,words:String):this(c,words,words.filterNot { it.isWhitespace() })
+            fun matches(query:List<String>)=query.all { words.contains(it) || packed.contains(it) }
+        }
+        internal fun searchable(c:CallRecord)=Searchable(c,listOfNotNull(c.displayName,c.counterpart,c.analysis?.counterpartName,c.analysis?.counterpartCompany,
+            c.linkedPerson,c.summary,c.analysis?.summary,c.transcript).joinToString(" ").lowercase())
+        internal fun queryWords(q:String)=q.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.map { it.lowercase() }
     }
     private val body:LinearLayout get()=a.column
     private var day:LocalDate=CallUi.today()
@@ -33,18 +87,41 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
     private var calls:List<CallRecord> =emptyList()
     /** The day's call-log lines that have no record of their own ([CallRecordStore.dayLog]). */
     private var logs:List<LoggedCall> =emptyList()
+    /** When the recordings still waiting for their words were made (this day), and whether the folder is connected. */
+    private var jobStarts:List<Long> =emptyList()
+    private var folder=false
+    /** True from a day change (or the first opening) until that day is read: the list shows "불러오는 중이에요". */
+    private var reading=true
     /** Where the list was scrolled when a detail page opened from it; put back once the list is drawn again (design G1). */
     private var listY=0
     /** A scroll position to put back after the next list drawing (and its later parts). */
     private var pendingY=0
+    private val handler=Handler(Looper.getMainLooper())
+    private val searchLater=Runnable { if(live() && detail==null && ::listBox.isInitialized) fill() }
 
-    override fun enter() { load() }
+    override fun enter() {
+        // The column was cleared (another screen was in front): what was read before at once, or the title and "불러오는 중이에요"
+        // the first time, then the read.
+        if(body.childCount==0) { if(calls.isEmpty() && logs.isEmpty()) reading=true;render() }
+        load()
+    }
+    override fun leave() { handler.removeCallbacks(searchLater) }
     /** The calls tab tapped while calls is in front: today's list from the top, no search. */
-    override fun reselect() { detail=null;query="";day=CallUi.today();listY=0;pendingY=0;shown=null;load();CallUi.scrollTo(body,0) }
+    override fun reselect() {
+        handler.removeCallbacks(searchLater)
+        val newDay=CallUi.today()!=day
+        detail=null;query="";day=CallUi.today();listY=0;pendingY=0;shown=null
+        if(newDay) { calls=emptyList();logs=emptyList();reading=true }
+        render();load();CallUi.scrollTo(body,0)
+    }
     override fun back():Boolean { if(detail==null) return false;closeDetail();return true }
     /** From another screen (home memo, a check item, a company, a notification): this day, and this call open when [callId] is given. */
-    fun show(d:LocalDate,callId:String?) { if(d!=day) { calls=emptyList();logs=emptyList() };day=d;query="";detail=callId;listY=0;pendingY=0;shown=null }
-    /** Opens the detail page of a call of the list, keeping where the list was. */
+    fun show(d:LocalDate,callId:String?) {
+        if(d!=day) { calls=emptyList();logs=emptyList();jobStarts=emptyList();reading=true }
+        handler.removeCallbacks(searchLater)
+        day=d;query="";detail=callId;listY=0;pendingY=0;shown=null
+    }
+    /** Opens the detail page of a call of the list (or of the search), keeping where the list was and what was typed. */
     private fun openDetail(id:String) { if(!a.once("call:$id")) return;listY=CallUi.scrollY(body);detail=id;render() }
     private fun closeDetail() { detail=null;pendingY=listY;listY=0;render() }
     override fun save(out:Bundle) { out.putString("calls_day",day.toString());detail?.let { out.putString("calls_detail",it) };out.putString("calls_query",query) }
@@ -58,19 +135,39 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
         a.lifecycleScope.launch {
             val result=runCatching { withContext(Dispatchers.IO) {
                 // Reads only (r8-1): the call log is matched in the discovery and upload passes, not at every screen open.
-                kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(a)).let { s ->
-                    s.day(target) to runCatching { s.dayLog(target) }.getOrDefault(emptyList()) }
+                val storage=CallPipelineStartup.storage(a)
+                val s=kr.callbrief.IeumApplication.store(storage)
+                val from=target.atStartOfDay(CallRecordStore.KST).toInstant().toEpochMilli()
+                val to=target.plusDays(1).atStartOfDay(CallRecordStore.KST).toInstant().toEpochMilli()
+                Read(s.day(target),runCatching { s.dayLog(target) }.getOrDefault(emptyList()),
+                    runCatching { s.transcribingStarts(from-NEAR_MS,to+NEAR_MS) }.getOrDefault(emptyList()),
+                    runCatching { SecureSettings(storage).snapshot().optString("treeUri").isNotBlank() }.getOrDefault(false))
             } }
             if(!live()||target!=day)return@launch
-            result.onSuccess { calls=it.first;logs=it.second;pool=null;render() }
-            result.onFailure { body.removeAllViews();CallUi.band(body,"통화");body.addView(CallUi.text(a,"저장된 통화를 읽지 못했어요. 잠시 후 다시 열어주세요.")) }
+            result.onSuccess { calls=it.calls;logs=it.logs;jobStarts=it.jobs;folder=it.folder;reading=false;pool=null;render() }
+            result.onFailure {
+                reading=false
+                body.removeAllViews();CallUi.band(body,"${CallUi.dayWord(day)}의 통화")
+                CallUi.retryCard(body,"저장된 통화를 읽지 못했어요. 잠시 후 다시 불러와 주세요.") { reading=true;render();load() }
+            }
         }
     }
-    private fun go(d:LocalDate) { day=d;detail=null;load() }
+    private class Read(val calls:List<CallRecord>,val logs:List<LoggedCall>,val jobs:List<Long>,val folder:Boolean)
+    /** ‹ ›: the new date and arrows at once with "불러오는 중이에요" in place of the list, then the read (review #16). */
+    private fun go(d:LocalDate) {
+        if(d>CallUi.today()) return
+        day=d;detail=null;calls=emptyList();logs=emptyList();jobStarts=emptyList();reading=true;listY=0;pendingY=0
+        render();load()
+    }
 
     private var shown:String?=null
+    private fun record(id:String)=calls.firstOrNull { it.recordId==id } ?: pool?.firstOrNull { it.record.recordId==id }?.record
     private fun render() {
-        val record=detail?.let { id -> calls.firstOrNull { it.recordId==id } }
+        val record=detail?.let(::record)
+        if(record==null && detail!=null && reading) {
+            // A call opened from elsewhere, its day still being read.
+            body.removeAllViews();CallUi.band(body,"통화");CallUi.loading(body);return
+        }
         val mode=if(record!=null) "detail" else "list"
         val keep=if(mode==shown) CallUi.scrollY(body) else 0;shown=mode
         body.removeAllViews()
@@ -78,8 +175,13 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
         detail=null
         // Back from a detail page: the list where it was, once the parts of it above that place are drawn (see [fill]).
         val y=if(pendingY>0) pendingY else keep;pendingY=0
-        CallUi.band(body,"${CallUi.dayWord(day)}의 통화",counts(calls,logs))
-        val search=ScreenParts.searchBox(a,"업체, 사람, 통화 내용 찾기",query,"calls_search") { q -> query=q;fill() }
+        CallUi.band(body,"${CallUi.dayWord(day)}의 통화",if(reading) null else counts(calls,visibleLogs(calls,logs)))
+        val search=ScreenParts.searchBox(a,"업체, 사람, 통화 내용 찾기",query,"calls_search") { q ->
+            if(q==query) return@searchBox
+            query=q;handler.removeCallbacks(searchLater)
+            // Back to the day at once; a search waits until typing stops for a moment.
+            if(q.isBlank()) fill() else handler.postDelayed(searchLater,SEARCH_WAIT_MS)
+        }
         body.addView(search)
         listBox=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;tag="calls_box" }
         body.addView(listBox)
@@ -90,52 +192,55 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
     /** What is typed in the search line ("" shows the day). */
     private var query=""
     private lateinit var listBox:LinearLayout
-    /** Every call since 10/1 for the search (read once per opening of the screen, off the main thread). */
-    private var pool:List<CallRecord>? =null
+    /** Every call since 10/1 for the search, each made searchable once (read once per opening of the screen, off the main thread). */
+    private var pool:List<Searchable>? =null
     private var poolLoading=false
 
     /** One line of the call-log entries ([LoggedCall]): who and when, and what kind of call it was. Nothing to open. */
-    private fun logRow(e:LoggedCall):View {
+    private fun logRow(e:LoggedCall,now:Long):View {
         val who=e.name ?: e.numberKey?.let(CallUi::who) ?: "모르는 번호"
         val time=CallUi.time(e.startMs)
+        val pending=transcribing(e,now,folder,jobStarts)
         val row=when {
-            e.personal -> CallUi.logRow(a,time,who,"개인 통화",CallUi.MUTED)
+            e.personal -> CallUi.logRow(a,time,who,"개인 통화",CallUi.SUBTLE)
+            pending -> CallUi.logRow(a,time,who,TRANSCRIBING,CallUi.SUBTLE)
             else -> when(e.kind) {
                 FirstPass.LogKind.MISSED -> CallUi.logRow(a,time,who,"부재중 전화",CallUi.AMBER,trailing=CallUi.redialButton(a,e.numberKey,e.name ?: who))
                 FirstPass.LogKind.NOT_CONNECTED -> CallUi.logRow(a,time,who,"건 전화, 연결 안 됨",CallUi.SUBTLE,trailing=CallUi.redialButton(a,e.numberKey,e.name ?: who))
-                FirstPass.LogKind.BLOCKED -> CallUi.logRow(a,time,who,"차단한 번호의 전화",CallUi.MUTED)
+                FirstPass.LogKind.BLOCKED -> CallUi.logRow(a,time,who,"차단한 번호의 전화",CallUi.SUBTLE)
                 FirstPass.LogKind.NO_RECORDING -> CallUi.logRow(a,time,who,
                     "${if(e.type==android.provider.CallLog.Calls.OUTGOING_TYPE) "건 전화" else "받은 전화"} ${CallUi.duration(e.durationMs)}, 녹음 없음",CallUi.SUBTLE)
             }
         }
-        return row.apply { tag="log_${if(e.personal) "personal" else e.kind.name.lowercase()}_${e.logId}" }
+        return row.apply { tag="log_${when { e.personal -> "personal";pending -> "transcribing";else -> e.kind.name.lowercase() }}_${e.logId}" }
     }
 
-    private fun row(c:CallRecord,searching:Boolean)=
-        // One call: who and when, the first sentence of the summary (or its state). Tap for details.
-        CallUi.memoRow(a,CallUi.whenLabel(c),c.displayName,c.summary?.let(CallUi::firstSentence) ?: CallUi.state(c),c.summary==null,
-            avatarName=c.linkedPerson ?: c.analysis?.counterpartName) {
-            if(searching) { if(a.once("call:"+c.recordId)) { day=CallRecordStore.kstDay(c.dayMs);query="";listY=0;detail=c.recordId;load() } } else openDetail(c.recordId) }
+    private fun row(c:CallRecord)=
+        // One call: who and when, the first sentence of the summary (or its state). Tap for details; a search stays as typed.
+        CallUi.memoRow(a,CallUi.whenLabel(c),c.displayName,c.summary?.let(CallUi::firstSentence) ?: stateWords(c),c.summary==null,
+            avatarName=c.linkedPerson ?: c.analysis?.counterpartName) { openDetail(c.recordId) }
             .apply { tag="call_${c.recordId}" }
 
     /** The calls below the search line: the day with its switcher, or, once something is typed, the matches among all calls. */
     private fun fill() {
+        handler.removeCallbacks(searchLater)
         listBox.removeAllViews()
         if(query.isNotBlank()) { fillSearch();return }
         // Day switcher: ‹ date › in one sheet; "오늘로 돌아가기" only when away from today.
         val nav=CallUi.card(a).apply { orientation=LinearLayout.HORIZONTAL;gravity=android.view.Gravity.CENTER_VERTICAL;setPadding(CallUi.dp(a,4),CallUi.dp(a,4),CallUi.dp(a,4),CallUi.dp(a,4)) }
-        fun arrow(kind:String,label:String,enabled:Boolean,action:()->Unit)=Button(a).apply {
-            background=CallUi.ripple(a,null,24,oval=false);stateListAnimator=null;contentDescription=label;isEnabled=enabled
+        fun arrow(kind:String,label:String,t:String,enabled:Boolean,action:()->Unit)=Button(a).apply {
+            background=CallUi.ripple(a,null,24,oval=false);stateListAnimator=null;contentDescription=label;isEnabled=enabled;tag=t
             setCompoundDrawablesWithIntrinsicBounds(CallUi.icon(a,kind,if(enabled) CallUi.INK else CallUi.FAINT,24),null,null,null)
-            minWidth=CallUi.dp(a,56);minimumWidth=minWidth;minHeight=CallUi.dp(a,56);minimumHeight=minHeight;setOnClickListener { action() }
+            minWidth=CallUi.dp(a,56);minimumWidth=minWidth;minHeight=CallUi.dp(a,56);minimumHeight=minHeight;CallUi.onTap(this) { action() }
         }
-        nav.addView(arrow("back","전날 통화 보기",true) { go(day.minusDays(1)) })
+        nav.addView(arrow("back","전날 통화 보기","calls_prev",true) { go(day.minusDays(1)) })
         nav.addView(CallUi.text(a,CallUi.date(day),CallUi.SUMMARY,true).apply { gravity=android.view.Gravity.CENTER;tag="today_calls_date" },LinearLayout.LayoutParams(0,-2,1f))
-        nav.addView(arrow("chevron","다음날 통화 보기",day<CallUi.today()) { go(day.plusDays(1)) })
+        nav.addView(arrow("chevron","다음날 통화 보기","calls_next",day<CallUi.today()) { go(day.plusDays(1)) })
         listBox.addView(nav)
         if(day!=CallUi.today()) listBox.addView(CallUi.linkButton(a,"오늘로 돌아가기 ›") { go(CallUi.today()) })
+        if(reading) { CallUi.loading(listBox);return }
 
-        val lines=merged(calls,logs)
+        val lines=merged(calls,visibleLogs(calls,logs),clock())
         if(lines.isEmpty()) { listBox.addView(CallUi.card(a).apply { addView(CallUi.text(a,"이 날짜에 통화가 없어요.",CallUi.BODY,color=CallUi.SUBTLE)) });return }
         // A busy day can hold a hundred lines and more: the first screenful is built at once, the rest a part at a time
         // after it is drawn, so the screen opens without a wait. A newer fill drops the parts still to come.
@@ -151,29 +256,34 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
     private var fills=0
 
     /** The day's records and call-log lines in one list, newest first; each with the view that draws it. */
-    private fun merged(calls:List<CallRecord>,logs:List<LoggedCall>):List<Pair<Long,()->View>> =
-        (calls.map { c -> (c.startedMs ?: c.createdMs) to { row(c,false) } }+logs.map { e -> e.startMs to { logRow(e) } }).sortedByDescending { it.first }
+    private fun merged(calls:List<CallRecord>,logs:List<LoggedCall>,now:Long):List<Pair<Long,()->View>> =
+        (calls.map { c -> (c.startedMs ?: c.createdMs) to { row(c) } }+logs.map { e -> e.startMs to { logRow(e,now) } }).sortedByDescending { it.first }
 
-    internal fun matches(c:CallRecord,q:String)=ScreenParts.matches(q,c.displayName,c.counterpart,c.analysis?.counterpartName,c.analysis?.counterpartCompany,c.linkedPerson,c.summary,c.analysis?.summary,c.transcript)
+    internal fun matches(c:CallRecord,q:String)=searchable(c).matches(queryWords(q))
 
     private fun fillSearch() {
+        ++fills
         val all=pool
         if(all==null) {
             listBox.addView(CallUi.text(a,"찾는 중이에요",CallUi.BODY,color=CallUi.SUBTLE).apply { tag="calls_search_wait" })
             if(!poolLoading) { poolLoading=true
                 a.lifecycleScope.launch {
-                    val found=withContext(Dispatchers.IO) { runCatching { CallRecordStore(CallPipelineStartup.storage(a)).use { s ->
+                    val found=withContext(Dispatchers.IO) { runCatching { kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(a)).let { s ->
                         val from=CallRecordStore.kstDay(FirstPass.FROM_MS);val to=CallUi.today()
-                        generateSequence(to) { it.minusDays(1) }.takeWhile { !it.isBefore(from) }.flatMap { s.day(it) }.toList() } }.getOrDefault(emptyList()) }
+                        generateSequence(to) { it.minusDays(1) }.takeWhile { !it.isBefore(from) }.flatMap { s.day(it) }
+                            .map(::searchable).toList() } }.getOrNull() }
                     poolLoading=false
                     if(!live())return@launch
+                    if(found==null) { if(query.isNotBlank()&&detail==null) { listBox.removeAllViews()
+                        CallUi.retryCard(listBox,"통화를 찾지 못했어요. 잠시 후 다시 해 주세요.") { fill() } };return@launch }
                     pool=found;if(query.isNotBlank()&&detail==null) fill()
                 } }
             return
         }
-        val hits=all.filter { matches(it,query) }.sortedByDescending { it.startedMs ?: it.createdMs }
+        val words=queryWords(query)
+        val hits=all.filter { it.matches(words) }.map { it.record }.sortedByDescending { it.startedMs ?: it.createdMs }
         if(hits.isEmpty()) listBox.addView(CallUi.card(a).apply { addView(CallUi.text(a,"찾는 통화가 없어요.",CallUi.BODY,color=CallUi.SUBTLE)).also { tag="calls_search_none" } })
-        else listBox.addView(CallUi.list(a,hits.take(60).map { row(it,true) }).apply { setPadding(0,0,0,0) })
+        else listBox.addView(CallUi.list(a,hits.take(60).map { row(it) }).apply { setPadding(0,0,0,0) })
     }
 
     private fun renderDetail(c:CallRecord) {
@@ -185,13 +295,14 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
                 .apply { tag="call_company_link" },LinearLayout.LayoutParams(-2,-2).apply { marginStart=-CallUi.dp(a,6) })
         }
         if(c.state!=CallRecordStore.ANALYZED) {
-            // A call that could not be sorted out is an amber sheet with plain words, never red.
+            // A call that could not be sorted out is an amber sheet with plain words, never red. A recording with no speech
+            // in it says so and has no button: sorting it out again gives the same (review #10).
             val failed=c.state==CallRecordStore.FAILED
-            val s=CallUi.card(a,warn=failed)
-            s.addView(CallUi.text(a,CallUi.state(c),CallUi.SUMMARY,true,if(failed) CallUi.AMBER else CallUi.INK))
-            when(c.state) {
-                CallRecordStore.FAILED -> s.addView(CallUi.button(a,"다시 정리하기") { retry(c.recordId) })
-                CallRecordStore.WAITING_CONSENT -> s.addView(CallUi.button(a,"설정 열기") { a.switchTo(Screen.SETTINGS) })
+            val s=CallUi.card(a,warn=failed).apply { tag="call_state" }
+            s.addView(CallUi.text(a,stateWords(c),CallUi.SUMMARY,true,if(failed) CallUi.AMBER else CallUi.INK).apply { tag="call_state_text" })
+            when {
+                canRetry(c) -> s.addView(CallUi.button(a,"다시 정리하기","다시 정리하는 중이에요") { retry(c.recordId) }.apply { tag="call_retry" })
+                c.state==CallRecordStore.WAITING_CONSENT -> s.addView(CallUi.button(a,"설정 열기") { a.switchTo(Screen.SETTINGS) })
             }
             body.addView(s)
         }
@@ -224,9 +335,10 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
     private fun retry(id:String) {
         a.lifecycleScope.launch {
             withContext(Dispatchers.IO) {
-                runCatching { CallRecordStore(CallPipelineStartup.storage(a)).use { it.setState(id,CallRecordStore.TRANSCRIBED) } }
+                runCatching { kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(a)).setState(id,CallRecordStore.TRANSCRIBED) }
                 runCatching { CallPipelineStartup.enqueueAnalysis(a) }
             }
+            if(!live()) return@launch
             Toast.makeText(a,"다시 정리할게요. 잠시만 기다려 주세요.",Toast.LENGTH_SHORT).show();load()
         }
     }
