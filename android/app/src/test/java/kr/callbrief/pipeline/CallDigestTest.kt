@@ -82,7 +82,7 @@ class CallDigestTest:ProtectedTextHostTestBase() {
             p.execute("INSERT INTO folder_grants VALUES('g1',?,'content://generated/tree',1,1,1)",GeneralLocalStore.OWNER)
             p.execute("INSERT INTO recordings(recording_id,owner_key,grant_id,document_id,display_name,mime_type,byte_count,first_seen_ms,last_seen_ms,source_seq,source_version,head_revision) VALUES('r','${GeneralLocalStore.OWNER}','g1','d','n','audio/wav',1,0,0,1,1,1)")
             listOf("i1" to "2026-10-29" to "open","i2" to "2026-10-27" to "needs_confirmation","i3" to "2026-10-30" to "open","i4" to "2026-10-20" to "done","i5" to "내일" to "open").forEach { (a,status) ->
-                p.execute("INSERT INTO workflow_items VALUES(?,'r',NULL,'TODO',?,'',?,?,1,NULL,'',0)",a.first,"할 일 ${a.first}",a.second,status)
+                p.execute("INSERT INTO workflow_items(id,recording_id,case_id,kind,title,edition,due_text,status,revision,source_key,evidence_quote,created_ms) VALUES(?,'r',NULL,'TODO',?,'',?,?,1,NULL,'',0)",a.first,"할 일 ${a.first}",a.second,status)
             };null
         } }
         CallRecordStore(context).use { s ->
