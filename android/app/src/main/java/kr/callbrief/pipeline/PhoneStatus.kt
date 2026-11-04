@@ -16,13 +16,18 @@ internal object PhoneStatus {
     /** Everything the file says; [oldestQueuedMs] is the age start of the oldest recording still waiting for its text. */
     data class Input(val nowMs:Long,val appVersion:String,val versionCode:Long,val queuedCount:Int,val oldestQueuedMs:Long?,
         val lastTranscribedMs:Long,val lastResultMs:Long,
-        val modelState:String,val lastInboxError:String,val lastUpdateError:String,val storageUsedPercent:Int)
+        val modelState:String,val lastInboxError:String,val lastUpdateError:String,val storageUsedPercent:Int,
+        /** First pass (10/1 on): null before it starts, else whether it is done and what is left. Counts and minutes only. */
+        val firstPass:FirstPassStatus?=null)
+    data class FirstPassStatus(val done:Boolean,val toTranscribe:Int,val minutesLeft:Long?,val waiting:Int,val batchesToday:Int)
 
     fun build(i:Input):JSONObject {
         val o=JSONObject().put("atMs",i.nowMs).put("appVersion",i.appVersion).put("versionCode",i.versionCode)
             .put("queuedCount",i.queuedCount).put("oldestQueuedMs",i.oldestQueuedMs ?: JSONObject.NULL)
             .put("lastTranscribedMs",i.lastTranscribedMs).put("lastResultMs",i.lastResultMs)
             .put("modelState",code(i.modelState)).put("storageUsedPercent",i.storageUsedPercent)
+        i.firstPass?.let { f -> o.put("firstPass",JSONObject().put("done",f.done).put("toTranscribe",f.toTranscribe)
+            .put("audioMinutesLeft",f.minutesLeft ?: JSONObject.NULL).put("waitingForSummary",f.waiting).put("batchesToday",f.batchesToday)) }
         // Absent when there is nothing to report, so the watchdog's "has an error" test is just a key test.
         code(i.lastInboxError).takeIf { it.isNotEmpty() }?.let { o.put("lastInboxError",it) }
         code(i.lastUpdateError).takeIf { it.isNotEmpty() }?.let { o.put("lastUpdateError",it) }
@@ -66,8 +71,16 @@ internal object PhoneStatus {
             modelState = s.optString(PipelineSettingsKeys.MODEL_STATE,""),
             lastInboxError = s.optString(PipelineSettingsKeys.LAST_INBOX_ERROR,""),
             lastUpdateError = s.optString(LAST_UPDATE_ERROR,""),
-            storageUsedPercent = storagePercent(app))
+            storageUsedPercent = storagePercent(app),
+            firstPass = firstPass(app,s))
     }
+    private fun firstPass(app:Context,s:org.json.JSONObject):FirstPassStatus? = runCatching {
+        val start=FirstPass.start(s) ?: return@runCatching null
+        if(FirstPass.done(s)) return@runCatching FirstPassStatus(true,0,0,0,0)
+        val p=CallRecordStore(CallPipelineStartup.storage(app)).use { it.firstPassProgress(start) }
+        val minutes=p.bytesPerMinute?.takeIf { it>0 }?.let { p.bytesLeft/it }
+        FirstPassStatus(false,p.toTranscribe,minutes,p.waiting,s.optInt(PipelineSettingsKeys.FIRST_PASS_BATCHES_TODAY,0))
+    }.onFailure { Log.w(TAG,"first pass not read: ${it.javaClass.simpleName}") }.getOrNull()
     private fun storagePercent(app:Context):Int = runCatching {
         val st=StatFs(app.filesDir.path);val total=st.totalBytes
         if(total<=0) 0 else (100-st.availableBytes*100/total).toInt().coerceIn(0,100)

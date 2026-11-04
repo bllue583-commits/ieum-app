@@ -29,4 +29,11 @@ class PhoneStatusTest {
         val text=PhoneStatus.build(input(update="한글 이름")).toString()
         assertFalse(Regex("[가-힣]").containsMatchIn(text))
     }
+
+    @Test fun firstPassProgressIsCountsOnly() {
+        val o=PhoneStatus.build(input().copy(firstPass=PhoneStatus.FirstPassStatus(false,120,3600,4,2)))
+        val f=o.getJSONObject("firstPass")
+        assertEquals(120,f.getInt("toTranscribe"));assertEquals(3600L,f.getLong("audioMinutesLeft"));assertEquals(4,f.getInt("waitingForSummary"))
+        assertTrue(!PhoneStatus.build(input()).has("firstPass"))
+    }
 }
