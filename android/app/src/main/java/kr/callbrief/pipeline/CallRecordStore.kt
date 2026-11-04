@@ -106,7 +106,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
             // "진행 중인 일" from the repository ledger (design: 새벽 정리), in the ledger's order.
             "CREATE TABLE IF NOT EXISTS issues(id TEXT PRIMARY KEY,ord INTEGER NOT NULL,title TEXT NOT NULL,status TEXT NOT NULL,companies TEXT NOT NULL,updated_ms INTEGER NOT NULL,record_keys TEXT NOT NULL DEFAULT '[]')",
             // Numbers found personal (a result with business=false, design E9): their calls and texts stay on the phone.
-            "CREATE TABLE IF NOT EXISTS personal_numbers(phone_key TEXT PRIMARY KEY,decided_ms INTEGER NOT NULL)")
+            "CREATE TABLE IF NOT EXISTS personal_numbers(phone_key TEXT PRIMARY KEY,decided_ms INTEGER NOT NULL)",
+            // Personal verdicts in a row per number (E9 safety, round 6): a number is remembered only after [PERSONAL_STREAK].
+            "CREATE TABLE IF NOT EXISTS personal_streaks(phone_key TEXT PRIMARY KEY,streak INTEGER NOT NULL,updated_ms INTEGER NOT NULL)")
         /** Columns added after the first release: the repository-ledger id of a person and the user's name lock. */
         private val PEOPLE_COLUMNS=listOf("ledger_id" to "TEXT","name_locked" to "INTEGER NOT NULL DEFAULT 0","name_key" to "TEXT")
         private val COMPANY_COLUMNS=listOf("name_key" to "TEXT")
@@ -129,6 +131,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         fun noNumber(name:String?):String? = name?.let { kr.callbrief.core.PrivacyRules.removePhoneTokens(it).trim().takeIf { t -> t.isNotEmpty() && !t.all { c -> c.isDigit() || c=='-' || c==' ' } } }
         /** A phone number (digits) or a mail address: what identifies a person. Anything else is a name. */
         fun isContact(key:String?)=key!=null && (key.all { it.isDigit() } || key.contains('@'))
+        /** Personal verdicts in a row before a number is remembered as personal (one wrong verdict must not hide a work contact). */
+        const val PERSONAL_STREAK=2
         const val SITE_MEMO_MAX=600;const val COMPANY_MEMO_MAX=400
         /** Raw texts and mail sent with one request for cross-checking. */
         const val RECENT_TEXT_CHARS=3000
@@ -490,8 +494,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         // Personal, not work: a text or mail is deleted outright; a call keeps only a bare "done" mark (so it is not
         // transcribed again) with its words wiped. Neither reaches the ledger, the lists or the check items.
         if(!a.business) {
-            // A number seen to be personal is remembered: its next calls and texts are not sent (design E9).
-            record.str("counterpart_key")?.takeIf { k -> k.length>=8 && k.all { it.isDigit() } }?.let { port.execute("INSERT OR IGNORE INTO personal_numbers VALUES(?,?)",it,clock()) }
+            // A number seen to be personal twice in a row, and tied to no work, is remembered: its next calls and texts are not sent (design E9).
+            record.str("counterpart_key")?.takeIf { k -> k.length>=8 && k.all { it.isDigit() } }?.let { notePersonal(it,id) }
             if(MessageKind.of(recording)!="통화") {
                 port.execute("DELETE FROM call_inbox_sent WHERE record_id=?",id);port.execute("DELETE FROM call_records WHERE record_id=?",id)
                 port.execute("DELETE FROM recordings WHERE recording_id=? AND grant_id='messages'",recording)
@@ -505,6 +509,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         val now=clock()
         // Ledger first: who this was, their company, the memos; tasks then inherit the company.
         val cp=a.counterpart;val ckey=record.str("counterpart_key")
+        // A work verdict breaks a run of personal ones (E9 safety).
+        ckey?.let { port.execute("DELETE FROM personal_streaks WHERE phone_key=?",it) }
         val staffCall=cp?.isStaff==true
         // The company a person on this number already belongs to: a spelling one jamo off it is that company (B10).
         val onNumber=ckey?.takeIf { isContact(it) }?.let { peopleByNumber(it) }.orEmpty()
@@ -650,7 +656,26 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
     /** Numbers found personal, the latest first: (key, when). For the settings line "개인으로 둔 번호 n개". */
     fun personalNumbers():List<Pair<String,Long>> =rows("SELECT phone_key,decided_ms FROM personal_numbers ORDER BY decided_ms DESC").map { it.str("phone_key")!! to (it.long("decided_ms") ?: 0) }
     /** Takes a number back from personal: its later records are sent again (earlier ones stay as they were). */
-    fun forgetPersonal(key:String)=port.execute("DELETE FROM personal_numbers WHERE phone_key=?",key)
+    fun forgetPersonal(key:String)=port.transaction { port.execute("DELETE FROM personal_numbers WHERE phone_key=?",key);port.execute("DELETE FROM personal_streaks WHERE phone_key=?",key);null }
+    /** Personal verdicts in a row so far for [key] (0 after a work one). */
+    fun personalStreak(key:String):Int=(rows("SELECT streak FROM personal_streaks WHERE phone_key=?",key).firstOrNull()?.long("streak") ?: 0).toInt()
+    /** One personal verdict for [key]: the run grows, and at [PERSONAL_STREAK] in a row the number is remembered, unless
+     * it is tied to work (round 6). A number already remembered is left as it is. */
+    private fun notePersonal(key:String,recordId:String) {
+        if(isPersonal(key)) return
+        val n=(rows("SELECT streak FROM personal_streaks WHERE phone_key=?",key).firstOrNull()?.long("streak") ?: 0)+1
+        port.execute("INSERT OR REPLACE INTO personal_streaks VALUES(?,?,?)",key,n,clock())
+        if(n>=PERSONAL_STREAK && !tiedToWork(key,recordId)) port.execute("INSERT OR IGNORE INTO personal_numbers VALUES(?,?)",key,clock())
+    }
+    /** Whether [key] belongs to work: several people answer it (a shared office number), a company or our own staff is on
+     * it, a call of it is linked to a company, or any other record of it was found work (an old one without the mark too). */
+    private fun tiedToWork(key:String,recordId:String):Boolean {
+        val people=peopleByNumber(key)
+        if(people.size>=2 || people.any { it.str("company_id")!=null || it.long("is_staff")==1L }) return true
+        if(rows("SELECT 1 FROM call_links l JOIN call_records c ON c.record_id=l.record_id WHERE c.counterpart_key=? AND l.company_id IS NOT NULL LIMIT 1",key).isNotEmpty()) return true
+        return rows("SELECT analysis_json FROM call_records WHERE counterpart_key=? AND record_id!=? AND state='ANALYZED'",key,recordId).any { r ->
+            r.str("analysis_json")?.let { j -> runCatching { JSONObject(j).optJSONObject("analysis")?.optBoolean("business",true) }.getOrNull() }!=false }
+    }
     /** A waiting record with a personal number: kept as personal here, exactly as a business=false result would leave it. */
     fun keepPersonal(id:String)=applyAnalysis(id,ClaudeCallAnalysis("개인 내용",emptyList(),null,null,emptyList(),emptyList(),business=false))
 
