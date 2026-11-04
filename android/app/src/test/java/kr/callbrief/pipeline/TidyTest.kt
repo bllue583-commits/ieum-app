@@ -84,6 +84,51 @@ class TidyTest:ProtectedTextHostTestBase() {
         assertTrue(store().use { it.dueItems(LocalDate.of(2026,10,30)) }.none { it.id==b.id })
     }
 
+    // ---- v2.6 (문제 12): the state carries each item's rev, a proposal on an item changed since is skipped -----------------
+    @Test fun stateCarriesRevAndMergeCandidates() {
+        seed()
+        val a=item("견적서 보내기");val b=item("견적 메일")
+        val plain=store().use { it.tidyState(true,now) }
+        val revs=(0 until plain.getJSONArray("tasks").length()).map { plain.getJSONArray("tasks").getJSONObject(it) }.associate { it.getString("id") to it.getLong("rev") }
+        assertEquals(3,revs.size);assertTrue(revs.values.all { it>=1 })
+        val now0=AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql")).use { p ->
+            p.query("SELECT revision FROM workflow_items WHERE id=?",a.id).single()["revision"].toString().toLong() }
+        assertEquals("rev is workflow_items.revision",now0,revs.getValue(a.id))
+        assertFalse("no candidates, no key",plain.has("mergeCandidates"))
+        // The settings list (r7-4 fills it) goes up as it is; an empty one is left out.
+        val pairs=JSONArray().put(JSONArray().put(a.id).put(b.id))
+        val s=JSONObject().put(MERGE_CANDIDATES,pairs.toString())
+        val state=store().use { it.tidyState(true,now,mergeCandidates=mergeCandidates(s)) }
+        assertEquals(pairs.toString(),state.getJSONArray("mergeCandidates").toString())
+        assertNull(mergeCandidates(JSONObject().put(MERGE_CANDIDATES,JSONArray())));assertNull(mergeCandidates(JSONObject()))
+        assertEquals(pairs.toString(),mergeCandidates(JSONObject().put(MERGE_CANDIDATES,pairs)).toString())
+    }
+
+    @Test fun proposalWithAnOldRevIsSkipped() {
+        seed()
+        val a=item("견적서 보내기");val b=item("견적 메일");val c=item("계약서 초안 받기")
+        val state=store().use { it.tidyState(true,now) }
+        val rev=(0 until state.getJSONArray("tasks").length()).map { state.getJSONArray("tasks").getJSONObject(it) }.associate { it.getString("id") to it.getLong("rev") }
+        // A call that night changes "견적서 보내기" by analysis: still AI-owned, but newer than the state the proposal read.
+        AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql")).use { p -> p.transaction {
+            p.execute("UPDATE workflow_items SET due_text='2026-11-06',revision=revision+1 WHERE id=?",a.id)
+            p.execute("UPDATE call_task_bindings SET last_revision=last_revision+1 WHERE item_id=?",a.id);null } }
+        val n=store().use { it.applyTidy(JSONObject().put("rev",1).put("tasks",JSONArray()
+            .put(JSONObject().put("op","rewrite").put("id",a.id).put("rev",rev.getValue(a.id)).put("title","옛 판단").put("due","2026-10-29"))
+            .put(JSONObject().put("op","merge").put("id",a.id).put("rev",rev.getValue(a.id)).put("into",c.id))
+            .put(JSONObject().put("op","done_suggested").put("id",a.id).put("rev",rev.getValue(a.id)))
+            .put(JSONObject().put("op","rewrite").put("id",b.id).put("rev",rev.getValue(b.id)).put("title","견적서 메일 보내기"))
+            .put(JSONObject().put("op","done_suggested").put("id",c.id).put("rev",rev.getValue(c.id)+5))
+            .put(JSONObject().put("op","create").put("title","철근 반입 일정 회신 확인").put("basis","10/28 통화")))) }
+        assertEquals("the current rewrite and the follow-up only",2,n)
+        val open=store().use { it.openItems() }
+        val kept=open.single { it.id==a.id }
+        assertEquals("견적서 보내기",kept.title);assertEquals("2026-11-06",kept.due);assertEquals("open",kept.status)
+        assertEquals("견적서 메일 보내기",open.single { it.id==b.id }.title)
+        assertEquals("open",open.single { it.id==c.id }.status)
+        assertTrue(open.any { it.title=="철근 반입 일정 회신 확인" })
+    }
+
     @Test fun ledgerIssuesAndMergesReachTheScreensAndReport() {
         seed()
         AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql")).use { p -> p.transaction {

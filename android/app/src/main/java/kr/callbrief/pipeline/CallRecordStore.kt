@@ -801,8 +801,10 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
     /** What the morning tidy reads: open check items (marked when the user changed them, which it must leave alone) and
      * every work record since 10/1 as summary only, keyed by a hash so no number shows. */
     /** [all]: every record since 10/1 (the tidy's first full read); otherwise the last 14 days and those tied to an
-     * issue, so it does not grow with every record (round 2). */
-    fun tidyState(firstPassDone:Boolean,now:Long,all:Boolean=true):JSONObject {
+     * issue, so it does not grow with every record (round 2). Each item carries its [rev] (workflow_items.revision): the
+     * proposal hands it back and [applyTidy] skips an item changed since (v2.6, a call late at night wins over the morning).
+     * [mergeCandidates]: id pairs the phone saw as near duplicates (settings [MERGE_CANDIDATES]), sent only when there are some. */
+    fun tidyState(firstPassDone:Boolean,now:Long,all:Boolean=true,mergeCandidates:JSONArray?=null):JSONObject {
         val linked=rows("SELECT record_keys FROM issues").flatMap { r -> JSONArray(r.str("record_keys") ?: "[]").let { a -> (0 until a.length()).map { a.optString(it) } } }.toSet()
         val tasks=JSONArray()
         rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.created_ms,i.recording_id,b.last_revision,
@@ -812,7 +814,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
             val tidyMade=r.str("recording_id")=="tidy:followups" && r.long("last_revision")==null
             val locked=(r.long("edits") ?: 0)>0 || (!tidyMade && (r.long("last_revision")==null || r.long("last_revision")!=r.long("revision")))
             tasks.put(JSONObject().put("id",r.str("id")).put("title",r.str("title")).put("due",r.str("due_text").orEmpty()).put("status",r.str("status"))
-                .put("company",r.str("cname") ?: JSONObject.NULL).put("createdMs",r.long("created_ms") ?: 0).put("locked",locked)) }
+                .put("company",r.str("cname") ?: JSONObject.NULL).put("createdMs",r.long("created_ms") ?: 0).put("locked",locked).put("rev",r.long("revision") ?: 0)) }
         val records=JSONArray()
         rows("""$withPerson WHERE c.state='ANALYZED' AND c.summary IS NOT NULL AND COALESCE(c.started_ms,c.created_ms)>=CAST(? AS INTEGER)
             ORDER BY COALESCE(c.started_ms,c.created_ms)""",FirstPass.FROM_MS).map(::map).filter { it.analysis?.business!=false }
@@ -822,10 +824,12 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
                 .put("counterpartId",lid ?: JSONObject.NULL).put("company",c.analysis?.counterpartCompany ?: JSONObject.NULL).put("summary",c.summary)
                 .put("keyPoints",JSONArray(c.analysis?.keyPoints.orEmpty()))) }
         return JSONObject().put("generatedMs",now).put("firstPassDone",firstPassDone).put("tasks",tasks).put("records",records)
-            .put("recentlyDone",JSONArray(recentlyDone(null)))
+            .put("recentlyDone",JSONArray(recentlyDone(null))).apply { mergeCandidates?.takeIf { it.length()>0 }?.let { put("mergeCandidates",it) } }
     }
     /** Applies the morning tidy's proposal to check items the AI still owns (never one the user changed or finished):
-     * clearer wording, duplicates merged away, and "끝났는지 확인" where it looks finished. Returns how many changed. */
+     * clearer wording, duplicates merged away, and "끝났는지 확인" where it looks finished. Returns how many changed.
+     * An item whose "rev" is not its revision now changed after the state went up (a call that night): skipped. A proposal
+     * without "rev" (the routine before v2.6) is applied as before. "create" has no rev. */
     fun applyTidy(o:JSONObject):Int=port.transaction {
         // AI-owned: made by an analysis and not changed since, or a follow-up the tidy made (round 2: those can be tidied too).
         fun owned(id:String)=rows("""SELECT i.revision FROM workflow_items i LEFT JOIN call_task_bindings b ON b.item_id=i.id WHERE i.id=?
@@ -851,6 +855,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         for(k in 0 until ops.length()) { val t=ops.optJSONObject(k) ?: continue
             if(t.optString("op")=="create") continue
             val id=t.optString("id");val rev=owned(id) ?: continue
+            if(t.has("rev") && !t.isNull("rev") && t.optLong("rev",-1)!=rev) continue
             when(t.optString("op")) {
                 "rewrite" -> { val title=t.optString("title").trim().take(240);if(title.isEmpty()) continue
                     // No "due" in the proposal keeps the date (an omission must not drop it from the morning report).

@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kr.callbrief.SecureSettings
 import okhttp3.ResponseBody.Companion.toResponseBody
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** Sends every stored transcript that is waiting to the scheduled task and applies what comes back. Consent is checked per record, right before sending. */
@@ -240,7 +241,7 @@ internal class CallRecordAnalysisRunner(
         val s=settings();val now=clock()
         val hour=java.time.Instant.ofEpochMilli(now).atZone(CallRecordStore.KST).hour
         if(!consent || !FirstPass.done(s) || hour in 5..20 || now-s.optLong(PipelineSettingsKeys.TIDY_SENT_MS,0)<12*3_600_000L) return
-        val state=db.tidyState(true,now,all=!s.optBoolean(PipelineSettingsKeys.TIDIED_ONCE,false))
+        val state=db.tidyState(true,now,all=!s.optBoolean(PipelineSettingsKeys.TIDIED_ONCE,false),mergeCandidates=mergeCandidates(s))
         // The same content as last time is not sent again (round 6): the state on the inbox then gets older than a day and
         // the morning tidy rests by its own rule. The next run tries again, so a change later in the night still goes up.
         val hash=tidyHash(state)
@@ -275,6 +276,14 @@ internal object CallInboxConfig {
     val enabled get()=kr.callbrief.BuildConfig.IEUM_INBOX_TOKEN.isNotBlank()||kr.callbrief.BuildConfig.LOCAL_PREVIEW
 }
 internal const val RESEND_MS=6*3_600_000L
+/** Settings key (r7-4 fills it): id pairs the phone skipped as near duplicates, for the morning tidy's merge judgement. */
+internal const val MERGE_CANDIDATES="mergeCandidates"
+/** The [MERGE_CANDIDATES] list as kept in settings (a JSON array, or its text), or null when there is none. */
+internal fun mergeCandidates(s:JSONObject):JSONArray?=when(val v=s.opt(MERGE_CANDIDATES)) {
+    is JSONArray -> v
+    is String -> runCatching { JSONArray(v) }.getOrNull()
+    else -> null
+}?.takeIf { it.length()>0 }
 /** Settings key: SHA-256 of the last tidy state that went up, without its time stamp (round 6). */
 internal const val TIDY_STATE_HASH="tidyStateHash"
 /** The tidy state's content hash: generatedMs is left out, everything else counts. */
