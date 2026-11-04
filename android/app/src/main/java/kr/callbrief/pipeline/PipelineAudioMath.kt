@@ -93,7 +93,8 @@ internal class PipelineAudioResampler(private val from:Int,private val to:Int) {
 /** Pure, JVM-testable audio math for the on-device transcription pipeline. No Android APIs. */
 internal object PipelineAudioMath {
     const val TARGET_RATE=16000
-    const val MAX_CHUNK_MS=300_000L
+    /** Two minutes: a stopped piece costs little (it is redone from its start) and fits well inside WorkManager's time limit. */
+    const val MAX_CHUNK_MS=120_000L
     const val CUT_SEARCH_MS=2_000L
     const val CUT_WINDOW_MS=100L
     /** Candidate cut positions are evaluated on this grid. */
@@ -217,6 +218,21 @@ internal object PipelineAudioMath {
         }
         flush()
         return PipelineDecodedAudio(audio.durationMs,out,vadApplied=true)
+    }
+
+    /** Sample index near the middle where the audio is quietest (within 2 s either side), for halving a piece that keeps stalling. */
+    fun halfPoint(samples:FloatArray,rate:Int=TARGET_RATE):Int {
+        val mid=samples.size/2;val w=max(1,rate/10)
+        val lo=max(1,mid-2*rate);val hi=min(samples.size-1,mid+2*rate)
+        var best=mid;var bestEnergy=Double.MAX_VALUE;var c=lo
+        while(c<=hi){
+            val a=max(0,c-w/2);val b=min(samples.size,c+w/2);var e=0.0
+            for(j in a until b)e+=samples[j].toDouble()*samples[j]
+            e/=max(1,b-a)
+            if(e<bestEnergy){bestEnergy=e;best=c}
+            c+=w/2
+        }
+        return best.coerceIn(1,samples.size-1)
     }
 
     /** Chunks as (original start ms, samples). Lengths sum to the input length. */

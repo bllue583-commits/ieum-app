@@ -9,7 +9,7 @@ import java.nio.ByteOrder
 
 /** On-device decoder for call recordings: WAV is parsed directly; m4a/AAC, amr/3gp and anything else
  * MediaExtractor understands go through MediaCodec to PCM. Output is 16 kHz mono, chunked at quiet
- * points into pieces of at most five minutes. Long silences are dropped ([PipelineAudioMath.speechOnly]); each chunk's offset is the original
+ * points into pieces of at most two minutes. Long silences are dropped ([PipelineAudioMath.speechOnly]); each chunk's offset is the original
  * position of its first sample.
  * Audio stays in memory on this device; nothing is written to disk or sent anywhere. */
 internal class PipelineAudioDecoder:PipelineAudioSource {

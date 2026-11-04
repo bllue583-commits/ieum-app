@@ -38,12 +38,12 @@ class CallTranscriptionUnitTest {
             assertTrue(d.durationMs in 2990..3010)
         }
     }
-    @Test fun longAudioIsChunkedAtMostFiveMinutesWithIncreasingOffsets() {
+    @Test fun longAudioIsChunkedAtMostTwoMinutesWithIncreasingOffsets() {
         val mono=FloatArray(16000*60*12){(sin(2*PI*300*it/16000)*0.3).toFloat()}
         val chunks=PipelineAudioMath.split(mono)
-        assertTrue(chunks.size>=3)
+        assertTrue(chunks.size>=6)
         var expected=0L
-        for((offset,pcm) in chunks){assertEquals(expected,offset);assertTrue(pcm.size<=16000*300);expected+=pcm.size*1000L/16000}
+        for((offset,pcm) in chunks){assertEquals(expected,offset);assertTrue(pcm.size<=16000*120);expected+=pcm.size*1000L/16000}
         assertEquals(mono.size,chunks.sumOf{it.second.size})
     }
 
@@ -69,5 +69,14 @@ class CallTranscriptionUnitTest {
         val mostlySpeech=tone(5.0)+quiet(0.4)+tone(5.0)
         val same=PipelineDecodedAudio(10400,listOf(0L to mostlySpeech),false)
         assertTrue(PipelineAudioMath.speechOnly(same)===same)
+    }
+
+    @Test fun halfPointFallsInTheQuietestSpotNearTheMiddle() {
+        val rate=16000
+        val pcm=FloatArray(rate*60){ (0.3*sin(2*PI*440*it/rate)).toFloat() }
+        val quietAt=rate*30+rate  // one second after the exact middle
+        for(i in quietAt until quietAt+rate/5) pcm[i]=0f
+        val cut=PipelineAudioMath.halfPoint(pcm)
+        assertTrue("cut $cut",cut in quietAt..quietAt+rate/5)
     }
 }

@@ -16,7 +16,8 @@ internal object AndroidWhisperNative {
     external fun beginTimed(seconds:Int):Long
     external fun transcribeModel(id:Long,model:String,pcm:FloatArray,language:String,threads:Int):ByteArray
 }
-internal data class AndroidWhisperOutput(val raw:ByteArray,val text:String,val segments:JSONArray)
+/** [dropped] counts segments that were left out because they were malformed (never their text). */
+internal data class AndroidWhisperOutput(val raw:ByteArray,val text:String,val segments:JSONArray,val dropped:Int=0)
 
 /** Pinned APK native runtime (assets/local-stt/runtime-pin.json). The model file is owned and verified by the caller.
  * No microphone, network or account access. */
@@ -48,11 +49,21 @@ internal class AndroidWhisperEngine(private val context:Context) {
     }
     companion object {
         private val LOAD_LOCK=Any();private val EXECUTION_LOCK=Any();private var loadedSha:String?=null
+        /** Same segment limit and output size as the native side (ieum_whisper.cpp). */
+        const val MAX_SEGMENTS=2048
+        const val MAX_OUTPUT_BYTES=1048576
+        /** A malformed segment is dropped on its own; the rest of the piece is kept. An empty result is silence. */
         fun decodeOutput(raw:ByteArray):AndroidWhisperOutput {
-            check(raw.size in 1..262144){"ANDROID_STT_OUTPUT_LIMIT"};val a=JSONObject(String(raw,Charsets.UTF_8)).getJSONArray("transcription");check(a.length() in 1..256){"ANDROID_STT_SEGMENTS"}
-            val segments=JSONArray();val text=StringBuilder();var last=0L
-            for(i in 0 until a.length()){val s=a.getJSONObject(i);val offset=s.getJSONObject("offsets");val start=offset.getLong("from");val end=offset.getLong("to");val value=s.getString("text");check(start>=last&&end>start&&value.isNotBlank()){"ANDROID_STT_SEGMENT_INVALID"};last=end;text.append(value);segments.put(JSONObject().put("startMs",start).put("endMs",end).put("text",value))}
-            check(text.isNotBlank()&&text.length<=131072){"ANDROID_STT_TEXT_SIZE"};return AndroidWhisperOutput(raw.clone(),text.toString(),segments)
+            check(raw.size in 1..MAX_OUTPUT_BYTES){"ANDROID_STT_OUTPUT_LIMIT"};val a=JSONObject(String(raw,Charsets.UTF_8)).getJSONArray("transcription");check(a.length()<=MAX_SEGMENTS){"ANDROID_STT_SEGMENTS"}
+            val segments=JSONArray();val text=StringBuilder();var last=0L;var dropped=0
+            for(i in 0 until a.length()){
+                val ok=runCatching {
+                    val s=a.getJSONObject(i);val offset=s.getJSONObject("offsets");val start=offset.getLong("from");val end=offset.getLong("to");val value=s.getString("text")
+                    if(start>=last&&end>start&&value.isNotBlank()&&text.length+value.length<=131072){last=end;text.append(value);segments.put(JSONObject().put("startMs",start).put("endMs",end).put("text",value));true} else false
+                }.getOrDefault(false)
+                if(!ok)dropped++
+            }
+            return AndroidWhisperOutput(raw.clone(),text.toString(),segments,dropped)
         }
     }
 }
