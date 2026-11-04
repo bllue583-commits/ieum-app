@@ -39,4 +39,15 @@ class CallSettingsActivityTest:ProtectedTextHostTestBase() {
         until(a) { views(root(a)).filterIsInstance<TextView>().any { it.text.toString().endsWith("의 통화") } }
         assertTrue(views(root(a)).filterIsInstance<TextView>().any { it.text.toString().contains("정리된 통화가 없어요") })
     }
+
+    @Test fun settingsShowMyInfoAndPersonalNumbers() {
+        val a=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        until(a) { root(a).findViewWithTag<View>("personal_state")!=null }
+        val texts=views(root(a)).filterIsInstance<TextView>().map { it.text.toString() }
+        assertTrue(texts.contains("내 정보"));assertTrue(texts.contains("개인으로 둔 번호"))
+        assertNotNull(root(a).findViewWithTag<View>("my_edit_"+PipelineSettingsKeys.MY_NAME))
+        assertTrue(root(a).findViewWithTag<TextView>("personal_state").text.toString().startsWith("아직 없어요"))
+        assertNull(root(a).findViewWithTag<View>("personal_list"))
+        assertTrue(texts.none { it.contains("·") })
+    }
 }

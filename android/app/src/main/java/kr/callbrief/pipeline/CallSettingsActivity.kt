@@ -23,6 +23,8 @@ class CallSettingsActivity:ComponentActivity() {
     /** Recordings still to turn into text (first pass only) and the share of the 16 MB store in use, for the status lights and the storage line. */
     @Volatile private var backlog=0
     @Volatile private var storagePercent:Int?=null
+    /** Numbers found personal (design E9), the latest first: their records stay on the phone. */
+    @Volatile private var personal:List<Pair<String,Long>> =emptyList()
     private val pickFolder=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { r ->
         if(r.resultCode==RESULT_OK) CallFolder.save(this,r.data)?.let { Toast.makeText(this,it,Toast.LENGTH_LONG).show() }
         refresh()
@@ -58,6 +60,7 @@ class CallSettingsActivity:ComponentActivity() {
                 oldestWaiting=runCatching { CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.oldestWaitingMs() } }.getOrNull()
                 backlog=runCatching { FirstPass.start(s)?.takeIf { !FirstPass.done(s) }?.let { st -> CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.firstPassProgress(st).toTranscribe } } ?: 0 }.getOrDefault(0)
                 storagePercent=runCatching { getDatabasePath(kr.callbrief.GeneralLocalStore.DATABASE).takeIf { it.isFile }?.let { (it.length()*100/CallRecordStore.DB_LIMIT_BYTES).toInt().coerceIn(0,100) } }.getOrNull()
+                personal=runCatching { CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.personalNumbers() } }.getOrDefault(emptyList())
                 Triple(s,counts,memo)
             } }
             if(isFinishing||isDestroyed)return@launch
@@ -118,8 +121,8 @@ class CallSettingsActivity:ComponentActivity() {
         hourRow("저녁 통화 정리",PipelineSettingsKeys.EVENING_HOUR,s.optInt(PipelineSettingsKeys.EVENING_HOUR,19),15..23)
         body.addView(CallUi.divider(this))
         hourRow("아침 체크할 일",PipelineSettingsKeys.MORNING_HOUR,s.optInt(PipelineSettingsKeys.MORNING_HOUR,6),4..11)
-        // v2: my info (내 정보: 이름, 회사와 현장, 직책 세 칸 go here, after the alert times)
-        // v2: personal numbers row (개인으로 둔 번호 n개 ›)
+        myInfo(s)
+        personalNumbers()
 
         // ---- 상태와 도움 ----
         group("상태와 도움")
@@ -300,4 +303,45 @@ class CallSettingsActivity:ComponentActivity() {
         box.addView(ends)
         body.addView(box)
     }
+    /** 내 정보 (design C5 [사용자]): who "I" am in the calls, so the summary knows whose check items they are. Empty fields send roles only. */
+    private fun myInfo(s:JSONObject) {
+        sub("내 정보")
+        body.addView(CallUi.caption(this,"통화를 정리할 때 누가 \"나\"인지 알려 줘요. 비워 둬도 돼요.").apply { tag="my_info_note" })
+        listOf(Triple("이름",PipelineSettingsKeys.MY_NAME,"예: 김민지"),Triple("회사와 현장",PipelineSettingsKeys.MY_COMPANY,"예: ○○건설 △△현장"),
+            Triple("직책",PipelineSettingsKeys.MY_ROLE,"예: 공무 부장")).forEach { (label,key,hint) ->
+            val value=s.optString(key).trim()
+            body.addView(CallUi.caption(this,label).apply { setPadding(0,CallUi.dp(this@CallSettingsActivity,10),0,0) })
+            body.addView(CallUi.text(this,value.ifEmpty { "적지 않았어요" },CallUi.BODY,value.isNotEmpty(),if(value.isEmpty()) CallUi.SUBTLE else CallUi.INK).apply { tag="my_$key" })
+            body.addView(button(if(value.isEmpty()) "$label 적기" else "$label 고치기") {
+                val field=EditText(this).apply { setText(value);this.hint=hint;textSize=CallUi.BODY;isSingleLine=true;inputType=InputType.TYPE_CLASS_TEXT
+                    typeface=CallUi.font(this@CallSettingsActivity,CallUi.Weight.REGULAR) }
+                android.app.AlertDialog.Builder(this).setTitle(label).setView(field)
+                    .setPositiveButton("저장") { _,_ -> val v=field.text.toString().trim().take(40);save { if(v.isEmpty()) it.remove(key) else it.put(key,v) } }
+                    .setNegativeButton("닫기",null).show()
+            }.apply { tag="my_edit_$key" })
+        }
+    }
+
+    /** 개인으로 둔 번호 (design E9): numbers whose calls and texts were judged personal are kept here and not sent. Each can be taken back. */
+    private fun personalNumbers() {
+        sub("개인으로 둔 번호")
+        val list=personal
+        body.addView(CallUi.text(this,if(list.isEmpty()) "아직 없어요. 개인 통화로 보이는 번호가 생기면 여기에 모여요."
+            else "${list.size}개 번호의 통화와 문자는 정리하지 않고 휴대폰에만 둬요.",CallUi.BODY).apply { tag="personal_state" })
+        if(list.isEmpty()) return
+        body.addView(button("번호 보기") {
+            val labels=list.map { (k,ms) -> CallUi.who(k)+"  "+java.time.format.DateTimeFormatter.ofPattern("M월 d일").format(java.time.Instant.ofEpochMilli(ms).atZone(java.time.ZoneId.of("Asia/Seoul"))) }.toTypedArray()
+            android.app.AlertDialog.Builder(this).setTitle("눌러서 업무 번호로 되돌려요").setItems(labels) { _,i ->
+                val key=list[i].first
+                android.app.AlertDialog.Builder(this).setMessage(CallUi.who(key)+" 번호를 업무 번호로 되돌릴까요? 앞으로 이 번호의 통화와 문자를 다시 정리해요.")
+                    .setPositiveButton("되돌리기") { _,_ ->
+                        lifecycleScope.launch {
+                            withContext(Dispatchers.IO) { runCatching { CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.forgetPersonal(key) } } }
+                            refresh()
+                        }
+                    }.setNegativeButton("닫기",null).show()
+            }.setNegativeButton("닫기",null).show()
+        }.apply { tag="personal_list" })
+    }
+
 }
