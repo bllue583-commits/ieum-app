@@ -40,7 +40,7 @@ class CallInboxTest:ProtectedTextHostTestBase() {
             null
         } }
     }
-    private fun runner(inbox:FakeInbox,consent:Boolean=true)=CallRecordAnalysisRunner(context,ClaudeCallAnalyzer(),
+    private fun runner(inbox:CallInboxStore,consent:Boolean=true)=CallRecordAnalysisRunner(context,ClaudeCallAnalyzer(),
         { JSONObject().put(PipelineSettingsKeys.CONSENT_GRANTED,consent) },{ now },inbox)
 
     @Test fun sendsOnceThenAppliesResultAndCleansUp() {
@@ -70,6 +70,40 @@ class CallInboxTest:ProtectedTextHostTestBase() {
         val r=CallRecordStore(context).use { it.record(id)!! }
         assertEquals(CallRecordStore.ANALYZED,r.state)
         assertEquals(listOf("견적서 메일 보내기"),CallRecordStore(context).use { it.openItems().map { i->i.title } })
+    }
+
+    /** The pass before a report and the hourly pass can start together: the second waits for the first, then finds the
+     * result already applied and deleted, so it is applied once. */
+    @Test fun twoPassesAtOnceApplyAResultOnce() {
+        val text=ClaudeCallAnalyzerTest.TRANSCRIPT
+        val t=CallTranscript("rec1",1,"a".repeat(64),now,125_000,"김과장",text,listOf(CallTranscript.Segment(0,5000,text)),"m","b".repeat(64),true)
+        val id=CallRecordStore(context){ now }.use { it.insert(t);CallRecordStore.recordId(t) }
+        val analysis=ClaudeCallAnalyzerTest.analysis(JSONArray().put(ClaudeCallAnalyzerTest.task("create",null,"견적서 메일 보내기","견적서는 내일까지 메일로 보내드릴게요",due="2026-10-30")))
+        val path="results/"+CallInbox.fileName(id)
+        val entered=java.util.concurrent.CountDownLatch(1);val release=java.util.concurrent.CountDownLatch(1)
+        val reads=java.util.concurrent.atomic.AtomicInteger()
+        val inbox=object:CallInboxStore {
+            val files=java.util.concurrent.ConcurrentHashMap<String,String>().apply { put(path,JSONObject().put("id",id).put("analysis",analysis).toString()) }
+            override fun put(path:String,json:String){ files[path]=json }
+            override fun list(dir:String):List<Pair<String,String>> {
+                val out=files.keys.filter{it.startsWith("$dir/")}.map{it.removePrefix("$dir/") to "sha"}
+                if(dir==CallInbox.RESULTS && entered.count>0) { entered.countDown();release.await(10,java.util.concurrent.TimeUnit.SECONDS) } // the first pass stops here
+                return out
+            }
+            override fun get(path:String):String { if(path.startsWith("results/")) reads.incrementAndGet();return files.getValue(path) }
+            override fun delete(path:String,sha:String){ files.remove(path) }
+        }
+        val first=java.util.concurrent.FutureTask { runner(inbox).runPending() };Thread(first).start()
+        assertTrue(entered.await(10,java.util.concurrent.TimeUnit.SECONDS))
+        val second=java.util.concurrent.FutureTask { runner(inbox).runPending() };Thread(second).start()
+        var n=0;while(!CallRecordAnalysisRunner.PASS.hasQueuedThreads() && n++<500) Thread.sleep(10)
+        assertTrue("the second pass waits for the first",CallRecordAnalysisRunner.PASS.hasQueuedThreads());assertFalse(second.isDone)
+        release.countDown()
+        assertTrue(first.get(30,java.util.concurrent.TimeUnit.SECONDS));assertTrue(second.get(30,java.util.concurrent.TimeUnit.SECONDS))
+        assertEquals("the result file is read by one pass only",1,reads.get())
+        assertFalse(inbox.files.containsKey(path))
+        assertEquals(listOf("견적서 메일 보내기"),CallRecordStore(context).use { it.openItems().map { i->i.title } })
+        assertFalse(CallRecordAnalysisRunner.PASS.isLocked)
     }
 
     @Test fun aRecordWhoseAnswerCameIsNotSentAgainAndAnOldTableGetsTheColumn() {

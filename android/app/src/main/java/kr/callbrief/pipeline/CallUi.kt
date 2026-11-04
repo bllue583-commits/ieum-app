@@ -402,6 +402,63 @@ internal object CallUi {
         setOnClickListener { onOpen() }
     }
 
+    // ---- bottom sheet (design G2: no AlertDialog) -------------------------------------------------------------------------
+    /** A sheet that rises from the bottom of the screen instead of a small centred dialog: a grab bar, a [title] (20sp
+     * SemiBold), an optional [message] (body 19sp), an optional [body] view (an input), then one big button per entry of
+     * [options] (a list to pick from) and the actions stacked under each other, full width, 56dp tall: [primary] in blue on
+     * top, [secondary] ("닫기", "취소") in grey below. Every button closes the sheet first and then does its work; back and a
+     * touch outside the sheet close it without doing anything. Colours follow the phone's night setting. Tags for tests:
+     * sheet_root, sheet_title, sheet_message, sheet_option_<i>, sheet_primary, sheet_secondary. */
+    fun sheetDialog(a:Activity,title:String,message:String?=null,body:View?=null,options:List<String> =emptyList(),onOption:((Int)->Unit)?=null,
+                    primary:String?=null,onPrimary:(()->Unit)?=null,secondary:String?="닫기",onSecondary:(()->Unit)?=null):android.app.Dialog {
+        applyTheme(a)
+        val d=android.app.Dialog(a,if(night) android.R.style.Theme_DeviceDefault_Dialog_NoActionBar else android.R.style.Theme_DeviceDefault_Light_Dialog_NoActionBar)
+        d.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        val side=dp(a,20)
+        val sheet=LinearLayout(a).apply {
+            orientation=LinearLayout.VERTICAL;tag="sheet_root";setPadding(side,dp(a,10),side,dp(a,16))
+        }
+        // The grab bar says "this came up from below and goes back down".
+        sheet.addView(View(a).apply { background=sheet(a,FAINT,radius=2) },LinearLayout.LayoutParams(dp(a,40),dp(a,4)).apply { gravity=Gravity.CENTER_HORIZONTAL;bottomMargin=dp(a,16) })
+        sheet.addView(text(a,title,HEADING,true).apply { tag="sheet_title";setPadding(0,0,0,dp(a,4)) })
+        message?.let { sheet.addView(text(a,it,BODY,false,SUBTLE).apply { tag="sheet_message";setPadding(0,dp(a,6),0,0) }) }
+        body?.let { sheet.addView(it,LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,12) }) }
+        fun act(view:Button,tag:String,then:(()->Unit)?):Button=view.apply { this.tag=tag;setOnClickListener { d.dismiss();then?.invoke() } }
+        options.forEachIndexed { i,label ->
+            sheet.addView(act(button(a,label) {},"sheet_option_$i") { onOption?.invoke(i) }.apply {
+                gravity=Gravity.CENTER_VERTICAL or Gravity.START;setPadding(dp(a,18),dp(a,10),dp(a,18),dp(a,10))
+            },LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,if(i==0) 16 else 8) })
+        }
+        primary?.let { sheet.addView(act(bigButton(a,"",it) {},"sheet_primary",onPrimary),LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,20) }) }
+        secondary?.let { sheet.addView(act(button(a,it) {},"sheet_secondary",onSecondary),LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,if(primary==null && options.isEmpty()) 20 else 10) }) }
+        // Long contents (many numbers, a long result) scroll inside the sheet; the navigation bar and keyboard never cover it.
+        val scroll=ScrollView(a).apply { isFillViewport=true;addView(sheet,android.widget.FrameLayout.LayoutParams(-1,-2)) }
+        val frame=android.widget.FrameLayout(a).apply { addView(scroll) }
+        frame.background=GradientDrawable().apply { setColor(CARD);val r=dp(a,20).toFloat();cornerRadii=floatArrayOf(r,r,r,r,0f,0f,0f,0f) }
+        frame.setOnApplyWindowInsetsListener { v,insets -> v.setPadding(0,0,0,insets.systemWindowInsetBottom);insets }
+        d.setContentView(frame)
+        d.setCancelable(true);d.setCanceledOnTouchOutside(true)
+        d.window?.apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            setLayout(android.view.WindowManager.LayoutParams.MATCH_PARENT,android.view.WindowManager.LayoutParams.WRAP_CONTENT)
+            setGravity(Gravity.BOTTOM)
+            setWindowAnimations(android.R.style.Animation_InputMethod)
+            addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND);setDimAmount(if(night) 0.6f else 0.4f)
+            @Suppress("DEPRECATION") setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+            decorView.setPadding(0,0,0,0)
+        }
+        d.show()
+        // setLayout again after show: some phones reset the width of a dialog window when it is first shown.
+        d.window?.setLayout(android.view.WindowManager.LayoutParams.MATCH_PARENT,android.view.WindowManager.LayoutParams.WRAP_CONTENT)
+        return d
+    }
+    /** A text field for a sheet: body size, 56dp tall, single line. */
+    fun sheetInput(a:Activity,value:String="",hint:String?=null,tag:String?=null)=android.widget.EditText(a).apply {
+        setText(value);setSelection(value.length);hint?.let { this.hint=it };textSize=BODY;isSingleLine=true
+        inputType=android.text.InputType.TYPE_CLASS_TEXT;typeface=font(a,Weight.REGULAR);setTextColor(INK);setHintTextColor(MUTED)
+        minHeight=dp(a,56);setPadding(dp(a,16),0,dp(a,16),0);background=sheet(a,CHIP,radius=14);this.tag=tag
+    }
+
     // ---- the undo bar ----------------------------------------------------------------------------------------------------
     /** A dark bar above the bottom bar: [message] and one [action] (default "되돌리기"), gone after [ms] (about five seconds).
      * [onAction] runs when it is tapped, [onGone] when it times out. A newer bar replaces an older one without calling its callbacks. */

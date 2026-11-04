@@ -1,10 +1,7 @@
 package kr.callbrief.pipeline
 
-import android.app.AlertDialog
 import android.os.Bundle
-import android.text.InputType
 import android.view.View
-import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -118,14 +115,9 @@ class CompaniesActivity:ComponentActivity() {
 
     /** Speech recognition mishears names; the fix shows everywhere and the old spelling keeps finding this person. */
     private fun rename(p:PersonRow) {
-        val input=EditText(this).apply {
-            setText(p.name);setSelection(p.name.length);textSize=CallUi.SUMMARY;isSingleLine=true;inputType=InputType.TYPE_CLASS_TEXT
-            minHeight=CallUi.dp(this@CompaniesActivity,60);tag="person_name_input"
-        }
-        val box=LinearLayout(this).apply { val pad=CallUi.dp(this@CompaniesActivity,20);setPadding(pad,pad/2,pad,0);addView(input) }
-        AlertDialog.Builder(this).setTitle("이름 고치기").setMessage("바른 이름을 적고 [저장]을 누르세요.").setView(box)
-            .setNegativeButton("취소",null)
-            .setPositiveButton("저장") { _,_ ->
+        val input=CallUi.sheetInput(this,p.name,tag="person_name_input")
+        CallUi.sheetDialog(this,"이름 고치기",message="바른 이름을 적고 [저장]을 누르세요.",body=input,secondary="취소",primary="저장",
+            onPrimary={
                 val name=input.text.toString()
                 lifecycleScope.launch {
                     val ok=runCatching { withContext(Dispatchers.IO) { CallRecordStore(CallPipelineStartup.storage(this@CompaniesActivity)).use { it.renamePerson(p.id,name) } } }.getOrDefault(false)
@@ -133,7 +125,7 @@ class CompaniesActivity:ComponentActivity() {
                     Toast.makeText(this@CompaniesActivity,if(ok) "이름을 고쳤어요" else "이름을 비워둘 수 없어요",Toast.LENGTH_SHORT).show()
                     load()
                 }
-            }.show()
+            })
     }
 
     private fun renderDetail(d:CompanyDetail) {
