@@ -1,0 +1,57 @@
+name: watchdog
+
+# SOURCE COPY. Lives in the app repository so it is reviewed with the app; copy it to ieum-inbox as
+# .github/workflows/watchdog.yml together with tools/inbox/watchdog.py (to ieum-inbox as tools/watchdog.py, the path used below).
+# Every 3 hours it reads status/phone.json, status/last-run.json and the age of inbox/ files (times and counts only,
+# never call content), opens one GitHub issue per problem, and closes the issue when the problem is gone.
+on:
+  schedule:
+    - cron: '0 */3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: watchdog
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      LABEL: ieum-watch
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Token expiry header
+        id: expiry
+        run: |
+          # Only a personal token carries this header; the workflow token does not, and then the check is skipped.
+          h=$(gh api -i /rate_limit 2>/dev/null | tr -d '\r' | grep -i '^github-authentication-token-expiration:' | cut -d' ' -f2- || true)
+          echo "value=$h" >> "$GITHUB_OUTPUT"
+      - name: Decide
+        run: python3 tools/watchdog.py --root . --token-expiry "${{ steps.expiry.outputs.value }}" --out "$RUNNER_TEMP/problems.json"
+      - name: Open and close issues
+        run: |
+          gh label create "$LABEL" --color D93F0B --description "ieum watchdog" 2>/dev/null || true
+          open=$(gh issue list --label "$LABEL" --state open --json number,title --limit 100)
+          # New problem and no open issue of the same title: create one. An open one already says it, so do nothing.
+          jq -c '.[]' "$RUNNER_TEMP/problems.json" | while read -r p; do
+            title=$(jq -r .title <<<"$p")
+            if [ "$(jq --arg t "$title" '[.[]|select(.title==$t)]|length' <<<"$open")" = "0" ]; then
+              jq -r .body <<<"$p" > "$RUNNER_TEMP/body.md"
+              gh issue create --title "$title" --label "$LABEL" --body-file "$RUNNER_TEMP/body.md"
+            fi
+          done
+          # Open issue whose problem is gone: close it.
+          jq -c '.[]' <<<"$open" | while read -r i; do
+            title=$(jq -r .title <<<"$i"); num=$(jq -r .number <<<"$i")
+            if [ "$(jq --arg t "$title" '[.[]|select(.title==$t)]|length' "$RUNNER_TEMP/problems.json")" = "0" ]; then
+              gh issue close "$num" --comment "정상으로 돌아왔어요."
+            fi
+          done

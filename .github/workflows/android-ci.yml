@@ -38,6 +38,11 @@ jobs:
             gradle-user/wrapper
             robolectric-jar
           key: gradle-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+      - name: UI rules and tool tests
+        run: |
+          python3 -m unittest discover -s tools -p 'test_*.py' -t tools
+          python3 -m unittest discover -s tools/inbox -p 'test_*.py'
+          python3 tools/check_ui_rules.py
       - name: Prepare Robolectric runtime
         run: |
           mkdir -p robolectric-jar

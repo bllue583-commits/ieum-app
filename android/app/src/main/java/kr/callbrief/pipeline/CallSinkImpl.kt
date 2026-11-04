@@ -80,5 +80,5 @@ internal object CallPipelineStartup {
 
 /** Hourly: queues [CallAnalysisWork] under its one unique name. */
 internal class CallAnalysisTick(context:Context,params:WorkerParameters):Worker(context,params) {
-    override fun doWork():Result { CallPipelineStartup.enqueueAnalysis(applicationContext);CallPipelineStartup.ensureWork(applicationContext,includeInbox=false);return Result.success() }
+    override fun doWork():Result { CallPipelineStartup.enqueueAnalysis(applicationContext);CallPipelineStartup.ensureWork(applicationContext,includeInbox=false);PhoneStatus.publish(applicationContext);return Result.success() }
 }
