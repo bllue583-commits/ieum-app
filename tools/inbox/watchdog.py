@@ -11,6 +11,7 @@ import argparse, json, os, subprocess, sys, time
 
 HOUR = 3_600_000
 PHONE_SILENT_MS = 12 * HOUR
+FIRST_PASS_STUCK_MS = 24 * HOUR
 QUEUE_STUCK_MS = 6 * HOUR
 INBOX_STUCK_MS = 3 * HOUR
 DISCOVERY_STUCK_MS = 12 * HOUR
@@ -94,7 +95,16 @@ def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count):
                     + ("추정 원인: 앱이 통화 기록을 다 저장하지 못했어요(개인 번호·부재중 저장 전 버전이면 그 수만큼 적어요)."
                        if device > stored else "추정 원인: 폰에서 통화 기록을 지웠거나, 기록 읽기가 중간에 끊겼어요."))
         oq = phone.get("oldestQueuedMs")
-        if oq:
+        fp = phone.get("firstPass") if isinstance(phone.get("firstPass"), dict) else {}
+        if fp and fp.get("done") is False:
+            # First pass (10/1 on) still running: old recordings wait at the back by design, so the oldest one says nothing.
+            # Stuck means no new subtitle for a day while recordings are left.
+            lt = ms(phone, "lastTranscribedMs")
+            if (fp.get("toTranscribe") or 0) > 0 and lt and now_ms - lt > FIRST_PASS_STUCK_MS:
+                add(T_QUEUE, f"처음 정리 중인데 마지막 자막이 {hours(now_ms - lt)} 전이에요 (기준 24시간). "
+                    f"남은 녹음 {fp.get('toTranscribe')}개, 약 {fp.get('audioMinutesLeft', '?')}분.\n\n"
+                    "추정 원인: 충전하지 않아 폰이 작업을 미루거나, 음성 인식 모델이 없거나, 절전 모드예요.")
+        elif oq:
             qage = now_ms - int(oq)
             if qage > QUEUE_STUCK_MS:
                 add(T_QUEUE, f"글자로 바꾸기를 기다리는 가장 오래된 녹음이 {hours(qage)} 됐어요 (기준 6시간). "

@@ -38,6 +38,12 @@ class WatchdogTest(unittest.TestCase):
         self.assertEqual([], titles(phone={"atMs": NOW - 11 * H}))
         self.assertEqual([w.T_PHONE], titles(phone=None))
 
+    def test_first_pass_old_queue_is_not_stuck(self):
+        fp = {"done": False, "toTranscribe": 139, "audioMinutesLeft": 225}
+        self.assertEqual([], titles(phone=phone(oldestQueuedMs=NOW - 90 * DAY, queuedCount=139, firstPass=fp)))
+        self.assertEqual([w.T_QUEUE], titles(phone=phone(oldestQueuedMs=NOW - 90 * DAY, queuedCount=139, firstPass=fp,
+                                                         lastTranscribedMs=NOW - 25 * H)))
+
     def test_silent_phone_says_why_from_its_last_heartbeat(self):
         body = problems(phone=phone(atMs=NOW - 20 * H, folder=False, standbyBucket="RESTRICTED", consent=False,
                                     lastDiscoveryMs=NOW - 30 * H))[0]["body"]
