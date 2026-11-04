@@ -89,6 +89,9 @@ class SelfCheckNoticesTest:ProtectedTextHostTestBase() {
             assertFalse(words,Regex("[A-Za-z·･…]").containsMatchIn(words) || words.contains("..."))
         }
         assertEquals("통화 글자 바꾸기가 밀려 있어요",late.single().title)
+        // Nobody else is told yet (the watchdog is not installed): no notice may say so.
+        assertTrue(all.none { it.text.contains("알렸어요") })
+        assertEquals("통화 정리 결과가 오래 오지 않아요. 휴대폰이 인터넷에 연결되어 있으면 매시간 다시 받아 봐요.",all.single { it.code==SelfCheckNotices.NO_RESULT }.text)
         val one=SelfCheckNotices.message(late)!!
         assertEquals("통화 글자 바꾸기가 밀려 있어요",one.title);assertEquals("충전기에 꽂아 두면 밤에 끝나요.",one.text)
         val many=SelfCheckNotices.message(all)!!

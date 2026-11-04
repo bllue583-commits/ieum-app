@@ -137,8 +137,14 @@ class ReviewRoundOneTest:ProtectedTextHostTestBase() {
         val inbox=Inbox()
         runner(inbox,s,at=now-7*3_600_000L).runPending() // sent at 03:00
         assertFalse(s.has(PipelineSettingsKeys.STALL_WARNED_DAY))
+        org.robolectric.Shadows.shadowOf(context as android.app.Application).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
         runner(inbox,s,at=now).runPending() // resent at 10:00, still the alert: it counts from when the call was stored
         assertEquals("2026-10-28",s.getString(PipelineSettingsKeys.STALL_WARNED_DAY))
+        // Only what is true: nobody else is told yet (the watchdog is not installed), the app keeps trying by itself.
+        val posted=org.robolectric.Shadows.shadowOf(context.getSystemService(android.app.NotificationManager::class.java)).allNotifications
+            .map { it.extras.getCharSequence(android.app.Notification.EXTRA_TITLE).toString()+" "+it.extras.getCharSequence(android.app.Notification.EXTRA_TEXT) }
+        assertTrue(posted.toString(),posted.any { it.startsWith("정리가 멈췄어요") && it.contains("매시간 다시 확인해요") })
+        assertTrue(posted.none { it.contains("알렸어요") })
     }
 
     @Test fun theStallNoticeUsesItsOwnStatusChannel() {

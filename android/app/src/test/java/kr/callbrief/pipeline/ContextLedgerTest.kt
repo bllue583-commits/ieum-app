@@ -274,11 +274,14 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         views(a.window.decorView).first { (it.tag as? String)?.startsWith("company_")==true }.performClick()
         settle { texts(a).any { it.text.toString()=="사람 (1)" } }
         views(a.window.decorView).first { (it.tag as? String)?.startsWith("person_rename_")==true }.performClick()
-        val dialog=org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog()
+        val dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog()
+        assertTrue(dialog.isShowing)
+        assertNotNull(dialog.window!!.decorView.findViewWithTag<View>("sheet_root")) // a bottom sheet, not an AlertDialog
         val input=views(dialog.window!!.decorView).filterIsInstance<android.widget.EditText>().single()
         assertEquals("김철주",input.text.toString())
         input.setText("김철수")
-        dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick()
+        dialog.window!!.decorView.findViewWithTag<View>("sheet_primary").performClick()
+        assertFalse(dialog.isShowing)
         settle { texts(a).any { it.text.toString()=="김철수" } }
         assertFalse(texts(a).any { it.text.toString()=="김철주" })
     }

@@ -1,12 +1,11 @@
 package kr.callbrief.pipeline
 
 import android.os.Bundle
-import android.text.InputType
 import android.view.View
 import android.widget.ArrayAdapter
-import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.Spinner
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
@@ -96,12 +95,26 @@ class CallTasksActivity:ComponentActivity() {
 
     /** "직접 적기": a title and a company from the list (or none); saved as the user's own check item. */
     private fun addOwn() {
-        val title=EditText(this).apply { hint="무엇을 해야 하나요";textSize=CallUi.BODY;isSingleLine=true;inputType=InputType.TYPE_CLASS_TEXT;minHeight=CallUi.dp(this@CallTasksActivity,56);tag="add_title" }
+        val title=CallUi.sheetInput(this,hint="무엇을 해야 하나요",tag="add_title")
         val names=listOf("업체 없음")+companies
-        val pick=Spinner(this).apply { adapter=ArrayAdapter(this@CallTasksActivity,android.R.layout.simple_spinner_dropdown_item,names);tag="add_company";minimumHeight=CallUi.dp(this@CallTasksActivity,56) }
-        val box=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL;val pad=CallUi.dp(this@CallTasksActivity,20);setPadding(pad,pad/2,pad,0);addView(title);addView(pick) }
-        android.app.AlertDialog.Builder(this).setTitle("체크할 일 직접 적기").setView(box).setNegativeButton("취소",null)
-            .setPositiveButton("저장") { _,_ -> save(title.text.toString(),names.getOrNull(pick.selectedItemPosition)?.takeIf { pick.selectedItemPosition>0 }) }.show()
+        // The company list in the same big type as the rest of the sheet (the stock spinner rows are small).
+        val big=object:ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,names) {
+            private fun fit(v:View)=v.apply { (this as? TextView)?.let { t -> t.textSize=CallUi.BODY;t.setTextColor(CallUi.INK);t.typeface=CallUi.font(context,CallUi.Weight.REGULAR)
+                t.minHeight=CallUi.dp(this@CallTasksActivity,56);t.gravity=android.view.Gravity.CENTER_VERTICAL
+                t.setPaddingRelative(CallUi.dp(this@CallTasksActivity,12),0,CallUi.dp(this@CallTasksActivity,12),0) } }
+            // The closed list shows a chevron on the right so it reads as "press to choose".
+            override fun getView(position:Int,convertView:View?,parent:android.view.ViewGroup)=fit(super.getView(position,convertView,parent)).apply {
+                (this as? TextView)?.setCompoundDrawablesRelativeWithIntrinsicBounds(null,null,CallUi.icon(this@CallTasksActivity,"chevron",CallUi.SUBTLE,22),null) }
+            override fun getDropDownView(position:Int,convertView:View?,parent:android.view.ViewGroup)=fit(super.getDropDownView(position,convertView,parent)).apply { setBackgroundColor(CallUi.CARD) }
+        }
+        val pick=Spinner(this).apply { adapter=big;tag="add_company";minimumHeight=CallUi.dp(this@CallTasksActivity,56);background=CallUi.sheet(this@CallTasksActivity,CallUi.CHIP,radius=14)
+            setPopupBackgroundDrawable(CallUi.sheet(this@CallTasksActivity,CallUi.CARD,radius=14));setPadding(CallUi.dp(this@CallTasksActivity,4),0,CallUi.dp(this@CallTasksActivity,4),0) }
+        val box=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL
+            addView(title,LinearLayout.LayoutParams(-1,-2))
+            addView(CallUi.caption(this@CallTasksActivity,"업체").apply { setPadding(CallUi.dp(this@CallTasksActivity,4),CallUi.dp(this@CallTasksActivity,14),0,CallUi.dp(this@CallTasksActivity,6)) })
+            addView(pick,LinearLayout.LayoutParams(-1,-2)) }
+        CallUi.sheetDialog(this,"체크할 일 직접 적기",body=box,primary="저장",
+            onPrimary={ save(title.text.toString(),names.getOrNull(pick.selectedItemPosition)?.takeIf { pick.selectedItemPosition>0 }) },secondary="취소")
     }
     internal fun save(title:String,company:String?) {
         if(title.isBlank()) { Toast.makeText(this,"적을 내용을 넣어 주세요.",Toast.LENGTH_SHORT).show();return }

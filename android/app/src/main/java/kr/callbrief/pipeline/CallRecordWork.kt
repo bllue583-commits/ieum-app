@@ -21,11 +21,23 @@ internal class CallRecordAnalysisRunner(
         FirstPass.readCallLog(context) { n -> rules.excluded(n,n) } },
     private val smsAllowed:()->Boolean={ context.checkSelfPermission(android.Manifest.permission.READ_SMS)==android.content.pm.PackageManager.PERMISSION_GRANTED },
 ) {
-    /** Returns false when a network-type failure should be retried later by WorkManager. */
-    fun runPending():Boolean = when {
-        kr.callbrief.BuildConfig.LOCAL_PREVIEW -> true // preview calls stay as seeded
-        inbox!=null -> runInbox(inbox)
-        else -> true
+    /** Returns false when a network-type failure should be retried later by WorkManager (or when another pass held the
+     * lock for longer than [PASS_WAIT_MS]). One pass at a time in the process: the hourly work and the pass right before a
+     * report ([CallDigestPrefetch]) could otherwise read the same result files together and apply them twice. A second
+     * caller waits for the first to finish and then runs; by then the results are applied and deleted, so it finds none. */
+    fun runPending():Boolean {
+        if(!PASS.tryLock() && !PASS.tryLock(PASS_WAIT_MS,java.util.concurrent.TimeUnit.MILLISECONDS)) return false
+        return try { when {
+            kr.callbrief.BuildConfig.LOCAL_PREVIEW -> true // preview calls stay as seeded
+            inbox!=null -> runInbox(inbox)
+            else -> true
+        } } finally { PASS.unlock() }
+    }
+    companion object {
+        /** Held for the whole of one analysis pass (see [runPending]). */
+        internal val PASS=java.util.concurrent.locks.ReentrantLock()
+        /** How long a second caller waits for the running pass before giving up for now. */
+        const val PASS_WAIT_MS=10*60_000L
     }
 
     /** One hourly pass (design: 장부의 원본, 처음 정리): the user's corrections go up, results are applied, the repository
@@ -155,7 +167,7 @@ internal class CallRecordAnalysisRunner(
         val waiting=db.pending().filter { !FirstPass.isOld(it.dayMs,s) }.minOfOrNull { it.createdMs } ?: return
         val last=maxOf(s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),waiting)
         if(at.hour !in 9..20 || now-last<6*3_600_000L || s.optString(PipelineSettingsKeys.STALL_WARNED_DAY)==at.toLocalDate().toString()) return
-        runCatching { CallDigestNotifier.post(context,CallDigestWork.STATUS,CallDigestText.Message("정리가 멈췄어요","통화가 6시간 넘게 정리되지 않고 있어요. 관리하는 분께도 알렸어요.")) }
+        runCatching { CallDigestNotifier.post(context,CallDigestWork.STATUS,CallDigestText.Message("정리가 멈췄어요","통화가 6시간 넘게 정리되지 않고 있어요. 휴대폰이 인터넷에 연결되어 있으면 매시간 다시 확인해요.")) }
         save { it.put(PipelineSettingsKeys.STALL_WARNED_DAY,at.toLocalDate().toString()) }
     }
 

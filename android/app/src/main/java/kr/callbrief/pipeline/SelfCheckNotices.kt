@@ -49,7 +49,7 @@ internal object SelfCheckNotices {
             add(Notice(FOLDER_LOST,"녹음 폴더 연결이 풀렸어요","이음 설정에서 녹음 폴더를 다시 골라 주세요."))
         if(i.sending && i.oldestWaitingMs!=null && i.now-i.oldestWaitingMs>=WAIT_LATE_MS && i.now-i.lastAnalyzedMs>=NO_RESULT_MS &&
             i.stallWarnedDay!=today && i.disconnectWarnedDay!=today)
-            add(Notice(NO_RESULT,"정리가 늦어지고 있어요","통화 정리 결과가 오래 오지 않아요. 관리하는 분께도 알렸어요."))
+            add(Notice(NO_RESULT,"정리가 늦어지고 있어요","통화 정리 결과가 오래 오지 않아요. 휴대폰이 인터넷에 연결되어 있으면 매시간 다시 받아 봐요."))
         i.dbBytes?.let(::storagePercent)?.takeIf { it>=STORAGE_SHARE_PERCENT }?.let { p ->
             add(Notice(STORAGE_FULL,"이음 저장 공간이 거의 찼어요","저장 공간을 ${p}% 쓰고 있어요. 관리하는 분께 이 알림을 보여 주세요.")) }
     }
