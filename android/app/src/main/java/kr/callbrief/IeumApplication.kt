@@ -41,12 +41,17 @@ class IeumApplication : Application() {
             synchronized(lock) {
                 held?.let { if(heldFor===app && it.usable()) return it }
                 held?.let { runCatching { it.close() } };held=null;heldFor=null
-                val s=CallRecordStore(CallPipelineStartup.storage(app))
+                // What the open did with a half-written file (r9-1), for the heartbeat's dbRecovery; also when the open fails.
+                val s=try { CallRecordStore(CallPipelineStartup.storage(app)) } finally { noteRecovery(app) }
                 held=s;heldFor=app
                 val ms=kr.co.callsummary.core.android.ProtectedDatabase.lastStateMs()
                 if(ms>=0) runCatching { SecureSettings(app).update { it.put(DB_OPEN_MS,ms) } }
                 return s
             }
+        }
+        private fun noteRecovery(app:Context) {
+            val code=kr.co.callsummary.core.android.ProtectedDatabase.takeRecovery()?.takeIf { it.isNotEmpty() } ?: return
+            runCatching { SecureSettings(app).update { it.put(kr.callbrief.pipeline.PhoneStatus.DB_RECOVERY_LAST,code) } }
         }
         /** Lets the process store go (memory trim, tests). The next [store] reads the sealed file again. */
         fun shutdown() { synchronized(lock) { held?.let { runCatching { it.close() } };held=null;heldFor=null };kr.callbrief.pipeline.ContactCards.shutdown() }

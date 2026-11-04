@@ -39,7 +39,8 @@ internal object SelfCheckNotices {
     const val DAY_KEY="selfCheckDay";const val SHOWN_KEY="selfCheckShown"
 
     fun day(now:Long):String=java.time.Instant.ofEpochMilli(now).atZone(CallRecordStore.KST).toLocalDate().toString()
-    fun storagePercent(bytes:Long):Int=(bytes*100/CallRecordStore.DB_LIMIT_BYTES).toInt().coerceIn(0,100)
+    /** The fuller of the file against 16 MB and the rows against 100,000 (review data #4). */
+    fun storagePercent(bytes:Long,rows:Long?=null):Int=StatusLights.dbPercent(bytes,rows) ?: 0
 
     /** Every problem found now, in the order they are listed. */
     fun check(i:Input):List<Notice> = buildList {

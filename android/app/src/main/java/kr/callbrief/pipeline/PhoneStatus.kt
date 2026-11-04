@@ -217,7 +217,7 @@ internal object PhoneStatus {
         val entries=if(allowed) FirstPass.readCallLog(app) { n -> rules.excluded(n,n) } else emptyList()
         val today=java.time.Instant.ofEpochMilli(now).atZone(CallRecordStore.KST).toLocalDate().atStartOfDay(CallRecordStore.KST).toInstant().toEpochMilli()
         val from=FirstPass.FROM_MS
-        CallRecordStore(CallPipelineStartup.storage(app)).use { db ->
+        kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(app)).let { db ->
             val personalKeys=db.personalNumbers().map { it.first }.toSet()
             val personal={ e:FirstPass.LogEntry -> e.excluded || e.numberKey!=null && e.numberKey in personalKeys }
             val all=db.callLogTally(from)
@@ -236,7 +236,7 @@ internal object PhoneStatus {
             && app.getSystemService(android.app.NotificationManager::class.java)?.areNotificationsEnabled()!=false }.getOrDefault(false)
         val battery=runCatching { app.getSystemService(android.os.PowerManager::class.java)?.isIgnoringBatteryOptimizations(app.packageName)==true }.getOrDefault(false)
         var lastUpload=0L;var pending=0
-        runCatching { CallRecordStore(CallPipelineStartup.storage(app)).use { db ->
+        runCatching { kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(app)).let { db ->
             lastUpload=db.lastSentMs() ?: 0L
             val c=db.counts();pending=(c[CallRecordStore.TRANSCRIBED] ?: 0)+(c[CallRecordStore.WAITING_CONSENT] ?: 0)
         } }.onFailure { Log.w(TAG,"records not read: ${it.javaClass.simpleName}") }
@@ -260,7 +260,7 @@ internal object PhoneStatus {
     private fun firstPass(app:Context,s:org.json.JSONObject):FirstPassStatus? = runCatching {
         val start=FirstPass.start(s) ?: return@runCatching null
         if(FirstPass.done(s)) return@runCatching FirstPassStatus(true,0,0,0,0)
-        val p=CallRecordStore(CallPipelineStartup.storage(app)).use { it.firstPassProgress(start) }
+        val p=kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(app)).let { it.firstPassProgress(start) }
         val minutes=p.bytesPerMinute?.takeIf { it>0 }?.let { p.bytesLeft/it }
         FirstPassStatus(false,p.toTranscribe,minutes,p.waiting,s.optInt(PipelineSettingsKeys.FIRST_PASS_BATCHES_TODAY,0),
             s.optLong(FirstPass.BOUND_KEY,0).takeIf { it>0 },s.optString(FirstPass.BLOCKED_KEY).ifEmpty { FirstPass.BLOCKED_NONE })

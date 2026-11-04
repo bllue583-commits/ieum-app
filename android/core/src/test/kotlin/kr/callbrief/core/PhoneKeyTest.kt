@@ -12,6 +12,13 @@ class PhoneKeyTest {
         assertEquals("0212345678",PhoneKey.of("+82 (0)2 1234 5678"))
         assertEquals("0311234567",PhoneKey.of("031 123 4567"))
         assertEquals("07012345678",PhoneKey.of("+82 70-1234-5678"))
+        // Without the plus: a Seoul number of 7 digits after 82 is still Seoul (the exclusion rules read it so before r9-1).
+        assertEquals("021234567",PhoneKey.of("82 2 123 4567"))
+    }
+    @Test fun theExclusionRulesUseTheSameKey() {
+        for(raw in listOf("+82 10-1234-5678","0082 10 1234 5678","82 2 123 4567","1588-1234"))
+            assertEquals(PhoneKey.of(raw),PrivacyRules.validatedPhone(raw),raw)
+        assertEquals(setOf("01012345678"),PrivacyRules.phoneTokens("통화 녹음 +82 10-1234-5678_251029.m4a"))
     }
     @Test fun fullWidthAndWrappedNumbersFold() {
         assertEquals("01012345678",PhoneKey.of("０１０－１２３４－５６７８"))
