@@ -43,7 +43,7 @@ internal object StatusLights {
         val update=when {
             // The stored value is a code for the heartbeat; the light shows only its Korean words (a cancel is no error).
             CallUpdate.errorWords(i.updateError)!=null -> CallUpdate.errorWords(i.updateError)!!.sentence
-            i.updateReady -> "새 버전이 준비됐어요. 홈에서 지금 업데이트를 눌러 주세요."
+            i.updateReady -> "새 버전이 준비됐어요. 아래 지금 설치를 눌러 주세요."
             else -> null }
         return listOf(light("status_import","녹음 가져오기",import),light("status_transcribe","글자로 바꾸기",transcribe),
             light("status_analyze","통화 정리",analyze),light("status_notify","알림",notify),light("status_update","업데이트",update))

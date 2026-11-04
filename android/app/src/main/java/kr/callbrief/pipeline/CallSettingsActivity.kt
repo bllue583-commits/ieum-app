@@ -12,8 +12,22 @@ import kotlinx.coroutines.withContext
 import kr.callbrief.SecureSettings
 import org.json.JSONObject
 
+/** The download bar shared by settings and the home card: a thick horizontal bar in the accent over its soft tint. */
+internal object UpdateViews {
+    fun bar(a:android.app.Activity,percent:Int)=ProgressBar(a,null,android.R.attr.progressBarStyleHorizontal).apply {
+        isIndeterminate=false;max=100;progress=percent.coerceIn(0,100);tag="update_progress"
+        // Rounded track and fill of our own: the theme's bar tints its track nearly invisible on the white sheet.
+        progressDrawable=android.graphics.drawable.LayerDrawable(arrayOf(CallUi.sheet(a,CallUi.ACCENT_SOFT,radius=6),
+            android.graphics.drawable.ClipDrawable(CallUi.sheet(a,CallUi.ACCENT,radius=6),Gravity.START,android.graphics.drawable.ClipDrawable.HORIZONTAL))).apply {
+            setId(0,android.R.id.background);setId(1,android.R.id.progress) }
+        contentDescription="새 버전 받기 ${progress}%"
+        layoutParams=LinearLayout.LayoutParams(-1,CallUi.dp(a,12)).apply { topMargin=CallUi.dp(a,10);bottomMargin=CallUi.dp(a,6) }
+    }
+}
+
 /** "설정": Claude key, consent, voice-model download, notification hours and a plain status. The key is never shown again. */
 class CallSettingsActivity:ComponentActivity() {
+    companion object { const val TICK_MS=1000L }
     private lateinit var page:LinearLayout
     /** The sheet the current settings group is written into. */
     private lateinit var body:LinearLayout
@@ -37,7 +51,68 @@ class CallSettingsActivity:ComponentActivity() {
         super.onCreate(savedInstanceState)
         page=CallUi.page(this,CallUi.Tab.SETTINGS);body=page
     }
-    override fun onResume() { super.onResume();refresh() }
+    override fun onResume() { super.onResume();refresh();ticker.removeCallbacks(tick);ticker.postDelayed(tick,TICK_MS) }
+    override fun onPause() { super.onPause();ticker.removeCallbacks(tick) }
+
+    // ---- 앱 버전: getting the next version, with a bar while it comes (round 6 v2.5) ----
+    private val ticker=android.os.Handler(android.os.Looper.getMainLooper())
+    /** While the screen is open, the update part follows the download every second. */
+    private val tick=object:Runnable { override fun run() { fillUpdate();ticker.postDelayed(this,TICK_MS) } }
+    private var updateBlock:LinearLayout?=null
+    private var updateKey:String?=null
+    private fun metered()=runCatching { getSystemService(android.net.ConnectivityManager::class.java)?.let { it.activeNetwork!=null && it.isActiveNetworkMetered } }.getOrNull()==true
+    private fun startFetch() {
+        val m=metered()
+        CallUpdate.fetchNow(this,installAfter=false,metered=m)
+        if(m) Toast.makeText(this,"모바일 데이터로 ${CallUpdate.sizeWords(CallUpdate.available(this)?.size ?: 0)} 받아요.",Toast.LENGTH_LONG).show()
+        fillUpdate()
+    }
+    /** The part under the version line: a bar and "받는 중 42%" while it comes, [지금 설치] when it is ready, [지금 받기] when a newer
+     * version is known and not yet here. Rebuilt only when what it shows changes. */
+    internal fun fillUpdate() {
+        val block=updateBlock ?: return
+        val ready=CallUpdate.ready(this)
+        if(ready!=null && CallUpdate.takeInstallWish(this)) { CallUpdate.install(this,metered()) } // asked for from [지금 업데이트]: on to the install
+        val f=CallUpdate.fetchState(this);val avail=CallUpdate.available(this)
+        val key="$f|${avail?.versionCode}|${ready?.versionCode}"
+        if(key==updateKey) return
+        updateKey=key;block.removeAllViews()
+        val name=(ready ?: avail)?.let(CallUpdate::shownName)
+        fun headline(t:String,color:Int=CallUi.INK)=CallUi.text(this,t,CallUi.HEADING,true,color).apply { tag="update_state";fontFeatureSettings="tnum";setPadding(0,CallUi.dp(this@CallSettingsActivity,12),0,0) }
+        fun note(t:String)=CallUi.text(this,t,CallUi.CAPTION,color=CallUi.SUBTLE).apply { tag="update_note" }
+        when {
+            ready!=null -> {
+                block.addView(headline("새 버전이 준비됐어요",CallUi.ACCENT))
+                if(ready.notes.isNotBlank()) block.addView(CallUi.text(this,ready.notes,CallUi.BODY))
+                block.addView(CallUi.bigButton(this,"","지금 설치") { if(!busy) { CallUpdate.install(this,metered());fillUpdate() } }.apply { tag="update_install" })
+            }
+            f.stage==CallUpdate.Stage.DOWNLOADING -> {
+                block.addView(headline(listOfNotNull("새 버전",name,"받는 중 ${f.percent}%").joinToString(" ")))
+                block.addView(UpdateViews.bar(this,f.percent))
+                block.addView(note(if(f.metered) "모바일 데이터로 ${CallUpdate.sizeWords(avail?.size ?: 0)} 받아요." else "다 받으면 바로 설치할 수 있어요."))
+            }
+            f.stage==CallUpdate.Stage.WAITING -> {
+                block.addView(headline(if(name!=null) "새 버전 $name 받을 준비 중이에요" else "새 버전이 있는지 보고 있어요"))
+                block.addView(UpdateViews.bar(this,0))
+                block.addView(note("인터넷에 연결되면 바로 시작해요."))
+            }
+            f.stage==CallUpdate.Stage.FAILED -> {
+                block.addView(headline(f.reason.ifBlank { CallUpdate.OTHER_WORDS },CallUi.AMBER))
+                block.addView(CallUi.bigButton(this,"","다시 받기") { if(!busy) startFetch() }.apply { tag="update_fetch" })
+            }
+            avail!=null -> {
+                block.addView(headline("새 버전 $name 받을 수 있어요"))
+                if(avail.notes.isNotBlank()) block.addView(CallUi.text(this,avail.notes,CallUi.BODY))
+                block.addView(CallUi.bigButton(this,"","지금 받기") { if(!busy) startFetch() }.apply { tag="update_fetch" })
+                block.addView(note("받는 데 ${CallUpdate.sizeWords(avail.size)}가 들어요. 받은 뒤 설치를 한 번 눌러 주세요."))
+            }
+            else -> {
+                block.addView(note("마지막 확인 "+CallUi.dateTime(CallUpdate.lastChecked(this))).apply { setPadding(0,CallUi.dp(this@CallSettingsActivity,6),0,0) })
+                block.addView(CallUi.linkButton(this,"새 버전 확인하기 ›") { if(!busy) startFetch() }.apply { tag="update_check" },
+                    LinearLayout.LayoutParams(-2,-2).apply { marginStart=-CallUi.dp(this@CallSettingsActivity,6) })
+            }
+        }
+    }
 
     /** Starts a settings group: its name above, a white sheet below that the following views go into. */
     private fun group(name:String) {
@@ -130,6 +205,7 @@ class CallSettingsActivity:ComponentActivity() {
         body.addView(CallUi.divider(this))
         // Installed version, and the next one when it is downloaded and waiting (design: 보고와 화면); a failed install shows its reason.
         body.addView(CallUi.text(this,CallUpdate.versionLine(kr.callbrief.BuildConfig.VERSION_NAME,kr.callbrief.BuildConfig.VERSION_CODE,CallUpdate.ready(this)),CallUi.BODY,true).apply { tag="app_version" })
+        updateBlock=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL;tag="update_block" }.also { body.addView(it) };updateKey=null;fillUpdate()
         CallUpdate.errorWords(s.optString(PipelineSettingsKeys.LAST_UPDATE_ERROR))?.let {
             body.addView(CallUi.text(this,it.reason,CallUi.CAPTION,color=CallUi.AMBER).apply { tag="update_error" }) }
         storagePercent?.let { body.addView(CallUi.text(this,"저장 공간 ${it}% 사용",CallUi.BODY).apply { tag="storage_use" }) }

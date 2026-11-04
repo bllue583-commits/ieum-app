@@ -51,7 +51,11 @@ class HomeActivity:ComponentActivity() {
     }
     // Text and call-log access are asked from the setup card, after it says why (round 2), not as the app opens.
     override fun onResume() { super.onResume();load()
-        if(intent?.getBooleanExtra("install_update",false)==true) { intent.removeExtra("install_update");CallUpdate.install(this) } }
+        if(intent?.getBooleanExtra("install_update",false)==true) { intent.removeExtra("install_update");updateNow() }
+        else if(CallUpdate.ready(this)!=null && CallUpdate.takeInstallWish(this)) CallUpdate.install(this) } // the asked-for download finished meanwhile
+    /** [지금 업데이트]: installs the version that is here; otherwise starts getting it and shows its bar in settings (round 6 v2.5). */
+    internal fun updateNow() { if(!CallUpdate.install(this,metered())) CallUi.go(this,CallUi.Tab.SETTINGS) }
+    private fun metered()=runCatching { getSystemService(android.net.ConnectivityManager::class.java)?.let { it.activeNetwork!=null && it.isActiveNetworkMetered } }.getOrNull()==true
     override fun onNewIntent(intent:Intent) { super.onNewIntent(intent);setIntent(intent) }
 
     private fun load() {
@@ -119,11 +123,16 @@ class HomeActivity:ComponentActivity() {
         if(s.working>0) today.addView(CallUi.pill(this,"정리 중 ${s.working}건",CallUi.SUBTLE))
         body.addView(today)
 
-        CallUpdate.ready(this)?.let { u ->
+        // A newer version: ready to install, coming, or known and not yet here. The one button always does something.
+        val ready=CallUpdate.ready(this);val fetch=CallUpdate.fetchState(this)
+        (ready ?: CallUpdate.available(this))?.let { u ->
             val c=CallUi.card(this,rail=CallUi.ACCENT).apply { tag="home_update" }
-            c.addView(CallUi.text(this,"새 버전이 준비됐어요",CallUi.HEADING,true))
+            val coming=ready==null && fetch.stage==CallUpdate.Stage.DOWNLOADING
+            c.addView(CallUi.text(this,when { ready!=null -> "새 버전이 준비됐어요";coming -> "새 버전 ${CallUpdate.shownName(u)} 받는 중 ${fetch.percent}%"
+                else -> "새 버전 ${CallUpdate.shownName(u)} 받을 수 있어요" },CallUi.HEADING,true).apply { tag="home_update_state" })
+            if(coming) c.addView(UpdateViews.bar(this,fetch.percent))
             if(u.notes.isNotBlank()) c.addView(CallUi.text(this,u.notes,CallUi.BODY))
-            c.addView(CallUi.bigButton(this,"","지금 업데이트") { CallUpdate.install(this) }.apply { tag="home_update_button" })
+            c.addView(CallUi.bigButton(this,"",if(coming) "받는 상황 보기" else "지금 업데이트") { if(coming) CallUi.go(this,CallUi.Tab.SETTINGS) else updateNow() }.apply { tag="home_update_button" })
             body.addView(c)
         }
 
