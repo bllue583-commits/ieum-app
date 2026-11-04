@@ -204,20 +204,21 @@ class CallPipelineDeviceTest {
      * The text of every call and variant goes to logcat (IEUM_RESULT golden_text) and device-test/golden_runs.json;
      * tools/audio/golden_score.py on the runner turns that into CER, entity accuracy and the comparison table (one scorer, host-tested).
      *
-     * Argument `golden`: `base` (default: today's code only), `compare` (also the [GoldenSwitches] variants), `off`.
+     * Argument `golden`: `compare` (default: every [GoldenSwitches] variant this build has), `base` (today's code only), `off`.
+     * Variants that do not run still get a row (why) so the comparison table always lists all three.
      * The large model on the emulator is far too slow for three one-minute calls; it runs only with `goldenLarge=true` (real devices). */
     @Test fun tg_goldenSet() {
-        val mode=args.getString("golden") ?: "base"
+        val mode=args.getString("golden") ?: "compare"
         if(mode=="off"){report("golden",JSONObject().put("skipped","golden=off"));return}
         if(large&&args.getString("goldenLarge")!="true"){report("golden",JSONObject().put("skipped","large model on an emulator is too slow for the golden set (goldenLarge=true on a real device)"));return}
         val set=JSONObject(inst.context.assets.open("golden/golden.json").bufferedReader().use{it.readText()})
         val model=model();val file=checkNotNull(model.verifiedModelFile())
-        val variants=if(mode=="compare") GoldenSwitches.VARIANTS else GoldenSwitches.VARIANTS.take(1)
         val runs=JSONArray();val summary=JSONObject().put("model",spec.name).put("mode",mode)
-        for(v in variants) {
-            val row=JSONObject().put("variant",v.name).put("floor",v.floor ?: JSONObject.NULL).put("prompt",v.prompt).put("available",v.available)
-            if(!v.available) {
-                row.put("why",v.why);runs.put(row);Log.i("IEUM_RESULT","golden_variant $row");summary.put(v.name,"not available");continue
+        for(v in GoldenSwitches.VARIANTS) {
+            val runIt=v.available&&(mode=="compare"||v.name=="base")
+            val row=JSONObject().put("variant",v.name).put("floor",v.floor ?: JSONObject.NULL).put("prompt",v.prompt).put("available",runIt)
+            if(!runIt) {
+                row.put("why",if(v.available) "not run (golden=$mode)" else v.why);runs.put(row);Log.i("IEUM_RESULT","golden_variant $row");summary.put(v.name,row.getString("why"));continue
             }
             val calls=JSONArray();val started=System.currentTimeMillis()
             for(i in 0 until set.getJSONArray("calls").length()) {

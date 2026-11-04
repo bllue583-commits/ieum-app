@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs the debug + test APKs on the connected device/emulator, runs CallPipelineDeviceTest
 # (public audio only), and collects results into device-results/. Exit status = test result.
-# IEUM_GOLDEN=base|compare|off (default base) runs the golden set (tg_goldenSet); its transcripts are scored here by
+# IEUM_GOLDEN=compare|base|off (default compare: every variant the build has) runs the golden set (tg_goldenSet); its transcripts are scored here by
 # tools/audio/golden_score.py into device-results/golden-score.json and golden-score.txt (per-call CER, entities, comparison table).
 # IEUM_MODEL=small|large (default large) picks the Whisper model. IEUM_MODEL_FILE, when set, is a runner-cached copy:
 # it is written (run-as, debug build) as the app's finished partial download, and the app's own size + SHA-256 check
@@ -26,7 +26,7 @@ if [ -n "${IEUM_MODEL_FILE:-}" ] && [ -f "$IEUM_MODEL_FILE" ]; then
 fi
 adb logcat -c
 adb shell am instrument -w -r -e class kr.callbrief.pipeline.CallPipelineDeviceTest -e model "${IEUM_MODEL:-large}" \
-  -e repeat "${IEUM_REPEAT:-3}" -e threads "${IEUM_THREADS:-6,8}" -e callLike "${IEUM_CALL_LIKE:-true}" -e golden "${IEUM_GOLDEN:-base}" \
+  -e repeat "${IEUM_REPEAT:-3}" -e threads "${IEUM_THREADS:-6,8}" -e callLike "${IEUM_CALL_LIKE:-true}" -e golden "${IEUM_GOLDEN:-compare}" \
   kr.callbrief.test/androidx.test.runner.AndroidJUnitRunner > "$out/instrument.txt" 2>&1
 adb logcat -d -s IEUM_RESULT:I > "$out/results.txt"
 adb logcat -d '*:E' | tail -300 > "$out/errors.txt"

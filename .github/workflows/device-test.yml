@@ -10,9 +10,9 @@ name: device-test
 # build script or the whisper.cpp source), or by hand with full=true.
 #
 # Golden set (tg_goldenSet, v2.4): three synthetic one-minute Korean site calls scored by tools/audio/golden_score.py
-# (per-call CER, entity accuracy, comparison table in the log and device-results/golden-score.*). Quick runs score
-# today's code (golden=base, about 10 more minutes); golden=compare (by hand) adds the silence-floor and prompt variants
-# where this build has them. The full run skips it (the large model on the emulator is far too slow for it).
+# (per-call CER, entity accuracy, comparison table in the log and device-results/golden-score.*). Quick runs use
+# golden=compare: today's code plus the silence-floor and prompt variants where this build has them (about 4-5 minutes
+# each with the small model); base or off by hand. The full run skips it (the large model on the emulator is far too slow).
 on:
   push:
     branches: ['feature/**']
@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       full: {description: 'Full run: large model + speed test (about 40 minutes)', type: boolean, default: false}
-      golden: {description: 'Golden set: base (today''s code), compare (+ floor/prompt variants, about 10 minutes each), off', type: choice, options: [base, compare, off], default: base}
+      golden: {description: 'Golden set: compare (every floor/prompt variant this build has, about 5 minutes each), base (today''s code only), off', type: choice, options: [compare, base, off], default: compare}
 
 concurrency:
   group: device-${{ github.ref }}
@@ -193,7 +193,7 @@ jobs:
           force-avd-creation: false
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: IEUM_MODEL=${{ steps.mode.outputs.model }} IEUM_MODEL_FILE=model-cache/${{ steps.mode.outputs.name }}.bin IEUM_REPEAT=1 IEUM_THREADS=6 IEUM_CALL_LIKE=false IEUM_GOLDEN=${{ inputs.golden || 'base' }} bash tools/run_device_test.sh
+          script: IEUM_MODEL=${{ steps.mode.outputs.model }} IEUM_MODEL_FILE=model-cache/${{ steps.mode.outputs.name }}.bin IEUM_REPEAT=1 IEUM_THREADS=6 IEUM_CALL_LIKE=false IEUM_GOLDEN=${{ inputs.golden || 'compare' }} bash tools/run_device_test.sh
       - name: Summarize
         if: always()
         run: |
