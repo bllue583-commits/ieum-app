@@ -95,13 +95,31 @@ jobs:
             IEUM_SIGNING_KEYSTORE="$RUNNER_TEMP/ieum.p12" IEUM_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))
           python3 run_gradle.py --log release-build.log :app:assembleDebug
           cp android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/ieum.apk"
-      # An update only installs over the old app when both APKs carry the same signing certificate.
+      # Key rotation (design-gap #37, tools/rotate_signing_key.sh): only when the repository variable IEUM_ROTATE is 1.
+      # Otherwise this step does nothing and the APK keeps exactly the old key and fingerprint.
+      - name: Re-sign with the key lineage (IEUM_ROTATE=1 only)
+        if: vars.IEUM_ROTATE == '1'
+        env:
+          IEUM_INBOX_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
+          IEUM_SIGNING_SEED: ${{ secrets.IEUM_SIGNING_SEED }}
+          IEUM_SIGNING_SEED_V2: ${{ secrets.IEUM_SIGNING_SEED_V2 }}
+        run: |
+          [ -n "$IEUM_SIGNING_SEED_V2" ] || { echo "::error title=release::IEUM_ROTATE is 1 but the secret IEUM_SIGNING_SEED_V2 is not set: not releasing"; exit 1; }
+          echo "::add-mask::$IEUM_SIGNING_SEED_V2"
+          [ -z "$IEUM_SIGNING_SEED" ] || echo "::add-mask::$IEUM_SIGNING_SEED"
+          export APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          bash tools/rotate_signing_key.sh prepare "$RUNNER_TEMP/rotate"
+          bash tools/rotate_signing_key.sh sign "$RUNNER_TEMP/rotate" "$RUNNER_TEMP/ieum.apk"
+      # An update only installs over the old app when both APKs carry the same signing certificate,
+      # or, with IEUM_ROTATE=1, when the new APK's lineage starts at the previous release's certificate.
       - name: Compare signing certificate with the previous release
         env:
           GH_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
+          ROTATE: ${{ vars.IEUM_ROTATE }}
         run: |
           apksigner="$ANDROID_HOME/build-tools/35.0.0/apksigner"
-          fp() { "$apksigner" verify --print-certs "$1" 2>/dev/null | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1; }
+          # Same value as before for an unrotated APK ("Signer #1"); the newest signer for a lineage-signed one.
+          fp() { APKSIGNER="$apksigner" bash tools/rotate_signing_key.sh fp "$1"; }
           new=$(fp "$RUNNER_TEMP/ieum.apk")
           [ -n "$new" ] || { echo "::error title=release::could not read the new APK's signing certificate"; exit 1; }
           asset=$(gh api "repos/$INBOX/contents/app/version.json" --jq .content 2>/dev/null | base64 -d 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['apk'].rsplit('/',1)[-1])" 2>/dev/null || true)
@@ -110,6 +128,13 @@ jobs:
           fi
           old=$(fp "$RUNNER_TEMP/previous.apk")
           if [ -z "$old" ]; then echo "::warning title=release::previous APK certificate unreadable: not compared"; exit 0; fi
+          if [ "$ROTATE" = "1" ]; then
+            # A rotated APK shows the new certificate, so "unchanged" is not the test: the lineage must be old -> new of
+            # our two seeds and the previous release must carry the old (first rotated release) or the new certificate.
+            APKSIGNER="$apksigner" bash tools/rotate_signing_key.sh check "$RUNNER_TEMP/rotate" "$RUNNER_TEMP/ieum.apk" "$old" \
+              || { echo "::error title=release::rotated APK does not chain to the previous release's certificate ($old): not publishing"; exit 1; }
+            exit 0
+          fi
           if [ "$old" != "$new" ]; then
             echo "::error title=release::signing certificate differs from the previous release (old $old, new $new): not publishing, phones could not update"; exit 1
           fi

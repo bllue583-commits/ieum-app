@@ -5,12 +5,18 @@ name: update-smoke
 # Runs on every push that release-apk runs on; the emulator part only when tools/needs_update_smoke.sh says the push
 # changed, since the last release, a manifest, IeumApplication, StartupReceiver, CallSinkImpl or the build settings.
 # For those pushes release-apk waits for the step "Install, update, start" here to pass; other pushes finish at once.
-# Needs the secrets IEUM_INBOX_TOKEN (and IEUM_SIGNING_SEED if release-apk uses it).
+# Needs the secrets IEUM_INBOX_TOKEN (and IEUM_SIGNING_SEED if release-apk uses it; IEUM_SIGNING_SEED_V2 once IEUM_ROTATE=1).
+# Manual run with rotate_test=true: rehearses key rotation (tools/rotate_signing_key.sh) on the emulator.
 on:
   push:
     branches: ['feature/lean-calls', 'main']
     paths: ['android/**', 'tools/**', '.github/workflows/release-apk.yml', '.github/workflows/update-smoke.yml']
   workflow_dispatch:
+    inputs:
+      rotate_test:
+        description: 'Rehearse key rotation: sign the new APK with a lineage from the release key to a throwaway key made in this run (never released)'
+        type: boolean
+        default: false
 
 concurrency:
   group: update-smoke-${{ github.ref }}
@@ -76,6 +82,28 @@ jobs:
             IEUM_SIGNING_KEYSTORE="$RUNNER_TEMP/ieum.p12" IEUM_VERSION_CODE=$((PREV_CODE + 1))
           python3 run_gradle.py --log smoke-build.log :app:assembleDebug
           cp android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/new.apk"
+      # Same signing as release-apk: with IEUM_ROTATE=1 the lineage to IEUM_SIGNING_SEED_V2. A manual rotate_test run
+      # rehearses it with a random key that exists only in this run, so no new secret is needed for the rehearsal.
+      - name: Re-sign with the key lineage (IEUM_ROTATE=1 or rotate_test)
+        if: steps.need.outputs.run == 'true' && (vars.IEUM_ROTATE == '1' || inputs.rotate_test)
+        env:
+          IEUM_INBOX_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
+          IEUM_SIGNING_SEED: ${{ secrets.IEUM_SIGNING_SEED }}
+          IEUM_SIGNING_SEED_V2: ${{ vars.IEUM_ROTATE == '1' && secrets.IEUM_SIGNING_SEED_V2 || '' }}
+        run: |
+          [ -z "$IEUM_SIGNING_SEED" ] || echo "::add-mask::$IEUM_SIGNING_SEED"
+          if [ -z "$IEUM_SIGNING_SEED_V2" ]; then
+            [ "${{ vars.IEUM_ROTATE }}" != "1" ] || { echo "::error title=smoke::IEUM_ROTATE is 1 but IEUM_SIGNING_SEED_V2 is not set"; exit 1; }
+            IEUM_SIGNING_SEED_V2=$(python3 -c "import secrets; print(secrets.token_hex(32))"); echo "rehearsal: throwaway new key"
+            export IEUM_ROTATE_REHEARSAL=1
+          fi
+          echo "::add-mask::$IEUM_SIGNING_SEED_V2"; export IEUM_SIGNING_SEED_V2
+          export APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          bash tools/rotate_signing_key.sh prepare "$RUNNER_TEMP/rotate"
+          bash tools/rotate_signing_key.sh sign "$RUNNER_TEMP/rotate" "$RUNNER_TEMP/new.apk"
+          prev=$(bash tools/rotate_signing_key.sh fp "$RUNNER_TEMP/previous.apk")
+          bash tools/rotate_signing_key.sh check "$RUNNER_TEMP/rotate" "$RUNNER_TEMP/new.apk" "$prev"
+          rm -f "$RUNNER_TEMP/rotate/"*.p12
       - name: Enable KVM
         if: steps.need.outputs.run == 'true'
         run: |
