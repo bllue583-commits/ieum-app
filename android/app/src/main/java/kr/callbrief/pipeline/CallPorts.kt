@@ -82,6 +82,12 @@ object PipelineSettingsKeys {
     const val RESCHEDULED_MS="rescheduledMs"
     /** The last failed self-update install: "code: message" (cleared when an install succeeds). Shown on the settings update light. */
     const val LAST_UPDATE_ERROR="lastUpdateError"
+    /** Design 3.3 (r7-3): install a downloaded, verified new version in the background (default on). Off: a notification only. */
+    const val AUTO_INSTALL="autoInstall"
+    /** The downloaded, verified new version code waiting to be installed (0 once installed or when up to date). */
+    const val UPDATE_AVAILABLE_CODE="updateAvailableCode"
+    /** When that version's download was verified (ms); 0 once it is installed. The watchdog's "not installed for 24 hours" rule reads it. */
+    const val UPDATE_READY_SINCE_MS="updateReadySinceMs"
     /** When the evening or morning report was last actually posted (ms). */
     const val LAST_DIGEST_MS="lastDigestMs"
     /** "내 정보" (design C5 [사용자]): the user's name, company and site, and title. Empty: the request says roles only. */

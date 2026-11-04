@@ -196,6 +196,16 @@ class CallSettingsActivity:ComponentActivity() {
         hourRow("저녁 통화 정리",PipelineSettingsKeys.EVENING_HOUR,s.optInt(PipelineSettingsKeys.EVENING_HOUR,19),15..23)
         body.addView(CallUi.divider(this))
         hourRow("아침 체크할 일",PipelineSettingsKeys.MORNING_HOUR,s.optInt(PipelineSettingsKeys.MORNING_HOUR,6),4..11)
+        // Design 3.3 (r7-3): a verified new version installs by itself; off, a notification only.
+        body.addView(CallUi.divider(this))
+        val auto=s.optBoolean(PipelineSettingsKeys.AUTO_INSTALL,true)
+        body.addView(Switch(this).apply {
+            text="새 버전은 자동으로 설치";textSize=CallUi.SUMMARY;isChecked=auto
+            minHeight=CallUi.dp(this@CallSettingsActivity,64);tag="auto_install_switch";setTextColor(CallUi.INK)
+            val tint=android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_checked),intArrayOf()),intArrayOf(CallUi.ACCENT,CallUi.FAINT))
+            thumbTintList=tint;trackTintList=tint.withAlpha(120)
+            setOnCheckedChangeListener { _,checked -> if(checked!=auto) save { it.put(PipelineSettingsKeys.AUTO_INSTALL,checked) } }
+        })
         myInfo(s)
         personalNumbers()
 
