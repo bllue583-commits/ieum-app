@@ -167,6 +167,19 @@ python run_gradle.py --log local-$(date +%H%M%S).log :app:compileDebugKotlin
 - 워치독: 11/5 ieum-inbox에 설치(커밋 2d121ae, 수동 실행 41853205350 이상 0건). 처음 정리 중에는 옛 대기열을 "자막이 밀려요"로 치지 않고, 마지막 자막이 24시간 넘었을 때만 알림(`tools/inbox/watchdog.py`, 시험 14개).
 - 기기 시험 고침(`tools/run_device_test.sh`): 결과를 logcat에서 실시간으로 모으고(`results.live`), instrument 자체 시간 제한 70분(`IEUM_INSTRUMENT_MIN`), 골든 통화마다 `golden_start` 기록, `IEUM_TESTS`로 시험 골라 돌리기.
 
+## 4-5. v2.6 (11/5 새벽, Fable 클라우드 세션, 기준 docs/DESIGN_V3.md 3절)
+- 상태: **코드 완성, 배포 대기.** 통합 브랜치 `feature/r7-v26`(v2.5 `feature/r6-v25` 81f9bd0과 lean-calls 문서를 모두 포함)에서 로컬 전체 단위 시험 423건 통과, lint 오류 0, 화면 규칙 0건. GitHub Actions가 결제 문제로 멈춰 ci·배포는 못 함. 결제가 풀리면: v2.5 배포(4-4 담당 세션) → `feature/r7-v26`의 ci 확인 → lean-calls에 합쳐 배포(v2.6) → 하트비트에서 `firstPass.blockedBy`, `newQueuedCount`, `callLogMatch`로 처음 정리가 흐르기 시작했는지 확인.
+- 묶음(모두 Opus 작업자, 각자 worktree·브랜치 `feature/r7-v26-r1`~`r6`, 공통 지시 `/home/claude/worker-brief.md`):
+  - r7-1 처음 정리 관문: 열 때 10/1 이전 QUEUED→SKIPPED 한 문장, `oldestOldJobMs`는 10/1 이후만, offer 루프 트랜잭션 1회+중지 신호, **live=기록 시각 7일 이내**(`FirstPass.LIVE_DAYS`, `liveFrom`, `isOld(now)`, `stale`; `beforeStart` 삭제), 덜 찬 묶음은 6시간(createdMs) 뒤 전송, `LAST_INBOX_ERROR`에 모든 코드+`LAST_INBOX_ERROR_MS`, 하트비트 `firstPass.bound/blockedBy`.
+  - r7-2 발견 경량화: 이름 시각 우선 10/1 컷오프(`DiscoveryCutoff`), SAF 목록은 옛 녹음을 세지 않고 2000 한도는 남긴 것에만(넘치면 최신 유지+`inventoryTruncated`), 큐 UPSERT·audit 100개, 시도마다 `lastDiscoveryAttemptMs/lastDiscoveryOutcome`, 트리거 finally 재등록·지연 140초, 녹음 한도 60MB(옛 DB의 25MB CHECK는 `VaultSizeLimit.widen`으로 한 번 넓힘, 금고·스키마 숫자 포함).
+  - r7-3 무인 설치: `CallUpdate.installInBackground`(USER_ACTION_NOT_REQUIRED, API31+, 세션 id 보관), PENDING이면 알림, 성공 시 키 0, 실패는 `LAST_UPDATE_ERROR` 80자, 설정 스위치 "새 버전은 자동으로 설치"(`AUTO_INSTALL`), 키 `UPDATE_AVAILABLE_CODE`·`UPDATE_READY_SINCE_MS`. 사이드로드 폰에서는 첫 한 번 확인을 물을 수 있음(그 뒤 앱이 설치자).
+  - r7-4 정확도: `FirstPass.match`가 이름 불일치·CACHED_NAME null이어도 후보 하나면 잇고 실패 사유·시작 차이 히스토그램을 `callLogMatchStats`에 쌓음, `NameKey` 호칭 추가·초성 비교·성+직책 규칙·사무실 제외, 제목 중복은 이름·업체·동작어 제거 뒤 비교(근사 중복은 `mergeCandidates`), 반복 인용은 핵심어 근처만·창 기반 퍼지, 자막 줄바꿈, 열린 일 `done_ms` 조건, 별칭 이동·trade "기타"·updated_ms 유지, 전화부 이름·메일 주소·10자리 유선 가리기, 자막 비우기 `analyzed_ms` 기준, `MIGRATION_VERSION=3`(합치기는 같은 번호·업체만, `mergeLog`).
+  - r7-5 지시문 v6: `docs/routines/hourly.md`(장부 사람·업체 추가 규칙, 화자·날짜·확실성·update 조건·성+직책·명절 인사), `tidy.md`(제안에 rev, mergedInto 유지, mergeCandidates), `PROMPT_VERSION=6`, `tidyState` rev·mergeCandidates, `applyTidy` rev 비교, `RoutineDocTest`. **루틴 프롬프트 교체는 자동 권한 검사가 막아 사용자가 직접**(붙여 넣을 전문을 11/5 03시 사용자에게 보냄: `hourly_v6_routine.txt`, `tidy_routine.txt`; 저장소 `docs/routines/*.md`의 "---" 아래와 같음). 10번(제목에서 사람 이름 제거)은 v2.7에서 taskRow META가 이름을 보여 준 뒤 적용.
+  - r7-6 감시 정확화: 신호등 입력을 실제 상태로(폴더 권한+발견 24시간, 새 녹음 대기열 진입 시각, live 지연, 업데이트 24시간), 하트비트 새 필드(newQueuedCount 등, dbPercent는 sealed 파일·행 수, standbyBucket EXEMPTED/NEVER), 워치독 새 규칙(ieum-inbox에 복사함, 커밋 1e52b1b), 저장 공간 % 수리, 긴 통화 stall 완화(진척 있는 시간 한도 중지는 안 셈).
+- 통합 중 고친 것: 신호등 대기열 판정에 시계 인자(7일 live 기준과 맞춤), `RoutineDocTest`가 새벽 정리 실제 답 형식("정리할 것 없음: 이유")을 허용, 지시문 문서를 실제 루틴 문구에 맞춤.
+- 로컬 빌드 환경(이 세션의 클라우드 작업 환경): `/home/claude/toolchain/env.sh`(JDK 17, SDK 36, Robolectric jar), `flock /home/claude/gradle.lock python3 run_gradle.py ...`로 한 번에 하나만. 메이븐이 429를 자주 내므로 첫 의존성 받기는 재시도 필요.
+- v2.7은 `feature/r8-v27`(v2.6 통합 HEAD에서 시작)에서 1단계 r8-1(저장소 성능)·r8-2(Activity 하나)·r8-3(즉시 반응 부품) 진행 중.
+
 ## 5. 현재 UI 상태와 문제점 (S26 스크린샷 기준, 다음 작업의 출발점)
 사용자 평가(10/30): "미관상 너무 엉망", "**깔끔하긴 한데 세련되지 않았다**". 목표는 깔끔함을 넘어 세련됨. 개편 방향은 [PRODUCT.md 4.5](PRODUCT.md). Claude가 본 구체적 문제:
 1. **모든 버튼이 같은 연청색 큰 덩어리** — 전날/다음날, 할 일 전체 보기, 이름 고치기, 완료했어요, 업체 목록으로가 모두 같은 크기·색. 주요 동작과 보조 동작의 구분이 없음.
