@@ -18,11 +18,11 @@ internal object TaskActions {
     private val inFlight=HashSet<String>()
     fun inFlight(id:String)=synchronized(inFlight) { id in inFlight }
     /** The store writes, replaceable in tests (to hold the write back or make it fail). They run on an IO thread. */
-    internal var completeIo:(Context,OpenItem)->Unit={ c,item -> CallRecordStore(CallPipelineStartup.storage(c)).use { it.completeItem(item.id,item.revision) } }
-    internal var undoIo:(Context,OpenItem)->Unit={ c,item -> CallRecordStore(CallPipelineStartup.storage(c)).use { it.undoDone(item.id,item.status,item.revision+1) } }
+    internal var completeIo:(Context,OpenItem)->Unit={ c,item -> kr.callbrief.IeumApplication.store(c).completeItem(item.id,item.revision) }
+    internal var undoIo:(Context,OpenItem)->Unit={ c,item -> kr.callbrief.IeumApplication.store(c).undoDone(item.id,item.status,item.revision+1) }
     internal fun resetIo() {
-        completeIo={ c,item -> CallRecordStore(CallPipelineStartup.storage(c)).use { it.completeItem(item.id,item.revision) } }
-        undoIo={ c,item -> CallRecordStore(CallPipelineStartup.storage(c)).use { it.undoDone(item.id,item.status,item.revision+1) } }
+        completeIo={ c,item -> kr.callbrief.IeumApplication.store(c).completeItem(item.id,item.revision) }
+        undoIo={ c,item -> kr.callbrief.IeumApplication.store(c).undoDone(item.id,item.status,item.revision+1) }
         synchronized(inFlight) { inFlight.clear() }
     }
 
@@ -68,7 +68,7 @@ internal object TaskActions {
     fun openSource(a:ComponentActivity,item:OpenItem) {
         a.lifecycleScope.launch {
             val found=withContext(Dispatchers.IO) { runCatching {
-                CallRecordStore(CallPipelineStartup.storage(a)).use { s ->
+                kr.callbrief.IeumApplication.store(a).let { s ->
                     val day=CallRecordStore.kstDay(item.createdMs)
                     listOf(day,day.minusDays(1)).firstNotNullOfOrNull { d -> s.day(d).firstOrNull { c -> c.applied.any { it.itemId==item.id } } } } }.getOrNull() }
             if(a.isFinishing||a.isDestroyed)return@launch
