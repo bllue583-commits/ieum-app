@@ -115,6 +115,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         try { port.transaction { SCHEMA.forEach { port.execute(it) }
             val have=rows("PRAGMA table_info(people)").mapNotNull { it.str("name") }.toSet()
             PEOPLE_COLUMNS.filter { it.first !in have }.forEach { (c,t) -> port.execute("ALTER TABLE people ADD COLUMN $c $t") }
+            // B17: when the answer for a sent record came back, so it is not sent a second time.
+            if(rows("PRAGMA table_info(call_inbox_sent)").none { it.str("name")=="result_ms" }) port.execute("ALTER TABLE call_inbox_sent ADD COLUMN result_ms INTEGER")
             if(rows("PRAGMA table_info(issues)").none { it.str("name")=="record_keys" }) port.execute("ALTER TABLE issues ADD COLUMN record_keys TEXT NOT NULL DEFAULT '[]'")
             port.execute("CREATE UNIQUE INDEX IF NOT EXISTS people_ledger_id ON people(ledger_id)")
             // Calls stored before v1026 have no start time although the filename had one: fill it in, first on the
@@ -171,7 +173,10 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
     }
     /** Subscription mode: when the transcript was last dropped into the inbox. */
     fun sentMs(id:String):Long?=rows("SELECT sent_ms FROM call_inbox_sent WHERE record_id=?",id).singleOrNull()?.long("sent_ms")
-    fun markSent(id:String,ms:Long)=port.execute("INSERT OR REPLACE INTO call_inbox_sent VALUES(?,?)",id,ms)
+    fun markSent(id:String,ms:Long)=port.execute("INSERT OR REPLACE INTO call_inbox_sent(record_id,sent_ms) VALUES(?,?)",id,ms)
+    /** When the task's answer for this record was received (null: not yet, or set aside as broken). A received record is not sent again. */
+    fun receivedMs(id:String):Long?=rows("SELECT result_ms FROM call_inbox_sent WHERE record_id=?",id).singleOrNull()?.long("result_ms")
+    fun setReceived(id:String,ms:Long?)=port.execute("UPDATE call_inbox_sent SET result_ms=? WHERE record_id=?",ms,id)
     private val withPerson="SELECT c.*,p.name AS linked_person FROM call_records c LEFT JOIN call_links l ON l.record_id=c.record_id LEFT JOIN people p ON p.id=l.person_id"
     fun record(id:String):CallRecord?=rows("$withPerson WHERE c.record_id=?",id).singleOrNull()?.let(::map)
     fun pending():List<CallRecord> =rows("SELECT * FROM call_records WHERE state IN ('TRANSCRIBED','WAITING_CONSENT','WAITING_KEY') ORDER BY created_ms").map(::map)

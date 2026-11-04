@@ -48,6 +48,9 @@ internal class CallRecordAnalysisRunner(
             val got=files.map { (name,sha) -> val t=store.get(CallInbox.RESULTS+"/"+name);Got(name,sha,t,runCatching { CallInbox.parseResults(t) }.getOrNull()) }
             for(g in got.filter { it.results==null }) { store.put(CallInbox.BAD+"/"+g.name,g.text);store.delete(CallInbox.RESULTS+"/"+g.name,g.sha) } // broken: kept aside
             val failedFiles=mutableSetOf<String>()
+            // The answer is here: from now on the record is not sent again, whatever the clock says (B17).
+            val recordsOf={ g:Got -> g.results!!.mapNotNull { (id,_) -> byKey[id] ?: db.record(id) } }
+            for(g in got.filter { it.results!=null }) recordsOf(g).forEach { r -> if(db.receivedMs(r.recordId)==null) db.setReceived(r.recordId,clock()) }
             // In call-time order, so the ledger and the check items follow the order things happened.
             val items=got.filter { it.results!=null }.flatMap { g -> g.results!!.map { (id,a) -> Triple(g.name,(byKey[id] ?: db.record(id)),a) } }
                 .filter { it.second!=null && it.second!!.state!=CallRecordStore.ANALYZED }.sortedBy { it.second!!.dayMs }
@@ -66,7 +69,7 @@ internal class CallRecordAnalysisRunner(
                 if(g.name !in failedFiles) { store.delete(path,g.sha);continue }
                 // Kept for the next run; after three failed runs it is set aside.
                 val tries=JSONObject(settings().optString(PipelineSettingsKeys.RESULT_FAILS,"{}")).optInt(g.name,0)+1
-                if(tries>=3) { store.put(CallInbox.BAD+"/"+g.name,g.text);store.delete(path,g.sha) }
+                if(tries>=3) { store.put(CallInbox.BAD+"/"+g.name,g.text);store.delete(path,g.sha);recordsOf(g).forEach { r -> db.setReceived(r.recordId,null) } } // set aside: may be sent again
                 save { it.put(PipelineSettingsKeys.RESULT_FAILS,JSONObject(it.optString(PipelineSettingsKeys.RESULT_FAILS,"{}")).put(g.name,tries).toString()) }
             }
             runCatching { takeTidy(store,db,consent) }
@@ -75,6 +78,8 @@ internal class CallRecordAnalysisRunner(
                 if(!consent) { db.setState(r.recordId,CallRecordStore.WAITING_CONSENT);return false }
                 if(r.state!=CallRecordStore.TRANSCRIBED) db.setState(r.recordId,CallRecordStore.TRANSCRIBED)
                 if(r.transcript.isBlank()) { db.setState(r.recordId,CallRecordStore.FAILED,"EMPTY_TRANSCRIPT");return false }
+                // Sent and answered (the answer waits to be applied): never again. Sent and silent for 6 hours: again.
+                if(db.receivedMs(r.recordId)!=null) return false
                 return db.sentMs(r.recordId)?.let { clock()-it>=RESEND_MS } ?: true
             }
             val (old,live)=db.pending().partition { FirstPass.isOld(it.dayMs,s) }
