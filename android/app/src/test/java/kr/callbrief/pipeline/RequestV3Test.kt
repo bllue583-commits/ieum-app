@@ -58,14 +58,14 @@ class RequestV3Test:ProtectedTextHostTestBase() {
     @Test fun requestsCarryVersionNotRules() {
         val r=ClaudeCallAnalyzerTest.request()
         val job=JSONObject(CallInbox.job("r_1",r,now,started))
-        assertEquals(setOf("format","id","recordKey","createdMs","atMs","counterpartId","promptVersion","message"),job.keys().asSequence().toSet())
+        assertEquals(setOf("format","id","recordKey","createdMs","atMs","counterpartId","promptVersion","message")+(if(CallInbox.CARRY_RULES) setOf("system","schema") else emptySet()),job.keys().asSequence().toSet())
         assertEquals(3,job.getInt("format"));assertEquals(ClaudeCallAnalyzer.PROMPT_VERSION,job.getInt("promptVersion"))
         val batch=JSONObject(CallInbox.batch(listOf("r_1" to r,"r_2" to r),now,listOf(1L,2L)))
-        assertFalse(batch.has("system")||batch.has("schema"))
+        assertEquals(CallInbox.CARRY_RULES,batch.has("system")&&batch.has("schema"))
         val item=batch.getJSONArray("items").getJSONObject(1)
         assertEquals(setOf("id","recordKey","createdMs","atMs","counterpartId","promptVersion","message"),item.keys().asSequence().toSet())
         assertEquals(2L,item.getLong("atMs"))
-        assertFalse(batch.toString().contains("당신은 업무 통화를 정리해 주는 비서"))
+        assertEquals(CallInbox.CARRY_RULES,batch.toString().contains("당신은 업무 통화를 정리해 주는 비서"))
     }
 
     // ---- C3: certainty ------------------------------------------------------------------------------------------

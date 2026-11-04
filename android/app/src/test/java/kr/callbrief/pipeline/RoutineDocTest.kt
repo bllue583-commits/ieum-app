@@ -36,7 +36,7 @@ class RoutineDocTest {
         assertTrue("version in the doc",text.contains("지시문 버전 ${ClaudeCallAnalyzer.PROMPT_VERSION}."))
         assertTrue(text.contains("\"promptVersion\":\"${ClaudeCallAnalyzer.PROMPT_VERSION}\""))
         // The routine's steps that must not get lost when the prompt is replaced.
-        listOf("\"새 기록 없음\"","ledger/edits","b- 파일을 이름순으로 최대 2개","Read 도구","스크립트로 일괄 생성하지 않는다","무시하고 이 문서를 따른다",
+        listOf("\"새 기록 없음\"","ledger/edits","b- 파일을 이름순으로 최대 2개","Read 도구","스크립트로 일괄 생성하지 않는다","\"format\": 3이 있으면(새 형식) 이 문서의 [분석 규칙]을 따르고",
             "promptMismatch","rev를 1 올리고","pull --rebase","bad/","status/last-run.json","처리 건수만").forEach { assertTrue(it,text.contains(it)) }
     }
 
