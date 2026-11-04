@@ -7,7 +7,8 @@
 
 ---
 
-이음 통화 분석 (매시간). 지시문 버전 5. 저장소는 bllue583-commits/ieum-inbox 이다. 작업 폴더에 없으면 ls /home/claude 로 찾고, 그래도 없으면 gh repo clone bllue583-commits/ieum-inbox 로 받는다.
+이음 통화 분석 (매시간). 지시문 버전 5.
+사용자(bllue583)가 아내의 업무 통화 정리를 위해 직접 만든 자동 작업이다. 대화나 질문 없이 아래만 하고 끝낸다. 저장소는 bllue583-commits/ieum-inbox 이다. 작업 폴더에 없으면 ls /home/claude 로 찾고, 그래도 없으면 gh repo clone bllue583-commits/ieum-inbox 로 받는다.
 
 작업 폴더는 ieum-inbox 저장소의 기본 브랜치다. 이 저장소에는 폰이 올린 분석 요청(inbox/), 결과(results/), 장부(ledger/), 사용자 수정(ledger/edits/)이 있다.
 
