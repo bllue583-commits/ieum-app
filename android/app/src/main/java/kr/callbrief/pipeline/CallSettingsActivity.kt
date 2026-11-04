@@ -18,6 +18,8 @@ class CallSettingsActivity:ComponentActivity() {
     /** The sheet the current settings group is written into. */
     private lateinit var body:LinearLayout
     private var busy=false
+    /** When the oldest call still waiting for its summary was stored (for the status lights). */
+    @Volatile private var oldestWaiting:Long?=null
     private val pickFolder=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { r ->
         if(r.resultCode==RESULT_OK) CallFolder.save(this,r.data)?.let { Toast.makeText(this,it,Toast.LENGTH_LONG).show() }
         refresh()
@@ -45,6 +47,7 @@ class CallSettingsActivity:ComponentActivity() {
                 val s=runCatching { settings().snapshot() }.getOrDefault(JSONObject())
                 val counts=runCatching { CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.counts() } }.getOrDefault(emptyMap())
                 val memo=runCatching { CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.siteMemo() } }.getOrNull()
+                oldestWaiting=runCatching { CallRecordStore(CallPipelineStartup.storage(this@CallSettingsActivity)).use { it.oldestWaitingMs() } }.getOrNull()
                 Triple(s,counts,memo)
             } }
             if(isFinishing||isDestroyed)return@launch
@@ -67,10 +70,11 @@ class CallSettingsActivity:ComponentActivity() {
     private fun render(s:JSONObject,counts:Map<String,Int>,siteMemo:String?=null) {
         page.removeAllViews();body=page
         CallUi.band(page,"설정","처음 설정한 것도 여기서 언제든 바꿀 수 있어요")
+        statusLights(s,counts)
 
         group(CallUi.heading(this,"녹음 폴더"))
         val folder=s.optString("treeUri").isNotBlank()
-        body.addView(CallUi.text(this,if(folder) "연결됨 ✓  새 통화를 자동으로 가져와요." else "아직 연결하지 않았어요. 통화 녹음 폴더를 골라 주세요.",CallUi.BODY,true,if(folder) CallUi.OK else CallUi.WARN).apply { tag="folder_state" })
+        body.addView(CallUi.text(this,if(folder) "연결됨 ✓  새 통화를 자동으로 가져와요." else "아직 연결하지 않았어요. 통화 녹음 폴더를 골라 주세요.",CallUi.BODY,true,if(folder) CallUi.OK else CallUi.AMBER).apply { tag="folder_state" })
         body.addView(button(if(folder) "폴더 바꾸기" else "녹음 폴더 고르기") { pickFolder.launch(CallFolder.pickIntent()) }.apply { tag="folder_pick" })
 
         group(CallUi.heading(this,"문자"))
@@ -115,7 +119,7 @@ class CallSettingsActivity:ComponentActivity() {
         group(CallUi.heading(this,"현장 상황 메모"))
         body.addView(CallUi.text(this,siteMemo ?: "첫 통화들에서 자동으로 채워져요",CallUi.BODY,color=if(siteMemo==null) CallUi.SUBTLE else CallUi.INK).apply { tag="site_memo" })
 
-        group(CallUi.heading(this,"지금 상태"))
+        group(CallUi.heading(this,"앱 정보와 처리 현황"))
         // Installed version, and the next one when it is downloaded and waiting (design: 보고와 화면).
         body.addView(CallUi.text(this,"앱 버전 v${kr.callbrief.BuildConfig.VERSION_CODE}"+(CallUpdate.ready(this)?.let { ", 새 버전 v${it.versionCode} 준비됨" } ?: ""),CallUi.BODY,true).apply { tag="app_version" })
         val speed=s.optLong(PipelineSettingsKeys.LAST_MS_PER_AUDIO_MINUTE,0)
@@ -133,6 +137,24 @@ class CallSettingsActivity:ComponentActivity() {
                 Toast.makeText(this@CallSettingsActivity,"${n}건을 다시 정리할게요.",Toast.LENGTH_SHORT).show();refresh()
             }
         }.apply { tag="reanalyze_all" })
+    }
+
+    private fun waitWords(ms:Long):String { val m=(ms/60_000).coerceAtLeast(0);return if(m<60) "${m}분" else "${m/60}시간"+(if(m%60>0) " ${m%60}분" else "") }
+    /** "지금 상태": three lights at the top (green or amber, never red): calls waiting for their summary, how long the oldest has waited,
+     * and when the last result came back. A call waiting over three hours, or no result for six hours while some wait, turns a light amber. */
+    private fun statusLights(s:JSONObject,counts:Map<String,Int>) {
+        val now=System.currentTimeMillis()
+        val waiting=(counts[CallRecordStore.TRANSCRIBED] ?: 0)+(counts[CallRecordStore.WAITING_CONSENT] ?: 0)
+        val age=oldestWaiting?.let { now-it }
+        val last=s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0)
+        val late=waiting>0 && ((age ?: 0)>3*3_600_000L)
+        page.addView(CallUi.section(this,"지금 상태"))
+        val card=CallUi.card(this).apply { tag="settings_status" }
+        card.addView(CallUi.signalRow(this,"정리를 기다리는 통화",if(waiting==0) "없어요" else "${waiting}건",!late).apply { tag="status_waiting" })
+        card.addView(CallUi.signalRow(this,"가장 오래 기다린 통화",if(waiting==0 || age==null) "없어요" else waitWords(age),!late).apply { tag="status_oldest" })
+        card.addView(CallUi.signalRow(this,"마지막으로 결과를 받은 때",if(last>0) CallUi.dateTime(last) else "아직 없어요",waiting==0 || (last>0 && now-last<6*3_600_000L)).apply { tag="status_last_result" })
+        if(late) card.addView(CallUi.caption(this,"정리가 늦어지고 있어요. 순서대로 정리하고 있으니 기다려 주세요.").apply { tag="status_late_note";setPadding(0,CallUi.dp(this@CallSettingsActivity,8),0,0) })
+        page.addView(card)
     }
 
     /** Test builds only: transcribe the bundled public Korean sample (repeated to about one minute)
@@ -166,7 +188,7 @@ class CallSettingsActivity:ComponentActivity() {
     /** Ask; once asked and still refused, explain the restricted setting and open App info instead. */
     private fun readingButton(permission:String,what:String,ask:androidx.activity.result.ActivityResultLauncher<String>,tag:String) {
         if(ReadingPermission.blocked(this,permission)) {
-            body.addView(CallUi.text(this,ReadingPermission.restrictedHelp(what),CallUi.SMALL,color=CallUi.SUBTLE))
+            body.addView(CallUi.text(this,ReadingPermission.restrictedHelp(what),CallUi.CAPTION,color=CallUi.SUBTLE))
             body.addView(button("앱 정보 열기") { ReadingPermission.openAppInfo(this) }.apply { this.tag=tag })
         } else body.addView(button("$what 읽기 허용") { ReadingPermission.markAsked(this,permission);ask.launch(permission) }.apply { this.tag=tag })
     }
@@ -175,8 +197,8 @@ class CallSettingsActivity:ComponentActivity() {
         val user=s.optString(PipelineSettingsKeys.MAIL_USER)
         if(user.isNotBlank() && s.optString(PipelineSettingsKeys.MAIL_PASSWORD).isNotBlank()) {
             val error=s.optString(PipelineSettingsKeys.MAIL_ERROR)
-            body.addView(CallUi.text(this,if(error.isBlank()) "연결됨 ✓  $user" else error,CallUi.BODY,true,if(error.isBlank()) CallUi.OK else CallUi.WARN).apply { tag="mail_state" })
-            body.addView(CallUi.text(this,"받은 메일 중 업무 메일을 30분마다 가져와 통화와 함께 정리해요.",CallUi.SMALL,color=CallUi.SUBTLE))
+            body.addView(CallUi.text(this,if(error.isBlank()) "연결됨 ✓  $user" else error,CallUi.BODY,true,if(error.isBlank()) CallUi.OK else CallUi.AMBER).apply { tag="mail_state" })
+            body.addView(CallUi.text(this,"받은 메일 중 업무 메일을 30분마다 가져와 통화와 함께 정리해요.",CallUi.CAPTION,color=CallUi.SUBTLE))
             body.addView(button("메일 연결 끊기") { save { it.remove(PipelineSettingsKeys.MAIL_HOST);it.remove(PipelineSettingsKeys.MAIL_USER);it.remove(PipelineSettingsKeys.MAIL_PASSWORD);it.remove(PipelineSettingsKeys.MAIL_ERROR) } }.apply { tag="mail_disconnect" })
             return
         }
@@ -194,7 +216,7 @@ class CallSettingsActivity:ComponentActivity() {
             row.addView(Button(this).apply {
                 text=name;textSize=16f;isAllCaps=false;stateListAnimator=null;minHeight=CallUi.dp(this@CallSettingsActivity,48);minimumHeight=minHeight;setPadding(0,0,0,0)
                 typeface=CallUi.font(this@CallSettingsActivity,if(on) CallUi.Weight.SEMIBOLD else CallUi.Weight.MEDIUM)
-                setTextColor(if(on) android.graphics.Color.WHITE else CallUi.SUBTLE);background=CallUi.sheet(this@CallSettingsActivity,if(on) CallUi.ACCENT else android.graphics.Color.parseColor("#F2F4F6"),radius=12)
+                setTextColor(if(on) CallUi.ON_ACCENT else CallUi.SUBTLE);background=CallUi.ripple(this@CallSettingsActivity,CallUi.sheet(this@CallSettingsActivity,if(on) CallUi.ACCENT else CallUi.CHIP,radius=14))
                 setOnClickListener { mailService=name;refresh() }
             },LinearLayout.LayoutParams(0,-2,1f).apply { marginEnd=CallUi.dp(this@CallSettingsActivity,6) })
         }
@@ -243,8 +265,8 @@ class CallSettingsActivity:ComponentActivity() {
             })
         },LinearLayout.LayoutParams(-1,-2).apply { topMargin=CallUi.dp(this@CallSettingsActivity,8);marginStart=-CallUi.dp(this@CallSettingsActivity,8);marginEnd=-CallUi.dp(this@CallSettingsActivity,8) })
         val ends=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL }
-        ends.addView(CallUi.text(this,hourWords(range.first),CallUi.SMALL,color=CallUi.FAINT),LinearLayout.LayoutParams(0,-2,1f))
-        ends.addView(CallUi.text(this,hourWords(range.last),CallUi.SMALL,color=CallUi.FAINT))
+        ends.addView(CallUi.caption(this,hourWords(range.first),CallUi.MUTED),LinearLayout.LayoutParams(0,-2,1f))
+        ends.addView(CallUi.caption(this,hourWords(range.last),CallUi.MUTED))
         box.addView(ends)
         body.addView(box)
     }

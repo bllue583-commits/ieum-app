@@ -195,6 +195,7 @@ class NativeAutomaticDiscoveryTest {
             NativeDiscoverySession(s,src,selected(src),{JSONObject()},t,{now},true,wide).use{n->
                 n.cycle(1,1,8000L)
                 assertEquals(3,s.snapshot().length());assertTrue(n.engine.rows().all{it.status==Status.STORED})}}
+    }
 
     @Test fun N28PruneVaultDeletesOriginalOnlyAfterTranscriptWasDoneFor14Days()=worker {
         store().use{s->s.initializeEmpty();val src=Source().apply{put(modified=now-300000)};ready(s,src,Time()){

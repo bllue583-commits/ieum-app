@@ -26,6 +26,8 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
     private fun views(v:View):List<View> =listOf(v)+if(v is ViewGroup)(0 until v.childCount).flatMap { views(v.getChildAt(it)) } else emptyList()
     private fun texts(a:android.app.Activity)=views(a.window.decorView).filterIsInstance<TextView>()
     private fun sp(t:TextView)=t.textSize/t.resources.displayMetrics.scaledDensity
+    /** The round 3 rule (11/4 review 7.2): text to read is 18sp and up; an aside made with CallUi.caption is 16 and up, a badge 15 and up. */
+    private fun sizeOk(t:TextView):Boolean { val min=(t.getTag(kr.callbrief.R.id.ui_min_sp) as? Float) ?: 18f;return sp(t)>=min }
     private fun settle(a:android.app.Activity,check:()->Boolean) { repeat(300) { shadowOf(Looper.getMainLooper()).idle();if(check())return;Thread.sleep(10) };fail("UI did not settle") }
     private val english=Regex("[A-Z]{3,}_[A-Z_]+|\\b(WAITING|FAILED|TRANSCRIBED|ANALYZED|null)\\b")
 
@@ -50,14 +52,14 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
 
     @Test fun mainScreensUseLargeTextAndPlainWords() {
         val a=home(HomeActivity.Snapshot(true,true,true,"READY",1,0,1,1,0,1_793_300_000_000))
-        assertTrue(texts(a).filter{it !is Button}.all{ sp(it)>=18f })
+        assertTrue(texts(a).filter{it !is Button}.filterNot(::sizeOk).joinToString { "${it.text} ${sp(it)}" },texts(a).filter{it !is Button}.all(::sizeOk))
         val today=Robolectric.buildActivity(TodayCallsActivity::class.java).setup().get()
-        settle(today) { texts(today).any { it.text.toString()=="통화 기록" } }
-        assertTrue(texts(today).filter{it !is Button}.all{ sp(it)>=18f })
+        settle(today) { texts(today).any { it.text.toString().endsWith("의 통화") } }
+        assertTrue(texts(today).filter{it !is Button}.all(::sizeOk))
         val settings=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
         settle(settings) { texts(settings).any { it.text.toString()=="설정" } }
         val all=texts(settings).joinToString("\n"){it.text.toString()}
-        assertFalse(all,english.containsMatchIn(all));assertTrue(texts(settings).filter{it !is Button && it !is android.widget.EditText}.all{ sp(it)>=18f })
+        assertFalse(all,english.containsMatchIn(all));assertTrue(texts(settings).filter{it !is Button && it !is android.widget.EditText}.all(::sizeOk))
     }
 
     @Test fun stateAndDueWordsArePlainKorean() {
