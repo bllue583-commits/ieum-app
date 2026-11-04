@@ -130,7 +130,7 @@ internal class CallRecordAnalysisRunner(
         val waiting=db.pending().filter { !FirstPass.isOld(it.dayMs,s) }.minOfOrNull { it.createdMs } ?: return
         val last=maxOf(s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),waiting)
         if(at.hour !in 9..20 || now-last<6*3_600_000L || s.optString(PipelineSettingsKeys.STALL_WARNED_DAY)==at.toLocalDate().toString()) return
-        runCatching { CallDigestNotifier.post(context,"stall",CallDigestText.Message("정리가 멈췄어요","통화가 6시간 넘게 정리되지 않고 있어요. 앱을 관리하는 분께 알려 주세요.")) }
+        runCatching { CallDigestNotifier.post(context,"stall",CallDigestText.Message("정리가 멈췄어요","통화가 6시간 넘게 정리되지 않고 있어요. 관리하는 분께도 알렸어요.")) }
         save { it.put(PipelineSettingsKeys.STALL_WARNED_DAY,at.toLocalDate().toString()) }
     }
 

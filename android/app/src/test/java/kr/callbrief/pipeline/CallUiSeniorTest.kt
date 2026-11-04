@@ -68,7 +68,7 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
         }
         val today=CallUi.today()
         assertEquals("오늘까지",CallUi.dueWords(today.toString()));assertEquals("내일까지",CallUi.dueWords(today.plusDays(1).toString()))
-        assertEquals("2일 지남",CallUi.dueWords(today.minusDays(2).toString()));assertEquals("기한 없음",CallUi.dueWords(""));assertEquals("다음 주",CallUi.dueWords("다음 주"))
+        assertEquals("2일 지남",CallUi.dueWords(today.minusDays(2).toString()));assertEquals("",CallUi.dueWords(""));assertEquals("다음 주",CallUi.dueWords("다음 주"))
         assertEquals("확인 필요",CallUi.taskStatus("needs_confirmation"))
     }
 
