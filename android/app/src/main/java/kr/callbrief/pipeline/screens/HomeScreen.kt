@@ -331,9 +331,9 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
         body.addView(CallUi.section(a,"먼저 볼 체크할 일",if(more>0) "외 ${more}개 보기 ›" else null) { a.switchTo(Screen.TASKS) }.apply { tag="home_tasks_head" })
         if(first.isEmpty()) body.addView(CallUi.card(a).apply { tag="home_tasks"
             addView(CallUi.text(a,if(left>0) "오늘 요청된 체크할 일이 없어요" else "체크할 일이 없어요",CallUi.BODY,color=CallUi.SUBTLE)) })
+        // The same row as the check tab (G3): only an item from a call opens that call, the rest show no press (r8-5).
         else body.addView(CallUi.list(a,first.map { item ->
-            CallUi.taskRow(a,item.title,item.createdMs,item.company,item.counterpart,if(item.status=="needs_confirmation") "" else item.status,
-                onDone={ row -> TaskActions.complete(a,item,row) { load() } },onOpen={ TaskActions.openSource(a,item) },aiNote=item.aiNote)
+            CheckRows.row(a,item,status=if(item.status=="needs_confirmation") "" else item.status,onDone={ row -> TaskActions.complete(a,item,row) { load() } })
                 .apply { tag="home_task_${item.id}" }
         },inset=16).apply { tag="home_tasks" })
 

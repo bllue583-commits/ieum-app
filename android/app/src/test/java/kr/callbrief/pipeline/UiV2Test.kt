@@ -375,10 +375,10 @@ class UiV2Test:ProtectedTextHostTestBase() {
         UpdateStatusReceiver().onReceive(app,i)
         settle { SecureSettings(app).snapshot().optString("lastUpdateError").startsWith("STATUS_FAILURE_INCOMPATIBLE") }
         assertTrue(SecureSettings(app).snapshot().optString("lastUpdateError").endsWith("서명이 달라요"))
-        // Success changes nothing; the error is cleared when the phone is up to date again.
+        // A later success clears the error (r7-3: the receiver does it on its own thread, so wait for it).
         UpdateStatusReceiver().onReceive(app,Intent().putExtra(PackageInstaller.EXTRA_STATUS,PackageInstaller.STATUS_SUCCESS))
-        assertTrue(SecureSettings(app).snapshot().optString("lastUpdateError").isNotEmpty())
-        CallUpdate.saveError(app,null);assertEquals("",SecureSettings(app).snapshot().optString("lastUpdateError"))
+        settle { SecureSettings(app).snapshot().optString("lastUpdateError").isEmpty() }
+        assertEquals("",SecureSettings(app).snapshot().optString("lastUpdateError"))
     }
 
     // ---- v2.5 #20: 처음 정리 rests (battery under half and not charging, or no result for six hours) and says so ----
