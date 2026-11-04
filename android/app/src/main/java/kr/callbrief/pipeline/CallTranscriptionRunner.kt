@@ -210,9 +210,10 @@ internal class CallTranscriptionRunner(
             val name=(if(parts.size>1&&parts.drop(1).all{p->p.all{it.isDigit()}})parts.first() else parts.firstOrNull() ?: "").trim()
             if(name.isEmpty()||name.all{it.isDigit()}&&name.length>=12)return null // a bare timestamp
             val digits=name.filter{it.isDigit()}
-            if(digits.length>=9&&name.all{it.isDigit()||it=='-'||it==' '||it=='+'}) return when {
-                digits.length==11&&digits.startsWith("01")->"${digits.take(3)}-${digits.substring(3,7)}-${digits.takeLast(4)}"
-                else->digits
+            if(digits.length>=9&&name.all{it.isDigit()||it=='-'||it==' '||it=='+'||it=='('||it==')'||it=='.'}) {
+                // "+82 10..." and "010..." are one number (PhoneKey, r9-1); a foreign number keeps its digits.
+                val key=kr.callbrief.core.PhoneKey.of(name) ?: return digits
+                return if(key.length==11&&key.startsWith("01")) "${key.take(3)}-${key.substring(3,7)}-${key.takeLast(4)}" else key
             }
             return name.take(40)
         }

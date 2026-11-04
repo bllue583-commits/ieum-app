@@ -19,11 +19,9 @@ internal object MessageIntake {
     private const val FIRST_LOOK_MS=2*86_400_000L
     private fun hhmm(ms:Long)=CallUi.time(ms)
 
-    /** Digits of a person's number; short service numbers (1588 and the like) give null and are not read. */
-    internal fun phoneKey(address:String?):String? {
-        val d=address.orEmpty().filter { it.isDigit() }.let { if(it.startsWith("82") && it.length>=11) "0"+it.drop(2) else it }
-        return d.takeIf { it.length>=8 && it.startsWith("0") }
-    }
+    /** A person's number as the one phone key ([kr.callbrief.core.PhoneKey]); service numbers (1588 and the like), short
+     * codes and foreign senders give null and are not read. */
+    internal fun phoneKey(address:String?):String? = kr.callbrief.core.PhoneKey.of(address)?.takeIf { it.startsWith("0") }
     /** Sent by a machine, not a person: advertising, verification codes, card and bank notices. */
     private val MACHINE=Regex("\\(광고\\)|무료\\s*수신\\s*거부|인증\\s*번호|인증코드|승인\\s*[0-9,]+\\s*원|[0-9,]+원\\s*승인|입금\\s*[0-9,]+원|출금\\s*[0-9,]+원|배송\\s*(완료|출발|예정)")
     internal fun automated(body:String)=MACHINE.containsMatchIn(body)
@@ -200,7 +198,7 @@ internal class MessageWork(context:Context,params:WorkerParameters):CoroutineWor
         if(kr.callbrief.BuildConfig.LOCAL_PREVIEW)return@withContext Result.success()
         val storage=CallPipelineStartup.storage(applicationContext);val settings=SecureSettings(storage)
         if(!settings.snapshot().optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false))return@withContext Result.success()
-        val added=CallRecordStore(storage).use { store ->
+        val added=kr.callbrief.IeumApplication.store(storage).let { store ->
             runCatching { MessageIntake.takeSms(applicationContext,store,settings) }.getOrDefault(0)+runCatching { MessageIntake.takeMail(store,settings) }.getOrDefault(0) }
         if(added>0) CallPipelineStartup.enqueueAnalysis(applicationContext)
         Result.success()

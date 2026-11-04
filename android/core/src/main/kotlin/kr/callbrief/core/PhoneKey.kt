@@ -20,8 +20,9 @@ object PhoneKey {
             when {
                 plus && digits.startsWith("82") -> add(national(digits.drop(2)))
                 digits.startsWith("0082") -> add(national(digits.drop(4)))
-                // "82" without a plus: only when a Korean number of 9 to 11 digits follows (no national number starts with 82).
-                digits.startsWith("82") && digits.length in 11..13 -> add(national(digits.drop(2)))
+                // "82" without a plus: only when a Korean number of 8 to 11 digits follows (no national number starts with 82,
+                // so the raw digits could never pass; "82 2 123 4567" is a Seoul number, as the exclusion rules always read it).
+                digits.startsWith("82") && digits.length in 10..13 -> add(national(digits.drop(2)))
             }
             add(digits)
         }

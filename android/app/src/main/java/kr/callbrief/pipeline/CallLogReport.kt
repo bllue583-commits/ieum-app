@@ -23,7 +23,7 @@ internal object CallLogReport {
 
     /** One entry of the CallLog provider. [excluded]: the user's exclusion rules match its number or name. */
     data class DeviceCall(val id:Long,val number:String,val name:String?,val startMs:Long,val durationSec:Long,val type:Int,val excluded:Boolean=false) {
-        val numberKey get()=MessageIntake.phoneKey(number)
+        val numberKey get()=kr.callbrief.core.PhoneKey.of(number)
     }
     data class Report(val text:String,val hash:String,val full:Boolean)
 
@@ -110,7 +110,7 @@ internal object CallLogReport {
             val settings=kr.callbrief.SecureSettings(app);val s=settings.snapshot()
             val calls=device(app,s)
             val full=calls!=null && fullDue(s.optString(FULL_DAY),now)
-            val (stored,personal)=CallRecordStore(app).use { db -> db.callLogRows(FirstPass.FROM_MS) to db.personalNumbers().map { it.first }.toSet() }
+            val (stored,personal)=kr.callbrief.IeumApplication.store(app).let { db -> db.callLogRows(FirstPass.FROM_MS) to db.personalNumbers().map { it.first }.toSet() }
             val rules=kr.callbrief.LocalPrivacy.rules(s)
             val r=render(now,appVersion,calls,stored,personal,full,s.optLong(FULL_MS,0L)) { n,name -> n!=null && rules.excluded(n,n) || name!=null && rules.excluded(name) }
             if(r.hash==s.optString(HASH)) return

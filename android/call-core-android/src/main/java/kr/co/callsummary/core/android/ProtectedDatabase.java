@@ -44,6 +44,10 @@ public final class ProtectedDatabase implements AutoCloseable {
     /** How long the last State creation (read, decrypt, restore or first schema) took, or -1 before any. */
     public static long lastStateMs(){return lastStateMs;}
     public static long lastTransactionMs(){return lastTransactionMs;}
+    private static volatile String lastRecovery;
+    /** What the last open did with left-over .new/.bak files (r9-1), as codes joined by ':' (PROMOTED_NEW, DROPPED_NEW,
+     * PROMOTED_BAK, DROPPED_BAK, FAILED), then forgets it; null when nothing was left over since the last call. No content. */
+    public static String takeRecovery(){synchronized(STORES){String r=lastRecovery;lastRecovery=null;return r;}}
     private final State state;
     private boolean closed;
     private ProtectedDatabase(State state){this.state=state;}
@@ -147,6 +151,7 @@ public final class ProtectedDatabase implements AutoCloseable {
                 boolean existing=path.exists()||new File(path+".bak").exists()||new File(path+".new").exists();
                 if(existing){
                     SecretKey key=existingKey();if(key==null)throw error("TEXT_STORE_KEY_UNAVAILABLE");
+                    recoverArtifacts(key);
                     byte[] encoded;try(InputStream in=readMainPreservingArtifacts()){encoded=readBounded(in,MAX_PLAIN_BYTES+128);}
                     RESTORES.incrementAndGet();
                     byte[] plain=unseal(encoded,key);try{restore(db,plain);lastPlain=plain.clone();keyProof=sealProof(key);cipherHash=sha(encoded);verified=true;sealedNow();}finally{Arrays.fill(plain,(byte)0);Arrays.fill(encoded,(byte)0);}
@@ -173,8 +178,48 @@ public final class ProtectedDatabase implements AutoCloseable {
         long changes(){return number("SELECT total_changes()");}
         long schemaVersion(){return number("PRAGMA schema_version");}
         void sealedNow(){sealedChanges=changes();sealedSchema=schemaVersion();}
-        /** AtomicFile.openRead normalizes .bak/.new before our AEAD check. Preserve and hold
-         * ambiguous recovery artifacts instead; no promotion, deletion, reset or key creation. */
+        /** Bounded raw bytes of a sealed file, or null when it is missing, unreadable or too large. */
+        byte[] sealedBytes(File f){if(!f.isFile()||f.length()>MAX_PLAIN_BYTES+128)return null;
+            try(InputStream in=new FileInputStream(f)){return readBounded(in,MAX_PLAIN_BYTES+128);}catch(Exception e){return null;}}
+        /** The bytes pass the AEAD check under [key] and hold a snapshot (the plain text is wiped at once). */
+        boolean opens(byte[] encoded,SecretKey key){
+            if(encoded==null)return false;
+            try{byte[] plain=unseal(encoded,key);try{return plain.length>0&&plain[0]=='{';}finally{Arrays.fill(plain,(byte)0);}}catch(Exception e){return false;}
+        }
+        /** Left-over files of a write that stopped half way (design v2.8 r9-1, review data #3), decided before the main file is
+         * read, with the key already in hand (no key: nothing is touched). A .new that passes the AEAD check and differs from
+         * the main file is the newer state and replaces it; any other .new goes. A .bak replaces the main file only when the
+         * main file does not pass the check; otherwise it goes. A .bak that does not pass either stays, and the store is held
+         * for review as before. What was done is kept for [takeRecovery] (the heartbeat's dbRecovery). */
+        void recoverArtifacts(SecretKey key)throws Exception{
+            File fresh=new File(path.getPath()+".new"),backup=new File(path.getPath()+".bak");
+            if(!fresh.exists()&&!backup.exists())return;
+            List<String> done=new ArrayList<>();
+            byte[] main=sealedBytes(path);boolean mainOk=opens(main,key);
+            try{
+                if(fresh.exists()){
+                    byte[] staged=sealedBytes(fresh);
+                    try{
+                        if(opens(staged,key)&&(!mainOk||!sha(staged).equals(sha(main)))){
+                            if(!fresh.renameTo(path)){done.add("FAILED");return;}
+                            done.add("PROMOTED_NEW");mainOk=true;
+                        }else{if(!fresh.delete()){done.add("FAILED");return;}done.add("DROPPED_NEW");}
+                    }finally{if(staged!=null)Arrays.fill(staged,(byte)0);}
+                }
+                if(backup.exists()){
+                    if(mainOk){if(!backup.delete()){done.add("FAILED");return;}done.add("DROPPED_BAK");}
+                    else{byte[] old=sealedBytes(backup);
+                        try{if(opens(old,key)&&backup.renameTo(path))done.add("PROMOTED_BAK");else done.add("FAILED");}
+                        finally{if(old!=null)Arrays.fill(old,(byte)0);}}
+                }
+            }finally{
+                if(main!=null)Arrays.fill(main,(byte)0);
+                synchronized(STORES){lastRecovery=String.join(":",done);}
+                android.util.Log.i(TAG,"recovery "+String.join(":",done));
+            }
+        }
+        /** AtomicFile.openRead normalizes .bak/.new before our AEAD check. [recoverArtifacts] decides them at open; one that is
+         * still there (recovery failed) or appears later holds the store for review; no reset or key creation. */
         InputStream readMainPreservingArtifacts()throws IOException{
             if(new File(path.getPath()+".bak").exists()||new File(path.getPath()+".new").exists()){
                 held=true;throw error("TEXT_STORE_RECOVERY_REVIEW_REQUIRED");

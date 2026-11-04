@@ -17,25 +17,20 @@ data class PrivacyRules(val phones: Set<String>, val aliases: List<ExcludedAlias
     }
     companion object {
         fun hash(value: String): String = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
-        fun normalizePhone(value: String): String {
-            var digits = Normalizer.normalize(value, Normalizer.Form.NFKC).replace(Regex("[^0-9]"), "")
-            if (digits.startsWith("0082")) digits = digits.drop(4).let { if (it.startsWith("0")) it else "0" + it }
-            else if (digits.startsWith("82")) digits = digits.drop(2).let { if (it.startsWith("0")) it else "0" + it }
-            return digits
-        }
         fun normalizeAlias(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFKC).filter { it.isLetterOrDigit() }.lowercase(java.util.Locale.ROOT)
         fun validKoreanPhone(number: String): Boolean = Regex("(?:010[0-9]{8}|02[0-9]{7,8}|0(?:31|32|33|41|42|43|44|51|52|53|54|55|61|62|63|64)[0-9]{7,8}|070[0-9]{8}|1[568][0-9]{6})").matches(number)
         fun validatedPhone(value: String): String? {
             val normalized = Normalizer.normalize(value.trim(), Normalizer.Form.NFKC)
             if (!Regex("\\+?[0-9][0-9 _().-]*").matches(normalized)) return null
-            return normalizePhone(normalized).takeIf { validKoreanPhone(it) }
+            // One number rule for the whole app (PhoneKey, design v2.8 r9-1).
+            return PhoneKey.of(normalized)
         }
         private val national = "(?:010|02|0(?:31|32|33|41|42|43|44|51|52|53|54|55|61|62|63|64)|070)"
         private val phonePattern = Regex("(?<![\\p{L}\\p{N}])(?:\\+?82[ _().-]*(?:0[ _().-]*)?(?:10|2|31|32|33|41|42|43|44|51|52|53|54|55|61|62|63|64|70)|0082[ _().-]*(?:0[ _().-]*)?(?:10|2|31|32|33|41|42|43|44|51|52|53|54|55|61|62|63|64|70)|$national)[ _().-]*(?:[0-9][ _().-]*){7,8}(?![\\p{L}\\p{N}])")
         private val servicePattern = Regex("(?<![\\p{L}\\p{N}])1[568][0-9][0-9][ _().-]*[0-9]{4}(?![\\p{L}\\p{N}])")
         private fun phoneMatches(value: String): List<MatchResult> {
             val selected=mutableListOf<MatchResult>()
-            for(match in (phonePattern.findAll(value)+servicePattern.findAll(value)).filter { validKoreanPhone(normalizePhone(it.value)) }
+            for(match in (phonePattern.findAll(value)+servicePattern.findAll(value)).filter { PhoneKey.of(it.value) != null }
                 .sortedWith(compareBy<MatchResult> { it.range.first }.thenByDescending { it.range.last })) {
                 if(selected.none { it.range.first<=match.range.last && match.range.first<=it.range.last }) selected.add(match)
             }
@@ -43,7 +38,7 @@ data class PrivacyRules(val phones: Set<String>, val aliases: List<ExcludedAlias
         }
         fun phoneTokens(filename: String): Set<String> {
             val value = Normalizer.normalize(filename, Normalizer.Form.NFKC)
-            return phoneMatches(value).map { normalizePhone(it.value) }.toSet()
+            return phoneMatches(value).mapNotNull { PhoneKey.of(it.value) }.toSet()
         }
         fun phoneTokenCount(value: String): Int = phoneMatches(Normalizer.normalize(value, Normalizer.Form.NFKC)).size
         fun removePhoneTokens(value: String): String = replacePhoneTokens(value, "")
