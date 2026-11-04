@@ -70,7 +70,10 @@ class UiV2Test:ProtectedTextHostTestBase() {
         assertTrue(bad(ok.copy(waiting=2,oldestWaitMs=4*3_600_000L),"status_analyze").contains("4시간"))
         assertTrue(bad(ok.copy(failed=1),"status_analyze").contains("1건"))
         assertTrue(bad(ok.copy(notifyAllowed=false),"status_notify").contains("알림"))
-        assertTrue(bad(ok.copy(updateError="STATUS_FAILURE_STORAGE (6)"),"status_update").contains("STATUS_FAILURE_STORAGE"))
+        // The stored code stays for the heartbeat; the light reads only Korean, and a cancelled install window is no problem.
+        assertEquals("저장 공간이 부족해 설치하지 못했어요. 사진이나 쓰지 않는 앱을 조금 지운 뒤 홈에서 지금 업데이트를 다시 눌러 주세요.",
+            bad(ok.copy(updateError="STATUS_FAILURE_STORAGE (6)"),"status_update"))
+        assertTrue(StatusLights.lights(ok.copy(updateError="STATUS_FAILURE_ABORTED (3): User rejected permissions")).all { it.ok })
         assertTrue(bad(ok.copy(updateReady=true),"status_update").contains("새 버전"))
         StatusLights.lights(ok.copy(folderConnected=false,consent=false)).forEach { assertFalse(it.words.contains("·")) }
     }
@@ -82,8 +85,9 @@ class UiV2Test:ProtectedTextHostTestBase() {
         settle { tag(a,"status_update")!=null }
         assertEquals(listOf("group_연결","group_정리","group_상태와 도움"),views(a.window.decorView).mapNotNull { it.tag as? String }.filter { it.startsWith("group_") })
         val update=views(tag(a,"status_update")).filterIsInstance<TextView>().joinToString { it.text }
-        assertTrue(update,update.contains("설치가 안 됐어요") && update.contains("STATUS_FAILURE_STORAGE"))
-        assertTrue(texts(a).any { it.text.toString().startsWith("마지막 설치가 안 됐어요") })
+        assertTrue(update,update.contains("저장 공간이 부족해 설치하지 못했어요") && !update.contains("STATUS") && !update.contains("공간 부족"))
+        assertEquals("저장 공간이 부족해 설치하지 못했어요.",(tag(a,"update_error") as TextView).text.toString())
+        assertTrue(texts(a).none { it.text.contains("STATUS_FAILURE") })
         assertTrue(texts(a).none { it.text.contains("녹음 1분을") || it.text.contains("·") })
         assertEquals(5,listOf("status_import","status_transcribe","status_analyze","status_notify","status_update").count { tag(a,it)!=null })
         val a2=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()

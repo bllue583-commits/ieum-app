@@ -130,8 +130,8 @@ class CallSettingsActivity:ComponentActivity() {
         body.addView(CallUi.divider(this))
         // Installed version, and the next one when it is downloaded and waiting (design: 보고와 화면); a failed install shows its reason.
         body.addView(CallUi.text(this,CallUpdate.versionLine(kr.callbrief.BuildConfig.VERSION_NAME,kr.callbrief.BuildConfig.VERSION_CODE,CallUpdate.ready(this)),CallUi.BODY,true).apply { tag="app_version" })
-        s.optString(PipelineSettingsKeys.LAST_UPDATE_ERROR).takeIf { it.isNotBlank() }?.let {
-            body.addView(CallUi.text(this,"마지막 설치가 안 됐어요: ${it.take(80)}",CallUi.CAPTION,color=CallUi.AMBER).apply { tag="update_error" }) }
+        CallUpdate.errorWords(s.optString(PipelineSettingsKeys.LAST_UPDATE_ERROR))?.let {
+            body.addView(CallUi.text(this,it.reason,CallUi.CAPTION,color=CallUi.AMBER).apply { tag="update_error" }) }
         storagePercent?.let { body.addView(CallUi.text(this,"저장 공간 ${it}% 사용",CallUi.BODY).apply { tag="storage_use" }) }
 
         val modelState=s.optString(PipelineSettingsKeys.MODEL_STATE)

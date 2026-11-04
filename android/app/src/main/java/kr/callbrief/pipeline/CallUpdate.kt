@@ -49,6 +49,24 @@ internal object CallUpdate {
             else -> "STATUS" }
         return "$name ($status)"+(message?.trim()?.takeIf { it.isNotEmpty() }?.let { ": ${it.take(80)}" } ?: "")
     }
+    /** What a failed install means to the user: why, then what to do. [PipelineSettingsKeys.LAST_UPDATE_ERROR] keeps the code for the
+     * heartbeat; screens show only these words. */
+    data class ErrorWords(val reason:String,val action:String) { val sentence get()="$reason $action" }
+    private const val AGAIN="홈에서 지금 업데이트를 다시 눌러 주세요."
+    /** The stored code ("STATUS_FAILURE_STORAGE (6): ...") in plain Korean, or null when it is no problem to show: nothing stored,
+     * or the user closed the install window (STATUS_FAILURE_ABORTED). Never echoes the code or the installer's message. */
+    fun errorWords(stored:String?):ErrorWords? {
+        val code=stored?.trim()?.substringBefore(' ')?.substringBefore(':')?.takeIf { it.isNotEmpty() } ?: return null
+        return when(code) {
+            "STATUS_FAILURE_ABORTED" -> null
+            "STATUS_FAILURE_STORAGE" -> ErrorWords("저장 공간이 부족해 설치하지 못했어요.","사진이나 쓰지 않는 앱을 조금 지운 뒤 $AGAIN")
+            "STATUS_FAILURE_BLOCKED" -> ErrorWords("휴대폰이 설치를 막았어요.","관리하는 분께 알려 주세요.")
+            "STATUS_FAILURE_CONFLICT","STATUS_FAILURE_INCOMPATIBLE","STATUS_FAILURE_INVALID" -> ErrorWords("새 버전이 이 휴대폰에 맞지 않아 설치하지 못했어요.","관리하는 분께 알려 주세요.")
+            else -> ErrorWords("설치가 중간에 멈췄어요.",AGAIN)
+        }
+    }
+    /** The user cancelled the system install window: not an error (no amber light, nothing for the watchdog). */
+    fun isUserCancel(status:Int)=status==PackageInstaller.STATUS_FAILURE_ABORTED
     internal fun saveError(c:Context,text:String?) {
         runCatching { kr.callbrief.SecureSettings(CallPipelineStartup.storage(c)).update { if(text.isNullOrBlank()) it.remove(PipelineSettingsKeys.LAST_UPDATE_ERROR) else it.put(PipelineSettingsKeys.LAST_UPDATE_ERROR,text) } }
     }
@@ -153,7 +171,7 @@ class UpdateStatusReceiver:BroadcastReceiver() {
                 @Suppress("DEPRECATION") val confirm=intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT) ?: return
                 context.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
-            status==PackageInstaller.STATUS_SUCCESS || status==-99 -> {}
+            status==PackageInstaller.STATUS_SUCCESS || status==-99 || CallUpdate.isUserCancel(status) -> {}
             else -> {
                 val text=CallUpdate.errorText(status,intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE))
                 val pending:PendingResult? =goAsync()
