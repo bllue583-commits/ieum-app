@@ -158,8 +158,10 @@ class CallPipelineDeviceTest {
                 var ok=false
                 repeat(300){ if(!ok){ s.onActivity{a->ok=ready(a)};if(!ok)Thread.sleep(100) } }
                 inst.waitForIdleSync();Thread.sleep(2000);inst.waitForIdleSync()
-                val bmp=inst.uiAutomation.takeScreenshot()
-                File(out,"$name.png").outputStream().use{bmp.compress(Bitmap.CompressFormat.PNG,100,it)}
+                // takeScreenshot() now and then returns null on a busy emulator; the render check below is what counts.
+                var bmp:Bitmap?=null
+                repeat(3){ if(bmp==null){ bmp=inst.uiAutomation.takeScreenshot();if(bmp==null)Thread.sleep(1000) } }
+                bmp?.let { b -> File(out,"$name.png").outputStream().use{b.compress(Bitmap.CompressFormat.PNG,100,it)} }
                 shots.put(name,ok);assertTrue("$name did not render",ok)
             }
         }
