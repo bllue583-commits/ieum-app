@@ -68,9 +68,9 @@
 - 로컬에만 있는 것(빌드 산출물, `robolectric-jar/`, `gradle-user/`, 에뮬레이터)은 컴퓨터마다 따로 준비. 코드·문서는 전부 저장소에 있음.
 - Mac 준비(처음 한 번): Homebrew로 `git gh python@3.12`, JDK 17(`brew install --cask temurin@17`), Android cmdline-tools(`brew install --cask android-commandlinetools`) → `sdkmanager`로 아래 Windows와 같은 패키지(시스템 이미지는 Apple Silicon이면 `arm64-v8a`) → `gh auth login` → `git clone -b feature/lean-calls https://github.com/bllue583-commits/ieum-app.git`. Mac에는 `make`가 있어 Whisper 네이티브 빌드와 Robolectric 단위 테스트도 로컬에서 될 가능성이 높음(미확인).
 
-### 이 PC(Windows) 로컬 도구 (10/30 저녁 다시 설치: Git·gh·Python 3.12는 winget, `gh auth login` 완료, 저장소는 `C:\Users\bllue\ieum-app`)
-- Android SDK: `C:\Users\bllue\Android\Sdk` (platform 36, build-tools 35, NDK 28.2.13676358, cmake 3.22.1, emulator, `system-images;android-34;google_apis;x86_64`), 에뮬레이터 이름 `ieum34`
-- JDK 17: `C:\Users\bllue\tools\jdk-17` (Gradle 툴체인이 17을 요구)
+### 이 PC(Windows) 로컬 도구 (10/30 저녁 다시 설치: Git·gh·Python 3.12는 winget, `gh auth login` 완료, 저장소는 `%USERPROFILE%\ieum-app`)
+- Android SDK: `%USERPROFILE%\Android\Sdk` (platform 36, build-tools 35, NDK 28.2.13676358, cmake 3.22.1, emulator, `system-images;android-34;google_apis;x86_64`), 에뮬레이터 이름 `ieum34`
+- JDK 17: `%USERPROFILE%\tools\jdk-17` (Gradle 툴체인이 17을 요구)
 - Robolectric 런타임: 저장소의 `robolectric-jar/` (git 제외), `python tools/prepare_host_tests.py robolectric-jar/android-all.jar`로 준비
 - **주의:** Windows에서는 Robolectric 단위 테스트 대부분이 `TEXT_STORE_RECOVERY_REVIEW_REQUIRED`로 실패함(테스트용 AtomicFile 흉내가 Linux 이름 바꾸기 방식을 전제 → `.bak` 잔존). 앱 문제 아님. **단위 테스트 판정은 GitHub ci 결과로.**
 - Windows에서 Whisper 네이티브 빌드는 `make`가 없어 불가 → APK는 GitHub `release-apk` 산출물 사용.
@@ -83,7 +83,7 @@ export JAVA_HOME="C:\\Users\\bllue\\tools\\jdk-17" ANDROID_SDK_ROOT="C:\\Users\\
 python run_gradle.py --log local-$(date +%H%M%S).log :app:compileDebugKotlin
 ```
 ```bash
-/c/Users/bllue/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu swiftshader_indirect
+$HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu swiftshader_indirect
 ```
 
 ## 4. 지금까지 완료된 것
