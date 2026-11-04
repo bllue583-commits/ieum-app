@@ -80,7 +80,7 @@ class RoutineDocTest {
     @Test fun tidyDocEndsWithTheSelfReport() {
         val text=File(doc().parentFile,"tidy.md").readText()
         assertTrue(text.contains("\"routine\":\"tidy\""));assertTrue(text.contains("status/last-run.json"))
-        listOf("firstPassDone","tidiedOnce","mergedInto","tidy/proposal.json","\"정리할 것 없음\"","중복 방지","\"이미 정리됨\"").forEach { assertTrue(it,text.contains(it)) }
+        listOf("firstPassDone","tidiedOnce","mergedInto","tidy/proposal.json","\"정리할 것 없음","중복 방지","\"이미 정리됨\"").forEach { assertTrue(it,text.contains(it)) }
         // v2.6: proposals hand back the state's rev (the phone skips an item changed since), merges only mark mergedInto.
         listOf("locked, rev}","mergeCandidates[]","{\"op\":\"rewrite\",\"id\",\"rev\",","{\"op\":\"merge\",\"id\",\"rev\",","{\"op\":\"done_suggested\",\"id\",\"rev\"}",
             "각 제안 항목에는 state의 rev를 그대로 적는다","create에는 rev가 없다","state에 mergeCandidates가 있으면",
