@@ -249,6 +249,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
     /** Subscription mode: when the transcript was last dropped into the inbox. */
     fun sentMs(id:String):Long?=rows("SELECT sent_ms FROM call_inbox_sent WHERE record_id=?",id).singleOrNull()?.long("sent_ms")
     fun markSent(id:String,ms:Long)=port.execute("INSERT OR REPLACE INTO call_inbox_sent(record_id,sent_ms) VALUES(?,?)",id,ms)
+    /** When a request last went up to the mailbox (heartbeat lastUploadMs), or null when none ever did. */
+    fun lastSentMs():Long?=rows("SELECT MAX(sent_ms) AS m FROM call_inbox_sent").firstOrNull()?.long("m")
     /** When the task's answer for this record was received (null: not yet, or set aside as broken). A received record is not sent again. */
     fun receivedMs(id:String):Long?=rows("SELECT result_ms FROM call_inbox_sent WHERE record_id=?",id).singleOrNull()?.long("result_ms")
     fun setReceived(id:String,ms:Long?)=port.execute("UPDATE call_inbox_sent SET result_ms=? WHERE record_id=?",ms,id)
@@ -897,6 +899,24 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
                 NameKey.sameWords(title,other) ||
                     (it.str("status") !in setOf("done","merged") && companyId!=null && it.str("cid")==companyId && NameKey.nearTitle(title,other)) }
     }
+    /** Read only, for the heartbeat's callLog check: the stored call log from [fromMs] (to [toMs]) as counts and a time. */
+    data class LogTally(val total:Int,val latestMs:Long?,val recorded:Int,val unrecorded:Int)
+    fun callLogTally(fromMs:Long,toMs:Long=Long.MAX_VALUE):LogTally {
+        val r=rows("""SELECT COUNT(*) AS n,MAX(start_ms) AS latest,
+            SUM(CASE WHEN type IN (1,2) AND log_id IN (SELECT log_id FROM call_record_log) THEN 1 ELSE 0 END) AS rec,
+            SUM(CASE WHEN duration_ms>0 AND type IN (1,2) AND log_id NOT IN (SELECT log_id FROM call_record_log) THEN 1 ELSE 0 END) AS unrec
+            FROM call_log WHERE start_ms>=CAST(? AS INTEGER) AND start_ms<CAST(? AS INTEGER)""",fromMs,toMs).single()
+        return LogTally((r.long("n") ?: 0).toInt(),r.long("latest"),(r.long("rec") ?: 0).toInt(),(r.long("unrec") ?: 0).toInt())
+    }
+    /** Read only, for status/calllog.txt: each stored call log entry from [fromMs] with the record tied to it, if any. */
+    data class StoredLog(val logId:Long,val numberKey:String?,val name:String?,val startMs:Long,val durationMs:Long,val type:Int,
+        val recordId:String?,val state:String?,val business:Boolean?,val recordingId:String?)
+    fun callLogRows(fromMs:Long):List<StoredLog> =rows("""SELECT l.log_id,l.number_key,l.name,l.start_ms,l.duration_ms,l.type,x.record_id,r.state,r.analysis_json,r.recording_id
+        FROM call_log l LEFT JOIN call_record_log x ON x.log_id=l.log_id LEFT JOIN call_records r ON r.record_id=x.record_id
+        WHERE l.start_ms>=CAST(? AS INTEGER) ORDER BY l.start_ms""",fromMs).map { r ->
+        StoredLog(r.long("log_id")!!,r.str("number_key"),r.str("name"),r.long("start_ms") ?: 0,r.long("duration_ms") ?: 0,(r.long("type") ?: 0).toInt(),
+            r.str("record_id"),r.str("state"),r.str("analysis_json")?.let { j -> runCatching { JSONObject(j).optJSONObject("analysis")?.takeIf { it.has("business") }?.optBoolean("business") }.getOrNull() },
+            r.str("recording_id")) }
     /** Answered calls in the log since 10/1 with no recording (missed and rejected calls are not counted). */
     fun unrecordedCalls():Int=(rows("SELECT COUNT(*) AS n FROM call_log WHERE duration_ms>0 AND type IN (1,2) AND log_id NOT IN (SELECT log_id FROM call_record_log)").single().long("n") ?: 0).toInt()
     /** Start of the earliest stored text ("sms:") or mail ("mail:") record, or null. */

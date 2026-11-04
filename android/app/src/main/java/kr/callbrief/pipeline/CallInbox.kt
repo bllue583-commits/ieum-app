@@ -31,7 +31,7 @@ internal class GitHubInboxStore(private val repo:String,private val token:String
     private val json="application/json".toMediaType()
     private fun request(path:String)=Request.Builder().url("https://api.github.com/repos/$repo/contents/$path")
         .header("Authorization","Bearer $token").header("X-GitHub-Api-Version","2022-11-28")
-    private fun call(r:Request):Pair<Int,String> = client.newCall(r).execute().use { it.code to (it.body?.string() ?: "") }
+    private fun call(r:Request):Pair<Int,String> = client.newCall(r).execute().use { CallInbox.noteTokenExpiry(it.header(CallInbox.TOKEN_EXPIRY_HEADER));it.code to (it.body?.string() ?: "") }
     // 409: the repository moved on between read and write (the task pushed): try again next run.
     private fun ok(code:Int,body:String) { if(code !in 200..299) throw if(code>=500||code==429||code==409||code==403&&body.contains("rate limit")) IOException("INBOX_HTTP_$code") else ClaudeCallException("INBOX_HTTP_$code") }
 
@@ -66,6 +66,7 @@ internal class GitHubInboxStore(private val repo:String,private val token:String
             .header("Authorization","Bearer $token").header("Accept","application/octet-stream")
             else request(path).header("Accept","application/vnd.github.raw+json")
         big.newCall(r0.get().build()).execute().use { r ->
+            if(path.startsWith("releases/assets/")) CallInbox.noteTokenExpiry(r.priorResponse?.header(CallInbox.TOKEN_EXPIRY_HEADER)) else CallInbox.noteTokenExpiry(r.header(CallInbox.TOKEN_EXPIRY_HEADER))
             ok(r.code,if(r.isSuccessful) "" else r.body?.string() ?: "")
             r.body!!.byteStream().use { input -> to.outputStream().use { input.copyTo(it) } }
         }
@@ -78,6 +79,18 @@ internal class GitHubInboxStore(private val repo:String,private val token:String
 }
 
 internal object CallInbox {
+    /** GitHub sends this on every reply to a request made with an expiring token, e.g. "2026-12-01 10:00:00 UTC".
+     * Only the phone sees it (the watchdog's workflow token has none), so the heartbeat carries it (design B2). */
+    const val TOKEN_EXPIRY_HEADER="github-authentication-token-expiration"
+    /** The expiry seen on the latest mailbox reply in this process; null until one carried the header. */
+    @Volatile var tokenExpiresMs:Long?=null
+    fun noteTokenExpiry(header:String?) { parseTokenExpiry(header)?.let { tokenExpiresMs=it } }
+    /** "yyyy-MM-dd HH:mm:ss UTC" or with a numeric zone ("... -0700"); anything else gives null. */
+    fun parseTokenExpiry(header:String?):Long? {
+        val h=header?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val f=java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z",java.util.Locale.US).apply { isLenient=false }
+        return runCatching { f.parse(h.replace(Regex(" (UTC|GMT)$")," +0000"))?.time }.getOrNull()
+    }
     const val INBOX="inbox";const val RESULTS="results";const val BAD="bad"
     /** First-pass batches (처음 정리): "b-<time of the first record>-<hash>.json", so name order is time order. */
     const val OLD="b-"

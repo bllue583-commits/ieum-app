@@ -37,3 +37,103 @@ class PhoneStatusTest {
         assertTrue(!PhoneStatus.build(input()).has("firstPass"))
     }
 }
+
+/** Heartbeat fields that tell why a phone is quiet (design B1), and the mailbox token expiry (B2). */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk=[35])
+class PhoneStatusHealthTest {
+    private fun base()=PhoneStatus.Input(1_000L,"v2.4",1040,0,null,5,6,"READY","","",12)
+
+    @Test fun quietPhoneFieldsAreAlwaysThere() {
+        val o=PhoneStatus.build(base().copy(health=PhoneStatus.Health(consent=true,folder=false,notifyAllowed=true,batteryFree=false,
+            standbyBucket="RARE",lastDiscoveryMs=900,lastUploadMs=800,pendingAnalysis=3,rescheduledMs=700,tokenExpiresMs=2_000_000L,audioChannels=2,audioChannelCorr=0.12345)))
+        for(k in listOf("consent","folder","notifyAllowed","batteryFree","standbyBucket","lastDiscoveryMs","lastUploadMs","pendingAnalysis","rescheduledMs","tokenExpiresMs","audioChannels"))
+            assertTrue(k,o.has(k))
+        assertTrue(o.getBoolean("consent"));assertFalse(o.getBoolean("folder"));assertEquals("RARE",o.getString("standbyBucket"))
+        assertEquals(900L,o.getLong("lastDiscoveryMs"));assertEquals(3,o.getInt("pendingAnalysis"));assertEquals(2_000_000L,o.getLong("tokenExpiresMs"))
+        assertEquals(2,o.getInt("audioChannels"));assertEquals(0.123,o.getDouble("audioChannelCorr"),1e-9)
+        val unknown=PhoneStatus.build(base())
+        assertTrue(unknown.isNull("tokenExpiresMs"));assertTrue(unknown.isNull("audioChannels"));assertTrue(unknown.isNull("audioChannelCorr"))
+        assertFalse(unknown.has("droppedSegments"));assertFalse(unknown.has("cleaned"))
+    }
+    @Test fun bucketIsAFixedCode() {
+        assertEquals("ACTIVE",PhoneStatus.bucketCode(android.app.usage.UsageStatsManager.STANDBY_BUCKET_ACTIVE))
+        assertEquals("RESTRICTED",PhoneStatus.bucketCode(45));assertEquals("B99",PhoneStatus.bucketCode(99))
+        assertEquals("ACTIVE",PhoneStatus.build(base().copy(health=PhoneStatus.Health(standbyBucket="ACTIVE 김부장"))).getString("standbyBucket"))
+    }
+    @Test fun callLogWindowCountsByTypeAndPersonal() {
+        fun e(id:Long,at:Long,type:Int,dur:Long=60_000,key:String?="k$id",personal:Boolean=false)=FirstPass.LogEntry(id,key,"홍길동",at,dur,type,personal)
+        val log=listOf(e(1,100,1),e(2,200,2),e(3,300,3,0),e(4,400,5,0),e(5,500,6,0),e(6,600,1,key="01099998888"),e(7,700,2,personal=true),e(8,50,1))
+        val w=PhoneStatus.window(log,100,{ it.personal || it.numberKey=="01099998888" },CallRecordStore.LogTally(7,700,2,1))
+        assertEquals(PhoneStatus.CallLogWindow(7,2,2,1,1,1,2,1,2),w)
+        val status=PhoneStatus.CallLogStatus(true,100,600,w,PhoneStatus.window(log,600,{ false },CallRecordStore.LogTally(2,700,0,0)),700,700,8,7,555)
+        val o=PhoneStatus.build(base().copy(callLog=status)).getJSONObject("callLog")
+        assertEquals(7,o.getJSONObject("since").getInt("total"));assertEquals(1,o.getJSONObject("since").getInt("unrecordedCalls"))
+        assertEquals(2,o.getJSONObject("today").getInt("total"));assertEquals(8,o.getInt("deviceTotal"));assertEquals(7,o.getInt("storedTotal"))
+        assertEquals(555L,o.getLong("mismatchSinceMs"))
+        assertFalse(o.toString().contains("9999"));assertFalse(Regex("[가-힣]").containsMatchIn(o.toString()))
+        assertFalse(PhoneStatus.build(base()).has("callLog"))
+    }
+    @Test fun mismatchKeepsItsStart() {
+        assertEquals(1_000L,PhoneStatus.mismatchSince(0,5,4,1_000))
+        assertEquals(1_000L,PhoneStatus.mismatchSince(1_000,5,4,9_000))
+        assertEquals(0L,PhoneStatus.mismatchSince(1_000,4,4,9_000))
+        assertEquals(0L,PhoneStatus.mismatchSince(1_000,null,4,9_000)) // no permission: cannot compare
+    }
+    @Test fun tokenExpiryHeaderIsRead() {
+        assertNull(CallInbox.parseTokenExpiry(null));assertNull(CallInbox.parseTokenExpiry(""));assertNull(CallInbox.parseTokenExpiry("nonsense"))
+        assertEquals(1764583200000L,CallInbox.parseTokenExpiry("2025-12-01 10:00:00 UTC"))
+        assertEquals(1764583200000L,CallInbox.parseTokenExpiry("2025-12-01 02:00:00 -0800"))
+        val before=CallInbox.tokenExpiresMs
+        try {
+            CallInbox.noteTokenExpiry("2025-12-01 10:00:00 UTC");CallInbox.noteTokenExpiry(null) // a reply without the header keeps the last value
+            assertEquals(1764583200000L,CallInbox.tokenExpiresMs)
+        } finally { CallInbox.tokenExpiresMs=before }
+    }
+}
+
+/** The whole heartbeat as the phone sends it, from a phone holding a named call: no name, number or content goes up. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk=[35],shadows=[kr.callbrief.ShadowTextKeys::class,kr.callbrief.ShadowTextKeys.ExistingApprovedSettings::class,kr.callbrief.ShadowTextAtomicFile::class])
+@org.robolectric.annotation.SQLiteMode(org.robolectric.annotation.SQLiteMode.Mode.NATIVE)
+class PhoneStatusPublishTest:kr.callbrief.ProtectedTextHostTestBase() {
+    @Test fun sentHeartbeatHasNoNameNumberOrContent() {
+        val context=org.robolectric.RuntimeEnvironment.getApplication()
+        kr.co.callsummary.core.android.AndroidSqlPort(context,kr.callbrief.GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql")).use { p -> p.transaction {
+            p.execute("INSERT OR IGNORE INTO board_state(owner_key,revision) VALUES(?,0)",kr.callbrief.GeneralLocalStore.OWNER)
+            p.execute("INSERT INTO folder_grants VALUES('g1',?,'content://generated/tree',1,1,1)",kr.callbrief.GeneralLocalStore.OWNER)
+            p.execute("INSERT INTO recordings(recording_id,owner_key,grant_id,document_id,display_name,mime_type,byte_count,first_seen_ms,last_seen_ms,source_seq,source_version,head_revision) VALUES('rec1',?,'g1','rec1','통화 녹음 홍길동_261027_093000.m4a','audio/mp4',10,0,0,1,1,1)",kr.callbrief.GeneralLocalStore.OWNER)
+            null } }
+        CallRecordStore(context){ 5_000L }.use { db ->
+            db.insert(CallTranscript("rec1",1,"a".repeat(64),4_000L,60_000,"010-1111-2222","홍길동 부장님 내일 현장 콘크리트 타설 3시",emptyList(),"m","b".repeat(64),true))
+            db.markSent(db.pending().single().recordId,4_500L)
+            db.reconcileCallLog(listOf(FirstPass.LogEntry(77,"01033334444","박영희",FirstPass.FROM_MS+4_200L,30_000,1)))
+        }
+        kr.callbrief.SecureSettings(context).update { it.put(PipelineSettingsKeys.CONSENT_GRANTED,true).put("treeUri","content://generated/tree")
+            .put(kr.callbrief.AutomaticRecordingDiscovery.LAST_DISCOVERY_MS,3_000L).put(PipelineSettingsKeys.RESCHEDULED_MS,2_000L)
+            .put(PipelineSettingsKeys.MY_NAME,"김철수") }
+        val sent=LinkedHashMap<String,String>()
+        val inbox=object:CallInboxStore {
+            override fun put(path:String,json:String){ sent[path]=json }
+            override fun list(dir:String)=emptyList<Pair<String,String>>()
+            override fun get(path:String)=sent[path] ?: throw ClaudeCallException("INBOX_HTTP_404")
+            override fun delete(path:String,sha:String){}
+        }
+        val before=CallInbox.tokenExpiresMs
+        try {
+            CallInbox.noteTokenExpiry("2026-11-17 00:00:00 UTC")
+            PhoneStatus.publish(context,inbox,10_000L)
+        } finally { CallInbox.tokenExpiresMs=before }
+        val text=sent.getValue(PhoneStatus.PATH);val o=org.json.JSONObject(text)
+        assertTrue(o.getBoolean("consent"));assertEquals(3_000L,o.getLong("lastDiscoveryMs"));assertEquals(4_500L,o.getLong("lastUploadMs"))
+        assertEquals(1,o.getInt("pendingAnalysis"));assertEquals(2_000L,o.getLong("rescheduledMs"))
+        assertEquals(CallInbox.parseTokenExpiry("2026-11-17 00:00:00 UTC"),o.getLong("tokenExpiresMs"))
+        val c=o.getJSONObject("callLog")
+        assertEquals(1,c.getInt("storedTotal"));assertEquals(FirstPass.FROM_MS+4_200L,c.getLong("latestStoredLogMs"))
+        assertFalse(c.getBoolean("allowed"));assertTrue(c.isNull("deviceTotal"));assertEquals(0L,c.getLong("mismatchSinceMs"))
+        assertFalse(text,Regex("[가-힣]").containsMatchIn(text))
+        for(bad in listOf("010","1111","2222","3333","4444","rec1","content://","treeUri")) assertFalse(bad,text.contains(bad))
+        // The expiry is kept for the next heartbeat after a restart.
+        assertEquals(o.getLong("tokenExpiresMs"),kr.callbrief.SecureSettings(context).snapshot().optLong(PhoneStatus.TOKEN_EXPIRES_MS))
+    }
+}
