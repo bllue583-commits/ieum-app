@@ -1,18 +1,25 @@
 name: update-smoke
 
-# Draft (design H1). Manual only for now: it is NOT wired into release-apk and blocks nothing until it has been
-# proven on a few runs. Installs the previous release APK from the inbox repository on an emulator, installs the
-# freshly built APK over it (same signing key, higher version code), starts the app and checks for crashes and for
-# the scheduled work. Needs the secrets IEUM_INBOX_TOKEN (and IEUM_SIGNING_SEED if release-apk uses it).
+# Design H1. Installs the previous release APK from the inbox repository on an emulator, installs the freshly built
+# APK over it (same signing key, higher version code), starts the app and checks for crashes and for the scheduled work.
+# Runs on every push that release-apk runs on; the emulator part only when tools/needs_update_smoke.sh says the push
+# changed, since the last release, a manifest, IeumApplication, StartupReceiver, CallSinkImpl or the build settings.
+# For those pushes release-apk waits for the step "Install, update, start" here to pass; other pushes finish at once.
+# Needs the secrets IEUM_INBOX_TOKEN (and IEUM_SIGNING_SEED if release-apk uses it).
 on:
+  push:
+    branches: ['feature/lean-calls', 'main']
+    paths: ['android/**', 'tools/**', '.github/workflows/release-apk.yml', '.github/workflows/update-smoke.yml']
   workflow_dispatch:
 
 concurrency:
   group: update-smoke-${{ github.ref }}
-  cancel-in-progress: true
+  # A push run is what release-apk waits for: never cancelled by the next push.
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   smoke:
@@ -22,18 +29,30 @@ jobs:
       INBOX: bllue583-commits/ieum-inbox
     steps:
       - uses: actions/checkout@v4
+      - name: Decide
+        id: need
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; echo "manual run: smoke test runs"; exit 0; fi
+          out=$(bash tools/needs_update_smoke.sh "$GITHUB_REPOSITORY" "$GITHUB_SHA"); echo "$out"
+          echo "run=$(echo "$out" | tail -n 1)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-java@v4
+        if: steps.need.outputs.run == 'true'
         with: {distribution: temurin, java-version: '17'}
       - uses: android-actions/setup-android@v3
+        if: steps.need.outputs.run == 'true'
         with:
           packages: 'platforms;android-36 build-tools;35.0.0 ndk;28.2.13676358 cmake;3.22.1'
       - uses: actions/cache@v4
+        if: steps.need.outputs.run == 'true'
         with:
           path: |
             gradle-user/caches
             gradle-user/wrapper
           key: device-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties') }}
       - name: Download the previous release APK
+        if: steps.need.outputs.run == 'true'
         env:
           GH_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
         run: |
@@ -43,12 +62,14 @@ jobs:
           gh api -H "Accept: application/octet-stream" "repos/$INBOX/releases/assets/$asset" > "$RUNNER_TEMP/previous.apk"
           python3 -c "import json,sys; print('PREV_CODE=' + str(json.load(open(sys.argv[1]))['versionCode']))" "$RUNNER_TEMP/version.json" >> "$GITHUB_ENV"
       - name: Build the new APK with the release signing key
+        if: steps.need.outputs.run == 'true'
         env:
           IEUM_INBOX_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
           IEUM_SIGNING_SEED: ${{ secrets.IEUM_SIGNING_SEED }}
         run: |
           [ -z "$IEUM_SIGNING_SEED" ] || echo "::add-mask::$IEUM_SIGNING_SEED"
-          pip install --quiet 'cryptography>=44'
+          # Pinned: the certificate must come out byte-identical every build (checked with 50.0.1 and 50.0.2: same fingerprint).
+          pip install --quiet 'cryptography==50.0.2'
           python3 tools/derive_signing_key.py "$RUNNER_TEMP/ieum.p12"
           export ANDROID_SDK_ROOT="$ANDROID_HOME" \
             IEUM_ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/28.2.13676358" IEUM_CMAKE_BINARY="$ANDROID_HOME/cmake/3.22.1/bin/cmake" \
@@ -56,10 +77,13 @@ jobs:
           python3 run_gradle.py --log smoke-build.log :app:assembleDebug
           cp android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/new.apk"
       - name: Enable KVM
+        if: steps.need.outputs.run == 'true'
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      # release-apk checks this step by name: keep the name.
       - name: Install, update, start
+        if: steps.need.outputs.run == 'true'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -72,7 +96,7 @@ jobs:
           disable-animations: true
           script: bash tools/update_smoke.sh ${{ runner.temp }}/previous.apk ${{ runner.temp }}/new.apk smoke-results
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && steps.need.outputs.run == 'true'
         with:
           name: update-smoke-results
           retention-days: 7

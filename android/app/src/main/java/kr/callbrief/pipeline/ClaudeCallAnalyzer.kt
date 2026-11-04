@@ -135,9 +135,6 @@ internal class ClaudeCallAnalyzer {
             "counterpartName" to nullable("string"),
             "counterpartCompany" to nullable("string"),
             "counterpart" to obj("personName" to nullable("string"),"companyName" to nullable("string"),"role" to nullable("string"),"isStaff" to JSONObject().put("type","boolean")),
-            "siteMemo" to nullable("string").put("description","현장 상황 메모 전체 새 글(600자 이내), 바뀐 게 없으면 null"),
-            "companyMemo" to nullable("string").put("description","상대 업체 메모 전체 새 글(400자 이내), 바뀐 게 없으면 null"),
-            "companyTrade" to nullable("string").put("enum",JSONArray(TRADES).put(JSONObject.NULL)).put("description","상대 업체 공종, 메시지의 [공종 목록] 중 하나 또는 null"),
             "business" to JSONObject().put("type","boolean").put("description","업무와 관련 있으면 true, 개인적인 문자·메일이면 false"),
             "speakerNotes" to nullable("string").put("description","누가 말했는지 판단한 근거 한두 문장, 화면에 쓰지 않음"),
             "tasks" to array(obj("op" to enum("create","update","done_suggested"),"taskId" to nullable("string"),"title" to str(),"due" to date(),
@@ -145,13 +142,14 @@ internal class ClaudeCallAnalyzer {
                 "owner" to enum("me","them","unknown").put("description","일을 하는 쪽: 사용자 me, 상대 them, 애매하면 unknown"),
                 "certainty" to enum("sure","tentative").put("description","하기로 정해졌으면 sure, 알아보겠다 정도면 tentative")),
                 "체크할 일, 한 기록에 최대 5개"))
-        /** Version of the analysis rules and result format (docs/routines/hourly.md). Requests carry it; the request file format is [FORMAT]. */
-        const val PROMPT_VERSION=4
+        /** Version of the analysis rules and result format (docs/routines/hourly.md). Requests carry it; the request file format is [FORMAT].
+         * 5: the result no longer has siteMemo, companyMemo, companyTrade (the phone never used them; the task keeps the ledger). */
+        const val PROMPT_VERSION=5
         const val FORMAT=3
         /** Site words the speech recogniser tends to mishear (design C5 [용어]). */
         val TERMS=listOf("타설","양생","레미콘","슬럼프","거푸집","동바리","배근","D10","D13","D16","D19","D22","D25","샵드로잉","기성","내역서","견적서","도면",
             "시방서","위험성평가","작업허가서","안전교육","감리","발주처","준공","검측","펌프카","크레인","비계","방수","미장","조적","설비","소방")
-        /** The trades a company can have (design C5 [공종 목록]); the schema's companyTrade takes only these. */
+        /** The trades a company can have (design C5 [공종 목록]); the message lists them for the task's ledger. */
         val TRADES=listOf("철근","형틀","타설","전기","설비","소방","도장","방수","미장","조적","금속","유리","석재","토공","가설","장비","자재","안전","감리","발주처","기타")
         /** Korean public holidays (substitute and election days included), fixed per year: renew every year (design C5). */
         val HOLIDAYS:Set<java.time.LocalDate> =listOf(
@@ -211,17 +209,14 @@ internal class ClaudeCallAnalyzer {
 13. counterpart에는 이번 통화 상대의 personName, companyName, role, isStaff(우리 회사 직원이면 true, 이때 companyName은 null)를 씁니다. 자막이나 [이름 목록]에서 확인되지 않으면 null로 두고, 자막과 [이름 목록]에 없는 이름은 절대 지어내지 마세요. counterpartName과 counterpartCompany에는 같은 값을 넣습니다. 호칭(과장, 소장, 님)은 이름에 붙이지 말고 role에 씁니다.
 14. 자막의 이름은 음성 인식 오타가 있을 수 있습니다. [이름 목록]에 비슷한 이름이 있으면 목록의 표기를 그대로 쓰세요. 목록에 "김민수(△△철강 과장, 오인식 김민서)"처럼 "오인식" 뒤에 적힌 이름은 다르게 들린 적이 있는 틀린 표기이니 같은 사람으로 보고 앞의 이름을 쓰세요.
 15. "상대 id"가 있으면 그 상대는 전화번호(메일은 주소)로 확인된 사람입니다. 자막의 이름이 [상대]의 이름과 다르게 들려도 같은 사람이니 [상대]의 이름을 쓰세요. 다만 자막에서 상대가 자기 이름을 분명히 다르게 말하면 [이 번호를 쓰는 사람들]에서 고르고, 거기에도 없으면 그 이름을 쓰세요(사무실 번호를 여러 사람이 씁니다).
-16. 전화부 이름에 업체나 직책이 붙어 있으면(김과장 △△철강) 이름, 업체, 직책으로 나눠 쓰세요. companyTrade는 [공종 목록] 중 하나이며 모르면 null입니다.
-
-[장부 메모]
-17. siteMemo는 현장의 지금 상황을 짧게 요약한 전체 새 글(600자 이내), companyMemo는 상대 업체의 지금 상태를 짧게 요약한 전체 새 글(400자 이내)입니다. 기존 메모에 덧붙이지 말고, 아직 유효한 내용과 이번 통화에서 새로 알게 된 내용을 합쳐 다시 쓰세요. 바뀐 것이 없으면(업체를 모르면 companyMemo도) null을 보내세요. [처음 정리] 기록이면 아직 모르던 사실만 보태고 더 최신 내용을 지우거나 되돌리지 마세요.
+16. 전화부 이름에 업체나 직책이 붙어 있으면(김과장 △△철강) 이름, 업체, 직책으로 나눠 쓰세요.
 
 [문자와 메일]
-18. 메시지 맨 위 "종류"가 문자나 메일이면 <transcript> 안의 글은 업무 문자(시각과 보낸/받은 표시) 또는 메일(제목, 보낸 사람, 본문, 첨부 목록)입니다. 자막 규칙을 똑같이 적용하고 quote도 그 글에서 복사하세요. 보낸 문자의 약속은 사용자의 약속(owner "me")입니다. "첨부: 견적서.pdf" 같은 줄은 그 서류가 실제로 갔다는 신호이므로 [열린 체크할 일]의 "보내기" 일이 끝난 것으로 보이면 done_suggested를 내세요.
-19. <texts>는 같은 상대와 최근 7일 동안 주고받은 업무 문자와 메일 원문입니다. 통화와 문자, 메일을 한 흐름으로 이어서 요약하고, 이미 문자로 끝난 일은 새 할 일로 만들지 마세요. "아직 정리 전" 표시는 아직 분석되지 않은 문자라는 뜻입니다.
+17. 메시지 맨 위 "종류"가 문자나 메일이면 <transcript> 안의 글은 업무 문자(시각과 보낸/받은 표시) 또는 메일(제목, 보낸 사람, 본문, 첨부 목록)입니다. 자막 규칙을 똑같이 적용하고 quote도 그 글에서 복사하세요. 보낸 문자의 약속은 사용자의 약속(owner "me")입니다. "첨부: 견적서.pdf" 같은 줄은 그 서류가 실제로 갔다는 신호이므로 [열린 체크할 일]의 "보내기" 일이 끝난 것으로 보이면 done_suggested를 내세요.
+18. <texts>는 같은 상대와 최근 7일 동안 주고받은 업무 문자와 메일 원문입니다. 통화와 문자, 메일을 한 흐름으로 이어서 요약하고, 이미 문자로 끝난 일은 새 할 일로 만들지 마세요. "아직 정리 전" 표시는 아직 분석되지 않은 문자라는 뜻입니다.
 
 [개인 내용]
-20. business는 이 통화·문자·메일이 사용자의 일(현장, 협력업체, 회사 업무)과 관련 있으면 true입니다. 가족, 지인, 쇼핑, 택배, 광고, 금융 알림 같은 개인적인 것이면 false로 하고, summary는 "개인 내용"이라고만 쓰고 나머지 목록은 비우며 이름, 메모, 업체도 모두 null로 두세요. 개인 내용은 요약하거나 옮겨 적지 마세요. [상대]에 업체가 있는 통화는 분명히 개인적인 내용일 때만 false입니다.
+19. business는 이 통화·문자·메일이 사용자의 일(현장, 협력업체, 회사 업무)과 관련 있으면 true입니다. 가족, 지인, 쇼핑, 택배, 광고, 금융 알림 같은 개인적인 것이면 false로 하고, summary는 "개인 내용"이라고만 쓰고 나머지 목록은 비우며 이름과 업체도 모두 null로 두세요. 개인 내용은 요약하거나 옮겨 적지 마세요. [상대]에 업체가 있는 통화는 분명히 개인적인 내용일 때만 false입니다.
 
 [예시 1] [열린 체크할 일]에 {"taskId":"w12","title":"김민수 과장 수정 견적서 회신 확인"}이 있고 자막에 "수정 견적서는 어제 메일로 보내드렸습니다"가 있으면 → tasks: [{"op":"done_suggested","taskId":"w12","quote":"수정 견적서는 어제 메일로 보내드렸습니다","owner":"them","certainty":"sure"}]
 [예시 2] [열린 체크할 일]에 {"taskId":"w20","title":"3층 타설 일정표 공유","due":"2026-11-05"}가 있고 자막에 "타설 일정표는 금요일까지 드릴게요"(통화일 수요일 11/4)가 있으면 → tasks: [{"op":"update","taskId":"w20","title":"3층 타설 일정표 공유","due":"2026-11-06","quote":"타설 일정표는 금요일까지 드릴게요","owner":"them","certainty":"sure"}]

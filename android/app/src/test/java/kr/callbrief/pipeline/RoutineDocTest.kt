@@ -38,11 +38,24 @@ class RoutineDocTest {
         // The routine's steps that must not get lost when the prompt is replaced.
         listOf("\"새 기록 없음\"","ledger/edits","b- 파일을 이름순으로 최대 2개","Read 도구","스크립트로 일괄 생성하지 않는다","\"format\": 3이 있으면(새 형식) 이 문서의 [분석 규칙]을 따르고",
             "promptMismatch","rev를 1 올리고","pull --rebase","bad/","status/last-run.json","처리 건수만").forEach { assertTrue(it,text.contains(it)) }
+        // The CI end-to-end job (inbox-e2e.yml, InboxSelfTest) names its file selftest-…: answered, never put into the ledger.
+        assertTrue(text.contains("이름이 selftest-로 시작하는 파일"));assertTrue(text.contains("장부(현장 메모, 업체, 사람, issues"))
+        // v5: the memos and the trade left the result; the task still keeps them in the ledger, and phones not yet updated still send 4.
+        listOf("siteMemo","companyMemo","companyTrade").forEach { assertFalse(it,ClaudeCallAnalyzer.SCHEMA.getJSONObject("properties").has(it)) }
+        listOf("- siteMemo: 현장의 지금 상황","memo는 그 업체의 지금 상태","[공종 목록] 중 하나로","\"promptVersion\": 4는 폰이 업데이트되기 전의 과도기 요청",
+            "옛 형식","\"system\"을 규칙으로").forEach { assertTrue(it,text.contains(it)) }
+        assertTrue(text.contains(REPO))
     }
 
     @Test fun tidyDocEndsWithTheSelfReport() {
         val text=File(doc().parentFile,"tidy.md").readText()
         assertTrue(text.contains("\"routine\":\"tidy\""));assertTrue(text.contains("status/last-run.json"))
-        listOf("firstPassDone","tidiedOnce","mergedInto","tidy/proposal.json","\"정리할 것 없음\"").forEach { assertTrue(it,text.contains(it)) }
+        listOf("firstPassDone","tidiedOnce","mergedInto","tidy/proposal.json","\"정리할 것 없음\"","중복 방지","\"이미 정리됨\"").forEach { assertTrue(it,text.contains(it)) }
+        assertTrue(text.contains(REPO))
+    }
+
+    private companion object {
+        /** Both routines find the inbox repository the same way. */
+        const val REPO="저장소는 bllue583-commits/ieum-inbox 이다. 작업 폴더에 없으면 ls /home/claude 로 찾고, 그래도 없으면 gh repo clone bllue583-commits/ieum-inbox 로 받는다."
     }
 }

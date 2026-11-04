@@ -1,7 +1,7 @@
 ﻿# Local design preview: capture every screen of the preview build (IEUM_LOCAL_PREVIEW=1) on the running emulator.
 # Usage: powershell -File tools/preview_shots.ps1 <prefix>   -> evidence/shots/<prefix>_*.png
 param([string]$prefix="shot")
-$adb="$env:ANDROID_SDK_ROOT\platform-tools\adb.exe"; if(-not (Test-Path $adb)){ $adb="C:\Users\bllue\Android\Sdk\platform-tools\adb.exe" }
+$adb="$env:ANDROID_SDK_ROOT\platform-tools\adb.exe"; if(-not (Test-Path $adb)){ $adb="$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" }
 $out=Join-Path $PSScriptRoot "..\evidence\shots"; New-Item -ItemType Directory -Force $out | Out-Null
 function cap($name){ Start-Sleep 3; cmd /c "`"$adb`" exec-out screencap -p > `"$out\${prefix}_$name.png`"" }
 function home { & $adb shell am force-stop kr.callbrief; & $adb shell monkey -p kr.callbrief -c android.intent.category.LAUNCHER 1 2>&1 | Out-Null; Start-Sleep 4 }
