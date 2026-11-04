@@ -13,7 +13,7 @@
 
 작업 폴더는 ieum-inbox 저장소의 기본 브랜치다. 이 저장소에는 폰이 올린 분석 요청(inbox/), 결과(results/), 장부(ledger/), 사용자 수정(ledger/edits/)이 있다.
 
-0. 시작하면 `git pull`을 하고 `ls inbox ledger/edits`만 실행한다. 둘 다 .json 파일이 없으면 마지막 단계(자가 보고)만 하고 "새 기록 없음" 한 줄로 끝낸다. 다른 파일은 열지 않는다.
+0. 시작하면 `git pull`을 하고 `ls inbox ledger/edits`만 실행한다. 둘 다 .json 파일이 없으면 마지막 단계(자가 보고)만 하고 7번 형식으로 "새 기록 없음"이라고 답한다. 다른 파일은 열지 않는다.
 
 [장부]
 ledger/ledger.json의 형식은 아래와 같다.
@@ -43,7 +43,7 @@ ledger/ledger.json의 형식은 아래와 같다.
 5. 결과 파일: 단일 요청은 results/<같은 파일 이름>에 {"id": 요청 id, "analysis": 객체}를, 묶음은 {"id": 묶음 id, "results": [{"id": item id, "analysis": 객체}, …]}를 쓴다. 처리한 inbox 파일은 `git rm` 한다. 형식이 깨진 요청은 bad/로 옮긴다. 결과 파일은 `python3 -c 'import json;json.load(open("파일"))'`로 형식만 확인한다.
 6. 장부의 rev를 1 올리고 updatedMs를 지금 시각으로 쓴다. 이번에 처리한 것이 selftest- 요청뿐이면 장부는 그대로 두고 결과와 지운 파일만 커밋한다. 결과, 장부, 지운 파일을 한 커밋 "analyze N calls"로 push한다. 충돌이 나면 `git pull --rebase` 후 ledger/edits를 다시 확인하고 2번부터 다시 적용한다.
 7. 내용(자막, 문자, 이름, 요약)은 답이나 로그에 옮기지 않는다. 처리 건수만 아래 세 줄 그대로의 형식으로 답한다(한국 시각).
-   [이음 분석 HH:MM] 정상 (실패나 사용 한도가 있으면 "확인 필요: 이유")
+   [이음 분석 HH:MM] 정상 (실패나 사용 한도가 있으면 "확인 필요: 이유", 처리할 것이 없었으면 "새 기록 없음")
    처리 N건 (통화 a, 문자 b, 메일 c, 처음 정리 d) | 실패 f | 남은 요청 r건
    폰 요청 형식: 새 형식 버전 목록 또는 "옛 형식" 또는 "요청 없음" | 장부 rev n
 
