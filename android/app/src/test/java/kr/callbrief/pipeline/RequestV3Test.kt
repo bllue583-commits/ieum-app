@@ -144,7 +144,7 @@ class RequestV3Test:ProtectedTextHostTestBase() {
     }
 
     @Test fun firstPassCountsItsBatchesPerDay() {
-        (1..8).forEach { call(it,at=started-2*86_400_000L+it*60_000L) }
+        (1..8).forEach { call(it,at=started-10*86_400_000L+it*60_000L) } // more than 7 days ago: old (r7-1)
         val s=settings().put(PipelineSettingsKeys.FIRST_PASS_START_MS,started-86_400_000L)
         val inbox=FakeInbox()
         assertTrue(runner(inbox,s).runPending())

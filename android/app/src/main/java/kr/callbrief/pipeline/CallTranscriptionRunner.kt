@@ -85,7 +85,7 @@ internal class CallTranscriptionRunner(
     private val cleanedCount:(Int)->Unit={},
     /** True for an old recording (처음 정리) that has to wait for the charger or more battery. */
     private val holdOld:(CallTranscriptionStore.Candidate)->Boolean={false},
-    /** The first-pass start while it runs: older recordings are done after newer ones, oldest first. */
+    /** The start of the live window while the first pass runs: older recordings are done after newer ones, oldest first. */
     private val oldBefore:()->Long?={null},
 ) {
     data class Pass(val state:String,val done:Int,val failed:Int,val pieces:Int=0)
@@ -134,7 +134,8 @@ internal class CallTranscriptionRunner(
 
     fun run(maxJobs:Int=10):Pass {
         store.recoverRunning(MAX_ATTEMPTS);store.skipSuperseded()
-        for(c in store.candidates()){val reason=skipReason(c);store.offer(c,reason==null,reason ?: "")}
+        store.offerAll(store.candidates(),skipReason,stopped) // one transaction for the whole list (r7-1)
+        if(stopped())return Pass("STOPPED",0,0)
         val target=sink() ?: return Pass("NO_SINK",0,0)
         val file=model.verifiedModelFile() ?: return Pass("NO_MODEL",0,0)
         var done=0;var failed=0;pieces=0
@@ -227,8 +228,9 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                     stopped={ isStopped || tooHot() },
                     cleanedCount={ n -> settings.update{ it.put(PipelineSettingsKeys.TRANSCRIPT_CLEANED,it.optLong(PipelineSettingsKeys.TRANSCRIPT_CLEANED,0)+n) } },
                     speed={ ms -> settings.update{ it.put(PipelineSettingsKeys.LAST_MS_PER_AUDIO_MINUTE,ms).put(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,System.currentTimeMillis()) } },
-                    holdOld={ c -> FirstPass.isOld(c.startedAtMs ?: c.modifiedMs,settings.snapshot()) && !FirstPass.powerOk(applicationContext) },
-                    oldBefore={ settings.snapshot().let { s -> FirstPass.start(s).takeUnless { FirstPass.done(s) } } }
+                    // Old = more than 7 days ago while the first pass runs (r7-1): today's calls never wait for the charger.
+                    holdOld={ c -> FirstPass.isOld(c.startedAtMs ?: c.modifiedMs,settings.snapshot(),System.currentTimeMillis()) && !FirstPass.powerOk(applicationContext) },
+                    oldBefore={ FirstPass.liveFrom(settings.snapshot(),System.currentTimeMillis()) }
                 ).run()
                 // Stopped part way: queue the next pass at once (the finished pieces are kept) instead of waiting for the hourly one.
                 if(CallTranscriptionRunner.requeueNow(pass.state,pass.pieces))enqueue(applicationContext)

@@ -35,6 +35,12 @@ class PhoneStatusTest {
         val f=o.getJSONObject("firstPass")
         assertEquals(120,f.getInt("toTranscribe"));assertEquals(3600L,f.getLong("audioMinutesLeft"));assertEquals(4,f.getInt("waitingForSummary"))
         assertTrue(!PhoneStatus.build(input()).has("firstPass"))
+        assertTrue("no bound yet",f.isNull("bound"));assertEquals("none",f.getString("blockedBy"))
+    }
+    @Test fun firstPassBoundAndWhatHoldsIt() {
+        val f=PhoneStatus.build(input(inbox="INBOX_HTTP_422").copy(firstPass=PhoneStatus.FirstPassStatus(false,1,2,3,0,1_790_000_000_000L,FirstPass.BLOCKED_MESSAGES))).also {
+            assertEquals("INBOX_HTTP_422",it.getString("lastInboxError")) }.getJSONObject("firstPass")
+        assertEquals(1_790_000_000_000L,f.getLong("bound"));assertEquals("waiting_messages",f.getString("blockedBy"))
     }
 }
 

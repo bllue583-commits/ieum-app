@@ -10,8 +10,9 @@ import java.time.LocalDate
 
 /** "처음 정리" (design: 처음 정리 (10월 1일부터)). Everything since [FROM_MS] is gathered once and the old records go to
  * the scheduled task in time order, in batches, so it can carry the repository ledger from one record to the next.
- * Records older than the moment this started ([PipelineSettingsKeys.FIRST_PASS_START_MS]) are "old"; newer ones are
- * analysed as usual all along. */
+ * While it runs (from [PipelineSettingsKeys.FIRST_PASS_START_MS] until [done]) a record is "old" when it is more than
+ * [LIVE_DAYS] days before now; newer ones are "live" and analysed one at a time as usual (v2.6, r7-1: the moment the
+ * update arrived no longer decides, so today's calls reach today's report). */
 internal object FirstPass {
     /** 2026-10-01 00:00 KST: nothing older is transcribed or read. */
     val FROM_MS:Long=LocalDate.of(2026,10,1).atStartOfDay(CallRecordStore.KST).toInstant().toEpochMilli()
@@ -26,14 +27,27 @@ internal object FirstPass {
     const val TASK_DAYS=7L
     const val BATCH_PREFIX="batch:"
 
+    /** Records this recent are "live" while the first pass runs (sent one at a time, no charger needed). */
+    const val LIVE_DAYS=7L
+    const val LIVE_MS=LIVE_DAYS*86_400_000L
+    /** A batch with fewer than [BATCH] records goes up anyway once its oldest record has waited this long (r7-1). */
+    const val PARTIAL_AFTER_MS=6*3_600_000L
+    /** Settings keys the hourly pass writes for the heartbeat: the time bound of the batches (0: none) and what holds them. */
+    const val BOUND_KEY="firstPassBoundMs"
+    const val BLOCKED_KEY="firstPassBlockedBy"
+    const val BLOCKED_NONE="none";const val BLOCKED_MESSAGES="waiting_messages";const val BLOCKED_TRANSCRIPTS="waiting_transcripts";const val BLOCKED_BACKOFF="backoff"
+
+    /** When the first pass started; it marks that it runs (with [done]) and starts the 3 days old texts may hold it. */
     fun start(s:JSONObject):Long? = s.optLong(PipelineSettingsKeys.FIRST_PASS_START_MS,0).takeIf { it>0 }
     fun done(s:JSONObject)=s.optBoolean(PipelineSettingsKeys.FIRST_PASS_DONE,false)
-    /** Old = before the first pass started, while it is still running. */
-    fun isOld(dayMs:Long,s:JSONObject):Boolean = !done(s) && start(s)?.let { dayMs<it } ?: false
+    /** The start of the live window while the first pass runs (records before it are old), else null. */
+    fun liveFrom(s:JSONObject,now:Long):Long? = if(start(s)!=null && !done(s)) now-LIVE_MS else null
+    /** Old = more than [LIVE_DAYS] days before [now], while the first pass is running. */
+    fun isOld(dayMs:Long,s:JSONObject,now:Long=System.currentTimeMillis()):Boolean = liveFrom(s,now)?.let { dayMs<it } ?: false
     fun beforeRange(ms:Long?)=ms!=null && ms>0 && ms<FROM_MS
-    /** Before the first pass started, whether or not it is over: a late old recording still follows the old-record
-     * rules (work only from the last 7 days, the ledger only gains facts). Sending mode is [isOld]. */
-    fun beforeStart(dayMs:Long,s:JSONObject)=start(s)?.let { dayMs<it } ?: false
+    /** More than [LIVE_DAYS] days old, whether or not the first pass is over: such a record follows the old-record rules
+     * (work only from the last 7 days, the ledger only gains facts). Sending mode is [isOld]. */
+    fun stale(dayMs:Long,now:Long)=now-dayMs>LIVE_MS
 
     /** Old recordings are transcribed only while charging or with at least half the battery (no heat during work calls). */
     fun powerOk(context:Context):Boolean {

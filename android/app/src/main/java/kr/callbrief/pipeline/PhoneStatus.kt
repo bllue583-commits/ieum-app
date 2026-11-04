@@ -42,7 +42,10 @@ internal object PhoneStatus {
         val tokenExpiresMs:Long?=null,
         /** Decoder channel diagnosis (design F1); null until a recording has been decoded with it. */
         val audioChannels:Int?=null,val audioChannelCorr:Double?=null)
-    data class FirstPassStatus(val done:Boolean,val toTranscribe:Int,val minutesLeft:Long?,val waiting:Int,val batchesToday:Int)
+    /** [bound]: old records before it may go up in batches (null: no bound, all of them may); [blockedBy]: what held the
+     * ready old records at the last hourly pass, one of "none", "waiting_messages", "waiting_transcripts", "backoff" (r7-1). */
+    data class FirstPassStatus(val done:Boolean,val toTranscribe:Int,val minutesLeft:Long?,val waiting:Int,val batchesToday:Int,
+        val bound:Long?=null,val blockedBy:String=FirstPass.BLOCKED_NONE)
 
     fun build(i:Input):JSONObject {
         val o=JSONObject().put("atMs",i.nowMs).put("appVersion",i.appVersion).put("versionCode",i.versionCode)
@@ -57,7 +60,8 @@ internal object PhoneStatus {
             .put("audioChannelCorr",h.audioChannelCorr?.takeIf { it.isFinite() }?.let { Math.round(it*1000)/1000.0 } ?: JSONObject.NULL)
         i.callLog?.let { c -> o.put("callLog",callLogJson(c)) }
         i.firstPass?.let { f -> o.put("firstPass",JSONObject().put("done",f.done).put("toTranscribe",f.toTranscribe)
-            .put("audioMinutesLeft",f.minutesLeft ?: JSONObject.NULL).put("waitingForSummary",f.waiting).put("batchesToday",f.batchesToday)) }
+            .put("audioMinutesLeft",f.minutesLeft ?: JSONObject.NULL).put("waitingForSummary",f.waiting).put("batchesToday",f.batchesToday)
+            .put("bound",f.bound ?: JSONObject.NULL).put("blockedBy",code(f.blockedBy).ifEmpty { FirstPass.BLOCKED_NONE })) }
         // Absent when there is nothing to report, so the watchdog's "has an error" test is just a key test.
         code(i.lastInboxError).takeIf { it.isNotEmpty() }?.let { o.put("lastInboxError",it) }
         code(i.lastUpdateError).takeIf { it.isNotEmpty() }?.let { o.put("lastUpdateError",it) }
@@ -191,7 +195,8 @@ internal object PhoneStatus {
         if(FirstPass.done(s)) return@runCatching FirstPassStatus(true,0,0,0,0)
         val p=CallRecordStore(CallPipelineStartup.storage(app)).use { it.firstPassProgress(start) }
         val minutes=p.bytesPerMinute?.takeIf { it>0 }?.let { p.bytesLeft/it }
-        FirstPassStatus(false,p.toTranscribe,minutes,p.waiting,s.optInt(PipelineSettingsKeys.FIRST_PASS_BATCHES_TODAY,0))
+        FirstPassStatus(false,p.toTranscribe,minutes,p.waiting,s.optInt(PipelineSettingsKeys.FIRST_PASS_BATCHES_TODAY,0),
+            s.optLong(FirstPass.BOUND_KEY,0).takeIf { it>0 },s.optString(FirstPass.BLOCKED_KEY).ifEmpty { FirstPass.BLOCKED_NONE })
     }.onFailure { Log.w(TAG,"first pass not read: ${it.javaClass.simpleName}") }.getOrNull()
     private fun storagePercent(app:Context):Int = runCatching {
         val st=StatFs(app.filesDir.path);val total=st.totalBytes

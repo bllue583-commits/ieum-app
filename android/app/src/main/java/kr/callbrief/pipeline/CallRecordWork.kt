@@ -73,13 +73,13 @@ internal class CallRecordAnalysisRunner(
                 .filter { it.second!=null && it.second!!.state!=CallRecordStore.ANALYZED }.sortedBy { it.second!!.dayMs }
             var duplicates=0
             for((name,record,analysis) in items) runCatching {
-                val isOld=FirstPass.isOld(record!!.dayMs,s)
+                val isOld=FirstPass.stale(record!!.dayMs,clock())
                 // Checked against what is there now, more widely than when it was sent: what changed since must not drop good items.
                 val request=db.request(record,isOld,wide=true)
                 // Memos come from the repository ledger, which the task keeps in time order.
                 val a=analyzer.filter(analysis,request,db.openTaskIds()).copy(siteMemo=null,companyMemo=null,companyTrade=null)
                 val dropped=analysis.tasks.size+analysis.promises.size-a.tasks.size-a.promises.size
-                val applied=db.applyAnalysis(record.recordId,if(FirstPass.beforeStart(record.dayMs,s)) FirstPass.restrict(a,record.dayMs,clock()) else a)
+                val applied=db.applyAnalysis(record.recordId,if(FirstPass.stale(record.dayMs,clock())) FirstPass.restrict(a,record.dayMs,clock()) else a)
                 duplicates+=applied.count { it.duplicate }
                 save { it.put(PipelineSettingsKeys.LAST_ANALYZED_MS,clock()).put(PipelineSettingsKeys.DROPPED_ITEMS,it.optLong(PipelineSettingsKeys.DROPPED_ITEMS,0)+dropped) }
             }.onFailure { failedFiles+=name }
@@ -106,30 +106,51 @@ internal class CallRecordAnalysisRunner(
             }
             val user=userInfo(s)
             fun request(r:CallRecord,old:Boolean)=db.request(r,old).copy(user=user)
-            val (old,live)=db.pending().partition { FirstPass.isOld(it.dayMs,s) }
+            // Live = the last 7 days (r7-1): one file each, whenever the first pass started; older ones wait for its batches.
+            val (old,live)=db.pending().partition { FirstPass.isOld(it.dayMs,s,clock()) }
             for(record in live.filter(::due)) {
                 db.ledgerIdFor(record)
                 // atMs: the task works in call-time order. A late old recording keeps the old-record marker.
-                store.put(CallInbox.INBOX+"/"+CallInbox.fileName(record.recordId),CallInbox.job(CallInbox.recordKey(record.recordId),request(record,FirstPass.beforeStart(record.dayMs,s)),clock(),record.dayMs))
+                store.put(CallInbox.INBOX+"/"+CallInbox.fileName(record.recordId),CallInbox.job(CallInbox.recordKey(record.recordId),request(record,FirstPass.stale(record.dayMs,clock())),clock(),record.dayMs))
                 db.markSent(record.recordId,clock());sent++
             }
-            val start=FirstPass.start(s)
-            if(start!=null && !FirstPass.done(s)) {
+            val liveFrom=FirstPass.liveFrom(s,clock())
+            if(liveFrom!=null) {
                 val inFlight=old.count { r -> db.sentMs(r.recordId)?.let { clock()-it<RESEND_MS }==true }
-                // Old records earlier than this are complete; later ones may still be joined by older ones.
-                val bound=listOfNotNull(db.oldestOldJobMs(start),messagesBound(s)).minOrNull()
-                var slots=batchSlots(s,db.pending().mapNotNull { r -> db.sentMs(r.recordId)?.takeIf { db.receivedMs(r.recordId)==null } }.minOrNull(),
-                    FirstPass.BATCHES_IN_FLIGHT-(inFlight+FirstPass.BATCH-1)/FirstPass.BATCH)
-                for(chunk in old.filter(::due).filter { bound==null || it.dayMs<bound }.sortedBy { it.dayMs }.chunked(FirstPass.BATCH)) {
-                    if(slots<=0 || (chunk.size<FirstPass.BATCH && bound!=null)) break
+                // Old records earlier than this are complete; later ones may still be joined by older ones. Recordings
+                // before 10/1 and skipped ones never hold it (r7-1).
+                val jobBound=db.oldestOldJobMs(liveFrom);val textBound=messagesBound(s)
+                val bound=listOfNotNull(jobBound,textBound).minOrNull()
+                val waitingSince=db.pending().mapNotNull { r -> db.sentMs(r.recordId)?.takeIf { db.receivedMs(r.recordId)==null } }.minOrNull()
+                val free=FirstPass.BATCHES_IN_FLIGHT-(inFlight+FirstPass.BATCH-1)/FirstPass.BATCH
+                var slots=batchSlots(s,waitingSince,free)
+                val backoff=slots<=0 && free>0
+                val ready=old.filter(::due).sortedBy { it.dayMs }
+                val sendable=ready.filter { bound==null || it.dayMs<bound }
+                // A batch that is not full goes too once its oldest record has waited 6 hours (r7-1): the first pass must
+                // not wait for 15 in a row while the bound moves slowly.
+                val overdue=sendable.minOfOrNull { it.createdMs }?.let { clock()-it>=FirstPass.PARTIAL_AFTER_MS }==true
+                var sentBatches=0
+                for(chunk in sendable.chunked(FirstPass.BATCH)) {
+                    if(slots<=0 || (chunk.size<FirstPass.BATCH && bound!=null && !overdue)) break
                     val items=chunk.map { r -> db.ledgerIdFor(r);CallInbox.recordKey(r.recordId) to request(r,true) }
                     store.put(CallInbox.INBOX+"/"+CallInbox.batchName(chunk.first().dayMs,items.map { it.first }),CallInbox.batch(items,clock(),chunk.map { it.dayMs }))
-                    chunk.forEach { db.markSent(it.recordId,clock()) };sent++
+                    chunk.forEach { db.markSent(it.recordId,clock()) };sent++;sentBatches++
                     val today=kstDay()
                     save { it.put(PipelineSettingsKeys.FIRST_PASS_BATCHES_TODAY,(if(it.optString(PipelineSettingsKeys.FIRST_PASS_BATCH_DAY)==today) it.optInt(PipelineSettingsKeys.FIRST_PASS_BATCHES_TODAY,0) else 0)+1)
                         .put(PipelineSettingsKeys.FIRST_PASS_BATCH_DAY,today) }
                     slots--
                 }
+                // For the heartbeat: what holds the old records that are ready but did not go up in this pass.
+                val held=sentBatches==0 && ready.isNotEmpty()
+                val blocked=when {
+                    !held -> FirstPass.BLOCKED_NONE
+                    backoff -> FirstPass.BLOCKED_BACKOFF
+                    slots<=0 -> FirstPass.BLOCKED_NONE // two batches in flight: their answers are awaited
+                    textBound!=null && (jobBound==null || textBound<=jobBound) -> FirstPass.BLOCKED_MESSAGES
+                    else -> FirstPass.BLOCKED_TRANSCRIPTS
+                }
+                noteFirstPass(s,bound,blocked)
                 // Over only after 12 quiet hours: discovery brings recordings a few at a time, so the queue empties briefly.
                 val quiet=consent && old.isEmpty() && bound==null
                 val since=s.optLong(PipelineSettingsKeys.FIRST_PASS_QUIET_SINCE,0)
@@ -144,11 +165,26 @@ internal class CallRecordAnalysisRunner(
             if(sent>0) runCatching { afterSend() }
           }
         }
+        // A whole pass went through: an error kept from an earlier one is over.
+        if(settings().optString(PipelineSettingsKeys.LAST_INBOX_ERROR).isNotEmpty()) save { it.put(PipelineSettingsKeys.LAST_INBOX_ERROR,"").put(PipelineSettingsKeys.LAST_INBOX_ERROR_MS,0L) }
         true
-    } catch(e:java.io.IOException) { false }
-    catch(e:ClaudeCallException) {
-        // 401, 403, 404: the inbox refuses this phone (token expired or revoked). Retrying will not help: say so once a day.
-        if(e.code in setOf("INBOX_HTTP_401","INBOX_HTTP_403","INBOX_HTTP_404")) warnDisconnected(e.code);true
+    } catch(e:ClaudeCallException) {
+        // Every refusal is kept as its code and time (r7-1, #16), never the reply's text. 401, 403, 404: the inbox refuses
+        // this phone (token expired or revoked); retrying will not help, so say so once a day and do not retry now.
+        noteInboxError(e.code)
+        if(e.code in setOf("INBOX_HTTP_401","INBOX_HTTP_403","INBOX_HTTP_404")) { warnDisconnected();true } else false
+    } catch(e:Exception) {
+        // Network, rate limit, a server error, the database (#17): the code or the class name only, and WorkManager retries.
+        noteInboxError(errorCode(e));false
+    }
+
+    /** The code of a failed pass: the exception's message when it is a code (INBOX_HTTP_503), else its class name. */
+    private fun errorCode(e:Exception)=e.message?.takeIf { it.matches(Regex("[A-Z0-9_]{1,80}")) } ?: e.javaClass.simpleName
+    private fun noteInboxError(code:String)=runCatching { save { it.put(PipelineSettingsKeys.LAST_INBOX_ERROR,code).put(PipelineSettingsKeys.LAST_INBOX_ERROR_MS,clock()) } }
+    /** The first pass's bound and what holds it, written only when they changed (the heartbeat reads them). */
+    private fun noteFirstPass(s:JSONObject,bound:Long?,blocked:String) {
+        if(s.optLong(FirstPass.BOUND_KEY,0)==(bound ?: 0L) && s.optString(FirstPass.BLOCKED_KEY)==blocked) return
+        save { it.put(FirstPass.BOUND_KEY,bound ?: 0L).put(FirstPass.BLOCKED_KEY,blocked) }
     }
 
     private fun kstDay()=java.time.Instant.ofEpochMilli(clock()).atZone(CallRecordStore.KST).toLocalDate().toString()
@@ -172,18 +208,18 @@ internal class CallRecordAnalysisRunner(
         val at=java.time.Instant.ofEpochMilli(now).atZone(CallRecordStore.KST)
         // When the oldest waiting record was stored: sending time would not do (a resend every 6 hours renews it, and a
         // failed upload has none). Old first-pass records may rightly wait for the charger and are not counted.
-        val waiting=db.pending().filter { !FirstPass.isOld(it.dayMs,s) }.minOfOrNull { it.createdMs } ?: return
+        val waiting=db.pending().filter { !FirstPass.isOld(it.dayMs,s,now) }.minOfOrNull { it.createdMs } ?: return
         val last=maxOf(s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),waiting)
         if(at.hour !in 9..20 || now-last<6*3_600_000L || s.optString(PipelineSettingsKeys.STALL_WARNED_DAY)==at.toLocalDate().toString()) return
         runCatching { CallDigestNotifier.post(context,CallDigestWork.STATUS,CallDigestText.Message("정리가 멈췄어요","통화가 6시간 넘게 정리되지 않고 있어요. 휴대폰이 인터넷에 연결되어 있으면 매시간 다시 확인해요.")) }
         save { it.put(PipelineSettingsKeys.STALL_WARNED_DAY,at.toLocalDate().toString()) }
     }
 
-    private fun warnDisconnected(code:String) {
+    private fun warnDisconnected() {
         val at=java.time.Instant.ofEpochMilli(clock()).atZone(CallRecordStore.KST).toLocalDate().toString()
         if(settings().optString(PipelineSettingsKeys.DISCONNECT_WARNED_DAY)==at) return
         runCatching { CallDigestNotifier.post(context,CallDigestWork.STATUS,CallDigestText.Message("연결이 끊겼어요","통화를 정리하는 곳과 연결되지 않아요. 앱을 관리하는 분께 이 알림을 보여 주세요.")) }
-        save { it.put(PipelineSettingsKeys.DISCONNECT_WARNED_DAY,at).put(PipelineSettingsKeys.LAST_INBOX_ERROR,code) }
+        save { it.put(PipelineSettingsKeys.DISCONNECT_WARNED_DAY,at) }
     }
 
     /** Takes the repository ledger when its rev changed (a lower rev means it was rebuilt). A missing ledger is fine. */

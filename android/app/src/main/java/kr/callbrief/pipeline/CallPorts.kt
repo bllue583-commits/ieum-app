@@ -69,6 +69,8 @@ object PipelineSettingsKeys {
     /** The inbox refused this phone (401/403/404): day told, and the code. */
     const val DISCONNECT_WARNED_DAY="disconnectWarnedDay"
     const val LAST_INBOX_ERROR="lastInboxError"
+    /** When [LAST_INBOX_ERROR] was written (r7-1); 0 once a pass went through. */
+    const val LAST_INBOX_ERROR_MS="lastInboxErrorMs"
     /** Mirrors the repository ledger's tidiedOnce: the morning tidy has read everything once. */
     const val TIDIED_ONCE="tidiedOnce"
     /** Reading old texts and mail from 10/1 up to where the regular intake began: progress and end. */

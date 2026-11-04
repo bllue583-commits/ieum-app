@@ -167,6 +167,10 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
                     .forEach { f -> kr.callbrief.core.RecordingNames.startedAt(f.str("display_name").orEmpty())?.toEpochMilli()?.let { port.execute("UPDATE local_files SET filename_time_candidate_ms=? WHERE recording_id=?",it,f.str("recording_id")) } }
                 port.execute("""UPDATE call_records SET started_ms=(SELECT l.filename_time_candidate_ms FROM local_files l WHERE l.recording_id=call_records.recording_id)
                     WHERE started_ms IS NULL AND recording_id IN (SELECT recording_id FROM local_files WHERE filename_time_candidate_ms IS NOT NULL)""")
+                // Recordings from before 10/1 still queued by an older build hold the first pass forever (r7-1): skipped here
+                // in one statement, without waiting for the transcription pass to come round.
+                if(rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name='call_transcription_jobs'").isNotEmpty())
+                    port.execute(CallTranscriptionStore.SKIP_BEFORE_START_SQL,clock(),FirstPass.FROM_MS)
             }
             null } } catch(e:Exception) { port.close();throw e }
     }
@@ -892,13 +896,16 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
                 rows("SELECT p.id FROM call_links l JOIN people p ON p.id=l.person_id WHERE l.record_id=? AND p.phone_key IS NULL",recordId).firstOrNull()?.str("id")?.let { addNumber(it,number) }
         };null
     }
-    /** Time of the oldest recording before [old] still waiting for its transcript, or null when none is left. Old records
-     * earlier than this are complete and can go to the task in time order. */
+    /** Time of the oldest recording before [old] (the start of the live window) still waiting for its transcript, or null
+     * when none is left. Old records earlier than this are complete and can go to the task in time order. Skipped rows,
+     * recordings before 10/1 ([FirstPass.FROM_MS]) and ones with no known time never count (r7-1): one such row held
+     * every batch back for good. */
     fun oldestOldJobMs(old:Long):Long? {
         if(rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name='call_transcription_jobs'").isEmpty()) return null
         return rows("""SELECT MIN(COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)) AS m FROM call_transcription_jobs j
             JOIN recordings r ON r.recording_id=j.recording_id LEFT JOIN local_files l ON l.recording_id=j.recording_id
-            WHERE j.state IN ('QUEUED','RUNNING') AND COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)<CAST(? AS INTEGER)""",old).single().long("m")
+            WHERE j.state IN ('QUEUED','RUNNING') AND COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)>=CAST(? AS INTEGER)
+            AND COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)<CAST(? AS INTEGER)""",FirstPass.FROM_MS,old).single().long("m")
     }
     /** A recording found to be with the personal number: the record, its words and anything sent or linked go. The
      * transcription job stays done, so it is not transcribed again. */
@@ -960,8 +967,10 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
 
     data class FirstPassProgress(val toTranscribe:Int,val bytesLeft:Long,val bytesPerMinute:Long?,val waiting:Int,val unrecorded:Int)
     /** What is left before the consolidation: recordings since 10/1 without a transcript yet, and old records waiting for
-     * their summary. [old] is the first-pass start. */
-    fun firstPassProgress(old:Long):FirstPassProgress {
+     * their summary. [start] is the first-pass start; "old" is more than [FirstPass.LIVE_DAYS] days before now (r7-1), so a
+     * record from before the start that is still in the live window goes one at a time and is not counted here. */
+    fun firstPassProgress(@Suppress("UNUSED_PARAMETER") start:Long):FirstPassProgress {
+        val old=clock()-FirstPass.LIVE_MS
         val jobs=if(rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name='call_transcription_jobs'").isEmpty()) null
             else rows("""SELECT COUNT(*) AS n,COALESCE(SUM(r.byte_count),0) AS b FROM call_transcription_jobs j JOIN recordings r ON r.recording_id=j.recording_id
                 WHERE j.state IN ('QUEUED','RUNNING')""").single()

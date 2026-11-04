@@ -31,7 +31,9 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
                     reason TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,updated_ms INTEGER NOT NULL,
                     PRIMARY KEY(recording_id,source_version,audio_sha))""")
                 // Encrypted originals deleted by GeneralLocalStore.pruneVault (#39); a recording whose blob is gone is not offered again.
-                db.execute("CREATE TABLE IF NOT EXISTS vault_pruned(ciphertext_sha256 TEXT PRIMARY KEY,at_ms INTEGER NOT NULL)");null
+                db.execute("CREATE TABLE IF NOT EXISTS vault_pruned(ciphertext_sha256 TEXT PRIMARY KEY,at_ms INTEGER NOT NULL)")
+                // Recordings from before 10/1 left queued by an older build (r7-1): one statement, whatever the offer pass does.
+                db.execute(SKIP_BEFORE_START_SQL,now(),FirstPass.FROM_MS);null
             }
         } catch(e:Exception){db.close();throw e}
     }
@@ -56,12 +58,28 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
 
     /** Idempotent: new versions are inserted; rows that have not started or finished follow the current eligibility.
      * "No speech" was found by transcribing, not by eligibility, so it stays (it was queued again on every pass before). */
-    fun offer(c:Candidate,eligible:Boolean,reason:String)=db.transaction {
+    fun offer(c:Candidate,eligible:Boolean,reason:String)=tx {
         val state=if(eligible)"QUEUED" else "SKIPPED"
         db.execute("INSERT OR IGNORE INTO call_transcription_jobs(recording_id,source_version,audio_sha,state,reason,updated_ms) VALUES(?,?,?,?,?,?)",
             c.key.recordingId,c.key.sourceVersion,c.key.audioSha,state,reason,now())
         db.execute("UPDATE call_transcription_jobs SET state=?,reason=?,updated_ms=? WHERE recording_id=? AND source_version=? AND audio_sha=? AND state IN('QUEUED','SKIPPED') AND (state!=? OR reason!=?) AND NOT (state='SKIPPED' AND reason='NO_SPEECH')",
             state,reason,now(),c.key.recordingId,c.key.sourceVersion,c.key.audioSha,state,reason);null
+    }
+
+    /** Every candidate through [offer] inside one transaction (r7-1, review #2): the protected store snapshots the whole
+     * database once per outer transaction, so one per candidate made this pass take minutes. Stops between candidates
+     * when [stopped] says so; what was offered until then is kept. Returns how many were offered. */
+    fun offerAll(candidates:List<Candidate>,skipReason:(Candidate)->String?,stopped:()->Boolean={false}):Int = tx {
+        var n=0
+        for(c in candidates) { if(stopped()) break;val reason=skipReason(c);offer(c,reason==null,reason ?: "");n++ }
+        n
+    }
+    /** Outer transactions this store opened through [tx] (tests check that the offer pass is one). */
+    internal var outerTransactions=0;private set
+    private var depth=0
+    private fun <T> tx(work:()->T):T {
+        if(depth++==0) outerTransactions++
+        try { return db.transaction { work() } } finally { depth-- }
     }
 
     /** Queued rows whose recording moved on to a newer version (or vanished) are skipped. */
@@ -137,5 +155,13 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
     }
 
     override fun close()=db.close()
-    companion object { const val STALE_RUNNING_MS=11*60_000L }
+    companion object {
+        const val STALE_RUNNING_MS=11*60_000L
+        /** Queued recordings whose time (start or filename time, else the file's modified time) is before 10/1 become
+         * SKIPPED with BEFORE_START, the reason the offer pass gives them. Arguments: updated_ms, [FirstPass.FROM_MS]. */
+        const val SKIP_BEFORE_START_SQL="""UPDATE call_transcription_jobs SET state='SKIPPED',reason='BEFORE_START',updated_ms=? WHERE state='QUEUED' AND recording_id IN(
+            SELECT r.recording_id FROM recordings r LEFT JOIN local_files l ON l.recording_id=r.recording_id
+            WHERE COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)>0
+            AND COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)<CAST(? AS INTEGER))"""
+    }
 }
