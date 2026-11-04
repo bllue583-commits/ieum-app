@@ -3,7 +3,9 @@
 No key is stored anywhere: the same secret always yields the same EC P-256 key and the same
 self-signed certificate (RFC 6979 deterministic signature, fixed dates/serial). Usage:
   IEUM_SIGNING_SEED=<secret> python3 tools/derive_signing_key.py out.p12
-The keystore password is fixed ("ieum-signing"); secrecy comes from the seed.
+If IEUM_SIGNING_SEED is empty the mailbox token IEUM_INBOX_TOKEN is used as the seed (how every build until now was signed),
+so copying the current token into the IEUM_SIGNING_SEED secret keeps the same certificate and lets the token change later.
+The keystore password is fixed ("ieum-signing"); secrecy comes from the seed. The seed is never printed.
 """
 import datetime, hashlib, hmac, os, sys
 from cryptography import x509
@@ -12,9 +14,14 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.x509.oid import NameOID
 
-seed = os.environ.get("IEUM_SIGNING_SEED", "").strip().encode()
+source = "IEUM_SIGNING_SEED"
+seed = os.environ.get(source, "").strip().encode()
+if not seed:
+    source = "IEUM_INBOX_TOKEN"
+    seed = os.environ.get(source, "").strip().encode()
 if len(seed) < 20:
-    sys.exit("IEUM_SIGNING_SEED missing")
+    sys.exit("IEUM_SIGNING_SEED missing (and IEUM_INBOX_TOKEN is not usable as the fallback)")
+print("signing seed taken from", source)  # the name only, never the value
 order = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
 scalar = int.from_bytes(hmac.new(seed, b"ieum-app-signing-v1", hashlib.sha256).digest(), "big") % (order - 1) + 1
 key = ec.derive_private_key(scalar, ec.SECP256R1())

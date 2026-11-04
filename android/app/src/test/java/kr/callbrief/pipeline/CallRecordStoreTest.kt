@@ -47,14 +47,26 @@ class CallRecordStoreTest:ProtectedTextHostTestBase() {
     private fun store()=CallRecordStore(context,clock)
     private fun item(id:String)=port().use { it.query("SELECT * FROM workflow_items WHERE id=?",id).single() }
     private fun board()=port().use { (it.query("SELECT revision FROM board_state WHERE owner_key=?",GeneralLocalStore.OWNER).single()["revision"] as Number).toLong() }
-    private class Fake(var next:()->ClaudeCallResponse):ClaudeCallHttp {
-        val bodies=mutableListOf<String>()
-        override fun post(apiKey:String,body:String):ClaudeCallResponse { bodies+=body;return next() }
-    }
-    private val consented=JSONObject().put(PipelineSettingsKeys.CONSENT_GRANTED,true).put(PipelineSettingsKeys.CLAUDE_API_KEY,"sk-test")
-    private fun runner(fake:Fake,settings:()->JSONObject={ consented })=CallRecordAnalysisRunner(context,ClaudeCallAnalyzer(fake) {},settings,clock)
-    private fun reply(vararg tasks:JSONObject)=ClaudeCallAnalyzerTest.reply(ClaudeCallAnalyzerTest.analysis(JSONArray(tasks.toList())))
     private val quote="견적서는 내일까지 메일로 보내드릴게요"
+    private val quote2="계약서 초안은 다음 주 월요일에 받기로 하죠"
+    private fun idOf(recording:String="rec1")=CallRecordStore.recordId(transcript(recording))
+    private fun taskJson(op:String,id:String?,title:String,q:String,due:String?=null)=ClaudeCallAnalyzerTest.task(op,id,title,q,due)
+    /** What the scheduled task's answer goes through on the phone: the same filter against the request, then the apply. */
+    private fun answer(recordId:String,vararg tasks:JSONObject):List<CallRecordStore.Applied> = store().use { s ->
+        val a=ClaudeCallAnalyzer().filter(ClaudeCallAnalysis.parse(ClaudeCallAnalyzerTest.analysis(JSONArray(tasks.toList()))),s.request(s.record(recordId)!!),s.openTaskIds())
+        s.applyAnalysis(recordId,a)
+    }
+
+    private var versions=10L
+    /** Stores a fresh record of rec1 and applies [titles] as new items of [company] (null: no company known). Returns the applied flags. */
+    private fun makeItems(company:String?,vararg titles:String):List<Boolean> {
+        val v=versions++
+        store().use { it.insert(transcript("rec1",startedMs=started+v*60_000L).copy(sourceVersion=v)) }
+        val id=CallRecordStore.recordId(transcript("rec1").copy(sourceVersion=v))
+        val a=ClaudeCallAnalysis("s",emptyList(),null,null,emptyList(),titles.map { ClaudeCallAnalysis.Task("create",null,it,null,quote) },
+            counterpart=company?.let { ClaudeCallAnalysis.Counterpart("김민수",it,null,false) })
+        return store().use { it.applyAnalysis(id,a) }.map { it.applied }
+    }
 
     @Test fun insertIsIdempotentAndSinkStores() {
         var enqueued=0
@@ -69,40 +81,39 @@ class CallRecordStoreTest:ProtectedTextHostTestBase() {
             assertFalse(s.insert(transcript()))
         }
         assertEquals("홍길동",CallRecordStore.counterpartKey("  홍길동 "));assertNull(CallRecordStore.counterpartKey(" "))
+        // The segments are no longer kept (review B20).
+        assertEquals("[]",port().use { it.query("SELECT segments_json FROM call_records").single()["segments_json"] })
     }
 
     @Test fun createdTaskIsVisibleInWorkflowItemsAndRerunIsIdempotent() {
         store().use { it.insert(transcript()) }
         val before=board()
-        val fake=Fake { reply(ClaudeCallAnalyzerTest.task("create",null,"견적서 보내기",quote,"2026-10-30")) }
-        assertTrue(runner(fake).runPending())
+        val created=answer(idOf(),taskJson("create",null,"견적서 보내기",quote,"2026-10-30")).single();assertTrue(created.applied)
         val record=store().use { it.day(LocalDate.of(2026,10,29)).single() }
         assertEquals(CallRecordStore.ANALYZED,record.state);assertEquals("김과장",record.displayName)
-        val created=record.applied.single();assertTrue(created.applied)
         val row=item(created.itemId)
         assertEquals("TODO",row["kind"]);assertEquals("open",row["status"]);assertEquals("2026-10-30",row["due_text"]);assertEquals(quote,row["evidence_quote"]);assertEquals("rec1",row["recording_id"])
-        assertNull(row["case_id"]);assertEquals(before+1,board())
-        assertTrue(runner(fake).runPending());assertEquals(1,fake.bodies.size) // already analyzed: nothing sent again
+        assertNull(row["case_id"]);assertNull(row["done_ms"]);assertNull(row["ai_note"]);assertEquals(before+1,board())
+        assertTrue(answer(idOf(),taskJson("create",null,"견적서 보내기",quote)).isEmpty()) // already analyzed: never applied twice
         store().use { s -> s.insert(transcript());assertEquals(1,port().use { it.query("SELECT COUNT(*) AS n FROM workflow_items").single()["n"] as Number }.toInt()) }
     }
 
     @Test fun completingAnItemMarksItDoneOnceAndProtectsItFromLaterAnalysis() {
         store().use { it.insert(transcript()) }
-        runner(Fake { reply(ClaudeCallAnalyzerTest.task("create",null,"견적서 보내기",quote)) }).runPending()
-        val a=store().use { it.day(LocalDate.of(2026,10,29)).single().applied.single().itemId }
+        val a=answer(idOf(),taskJson("create",null,"견적서 보내기",quote)).single().itemId
         val before=board()
         store().use { it.completeItem(a,1) }
         assertEquals("done",item(a)["status"]);assertEquals(2L,item(a)["revision"]);assertEquals(before+1,board())
+        assertEquals(now,(item(a)["done_ms"] as Number).toLong()) // finished at, for the 14-day guard against making it again
         assertEquals(1,port().use { it.query("SELECT * FROM workflow_item_history WHERE item_id=?",a).size })
         assertTrue(store().use { it.openItems() }.none { it.id==a })
         try { store().use { it.completeItem(a,1) };fail("stale revision must be rejected") } catch(e:IllegalArgumentException) { assertEquals("ITEM_REVISION_CONFLICT",e.message) }
         assertEquals(2L,item(a)["revision"])
     }
 
-    @Test fun updateOfAiOwnedItemAppliesButUserEditedAndDoneItemsAreUntouched() {
+    @Test fun updateOfAiOwnedItemAppliesButUserEditedItemOnlyGetsANoteAndDoneItemsAreUntouched() {
         store().use { it.insert(transcript()) }
-        runner(Fake { reply(ClaudeCallAnalyzerTest.task("create",null,"견적서 보내기",quote),ClaudeCallAnalyzerTest.task("create",null,"계약서 받기","계약서 초안은")) }).runPending()
-        val (a,b)=store().use { it.day(LocalDate.of(2026,10,29)).single().applied.map { it.itemId } }
+        val (a,b)=answer(idOf(),taskJson("create",null,"견적서 보내기",quote),taskJson("create",null,"계약서 받기",quote2)).map { it.itemId }
         // A user edit is recorded in workflow_item_history, like RecordingWorkflowStore.editItem does.
         port().use { p -> p.transaction {
             p.execute("UPDATE workflow_items SET title='사용자가 고친 제목',revision=2 WHERE id=?",b)
@@ -110,57 +121,169 @@ class CallRecordStoreTest:ProtectedTextHostTestBase() {
         } }
         now+=86_400_000
         store().use { it.insert(transcript("rec2",startedMs=started+86_400_000)) }
-        val fake=Fake { reply(ClaudeCallAnalyzerTest.task("update",a,"견적서 최종본 보내기",quote,"2026-10-31"),ClaudeCallAnalyzerTest.task("update",b,"AI 제목","계약서 초안은")) }
-        runner(fake).runPending()
-        assertTrue(fake.bodies.single().contains(a)) // open tasks with the same counterpart are offered to the model
+        val rec2=idOf("rec2")
+        assertTrue(store().use { s -> s.request(s.record(rec2)!!) }.openTasks.any { it.id==a }) // open tasks with the same counterpart are offered to the model
+        val applied=answer(rec2,taskJson("update",a,"견적서 최종본 보내기",quote,"2026-10-31"),taskJson("done_suggested",b,"AI 제목",quote2))
         assertEquals("견적서 최종본 보내기",item(a)["title"]);assertEquals("2026-10-31",item(a)["due_text"]);assertEquals(2L,item(a)["revision"])
-        assertEquals("사용자가 고친 제목",item(b)["title"])
-        val applied=store().use { it.day(LocalDate.of(2026,10,30)).single().applied };assertEquals(listOf(true,false),applied.map { it.applied })
+        // The user's item keeps title and date; one line says what the call suggests (review B12), and the model sees it as data.
+        assertEquals("사용자가 고친 제목",item(b)["title"]);assertEquals(2L,item(b)["revision"])
+        assertEquals("10/30 통화: 끝난 것으로 보여요",item(b)["ai_note"]);assertEquals(listOf(true,false),applied.map { it.applied });assertEquals("10/30 통화: 끝난 것으로 보여요",applied[1].note)
+        assertEquals("10/30 통화: 끝난 것으로 보여요",store().use { it.openItems() }.single { it.id==b }.aiNote)
+        assertEquals(listOf("10/30 통화: 끝난 것으로 보여요"),store().use { it.day(LocalDate.of(2026,10,30)).single().applied.mapNotNull { x -> x.note } })
 
         // Done by the user (directly) -> not offered and never changed.
         port().use { it.execute("UPDATE workflow_items SET status='done' WHERE id=?",a) }
         val req=store().use { s -> s.request(s.day(LocalDate.of(2026,10,30)).single()) };assertFalse(req.openTasks.any { it.id==a })
         val analysis=ClaudeCallAnalysis("s",emptyList(),null,null,emptyList(),listOf(ClaudeCallAnalysis.Task("update",a,"바뀌면 안 됨",null,quote)))
-        store().use { s -> s.applyAnalysis(s.day(LocalDate.of(2026,10,30)).single().recordId,analysis) }
+        store().use { s -> s.insert(transcript("rec1",startedMs=started+2*86_400_000).copy(sourceVersion=2)) }
+        val third=CallRecordStore.recordId(transcript("rec1").copy(sourceVersion=2))
+        store().use { s -> s.applyAnalysis(third,analysis) }
         assertEquals("견적서 최종본 보내기",item(a)["title"]);assertEquals("done",item(a)["status"])
     }
 
     @Test fun doneSuggestedBecomesNeedsConfirmationNeverDone() {
         store().use { it.insert(transcript()) }
-        runner(Fake { reply(ClaudeCallAnalyzerTest.task("create",null,"견적서 보내기",quote)) }).runPending()
-        val id=store().use { it.day(LocalDate.of(2026,10,29)).single().applied.single().itemId }
-        store().use { it.insert(transcript("rec2")) }
-        runner(Fake { reply(ClaudeCallAnalyzerTest.task("done_suggested",id,"견적서 보내기",quote)) }).runPending()
+        val id=answer(idOf(),taskJson("create",null,"견적서 보내기",quote)).single().itemId
+        store().use { it.insert(transcript("rec2",startedMs=started+60_000)) }
+        answer(idOf("rec2"),taskJson("done_suggested",id,"견적서 보내기",quote))
         assertEquals("needs_confirmation",item(id)["status"])
     }
 
-    @Test fun waitingKeyAndConsentThenSuccessAfterSettingsChange() {
-        store().use { it.insert(transcript()) }
-        var s=JSONObject()
-        val fake=Fake { reply() }
-        runner(fake) { s }.runPending()
-        assertEquals(CallRecordStore.WAITING_CONSENT,store().use { it.pending().single().state })
-        s=JSONObject().put(PipelineSettingsKeys.CONSENT_GRANTED,true);runner(fake) { s }.runPending()
-        assertEquals(CallRecordStore.WAITING_KEY,store().use { it.pending().single().state })
-        assertTrue(fake.bodies.isEmpty())
-        s=consented;runner(fake) { s }.runPending()
-        assertEquals(1,fake.bodies.size);assertTrue(store().use { it.pending().isEmpty() })
-        assertEquals(CallRecordStore.ANALYZED,store().use { it.day(LocalDate.of(2026,10,29)).single().state })
+    @Test fun anOldCallAnalysedLateDoesNotSeeOrRewriteWhatCameAfterIt() {
+        // The later call (day 2) is analysed first, then the older one (day 1) arrives (review B7).
+        store().use { it.insert(transcript("rec1",startedMs=started)) }
+        store().use { it.insert(transcript("rec2",startedMs=started+86_400_000)) }
+        val later=answer(idOf("rec2"),taskJson("create",null,"견적서 최종본 확인",quote,"2026-11-02")).single().itemId
+        assertEquals(started+86_400_000,(item(later)["created_ms"] as Number).toLong())
+        val req=store().use { s -> s.request(s.record(idOf("rec1"))!!) }
+        assertTrue("the later item is not offered to the older call",req.knownTaskIds.isEmpty())
+        // Even when the task names it anyway, the update does not apply.
+        val a=ClaudeCallAnalysis("s",emptyList(),null,null,emptyList(),listOf(ClaudeCallAnalysis.Task("update",later,"되돌린 제목","2026-10-30",quote)))
+        val applied=store().use { it.applyAnalysis(idOf("rec1"),a) }
+        assertFalse(applied.single().applied);assertEquals("견적서 최종본 확인",item(later)["title"]);assertEquals("2026-11-02",item(later)["due_text"]);assertNull(item(later)["ai_note"])
+        // Summaries and the company's calls of later days are not in the older call's request either.
+        assertTrue(store().use { s -> s.request(s.record(idOf("rec1"))!!) }.previousSummaries.isEmpty())
     }
 
-    @Test fun clientErrorFailsAndRequeueRetries() {
-        store().use { it.insert(transcript()) }
-        var response=ClaudeCallResponse(400,"{}")
-        val fake=Fake { response }
-        runner(fake).runPending()
-        val failed=store().use { it.day(LocalDate.of(2026,10,29)).single() };assertEquals(CallRecordStore.FAILED,failed.state);assertEquals("HTTP_400",failed.error)
-        response=reply();assertEquals(1,store().use { it.requeueAll() });runner(fake).runPending()
-        assertEquals(CallRecordStore.ANALYZED,store().use { it.day(LocalDate.of(2026,10,29)).single().state })
+    @Test fun nearTitlesOfTheSameCompanyAreOneOpenItemAndFinishedOnesBlockOnlyAnIdenticalTitle() {
+        val long1="△△철강 김민수 과장 3층 철근 견적서 회신 확인"
+        val near="△△철강 김민수 과장 3층 철근 견적서 회신 여부 확인"
+        assertEquals(listOf(true),makeItems("△△철강",long1))
+        // 2-letter pieces: 0.6 and above is the same open item of the same company.
+        assertEquals(listOf(false,true),makeItems("△△철강",near,"전혀 다른 일 도면 받기"))
+        val first=port().use { it.query("SELECT id FROM workflow_items WHERE title=?",long1).single()["id"] as String }
+        // Finished 5 days ago: only the identical title is blocked (spaces ignored); wording that is merely near is a new item.
+        port().use { it.execute("UPDATE workflow_items SET status='done',done_ms=? WHERE id=?",now-5*86_400_000L,first) }
+        assertEquals(listOf(false),makeItems("△△철강",long1.replace(" ","")))
+        assertEquals(listOf(true),makeItems("△△철강",near))
+        // Finished 20 days ago: no longer blocks the identical title either.
+        port().use { it.execute("UPDATE workflow_items SET done_ms=? WHERE id=?",now-20*86_400_000L,first) }
+        port().use { it.execute("UPDATE workflow_items SET status='done',done_ms=? WHERE title=?",now-20*86_400_000L,near) }
+        assertEquals(listOf(true),makeItems("△△철강",long1))
     }
 
-    @Test fun networkFailureAsksForRetryAndKeepsRecordQueued() {
+    @Test fun titlesThatDifferInANumberAreNewItems() {
+        listOf("3층 타설 일정 확인" to "4층 타설 일정 확인","□□레미콘 11/5 타설 확인" to "□□레미콘 11/12 타설 확인","2공구 철근 반입 확인" to "3공구 철근 반입 확인").forEach { (x,y) ->
+            assertEquals(x,listOf(true),makeItems("△△철강",x))
+            assertEquals(y,listOf(true),makeItems("△△철강",y))
+            assertEquals("the same title again is still one item",listOf(false),makeItems("△△철강",y))
+        }
+    }
+
+    @Test fun withoutACompanyOnlyAnIdenticalTitleIsTheSameItem() {
+        assertEquals(listOf(true),makeItems(null,"△△철강 김민수 과장 3층 철근 견적서 회신 확인"))
+        assertEquals(listOf(true),makeItems(null,"△△철강 김민수 과장 3층 철근 견적서 회신 여부 확인"))
+        assertEquals(listOf(false),makeItems(null,"△△철강 김민수 과장 3층 철근 견적서 회신 확인"))
+    }
+
+    @Test fun theMorningTidyUsesTheSameDuplicateRule() {
+        assertEquals(listOf(true),makeItems("△△철강","3층 타설 일정 확인"))
+        val ops=JSONObject().put("tasks",JSONArray().put(JSONObject().put("op","create").put("title","4층 타설 일정 확인").put("company","△△철강").put("basis","x"))
+            .put(JSONObject().put("op","create").put("title","3층 타설 일정 확인").put("company","△△철강").put("basis","x")))
+        assertEquals(1,store().use { it.applyTidy(ops) })
+    }
+
+    @Test fun trimClearsWordsOfAnsweredRecordsOnlyAndShrinksOldAnalysesToTheSummary() {
+        store().use { it.insert(transcript("rec1",startedMs=started)) }
+        val madeItem=answer(idOf(),taskJson("create",null,"견적서 보내기",quote)).single().itemId
+        store().use { it.insert(transcript("rec2",startedMs=started+60_000)) } // never answered
+        store().use { it.setState(idOf("rec2"),CallRecordStore.FAILED,"X") }
+        now+=15*86_400_000L
+        store().use { it.trim(now) }
+        assertEquals("",store().use { it.record(idOf())!! }.transcript)
+        assertEquals("a failed record keeps its words",ClaudeCallAnalyzerTest.TRANSCRIPT,store().use { it.record(idOf("rec2"))!! }.transcript)
+        assertTrue(store().use { it.record(idOf())!! }.analysis!!.keyPoints.isNotEmpty())
+        now+=80*86_400_000L
+        store().use { it.trim(now) }
+        val r=store().use { it.record(idOf())!! }
+        assertEquals("김과장과 견적서와 계약서 일정을 정했다.",r.summary);assertEquals("김과장",r.analysis!!.counterpartName)
+        assertTrue(r.analysis!!.keyPoints.isEmpty() && r.analysis!!.tasks.isEmpty())
+        // The items the call made stay known, so "통화 보기" still finds them.
+        assertEquals(listOf(madeItem),r.applied.map { it.itemId });assertEquals("견적서 보내기",r.applied.single().title);assertTrue(r.applied.single().applied)
+    }
+
+    @Test fun oldRowsAreMigratedKeysFilledWaitingKeyRequeuedAndSegmentsDropped() {
         store().use { it.insert(transcript()) }
-        assertFalse(runner(Fake { throw java.io.IOException("offline") }).runPending())
-        assertEquals(CallRecordStore.TRANSCRIBED,store().use { it.pending().single().state })
+        port().use { p -> p.transaction {
+            p.execute("UPDATE call_records SET segments_json='[[0,5000,\"x\"]]',state='TRANSCRIBED'")
+            p.execute("INSERT INTO companies(id,name,trade,memo,updated_ms) VALUES('co_a','(주)△△철강','철근','메모',5)")
+            p.execute("INSERT INTO companies(id,name,trade,memo,updated_ms) VALUES('co_b','△△ 철강',NULL,'',9)")
+            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms) VALUES('pe_a','김민수 과장','01011112222','co_a','과장',0,1)")
+            p.execute("INSERT INTO person_aliases VALUES('김민서','pe_a')")
+            p.execute("INSERT INTO call_links VALUES('x','pe_a','co_a')")
+            p.execute("INSERT INTO task_companies VALUES('t1','co_a')");null
+        } }
+        port().use { p -> p.execute("UPDATE people SET name_key=NULL");p.execute("UPDATE companies SET name_key=NULL");p.execute("DELETE FROM people_phones");p.execute("DELETE FROM app_migration") }
+        store().use { s ->
+            assertEquals(1,s.companyCount());assertEquals("김민수",port().use { it.query("SELECT name_key FROM people").single()["name_key"] })
+            assertEquals("co_b",port().use { it.query("SELECT id FROM companies").single()["id"] }) // the most recently used spelling stays
+            assertEquals("철근",s.companies().single().trade);assertEquals("메모",s.companyDetail("co_b")!!.memo)
+            assertEquals("co_b",port().use { it.query("SELECT company_id FROM task_companies").single()["company_id"] });assertEquals("co_b",port().use { it.query("SELECT company_id FROM people").single()["company_id"] })
+            assertEquals("△△철강",port().use { it.query("SELECT name_key FROM companies").single()["name_key"] })
+        }
+        assertEquals("01011112222",port().use { it.query("SELECT phone_key FROM people_phones").single()["phone_key"] })
+        assertEquals("[]",port().use { it.query("SELECT segments_json FROM call_records").single()["segments_json"] })
+    }
+
+    @Test fun migrationRunsOnceAndRefillsEveryNameKeyWithTheCurrentRule() {
+        store().use { it.insert(transcript()) }
+        port().use { p -> p.transaction {
+            p.execute("INSERT INTO companies(id,name,trade,memo,updated_ms,name_key) VALUES('co_i','△△이사',NULL,'',5,'△△')")
+            p.execute("INSERT INTO companies(id,name,trade,memo,updated_ms,name_key) VALUES('co_j','△△',NULL,'',9,'△△')")
+            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms,name_key) VALUES('pe_k','김 과장',NULL,NULL,NULL,0,1,'김')")
+            p.execute("DELETE FROM app_migration");null } }
+        store().use { s -> assertEquals("old keys are filled again by the current rule",listOf("김과장"),port().use { it.query("SELECT name_key FROM people WHERE id='pe_k'") }.map { it["name_key"] })
+            assertEquals("a company named ...이사 is not the company without it",2,s.companyCount()) }
+        // Done once: later opens do not repeat the work.
+        port().use { it.execute("UPDATE call_records SET segments_json='[[1]]'") }
+        store().use { }
+        assertEquals("[[1]]",port().use { it.query("SELECT segments_json FROM call_records").single()["segments_json"] })
+    }
+
+    @Test fun mergedCompaniesKeepBothMemosUpToTheLimit() {
+        store().use { it.insert(transcript()) }
+        port().use { p -> p.transaction {
+            p.execute("INSERT INTO companies(id,name,trade,memo,updated_ms) VALUES('co_a','(주)△△철강',NULL,?,5)","가".repeat(300))
+            p.execute("INSERT INTO companies(id,name,trade,memo,updated_ms) VALUES('co_b','△△ 철강',NULL,?,9)","나".repeat(300))
+            p.execute("INSERT INTO companies(id,name,trade,memo,updated_ms) VALUES('co_c','□□건설',NULL,'첫째',5)")
+            p.execute("INSERT INTO companies(id,name,trade,memo,updated_ms) VALUES('co_d','□□ 건설',NULL,'둘째',9)")
+            p.execute("UPDATE companies SET name_key=NULL");p.execute("DELETE FROM app_migration");null } }
+        store().use { s ->
+            val memo=s.companyDetail("co_b")!!.memo
+            assertEquals(CallRecordStore.COMPANY_MEMO_MAX,memo.length);assertTrue(memo.startsWith("나".repeat(300)+"\n가"))
+            assertEquals("둘째\n첫째",s.companyDetail("co_d")!!.memo)
+        }
+    }
+
+    @Test fun dialNumbersIncludePeopleWhoShareAnOfficeNumber() {
+        store().use { }
+        port().use { p -> p.transaction {
+            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms,name_key) VALUES('pe_1','김민수','0212345678',NULL,NULL,0,1,'김민수')")
+            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms,name_key) VALUES('pe_2','이영희',NULL,NULL,NULL,0,1,'이영희')")
+            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms,name_key) VALUES('pe_3','박철수',NULL,NULL,NULL,0,1,'박철수')")
+            p.execute("INSERT INTO people_phones VALUES('0212345678','pe_1')");p.execute("INSERT INTO people_phones VALUES('0212345678','pe_2')")
+            p.execute("INSERT INTO people_phones VALUES('01099998888','pe_2')");p.execute("INSERT INTO people_phones VALUES('123','pe_3')");null } }
+        val numbers=store().use { it.dialNumbers() }
+        assertEquals(mapOf("pe_1" to "0212345678","pe_2" to "0212345678"),numbers) // pe_3's number is too short to dial
     }
 }

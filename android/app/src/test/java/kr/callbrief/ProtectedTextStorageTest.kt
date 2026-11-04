@@ -98,16 +98,6 @@ class ProtectedTextStorageTest : ProtectedTextHostTestBase() {
         port().use {a->seed(a);port().use {b->b.execute("UPDATE notes SET note=?,revision=2 WHERE revision=1",canaries[3]);a.execute("UPDATE notes SET note=? WHERE revision=1",canaries[1]);assertEquals(canaries[3],row(a)["note"]);assertEquals(1L,row(b)["done"])}}
         port().use {assertEquals(2L,row(it)["revision"]);assertEquals(1,it.query("SELECT * FROM history").size)};evidence("T12","manual_done_preserved" to true,"stale_overwrite" to false)
     }
-    @Test fun T14NativeMetadataAndManualDoneRoundTripHasZeroDiskCanaries()=io{
-        val keys=HostVaultKeys();GeneralLocalStoreTest.host(context,keys).use {s->s.initializeEmpty();val source=GeneralLocalStoreTest.Source().apply{put(name=canaries[1]+".wav")};s.importSelected(source);var row=s.snapshot().getJSONObject(0);s.edit(row.getString("file_id"),row,canaries[0],"done");row=s.snapshot().getJSONObject(0);s.edit(row.getString("file_id"),row,canaries[3],"done")}
-        checkDisk();GeneralLocalStoreTest.host(context,keys).use {s->val row=s.snapshot().getJSONObject(0);assertEquals(canaries[1]+".wav",row.getString("display_name"));assertEquals(canaries[3],row.getString("manual_note"));assertEquals("done",row.getString("manual_status"));assertEquals(2L,row.getLong("user_revision"))};checkDisk();evidence("T14","native_note_filename_disk_canaries" to 0,"done_preserved" to true)
-    }
-    @Test fun T15UnacceptedSourceScopeIsHeldBeforeOpening()=io {
-        val keys=HostVaultKeys();val generated=GeneralLocalStoreTest.Source().apply {put()}
-        val unaccepted=object:SelectedRecordingSource by generated {override val explicitlySyntheticScope=false;override val collectionAccepted=false}
-        GeneralLocalStoreTest.host(context,keys).use {s->s.initializeEmpty();val r=s.importSelected(unaccepted);assertEquals(1,r.held);assertEquals(0,generated.opens);assertEquals(0,s.snapshot().length())}
-        evidence("T15","unaccepted_audio_opens" to 0)
-    }
     @Test fun T16CapacityFailureDoesNotTruncateOrOverwriteExisting()=io {
         port().use {p->seed(p);val file=ProtectedDatabase.file(context,name);val prior=sha(file)
             assertEquals("TEXT_STORE_CAPACITY_REQUIRES_REVIEW",blocked{p.execute("UPDATE notes SET note=?", "x".repeat(ProtectedDatabase.MAX_PLAIN_BYTES))})

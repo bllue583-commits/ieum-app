@@ -10,10 +10,12 @@
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-    <application android:allowBackup="false" android:fullBackupContent="@xml/vault_full_backup_rules"
+    <!-- Registers the call pipeline again after a restart of the phone, without opening the app. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <application android:name=".IeumApplication" android:allowBackup="false" android:fullBackupContent="@xml/vault_full_backup_rules"
         android:dataExtractionRules="@xml/vault_data_extraction_rules"
         android:usesCleartextTraffic="false" android:networkSecurityConfig="@xml/network_security_config"
-        android:label="이음" android:icon="@drawable/ic_callbrief" android:theme="@style/Theme.CallBrief">
+        android:label="이음" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher" android:theme="@style/Theme.CallBrief">
         <activity android:name=".pipeline.HomeActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -25,5 +27,11 @@
         <activity android:name=".pipeline.CompaniesActivity" android:exported="false" />
         <activity android:name=".pipeline.CallSettingsActivity" android:exported="false" />
         <receiver android:name=".pipeline.UpdateStatusReceiver" android:exported="false" />
+        <receiver android:name=".pipeline.StartupReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

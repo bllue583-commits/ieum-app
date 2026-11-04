@@ -20,10 +20,6 @@ if [ -z "${CALLBRIEF_SDK_ROOT:-}" ] || [ ! -f "$CALLBRIEF_SDK_ROOT/platforms/and
     printf '%s\n' 'BLOCKED: platforms;android-36 또는 build-tools;35.0.0이 없습니다. CALLBRIEF_SDK_ROOT에 준비된 SDK 경로를 지정하세요.'
     exit 3
 fi
-if [ ! -f app/src/main/java/kr/callbrief/LocalRecordingCatalog.kt ]; then
-    printf '%s\n' 'BLOCKED: 핵심 저장소 read adapter가 아직 통합되지 않았습니다.'
-    exit 3
-fi
 
 export JAVA_HOME="$CALLBRIEF_JDK_HOME"
 export ANDROID_HOME="$CALLBRIEF_SDK_ROOT"

@@ -36,7 +36,7 @@ class CallDigestTest:ProtectedTextHostTestBase() {
             assertEquals(listOf("unknown","noon","early"),s.day(LocalDate.of(2026,10,29)).map { it.recordingId })
             val m=CallDigestText.evening(s,LocalDate.of(2026,10,29))
             assertEquals("오늘 통화 3건, 새 체크할 일 0개",m.title)
-            assertTrue(m.text.contains("010-1111-2222"));assertTrue(m.text.contains("홍길동"));assertFalse(m.text.contains("통화 내용"))
+            assertTrue(m.text,m.text.contains("상대 미상"));assertTrue(m.lines.any { it.contains("010-1111-2222") });assertTrue(m.lines.any { it.contains("홍길동") });assertFalse(m.text.contains("통화 내용"))
         }
         assertEquals(LocalDate.of(2026,10,28),CallRecordStore.kstDay(kst("2026-10-28T23:59:00")))
         assertEquals(LocalDate.of(2026,10,29),CallRecordStore.kstDay(kst("2026-10-29T00:01:00")))
@@ -62,7 +62,7 @@ class CallDigestTest:ProtectedTextHostTestBase() {
     @Test fun eveningTextNamesAtMostTwo() {
         fun rec(name:String?)=CallRecord(name ?: "x",name ?: "x",0,0,name,null,"","TRANSCRIBED",null,null,emptyList(),null,0,null)
         val m=CallDigestText.evening(listOf(rec("가"),rec("나"),rec("다"),rec(null)),2)
-        assertEquals("오늘 통화 4건, 새 체크할 일 2개",m.title);assertTrue(m.text.contains("가, 나 등"));assertFalse(m.text.contains("다"))
+        assertEquals("오늘 통화 4건, 새 체크할 일 2개",m.title);assertEquals(4,m.lines.size);assertTrue(m.text.startsWith(m.lines.first()))
         assertTrue(m.text.endsWith("아직 정리 중인 통화가 4건 있어요"))
     }
 
@@ -82,7 +82,7 @@ class CallDigestTest:ProtectedTextHostTestBase() {
             p.execute("INSERT INTO folder_grants VALUES('g1',?,'content://generated/tree',1,1,1)",GeneralLocalStore.OWNER)
             p.execute("INSERT INTO recordings(recording_id,owner_key,grant_id,document_id,display_name,mime_type,byte_count,first_seen_ms,last_seen_ms,source_seq,source_version,head_revision) VALUES('r','${GeneralLocalStore.OWNER}','g1','d','n','audio/wav',1,0,0,1,1,1)")
             listOf("i1" to "2026-10-29" to "open","i2" to "2026-10-27" to "needs_confirmation","i3" to "2026-10-30" to "open","i4" to "2026-10-20" to "done","i5" to "내일" to "open").forEach { (a,status) ->
-                p.execute("INSERT INTO workflow_items VALUES(?,'r',NULL,'TODO',?,'',?,?,1,NULL,'',0)",a.first,"할 일 ${a.first}",a.second,status)
+                p.execute("INSERT INTO workflow_items(id,recording_id,case_id,kind,title,edition,due_text,status,revision,source_key,evidence_quote,created_ms) VALUES(?,'r',NULL,'TODO',?,'',?,?,1,NULL,'',0)",a.first,"할 일 ${a.first}",a.second,status)
             };null
         } }
         CallRecordStore(context).use { s ->
@@ -99,5 +99,19 @@ class CallDigestTest:ProtectedTextHostTestBase() {
         assertEquals(Instant.parse("2026-10-29T10:00:00Z"),CallDigestTime.next(Instant.parse("2026-10-29T09:59:00Z"),19))
         assertEquals(Instant.parse("2026-10-30T10:00:00Z"),CallDigestTime.next(Instant.parse("2026-10-29T10:00:00Z"),19))
         assertEquals(Instant.parse("2026-10-29T21:00:00Z"),CallDigestTime.next(Instant.parse("2026-10-29T10:00:00Z"),6))
+    }
+    @Test fun aLateRunKeepsTheDayOfItsTargetAndAVeryLateOneIsSkipped() {
+        val target=Instant.parse("2026-10-29T10:00:00Z") // 19:00 KST on the 29th
+        // Ran at 00:30 KST on the 30th (5.5 hours late): still the 29th.
+        val late=CallDigestTime.plan(Instant.parse("2026-10-29T15:30:00Z"),target)
+        assertEquals(java.time.LocalDate.of(2026,10,29),late.day);assertFalse(late.skip)
+        // 7 hours late: skipped.
+        assertTrue(CallDigestTime.plan(Instant.parse("2026-10-29T17:00:01Z"),target).skip)
+        assertFalse(CallDigestTime.plan(Instant.parse("2026-10-29T16:00:00Z"),target).skip)
+        // Morning 06:00 KST target of the 30th, run on time.
+        assertEquals(java.time.LocalDate.of(2026,10,30),CallDigestTime.plan(Instant.parse("2026-10-29T21:05:00Z"),Instant.parse("2026-10-29T21:00:00Z")).day)
+        assertEquals(Instant.parse("2026-10-29T10:00:00Z"),CallDigestTime.previous(Instant.parse("2026-10-29T15:30:00Z"),19))
+        assertEquals(Instant.parse("2026-10-28T10:00:00Z"),CallDigestTime.previous(Instant.parse("2026-10-29T09:00:00Z"),19))
+        assertEquals("2026-10-29T10:00:00Z",java.time.Instant.ofEpochMilli(CallDigestSchedule.request("evening",Instant.parse("2026-10-29T09:00:00Z"),19).workSpec.input.getLong("targetMs",0)).toString())
     }
 }

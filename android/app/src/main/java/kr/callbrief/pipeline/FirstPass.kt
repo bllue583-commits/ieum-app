@@ -18,6 +18,10 @@ internal object FirstPass {
     /** Old records per batch file, and batches in the inbox at once (the task takes two per run). */
     const val BATCH=15
     const val BATCHES_IN_FLIGHT=2
+    /** At most this many batches a day, and none while no result came for [STALL_MS] (design C7: the first pass steps
+     * back by itself when the routine is held by the subscription limit). */
+    const val BATCHES_PER_DAY=4
+    const val STALL_MS=6*3_600_000L
     /** Old records make check items only when this recent; older work is long settled. */
     const val TASK_DAYS=7L
     const val BATCH_PREFIX="batch:"
@@ -56,20 +60,41 @@ internal object FirstPass {
     /** Each recording to its call-log entry (design: 처음 정리, 대조). The log time is when the call was placed and the
      * recording starts once connected, so the recording may be up to 1 minute early or 2 minutes late; the lengths must
      * agree within 20% or 15 s. A number in the filename must match the entry's number, a name the entry's phone-book
-     * name; with neither, time and length alone. Only a single candidate is taken; two or more leave it unlinked. */
+     * name; with neither, time and length alone. A recording with neither number nor name pairs only when exactly one entry fits. When several pairs fit (a call placed again within a minute or two),
+     * every fitting pair gets a score, the start gap in 30 s units plus the length gap in 5% units, and the best pairs
+     * are taken first across all recordings and entries, each recording and each entry once (review B14). */
     fun match(records:List<RecordForMatch>,log:List<LogEntry>):Map<String,LogEntry> {
-        val used=mutableSetOf<Long>();val out=LinkedHashMap<String,LogEntry>()
-        for(r in records.sortedBy { it.startedMs }) {
+        class Fit(val r:RecordForMatch,val e:LogEntry,val score:Double)
+        val answeredLog=log.filter { answered(it) }.sortedBy { it.startMs }
+        val starts=LongArray(answeredLog.size) { answeredLog[it].startMs }
+        val fits=ArrayList<Fit>()
+        for(r in records) {
             val key=r.counterpartKey
-            val candidates=log.filter { e -> e.id !in used && answered(e) && r.startedMs-e.startMs in -60_000L..120_000L &&
-                (r.durationMs<=0 || kotlin.math.abs(r.durationMs-e.durationMs)<=maxOf(15_000L,maxOf(r.durationMs,e.durationMs)/5)) &&
-                when {
+            val mine=ArrayList<Fit>()
+            // Entries placed from 2 minutes before to 1 minute after the recording started.
+            var i=java.util.Arrays.binarySearch(starts,r.startedMs-120_000L).let { if(it>=0) { var k=it;while(k>0 && starts[k-1]==starts[it]) k--;k } else -it-1 }
+            while(i<starts.size && starts[i]<=r.startedMs+60_000L) {
+                val e=answeredLog[i++]
+                val longer=maxOf(r.durationMs,e.durationMs)
+                val gap=kotlin.math.abs(r.durationMs-e.durationMs)
+                if(r.durationMs>0 && gap>maxOf(15_000L,longer/5)) continue
+                val named=when {
                     key!=null && key.all { it.isDigit() } -> e.numberKey==key
                     key!=null -> e.name!=null && noSpace(e.name)==noSpace(r.counterpart ?: key)
                     else -> true
-                } }
-            val pick=candidates.singleOrNull() ?: continue
-            used+=pick.id;out[r.recordId]=pick
+                }
+                if(!named) continue
+                val lengthTerm=if(r.durationMs>0 && longer>0) gap.toDouble()/longer/0.05 else 0.0
+                mine+=Fit(r,e,kotlin.math.abs(r.startedMs-e.startMs)/30_000.0+lengthTerm)
+            }
+            // Nothing in the file name says who it was (no number, no name): only a single fitting entry is certain enough,
+            // personal ones included; two or more candidates are left unpaired (review M4).
+            if(key!=null || mine.size==1) fits+=mine
+        }
+        val usedEntries=mutableSetOf<Long>();val out=LinkedHashMap<String,LogEntry>()
+        for(f in fits.sortedWith(compareBy<Fit>({ it.score },{ it.r.startedMs },{ it.r.recordId },{ it.e.id }))) {
+            if(f.r.recordId in out || f.e.id in usedEntries) continue
+            out[f.r.recordId]=f.e;usedEntries+=f.e.id
         }
         return out
     }

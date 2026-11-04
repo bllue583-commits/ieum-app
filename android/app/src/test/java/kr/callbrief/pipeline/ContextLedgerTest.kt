@@ -99,12 +99,12 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         assertEquals("△△철강",req.company!!.name);assertEquals("철근",req.company!!.trade)
         assertEquals(listOf("박대리","김민수"),req.companyCalls.map { it.who }) // across people, newest first
         assertEquals(listOf("단가 재견적 받기"),req.openTasks.map { it.title })
-        assertEquals(listOf("납품 일정 확인"),req.tradeTasks.map { it.title });assertEquals("□□철근",req.tradeTasks.single().company)
-        assertEquals(listOf("분전반 점검"),req.otherTasks.map { it.title });assertEquals("◇◇전기",req.otherTasks.single().company)
         assertTrue(req.companyNames.containsAll(listOf("△△철강","□□철근","◇◇전기")));assertTrue(req.personNames.containsAll(listOf("김민수","박대리","한소장")))
         val message=ClaudeCallAnalyzer.userMessage(req)
-        listOf("[현장 상황 메모]","[상대]","[업체]","[이 업체와의 최근 통화","[이 업체의 열린 할 일(JSON)]","[같은 공종(철근)","[그 밖의 열린 할 일(JSON)]","[이름 목록]").forEach { assertTrue(it,message.contains(it)) }
-        val all=req.openTasks+req.tradeTasks+req.otherTasks
+        listOf("[현장 상황 메모]","[상대]","[업체]","[이 업체와의 최근 통화","[이 업체의 열린 체크할 일(JSON)]","[이름 목록]","[달력]","[용어]","[공종 목록]").forEach { assertTrue(it,message.contains(it)) }
+        // v3 (design C5): other companies' open work is not sent.
+        listOf("[같은 공종","[그 밖의 열린 체크할 일","납품 일정 확인","분전반 점검").forEach { assertFalse(it,message.contains(it)) }
+        val all=req.openTasks
         all.forEach { assertTrue(message.contains("\"taskId\":\"${it.id}\"")) }
         assertEquals(all.map { it.id }.toSet(),req.knownTaskIds)
     }
@@ -115,7 +115,7 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         val req=store().use { it.request(unknown) }
         assertNull(req.person);assertNull(req.company);assertEquals("현장 메모",req.siteMemo)
         assertEquals(listOf("오전 통화 요약"),req.todayCalls.map { it.summary })
-        assertEquals(listOf("단가 재견적 받기"),req.otherTasks.map { it.title });assertTrue(req.openTasks.isEmpty())
+        assertTrue(req.openTasks.isEmpty())
         assertEquals(listOf("△△철강"),req.companyNames)
         val m=ClaudeCallAnalyzer.userMessage(req)
         assertTrue(m.contains("[오늘 다른 통화 요약]"));assertTrue(m.contains("아직 모르는 상대"));assertTrue(m.contains("[이름 목록]"))
@@ -125,13 +125,13 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         val big=(1..60).map { ClaudeCallRequest.OpenTask("wf_$it","일 $it","","open","업체$it") }
         val req=ClaudeCallRequest("t","시각",null,0,big,emptyList(),siteMemo="가".repeat(2000),
             company=ClaudeCallRequest.CompanyCard("A","철근","나".repeat(2000)),companyCalls=(1..9).map { ClaudeCallRequest.PastCall("2026-10-0$it","누구","다".repeat(900)) },
-            tradeTasks=big,otherTasks=big,companyNames=(1..200).map { "업체이름$it" },personNames=(1..200).map { "사람이름$it" })
+            companyNames=(1..200).map { "업체이름$it" },personNames=(1..200).map { "사람이름$it" })
         val m=ClaudeCallAnalyzer.userMessage(req)
-        assertEquals(30+10+40,Regex("\"taskId\"").findAll(m).count())
+        assertEquals(30,Regex("\"taskId\"").findAll(m).count())
         assertEquals(5,m.lines().count { it.startsWith("- 2026-10-0") })
         assertFalse(m.contains("가".repeat(601)));assertFalse(m.contains("나".repeat(401)));assertFalse(m.contains("다".repeat(241)))
         val names=m.lines().first { it.startsWith("[이름 목록]") }
-        assertEquals(120,Regex("업체이름\\d+|사람이름\\d+").findAll(names).count())
+        assertEquals(60+200,Regex("업체이름\\d+|사람이름\\d+").findAll(names).count())
     }
 
     @Test fun filterKeepsSafetyRulesAndDropsInventedNames() {
@@ -156,6 +156,60 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         assertEquals("김과장",legacy.counterpart!!.personName);assertNull(legacy.siteMemo)
     }
 
+    @Test fun oneNumberCanBelongToSeveralPeopleAndTheNameDecidesWho() {
+        val office="010-5555-0001"
+        apply(call(1,office),analysis(cp("김민수","△△철강","과장")))
+        // The same number answered by someone with a clearly different name: a second person, not a rewrite of the first.
+        apply(call(2,office),analysis(cp("박지훈","△△철강","대리")))
+        assertEquals(2,count("people"));assertEquals(2,count("people_phones"))
+        assertEquals("과장",port().use { it.query("SELECT role FROM people WHERE name='김민수'").single()["role"] })
+        assertNull(port().use { it.query("SELECT phone_key FROM people WHERE name='박지훈'").single()["phone_key"] }) // phone_key stays unique, people_phones holds both
+        // A misheard jamo or a title is still the first person; so is a repeat.
+        apply(call(3,office),analysis(cp("김민서","△△철강")))
+        apply(call(4,office),analysis(cp("박지훈 대리","△△철강")))
+        assertEquals(2,count("people"))
+        // A call by number only goes to the latest answerer, and the request names the others on that number.
+        val next=call(5,office)
+        val req=store().use { it.request(next) }
+        assertEquals("박지훈",req.person!!.name);assertEquals(listOf("김민수(△△철강 과장)"),req.sameNumberPeople)
+        assertTrue(ClaudeCallAnalyzer.userMessage(req).contains("[같은 번호를 쓰는 다른 사람] 김민수(△△철강 과장)"))
+        // Someone known only by number takes the first name that is heard.
+        val ledgerId=store().use { it.ledgerIdFor(call(6,"010-7777-0007")) }
+        assertNotNull(ledgerId);assertEquals(3,count("people"))
+        apply(call(7,"010-7777-0007"),analysis(cp("최영호","□□전기")))
+        assertEquals(3,count("people"));assertEquals("최영호",port().use { it.query("SELECT name FROM people WHERE phone_key='01077770007'").single()["name"] })
+    }
+
+    @Test fun companySpellingsAreOneCompanyAndANearSpellingOnlyOnTheSameNumber() {
+        apply(call(1),analysis(cp("김민수","(주)△△철강")))
+        apply(call(2,"010-2222-0002"),analysis(cp("박지훈"," △△ 철강 ")))
+        apply(call(3,"010-2222-0003"),analysis(cp("최영호","△△철강 주식회사")))
+        assertEquals(1,count("companies"))
+        // One jamo off, on the number of someone who belongs to the company: the same company, remembered as another spelling.
+        apply(call(4),analysis(cp("김민수","△△철광")))
+        assertEquals(1,count("companies"));assertEquals("△△철광",port().use { it.query("SELECT name_key FROM company_aliases").single()["name_key"] })
+        apply(call(5,"010-4444-0004"),analysis(cp("한소장","△△철광")))   // known spelling now
+        assertEquals(1,count("companies"))
+        // One jamo off on another number: a different company.
+        apply(call(6,"010-4444-0005"),analysis(cp("오세훈","△△철감")))
+        assertEquals(2,count("companies"))
+        // The ledger's merge keeps the old spelling as an alias.
+        store().use { it.applyLedger(JSONObject("{\"rev\":2,\"companies\":[{\"name\":\"△△철감\",\"mergedInto\":\"△△철강\"}]}")) }
+        assertEquals(1,count("companies"));assertEquals(2,count("company_aliases"))
+        assertEquals(5,count("people")) // 김민수, 박지훈, 최영호, 한소장, 오세훈
+    }
+
+    @Test fun theNameListCarriesCompanyTitleAndCorrectedSpellings() {
+        apply(call(1),analysis(cp("김철주","△△철강","과장")))
+        val id=store().use { it.peopleOf(port().use { p -> p.query("SELECT id FROM companies").single()["id"] as String }).single().id }
+        store().use { it.renamePerson(id,"김철수") }
+        apply(call(2,"010-8888-0001"),analysis(cp("박영희",null,"공무",staff=true)))
+        val req=store().use { it.request(call(3,"010-9999-0001")) }
+        assertEquals("△△철강 과장, 오인식 김철주",req.personDetails["김철수"]);assertEquals("우리 회사 공무",req.personDetails["박영희"])
+        val m=ClaudeCallAnalyzer.userMessage(req)
+        assertTrue(m,m.contains("김철수(△△철강 과장, 오인식 김철주)"))
+    }
+
     private fun views(v:View):List<View> =listOf(v)+if(v is ViewGroup)(0 until v.childCount).flatMap { views(v.getChildAt(it)) } else emptyList()
     private fun texts(a:android.app.Activity)=views(a.window.decorView).filterIsInstance<TextView>()
     private fun settle(check:()->Boolean) { repeat(300) { shadowOf(Looper.getMainLooper()).idle();if(check())return;Thread.sleep(10) };fail("UI did not settle") }
@@ -167,7 +221,7 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         val english=Regex("[A-Z]{3,}_[A-Z_]+|\\b(WAITING|FAILED|TRANSCRIBED|ANALYZED|null)\\b")
         fun check() {
             val tv=texts(a)
-            assertTrue(tv.filter { it !is android.widget.Button }.all { it.textSize/it.resources.displayMetrics.scaledDensity>=18f })
+            assertTrue(tv.filter { it !is android.widget.Button }.all { it.textSize/it.resources.displayMetrics.scaledDensity>=((it.getTag(kr.callbrief.R.id.ui_min_sp) as? Float) ?: 18f) }) // round 3: read 18+, asides 16+, badges 15+
             assertFalse(english.containsMatchIn(tv.joinToString("\n") { it.text }))
         }
         check()
@@ -242,11 +296,11 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         assertTrue(m.lines.toString(),m.lines.any { it.startsWith("[△△철강] 단가 재견적 받기, ") && it.endsWith(" 요청") })
         val home=Robolectric.buildActivity(HomeActivity::class.java).setup().get()
         settle { home.window.decorView.findViewWithTag<View>("home_calls_button")!=null }
-        home.render(HomeActivity.Snapshot(true,true,true,"READY",0,0,0,0,0,0,companies=3))
+        home.render(HomeActivity.Snapshot(true,true,"READY",0,0,0,0,0,0,companies=3))
         val door=home.window.decorView.findViewWithTag<View>("home_companies_button")
         assertNotNull(door);assertTrue(views(door).filterIsInstance<TextView>().joinToString { it.text }.contains("업체"))
         val settings=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
-        settle { texts(settings).any { it.text.toString()=="현장 상황 메모" } }
+        settle { texts(settings).any { it.text.toString()=="현장 메모 보기 ›" } }
         settle { settings.window.decorView.findViewWithTag<TextView>("site_memo")?.text?.toString()=="현장 메모 본문" }
     }
 }

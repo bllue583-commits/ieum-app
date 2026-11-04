@@ -8,13 +8,13 @@ import kotlinx.coroutines.withContext
 import kr.callbrief.SecureSettings
 import org.json.JSONObject
 
-/** Analyzes every stored transcript that is waiting. Key/consent are checked per record, right before sending. */
+/** Sends every stored transcript that is waiting to the scheduled task and applies what comes back. Consent is checked per record, right before sending. */
 internal class CallRecordAnalysisRunner(
     private val context:Context,
     private val analyzer:ClaudeCallAnalyzer=ClaudeCallAnalyzer(),
     private val settings:()->JSONObject={ SecureSettings(context).snapshot() },
     private val clock:()->Long=System::currentTimeMillis,
-    /** Subscription mode (a scheduled Claude task) when set; otherwise the Claude API key path. */
+    /** The inbox of the scheduled Claude task; without it (a build with no token) nothing is sent. */
     private val inbox:CallInboxStore?=CallInboxConfig.store(),
     private val save:((JSONObject)->Unit)->Unit={ edit -> runCatching { SecureSettings(context).update { edit(it) } } },
     private val callLog:()->List<FirstPass.LogEntry> ={ val rules=kr.callbrief.LocalPrivacy.rules(settings())
@@ -25,7 +25,7 @@ internal class CallRecordAnalysisRunner(
     fun runPending():Boolean = when {
         kr.callbrief.BuildConfig.LOCAL_PREVIEW -> true // preview calls stay as seeded
         inbox!=null -> runInbox(inbox)
-        else -> runApi()
+        else -> true
     }
 
     /** One hourly pass (design: 장부의 원본, 처음 정리): the user's corrections go up, results are applied, the repository
@@ -48,9 +48,13 @@ internal class CallRecordAnalysisRunner(
             val got=files.map { (name,sha) -> val t=store.get(CallInbox.RESULTS+"/"+name);Got(name,sha,t,runCatching { CallInbox.parseResults(t) }.getOrNull()) }
             for(g in got.filter { it.results==null }) { store.put(CallInbox.BAD+"/"+g.name,g.text);store.delete(CallInbox.RESULTS+"/"+g.name,g.sha) } // broken: kept aside
             val failedFiles=mutableSetOf<String>()
+            // The answer is here: from now on the record is not sent again, whatever the clock says (B17).
+            val recordsOf={ g:Got -> g.results!!.mapNotNull { (id,_) -> byKey[id] ?: db.record(id) } }
+            for(g in got.filter { it.results!=null }) recordsOf(g).forEach { r -> if(db.receivedMs(r.recordId)==null) db.setReceived(r.recordId,clock()) }
             // In call-time order, so the ledger and the check items follow the order things happened.
             val items=got.filter { it.results!=null }.flatMap { g -> g.results!!.map { (id,a) -> Triple(g.name,(byKey[id] ?: db.record(id)),a) } }
                 .filter { it.second!=null && it.second!!.state!=CallRecordStore.ANALYZED }.sortedBy { it.second!!.dayMs }
+            var duplicates=0
             for((name,record,analysis) in items) runCatching {
                 val isOld=FirstPass.isOld(record!!.dayMs,s)
                 // Checked against what is there now, more widely than when it was sent: what changed since must not drop good items.
@@ -58,15 +62,17 @@ internal class CallRecordAnalysisRunner(
                 // Memos come from the repository ledger, which the task keeps in time order.
                 val a=analyzer.filter(analysis,request,db.openTaskIds()).copy(siteMemo=null,companyMemo=null,companyTrade=null)
                 val dropped=analysis.tasks.size+analysis.promises.size-a.tasks.size-a.promises.size
-                db.applyAnalysis(record.recordId,if(FirstPass.beforeStart(record.dayMs,s)) FirstPass.restrict(a,record.dayMs,clock()) else a)
+                val applied=db.applyAnalysis(record.recordId,if(FirstPass.beforeStart(record.dayMs,s)) FirstPass.restrict(a,record.dayMs,clock()) else a)
+                duplicates+=applied.count { it.duplicate }
                 save { it.put(PipelineSettingsKeys.LAST_ANALYZED_MS,clock()).put(PipelineSettingsKeys.DROPPED_ITEMS,it.optLong(PipelineSettingsKeys.DROPPED_ITEMS,0)+dropped) }
             }.onFailure { failedFiles+=name }
+            if(duplicates>0) save { it.put(PipelineSettingsKeys.DUPLICATE_SKIPPED,it.optLong(PipelineSettingsKeys.DUPLICATE_SKIPPED,0)+duplicates) }
             for(g in got.filter { it.results!=null }) {
                 val path=CallInbox.RESULTS+"/"+g.name
                 if(g.name !in failedFiles) { store.delete(path,g.sha);continue }
                 // Kept for the next run; after three failed runs it is set aside.
                 val tries=JSONObject(settings().optString(PipelineSettingsKeys.RESULT_FAILS,"{}")).optInt(g.name,0)+1
-                if(tries>=3) { store.put(CallInbox.BAD+"/"+g.name,g.text);store.delete(path,g.sha) }
+                if(tries>=3) { store.put(CallInbox.BAD+"/"+g.name,g.text);store.delete(path,g.sha);recordsOf(g).forEach { r -> db.setReceived(r.recordId,null) } } // set aside: may be sent again
                 save { it.put(PipelineSettingsKeys.RESULT_FAILS,JSONObject(it.optString(PipelineSettingsKeys.RESULT_FAILS,"{}")).put(g.name,tries).toString()) }
             }
             runCatching { takeTidy(store,db,consent) }
@@ -75,13 +81,19 @@ internal class CallRecordAnalysisRunner(
                 if(!consent) { db.setState(r.recordId,CallRecordStore.WAITING_CONSENT);return false }
                 if(r.state!=CallRecordStore.TRANSCRIBED) db.setState(r.recordId,CallRecordStore.TRANSCRIBED)
                 if(r.transcript.isBlank()) { db.setState(r.recordId,CallRecordStore.FAILED,"EMPTY_TRANSCRIPT");return false }
+                // A number found personal before (design E9): kept here as personal, never sent.
+                if(db.isPersonal(r.counterpartKey)) { db.keepPersonal(r.recordId);return false }
+                // Sent and answered (the answer waits to be applied): never again. Sent and silent for 6 hours: again.
+                if(db.receivedMs(r.recordId)!=null) return false
                 return db.sentMs(r.recordId)?.let { clock()-it>=RESEND_MS } ?: true
             }
+            val user=userInfo(s)
+            fun request(r:CallRecord,old:Boolean)=db.request(r,old).copy(user=user)
             val (old,live)=db.pending().partition { FirstPass.isOld(it.dayMs,s) }
             for(record in live.filter(::due)) {
                 db.ledgerIdFor(record)
                 // atMs: the task works in call-time order. A late old recording keeps the old-record marker.
-                store.put(CallInbox.INBOX+"/"+CallInbox.fileName(record.recordId),CallInbox.job(CallInbox.recordKey(record.recordId),db.request(record,FirstPass.beforeStart(record.dayMs,s)),clock(),record.dayMs))
+                store.put(CallInbox.INBOX+"/"+CallInbox.fileName(record.recordId),CallInbox.job(CallInbox.recordKey(record.recordId),request(record,FirstPass.beforeStart(record.dayMs,s)),clock(),record.dayMs))
                 db.markSent(record.recordId,clock())
             }
             val start=FirstPass.start(s)
@@ -89,12 +101,16 @@ internal class CallRecordAnalysisRunner(
                 val inFlight=old.count { r -> db.sentMs(r.recordId)?.let { clock()-it<RESEND_MS }==true }
                 // Old records earlier than this are complete; later ones may still be joined by older ones.
                 val bound=listOfNotNull(db.oldestOldJobMs(start),messagesBound(s)).minOrNull()
-                var slots=FirstPass.BATCHES_IN_FLIGHT-(inFlight+FirstPass.BATCH-1)/FirstPass.BATCH
+                var slots=batchSlots(s,db.pending().mapNotNull { r -> db.sentMs(r.recordId)?.takeIf { db.receivedMs(r.recordId)==null } }.minOrNull(),
+                    FirstPass.BATCHES_IN_FLIGHT-(inFlight+FirstPass.BATCH-1)/FirstPass.BATCH)
                 for(chunk in old.filter(::due).filter { bound==null || it.dayMs<bound }.sortedBy { it.dayMs }.chunked(FirstPass.BATCH)) {
                     if(slots<=0 || (chunk.size<FirstPass.BATCH && bound!=null)) break
-                    val items=chunk.map { r -> db.ledgerIdFor(r);CallInbox.recordKey(r.recordId) to db.request(r,true) }
+                    val items=chunk.map { r -> db.ledgerIdFor(r);CallInbox.recordKey(r.recordId) to request(r,true) }
                     store.put(CallInbox.INBOX+"/"+CallInbox.batchName(chunk.first().dayMs,items.map { it.first }),CallInbox.batch(items,clock(),chunk.map { it.dayMs }))
                     chunk.forEach { db.markSent(it.recordId,clock()) }
+                    val today=kstDay()
+                    save { it.put(PipelineSettingsKeys.FIRST_PASS_BATCHES_TODAY,(if(it.optString(PipelineSettingsKeys.FIRST_PASS_BATCH_DAY)==today) it.optInt(PipelineSettingsKeys.FIRST_PASS_BATCHES_TODAY,0) else 0)+1)
+                        .put(PipelineSettingsKeys.FIRST_PASS_BATCH_DAY,today) }
                     slots--
                 }
                 // Over only after 12 quiet hours: discovery brings recordings a few at a time, so the queue empties briefly.
@@ -115,6 +131,20 @@ internal class CallRecordAnalysisRunner(
         if(e.code in setOf("INBOX_HTTP_401","INBOX_HTTP_403","INBOX_HTTP_404")) warnDisconnected(e.code);true
     }
 
+    private fun kstDay()=java.time.Instant.ofEpochMilli(clock()).atZone(CallRecordStore.KST).toLocalDate().toString()
+    /** How many first-pass batches may go up now (design C7): none while something sent waits since [waitingSince] and no
+     * result came for [FirstPass.STALL_MS] (the routine is held, most likely by the subscription limit); never more than
+     * [FirstPass.BATCHES_PER_DAY] a KST day; otherwise [free] (the room left in flight). */
+    internal fun batchSlots(s:JSONObject,waitingSince:Long?,free:Int):Int {
+        val now=clock()
+        if(waitingSince!=null && now-waitingSince>=FirstPass.STALL_MS && now-s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0)>=FirstPass.STALL_MS) return 0
+        val today=if(s.optString(PipelineSettingsKeys.FIRST_PASS_BATCH_DAY)==kstDay()) s.optInt(PipelineSettingsKeys.FIRST_PASS_BATCHES_TODAY,0) else 0
+        return minOf(free,FirstPass.BATCHES_PER_DAY-today).coerceAtLeast(0)
+    }
+    /** "내 정보" as the request's [사용자] line takes it; null when nothing is entered. */
+    private fun userInfo(s:JSONObject)=ClaudeCallRequest.UserInfo(s.optString(PipelineSettingsKeys.MY_NAME).trim().ifEmpty { null },
+        s.optString(PipelineSettingsKeys.MY_COMPANY).trim().ifEmpty { null },s.optString(PipelineSettingsKeys.MY_ROLE).trim().ifEmpty { null }).takeIf { !it.empty }
+
     /** Once a day, in working hours: records wait and no result came for 6 hours. The analysis may be stopped (the
      * subscription limit held it for three days, 11/1 to 11/3, and nobody knew). */
     private fun warnIfStalled(db:CallRecordStore) {
@@ -125,7 +155,7 @@ internal class CallRecordAnalysisRunner(
         val waiting=db.pending().filter { !FirstPass.isOld(it.dayMs,s) }.minOfOrNull { it.createdMs } ?: return
         val last=maxOf(s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),waiting)
         if(at.hour !in 9..20 || now-last<6*3_600_000L || s.optString(PipelineSettingsKeys.STALL_WARNED_DAY)==at.toLocalDate().toString()) return
-        runCatching { CallDigestNotifier.post(context,"stall",CallDigestText.Message("정리가 멈췄어요","통화가 6시간 넘게 정리되지 않고 있어요. 앱을 관리하는 분께 알려 주세요.")) }
+        runCatching { CallDigestNotifier.post(context,"stall",CallDigestText.Message("정리가 멈췄어요","통화가 6시간 넘게 정리되지 않고 있어요. 관리하는 분께도 알렸어요.")) }
         save { it.put(PipelineSettingsKeys.STALL_WARNED_DAY,at.toLocalDate().toString()) }
     }
 
@@ -171,34 +201,6 @@ internal class CallRecordAnalysisRunner(
         val mail=s.optString(PipelineSettingsKeys.MAIL_HOST).isNotBlank() && s.optString(PipelineSettingsKeys.MAIL_ERROR).isBlank()
         return listOfNotNull(bound(smsAllowed(),PipelineSettingsKeys.SMS_BACKFILL_CURSOR,PipelineSettingsKeys.SMS_BACKFILL_UNTIL),
             bound(mail,PipelineSettingsKeys.MAIL_BACKFILL_CURSOR,PipelineSettingsKeys.MAIL_BACKFILL_UNTIL)).minOrNull()
-    }
-
-    private fun runApi():Boolean {
-        var allDone=true
-        val pending=CallRecordStore(context,clock).use { it.pending() }
-        for(record in pending) {
-            val s=settings()
-            val key=s.optString(PipelineSettingsKeys.CLAUDE_API_KEY).trim()
-            val state=when {
-                !s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false) -> CallRecordStore.WAITING_CONSENT
-                key.isEmpty() -> CallRecordStore.WAITING_KEY
-                else -> null
-            }
-            if(state!=null) { CallRecordStore(context,clock).use { it.setState(record.recordId,state) };continue }
-            if(record.transcript.isBlank()) { CallRecordStore(context,clock).use { it.setState(record.recordId,CallRecordStore.FAILED,"EMPTY_TRANSCRIPT") };continue }
-            val request=CallRecordStore(context,clock).use { it.request(record) }
-            try {
-                val analysis=analyzer.analyze(key,request)
-                CallRecordStore(context,clock).use { it.applyAnalysis(record.recordId,analysis) }
-                runCatching { SecureSettings(context).update { it.put(PipelineSettingsKeys.LAST_ANALYZED_MS,clock()) } }
-            } catch(e:ClaudeCallException) {
-                if(e.code=="NETWORK") { allDone=false;continue }
-                CallRecordStore(context,clock).use { it.setState(record.recordId,CallRecordStore.FAILED,e.code) }
-            } catch(e:Exception) {
-                CallRecordStore(context,clock).use { it.setState(record.recordId,CallRecordStore.FAILED,e.javaClass.simpleName) }
-            }
-        }
-        return allDone
     }
 }
 

@@ -1,25 +1,16 @@
-# 개발·통합 경계
+# 개발 방식과 변경 경계 (2026-11-04 기준)
 
-이 이관은 code34 v2 소스 보존과 Git 개발 준비입니다. 신규 앱 기능 구현·의존성 업그레이드·리팩터링은 하지 않았습니다. 후속 기능 작업은 기준 commit을 고정하고 독립 branch/worktree에서 진행합니다. 현재 제품 소스는 2026-10-15 작업의 code34 v2이며 Windows 인계에는 새 제품 구현이 없습니다.
+현재 상태와 다음 할 일은 [HANDOFF.md](HANDOFF.md), 제품 설계는 [PRODUCT.md](PRODUCT.md)를 따릅니다. 이 문서는 작업하는 방식만 적습니다.
 
-## 공통 계약
+## 작업 방식
+- 설계도(Claude Docs)를 먼저 고치고, 설계도대로 개발합니다.
+- 작업 브랜치는 `feature/lean-calls`입니다. 시험은 `feature/…` 브랜치에서 하고, CI 통과 후 lean-calls에 합친 뒤 시험 브랜치는 지웁니다. 인수인계 문서는 lean-calls에서만 고칩니다.
+- push하면 ci(`android-ci.yml`)가 JVM 단위 시험과 lint를 돌립니다. 같은 커밋의 ci가 통과해야 `release-apk`가 서명 APK를 빌드해 우편함 릴리스에 올리고 폰이 자동 업데이트합니다. 배포 전에 이전 릴리스와 서명 인증서가 같은지 확인합니다.
+- 병렬 작업은 작업마다 `git worktree`와 브랜치를 따로 씁니다. 같은 파일을 여럿이 고치지 않도록 담당 범위를 먼저 나누고, 합친 뒤 관련 시험을 다시 돌립니다.
+- 통과했다고 보고하기 전에 종료 코드와 결과 파일을 직접 확인합니다.
 
-- `kr.callbrief`, versionCode/versionName, 서명 identity·원 자료 식별자를 임의로 변경하지 않습니다. 기존 서명키는 Git 외부에 있습니다.
-- frozen v0/RO1/SG, 외부 6필드 wire와 shared SQL은 담당자 간 계약 검토 후에만 변경합니다. 의미 parser에 자동 확정 권한을 추가하지 않습니다.
-- owner/source/version/hash/lease/revision/receipt 검사, 원음 제외/철회, 숨김·보관, 수동 DONE·메모·잠금·충돌 보호를 유지합니다.
-- 개인정보 원본·인증·서명키·실사용 DB·비공개 URL·NAS를 변경하거나 커밋하지 않습니다. 새 OAuth/지속 권한/과금·실제 전송은 사용자 승인과 해당 서비스의 절차를 따릅니다.
-- `worker/`는 기존 소스 폴더 이름입니다. 이관은 새 worker/서버/정기 자동화를 만들지 않았습니다.
-- build/model/JNI/APK/cache/AVD는 각 checkout의 ignore된 생성물입니다. 공유 원본 경로를 산출물 디렉터리로 사용하지 않습니다.
-
-## 큰 기능별 협업
-
-기존 개발과 신규 설계 담당은 부모가 별도로 지정합니다. 이 저장소에는 아직 후속 기능 구현을 포함하지 않았습니다.
-
-| 작업 | 먼저 확인할 기존 위치 | 독립성/충돌 경계 |
-| --- | --- | --- |
-| 안전 접수·실제 자동 음성 왕복 | AutomaticRecordingDiscovery, NativeDiscoverySession, AutomationCoordinator, provider/worker | source/job 접수와 분석 후 업무 binding 분리; 모르는 case/task/시각을 합성하지 않음 |
-| 문맥·업무/사람·결과 소비 | LocalRecordingProducer, AndroidAutomationStore, RecordingWorkflowStore, 기존 dot 계약 | 같은 raw source를 보존; 의미 검토와 자동 canonical 적용 분리; Store.accept 우회 금지 |
-| SMS·네이버·23시/증분/06시 보고 | AndroidSmsReadOnlySource, naver-mail 모듈, DailyReportSchedule/Runtime/Ledger | 기존 스케줄러·장부 재사용; 미처리·부분 보고 표시; 실제 ACK/UNKNOWN 분리 |
-| 설계·신규 기능 | docs/plans, 설계 Page sequence54 | 제안·기대값을 구현 완료/시험 PASS로 올리지 않음 |
-
-공유 파일은 한 담당자가 통합합니다. 각 PR은 base SHA, 변경 경로, 입력/관측/실패/재검증과 미실행 범위를 적습니다. 실제 기기·합성 host·계약 validator·운영 수신 결과는 따로 보고합니다. 기존 실패 기록을 지우거나 합격 수를 더해 진척률로 쓰지 않습니다.
+## 지켜야 할 것
+- 패키지 `kr.callbrief`와 서명 키 유도(`tools/derive_signing_key.py`)를 바꾸지 않습니다. 서명이 달라지면 설치된 앱이 업데이트되지 않습니다.
+- 녹음 파일과 통화 내용은 폰 밖으로 내보내지 않습니다(자막만 우편함으로). 원본은 암호화 금고에 두고 자막 완료 14일 뒤 지웁니다.
+- 비밀번호·토큰·키·통화 내용·개인 경로를 파일, 로그, 커밋에 남기지 않습니다. `tools/scan_export.py`로 확인할 수 있습니다.
+- 코드와 문서를 지울 때는 먼저 `git grep`으로 참조를 확인합니다. 이력은 git에 남으므로 `archive/` 폴더를 만들지 않습니다(정리 전 상태는 태그 `archive/pre-cleanup-20261104`).

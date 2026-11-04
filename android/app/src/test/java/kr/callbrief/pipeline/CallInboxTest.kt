@@ -40,7 +40,7 @@ class CallInboxTest:ProtectedTextHostTestBase() {
             null
         } }
     }
-    private fun runner(inbox:FakeInbox,consent:Boolean=true)=CallRecordAnalysisRunner(context,ClaudeCallAnalyzer({ _,_ -> error("API must not be used") }) {},
+    private fun runner(inbox:FakeInbox,consent:Boolean=true)=CallRecordAnalysisRunner(context,ClaudeCallAnalyzer(),
         { JSONObject().put(PipelineSettingsKeys.CONSENT_GRANTED,consent) },{ now },inbox)
 
     @Test fun sendsOnceThenAppliesResultAndCleansUp() {
@@ -55,7 +55,8 @@ class CallInboxTest:ProtectedTextHostTestBase() {
         assertTrue(runner(inbox).runPending())
         val job=inbox.files.entries.single();assertTrue(job.key.startsWith("inbox/"))
         assertFalse("no names or numbers in paths",job.key.contains("rec1")||job.key.contains("김과장"))
-        val o=JSONObject(job.value);assertEquals(CallInbox.recordKey(id),o.getString("id"));assertFalse(job.value.contains("rec1|"));assertTrue(o.getString("message").contains(text));assertTrue(o.has("schema"))
+        val o=JSONObject(job.value);assertEquals(CallInbox.recordKey(id),o.getString("id"));assertFalse(job.value.contains("rec1|"));assertTrue(o.getString("message").contains(text))
+        assertEquals("v3 carries the rules until the task runs hourly.md",CallInbox.CARRY_RULES,o.has("schema")&&o.has("system"));assertEquals(3,o.getInt("format"));assertEquals(ClaudeCallAnalyzer.PROMPT_VERSION,o.getInt("promptVersion"))
         runner(inbox).runPending();assertEquals("not re-sent within 6 h",1,inbox.files.size)
 
         // The scheduled task answers; an invented quote is dropped by the same filter as the API path.
@@ -69,6 +70,25 @@ class CallInboxTest:ProtectedTextHostTestBase() {
         val r=CallRecordStore(context).use { it.record(id)!! }
         assertEquals(CallRecordStore.ANALYZED,r.state)
         assertEquals(listOf("견적서 메일 보내기"),CallRecordStore(context).use { it.openItems().map { i->i.title } })
+    }
+
+    @Test fun aRecordWhoseAnswerCameIsNotSentAgainAndAnOldTableGetsTheColumn() {
+        // An installation from before B17: the sent table has two columns only.
+        AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql")).use { p -> p.transaction {
+            p.execute("CREATE TABLE IF NOT EXISTS call_inbox_sent(record_id TEXT PRIMARY KEY,sent_ms INTEGER NOT NULL)");null } }
+        val text=ClaudeCallAnalyzerTest.TRANSCRIPT
+        val t=CallTranscript("rec1",1,"a".repeat(64),now,125_000,"김과장",text,listOf(CallTranscript.Segment(0,5000,text)),"m","b".repeat(64),true)
+        val id=CallRecordStore(context){ now }.use { it.insert(t);CallRecordStore.recordId(t) }
+        val inbox=FakeInbox()
+        assertTrue(runner(inbox).runPending());assertEquals(1,inbox.files.size)
+        CallRecordStore(context).use { assertNull(it.receivedMs(id));it.setReceived(id,now) }
+        // Six hours pass without the answer being applied: the clock alone no longer sends it again.
+        inbox.files.clear();now+=RESEND_MS+60_000
+        assertTrue(runner(inbox).runPending());assertTrue(inbox.files.isEmpty())
+        // The answer was set aside as broken: it may be sent again.
+        CallRecordStore(context).use { it.setReceived(id,null) }
+        assertTrue(runner(inbox).runPending());assertEquals(1,inbox.files.size)
+        assertNull(CallRecordStore(context).use { it.receivedMs(id) })
     }
 
     @Test fun networkFailureIsRetriedLater() {

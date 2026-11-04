@@ -125,7 +125,7 @@ class TidyTest:ProtectedTextHostTestBase() {
         }
         val night=java.time.LocalDate.of(2026,10,28).atTime(22,0).atZone(CallRecordStore.KST).toInstant().toEpochMilli()
         val s=JSONObject().put(PipelineSettingsKeys.CONSENT_GRANTED,true).put(PipelineSettingsKeys.FIRST_PASS_START_MS,now-86_400_000L)
-        fun run(at:Long)=CallRecordAnalysisRunner(context,ClaudeCallAnalyzer({ _,_ -> error("no API") }) {},{ s },{ at },inbox,save={ e -> e(s) },callLog={ emptyList() },smsAllowed={ false }).runPending()
+        fun run(at:Long)=CallRecordAnalysisRunner(context,ClaudeCallAnalyzer(),{ s },{ at },inbox,save={ e -> e(s) },callLog={ emptyList() },smsAllowed={ false }).runPending()
         run(night);assertFalse("not before the first pass ends",files.containsKey(CallInbox.TIDY_STATE))
         s.put(PipelineSettingsKeys.FIRST_PASS_DONE,true)
         run(night-10*3_600_000L);assertFalse("daytime",files.containsKey(CallInbox.TIDY_STATE))

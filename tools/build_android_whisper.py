@@ -25,6 +25,6 @@ for abi in abis:
   subprocess.run([str(cmake),'--build',str(build),'--target','ieum_whisper','-j','4'],stdout=f,stderr=subprocess.STDOUT,check=True)
  lib=build/'libieum_whisper.so';dest=out/'jniLibs'/abi/lib.name;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(lib,dest);pins[abi]={'sha256':hashlib.sha256(lib.read_bytes()).hexdigest(),'bytes':lib.stat().st_size}
  print(json.dumps({'abi':abi,**pins[abi]}),flush=True)
-for name in ['public-ko.wav','public-en.wav']:shutil.copy2(r/'worker/tests/audio'/name,assets/name)
+for name in ['public-ko.wav','public-en.wav']:shutil.copy2(r/'tools/audio'/name,assets/name)
 meta={'schema':'ieum.android-whisper-runtime.v1','engine':'whisper.cpp-v1.7.6-android-cpu','sourceArchiveSha256':source_sha,'native':pins,'publicAudio':{n:hashlib.sha256((assets/n).read_bytes()).hexdigest() for n in ['public-ko.wav','public-en.wav']},'network':False,'microphone':False,'ndk':'28.2.13676358'}
 (assets/'runtime-pin.json').write_text(json.dumps(meta,indent=2)+'\n');(r/'evidence').mkdir(exist_ok=True);(r/'evidence/ANDROID_NATIVE_BUILD_RECEIPT.json').write_text(json.dumps(meta,indent=2)+'\n');print(json.dumps({'status':'ANDROID_NATIVE_ASSETS_READY','abis':abis}),flush=True)

@@ -20,8 +20,12 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
             val ledger=context.assets.open("vault2_ledger.sql").bufferedReader().use{it.readText()}
             db.transaction{
                 ledger.split("\n-- statement-break\n").forEach{db.execute(it)}
-                // Finished 5-minute pieces of a transcript, so a long call survives the worker's time limit (review 11/4, round 2).
-                db.execute("CREATE TABLE IF NOT EXISTS call_transcription_parts(recording_id TEXT NOT NULL,source_version INTEGER NOT NULL,audio_sha TEXT NOT NULL,chunk INTEGER NOT NULL,segments_json TEXT NOT NULL,PRIMARY KEY(recording_id,source_version,audio_sha,chunk))")
+                // Finished 2-minute pieces of a transcript, so a long call survives the worker's time limit (review 11/4, round 2).
+                db.execute("CREATE TABLE IF NOT EXISTS call_transcription_parts(recording_id TEXT NOT NULL,source_version INTEGER NOT NULL,audio_sha TEXT NOT NULL,chunk INTEGER NOT NULL,segments_json TEXT NOT NULL,chunk_ms INTEGER,PRIMARY KEY(recording_id,source_version,audio_sha,chunk))")
+                // Installs from before the piece length was recorded: old rows get NULL and are never reused (the length changed 5 -> 2 minutes).
+                if(db.query("PRAGMA table_info(call_transcription_parts)").none { it["name"]=="chunk_ms" }) db.execute("ALTER TABLE call_transcription_parts ADD COLUMN chunk_ms INTEGER")
+                // How many times in a row a worker stop hit one chunk; three halves the chunk (B4).
+                db.execute("CREATE TABLE IF NOT EXISTS call_transcription_stalls(recording_id TEXT NOT NULL,source_version INTEGER NOT NULL,audio_sha TEXT NOT NULL,chunk INTEGER NOT NULL,stops INTEGER NOT NULL,PRIMARY KEY(recording_id,source_version,audio_sha,chunk))")
                 db.execute("""CREATE TABLE IF NOT EXISTS call_transcription_jobs(recording_id TEXT NOT NULL,source_version INTEGER NOT NULL,
                     audio_sha TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('QUEUED','RUNNING','DONE','FAILED','SKIPPED')),
                     reason TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,updated_ms INTEGER NOT NULL,
@@ -61,10 +65,12 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         SELECT 1 FROM recordings r JOIN source_versions v ON v.recording_id=r.recording_id AND v.source_version=r.source_version
         WHERE r.recording_id=call_transcription_jobs.recording_id AND r.source_version=call_transcription_jobs.source_version AND v.audio_sha256=call_transcription_jobs.audio_sha)""",now())
 
-    /** Rows left RUNNING by a process that died. The attempt stays counted, so a crash loop ends in FAILED. */
-    fun recoverRunning(maxAttempts:Int)=db.transaction {
-        db.execute("UPDATE call_transcription_jobs SET state='FAILED',reason='INTERRUPTED',updated_ms=? WHERE state='RUNNING' AND attempts>=?",now(),maxAttempts)
-        db.execute("UPDATE call_transcription_jobs SET state='QUEUED',reason='INTERRUPTED',updated_ms=? WHERE state='RUNNING'",now());null
+    /** Rows left RUNNING by a process that died. The attempt stays counted, so a crash loop ends in FAILED.
+     * Only rows untouched for [staleMs] (a bit over the 10 minute work limit): a RUNNING row younger than that may belong to a worker that is still going. */
+    fun recoverRunning(maxAttempts:Int,staleMs:Long=STALE_RUNNING_MS)=db.transaction {
+        val limit=now()-staleMs
+        db.execute("UPDATE call_transcription_jobs SET state='FAILED',reason='INTERRUPTED',updated_ms=? WHERE state='RUNNING' AND attempts>=? AND updated_ms<?",now(),maxAttempts,limit)
+        db.execute("UPDATE call_transcription_jobs SET state='QUEUED',reason='INTERRUPTED',updated_ms=? WHERE state='RUNNING' AND updated_ms<?",now(),limit);null
     }
 
     /** Newest first; with [oldBefore] (처음 정리) recordings before it come after all newer ones, oldest first, so the
@@ -76,12 +82,35 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         j.updated_ms LIMIT 1""".trimIndent(),GeneralLocalStore.OWNER,oldBefore ?: Long.MIN_VALUE,oldBefore ?: Long.MIN_VALUE)
         .singleOrNull()?.let{Job(candidate(it),it["state"].toString(),it["reason"].toString(),(it["attempts"] as Number).toInt())}
 
-    fun parts(k:Key):Map<Int,List<CallTranscript.Segment>> =db.query("SELECT chunk,segments_json FROM call_transcription_parts WHERE recording_id=? AND source_version=? AND audio_sha=?",
-        k.recordingId,k.sourceVersion,k.audioSha).associate { r -> (r["chunk"] as Number).toInt() to org.json.JSONArray(r["segments_json"].toString()).let { a ->
-            (0 until a.length()).map { val x=a.getJSONArray(it);CallTranscript.Segment(x.getLong(0),x.getLong(1),x.getString(2)) } } }
-    fun savePart(k:Key,chunk:Int,segments:List<CallTranscript.Segment>)=db.execute("INSERT OR REPLACE INTO call_transcription_parts VALUES(?,?,?,?,?)",
-        k.recordingId,k.sourceVersion,k.audioSha,chunk,org.json.JSONArray().apply { segments.forEach { put(org.json.JSONArray().put(it.startMs).put(it.endMs).put(it.text)) } }.toString())
-    fun clearParts(k:Key)=db.execute("DELETE FROM call_transcription_parts WHERE recording_id=? AND source_version=? AND audio_sha=?",k.recordingId,k.sourceVersion,k.audioSha)
+    /** Finished pieces made with piece length [chunkMs]. Rows of any other length (or unknown, NULL) are deleted, with the stop counters
+     * that were counted against those piece numbers: the same id then means a different stretch of audio. */
+    fun parts(k:Key,chunkMs:Long=PipelineAudioMath.MAX_CHUNK_MS):Map<Int,List<CallTranscript.Segment>> {
+        val stale=db.query("SELECT 1 FROM call_transcription_parts WHERE recording_id=? AND source_version=? AND audio_sha=? AND (chunk_ms IS NULL OR chunk_ms!=?) LIMIT 1",
+            k.recordingId,k.sourceVersion,k.audioSha,chunkMs).isNotEmpty()
+        if(stale)db.transaction {
+            db.execute("DELETE FROM call_transcription_parts WHERE recording_id=? AND source_version=? AND audio_sha=? AND (chunk_ms IS NULL OR chunk_ms!=?)",k.recordingId,k.sourceVersion,k.audioSha,chunkMs)
+            db.execute("DELETE FROM call_transcription_stalls WHERE recording_id=? AND source_version=? AND audio_sha=?",k.recordingId,k.sourceVersion,k.audioSha);null
+        }
+        return db.query("SELECT chunk,segments_json FROM call_transcription_parts WHERE recording_id=? AND source_version=? AND audio_sha=? AND chunk_ms=?",
+            k.recordingId,k.sourceVersion,k.audioSha,chunkMs).associate { r -> (r["chunk"] as Number).toInt() to org.json.JSONArray(r["segments_json"].toString()).let { a ->
+                (0 until a.length()).map { val x=a.getJSONArray(it);CallTranscript.Segment(x.getLong(0),x.getLong(1),x.getString(2)) } } }
+    }
+    fun savePart(k:Key,chunk:Int,segments:List<CallTranscript.Segment>,chunkMs:Long=PipelineAudioMath.MAX_CHUNK_MS)=db.execute(
+        "INSERT OR REPLACE INTO call_transcription_parts(recording_id,source_version,audio_sha,chunk,segments_json,chunk_ms) VALUES(?,?,?,?,?,?)",
+        k.recordingId,k.sourceVersion,k.audioSha,chunk,org.json.JSONArray().apply { segments.forEach { put(org.json.JSONArray().put(it.startMs).put(it.endMs).put(it.text)) } }.toString(),chunkMs)
+    fun clearParts(k:Key)=db.transaction {
+        db.execute("DELETE FROM call_transcription_parts WHERE recording_id=? AND source_version=? AND audio_sha=?",k.recordingId,k.sourceVersion,k.audioSha)
+        db.execute("DELETE FROM call_transcription_stalls WHERE recording_id=? AND source_version=? AND audio_sha=?",k.recordingId,k.sourceVersion,k.audioSha);null
+    }
+    fun stalls(k:Key,chunk:Int):Int = db.query("SELECT stops FROM call_transcription_stalls WHERE recording_id=? AND source_version=? AND audio_sha=? AND chunk=?",
+        k.recordingId,k.sourceVersion,k.audioSha,chunk).singleOrNull()?.let { (it["stops"] as Number).toInt() } ?: 0
+    /** Stops counted against any piece of this recording (the halves use the whole piece's number). */
+    fun totalStalls(k:Key):Int = db.query("SELECT coalesce(sum(stops),0) AS n FROM call_transcription_stalls WHERE recording_id=? AND source_version=? AND audio_sha=?",
+        k.recordingId,k.sourceVersion,k.audioSha).single()["n"].let { (it as Number).toInt() }
+    fun noteStall(k:Key,chunk:Int)=db.transaction {
+        db.execute("INSERT OR IGNORE INTO call_transcription_stalls VALUES(?,?,?,?,0)",k.recordingId,k.sourceVersion,k.audioSha,chunk)
+        db.execute("UPDATE call_transcription_stalls SET stops=stops+1 WHERE recording_id=? AND source_version=? AND audio_sha=? AND chunk=?",k.recordingId,k.sourceVersion,k.audioSha,chunk);null
+    }
 
     /** QUEUED -> RUNNING, counting the attempt. False when the row is no longer queued. */
     fun claim(k:Key):Boolean = db.transaction {
@@ -104,4 +133,5 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
     }
 
     override fun close()=db.close()
+    companion object { const val STALE_RUNNING_MS=11*60_000L }
 }

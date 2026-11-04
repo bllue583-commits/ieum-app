@@ -29,10 +29,8 @@ data class CallTranscript(
  * and schedule its analysis. Called on a background thread right after transcription. */
 interface CallTranscriptSink { fun onTranscript(transcript:CallTranscript) }
 
-/** SecureSettings keys. Secrets are only written by explicit user action in the settings screen. */
+/** SecureSettings keys. Written only by explicit user action in the settings screen. */
 object PipelineSettingsKeys {
-    /** Anthropic API key entered by the user. SecureSettings is Keystore-encrypted; never logged or shown again. */
-    const val CLAUDE_API_KEY="callsClaudeApiKey"
     /** User consent to send transcript TEXT (not audio) to the Claude API. Nothing is sent while false. */
     const val CONSENT_GRANTED="callsConsentGranted"
     /** Transcription side status: NOT_DOWNLOADED | DOWNLOADING | READY | FAILED | UNSUPPORTED. */
@@ -78,6 +76,23 @@ object PipelineSettingsKeys {
     const val SMS_BACKFILL_UNTIL="firstPassSmsUntil"
     const val MAIL_BACKFILL_CURSOR="firstPassMailCursor"
     const val MAIL_BACKFILL_UNTIL="firstPassMailUntil"
+    /** A9: hallucinated segments and repeated sentences removed from transcripts (a running count). */
+    const val TRANSCRIPT_CLEANED="transcriptCleaned"
+    /** A2: when the daily self-check last had to register a lost work again (0/absent = never). */
+    const val RESCHEDULED_MS="rescheduledMs"
+    /** The last failed self-update install: "code: message" (cleared when an install succeeds). Shown on the settings update light. */
+    const val LAST_UPDATE_ERROR="lastUpdateError"
+    /** When the evening or morning report was last actually posted (ms). */
+    const val LAST_DIGEST_MS="lastDigestMs"
+    /** "내 정보" (design C5 [사용자]): the user's name, company and site, and title. Empty: the request says roles only. */
+    const val MY_NAME="myName"
+    const val MY_COMPANY="myCompany"
+    const val MY_ROLE="myRole"
+    /** Check items the AI proposed that were left out as the same as an existing one: a running count (design E5). */
+    const val DUPLICATE_SKIPPED="duplicateSkipped"
+    /** First-pass batches put up on one KST day (design C7: at most [FirstPass.BATCHES_PER_DAY]): the day and the count. */
+    const val FIRST_PASS_BATCH_DAY="firstPassBatchDay"
+    const val FIRST_PASS_BATCHES_TODAY="firstPassBatchesToday"
 }
 
 /** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets

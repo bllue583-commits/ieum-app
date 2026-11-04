@@ -36,7 +36,7 @@ class FirstPassTest:ProtectedTextHostTestBase() {
     private fun transcript(id:String,startedMs:Long,counterpart:String?="김과장")=
         CallTranscript(id,1,"a".repeat(64),startedMs,60_000,counterpart,ClaudeCallAnalyzerTest.TRANSCRIPT,emptyList(),"m","b".repeat(64),true)
     private fun runner(inbox:FakeInbox,s:JSONObject,log:List<FirstPass.LogEntry> =emptyList(),at:Long=now)=CallRecordAnalysisRunner(context,
-        ClaudeCallAnalyzer({ _,_ -> error("API must not be used") }) {},{ s },{ at },inbox,save={ edit -> edit(s) },callLog={ log },smsAllowed={ false })
+        ClaudeCallAnalyzer(),{ s },{ at },inbox,save={ edit -> edit(s) },callLog={ log },smsAllowed={ false })
     /** The scheduled task answers every request in the inbox. */
     private fun answer(inbox:FakeInbox,analysis:(String)->JSONObject={ ClaudeCallAnalyzerTest.analysis() }) {
         inbox.files.keys.filter { it.startsWith("inbox/") }.toList().forEach { k ->
@@ -56,11 +56,11 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         val batches=inbox.files.keys.filter { it.startsWith("inbox/b-") }.sorted()
         assertEquals(2,batches.size);assertEquals(1,inbox.files.keys.count { !it.startsWith("inbox/b-") })
         val first=JSONObject(inbox.files.getValue(batches[0]));val second=JSONObject(inbox.files.getValue(batches[1]))
-        assertTrue(first.getString("id").startsWith(FirstPass.BATCH_PREFIX));assertTrue(first.has("schema"))
+        assertTrue(first.getString("id").startsWith(FirstPass.BATCH_PREFIX));assertEquals(CallInbox.CARRY_RULES,first.has("schema")&&first.has("system"));assertEquals(ClaudeCallAnalyzer.PROMPT_VERSION,first.getInt("promptVersion"))
         val items=first.getJSONArray("items");assertEquals(15,items.length());assertEquals(7,second.getJSONArray("items").length())
         // Time order: oldest first inside a batch and across batch names.
         assertEquals(CallInbox.recordKey(CallRecordStore.recordId(transcript("old22",0))),items.getJSONObject(0).getString("id"))
-        assertTrue(items.getJSONObject(0).getString("message").startsWith("[처음 정리]"))
+        assertTrue(items.getJSONObject(0).getString("message").let { it.startsWith("[사용자]") && it.contains("\n[처음 정리]") })
         assertTrue(items.getJSONObject(0).getString("counterpartId").startsWith("p_"))
         val single=JSONObject(inbox.files.entries.first { !it.key.startsWith("inbox/b-") }.value)
         assertFalse(single.getString("message").contains("[처음 정리]"))
@@ -142,8 +142,15 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         // Lengths must agree within 20% or 15 s.
         assertEquals(1L,FirstPass.match(listOf(r("a",t,null,null,dur=70_000)),listOf(e(1,null,null,t,dur=60_000)))["a"]?.id)
         assertNull(FirstPass.match(listOf(r("a",t,null,null,dur=120_000)),listOf(e(1,null,null,t,dur=60_000)))["a"])
-        // Two candidates in the same window: left unlinked.
+        // A recording whose filename gave no number or name pairs only when exactly one entry fits (two fitting ones: the old give-up rule).
         assertNull(FirstPass.match(listOf(r("a",t,null,null)),listOf(e(1,"01011112222",null,t),e(2,"01033334444",null,t+30_000)))["a"])
+        assertNull(FirstPass.match(listOf(r("a",t,null,null,dur=60_000)),listOf(e(1,"01011112222",null,t,dur=50_000),e(2,"01033334444",null,t+10_000,dur=60_000)))["a"])
+        assertEquals(2L,FirstPass.match(listOf(r("a",t,null,null,dur=60_000)),listOf(e(1,"01011112222",null,t,dur=10_000),e(2,"01033334444",null,t+10_000,dur=60_000)))["a"]?.id) // only one fits in length
+        // The personal number counts as a candidate too, and pairs only when it is the only one.
+        assertEquals(7L,FirstPass.match(listOf(r("a",t,null,null)),listOf(FirstPass.LogEntry(7,"01055556666",null,t,60_000,1,personal=true)))["a"]?.id)
+        assertNull(FirstPass.match(listOf(r("a",t,null,null)),listOf(FirstPass.LogEntry(7,"01055556666",null,t,60_000,1,personal=true),e(2,"01033334444",null,t+10_000)))["a"])
+        // With a number from the filename the entry is picked even among several.
+        assertEquals(2L,FirstPass.match(listOf(r("a",t,"010-3333-4444","01033334444")),listOf(FirstPass.LogEntry(7,"01055556666",null,t,60_000,1,personal=true),e(2,"01033334444",null,t+10_000)))["a"]?.id)
         // A number in the filename picks its entry even with another call nearby; a name picks the phone-book name.
         assertEquals(2L,FirstPass.match(listOf(r("a",t,"010-3333-4444","01033334444")),listOf(e(1,"01011112222",null,t),e(2,"01033334444",null,t+30_000)))["a"]?.id)
         assertEquals(1L,FirstPass.match(listOf(r("a",t,"홍 길동","홍 길동")),listOf(e(1,"01011112222","홍길동",t),e(2,"01033334444","김민수",t)))["a"]?.id)
@@ -151,6 +158,22 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         // Missed and rejected calls are never candidates.
         assertNull(FirstPass.match(listOf(r("a",t,null,null)),listOf(e(1,null,null,t,dur=0,type=3),e(2,null,null,t,type=5)))["a"])
         assertEquals("받은 전화",e(1,null,null,t).direction);assertEquals("건 전화",e(1,null,null,t,type=2).direction)
+    }
+
+    @Test fun callsPlacedAgainWithinTwoMinutesAreAssignedAcrossAllRecordingsAndEntries() {
+        val t=now;val min=60_000L
+        fun e(id:Long,at:Long,dur:Long)=FirstPass.LogEntry(id,"01011112222",null,at,dur,2)
+        fun r(id:String,at:Long,dur:Long)=FirstPass.RecordForMatch(id,at,"홍길동","01011112222",dur)
+        // The same person called twice a minute apart: both recordings fit both entries in time, the lengths tell them apart.
+        val redial=FirstPass.match(listOf(r("a",t,30_000),r("b",t+min,90_000)),listOf(e(1,t,30_000),e(2,t+min,90_000)))
+        assertEquals(mapOf("a" to 1L,"b" to 2L),redial.mapValues { it.value.id })
+        // Equal lengths: the best pairs are taken first across everything, not recording by recording.
+        val swap=FirstPass.match(listOf(r("a",t,60_000),r("b",t+min,60_000)),listOf(e(1,t+min,60_000),e(2,t-30_000,60_000)))
+        assertEquals(mapOf("b" to 1L,"a" to 2L),swap.mapValues { it.value.id })
+        // One entry, two recordings: it goes to the closer one, the other stays unlinked.
+        val one=FirstPass.match(listOf(r("a",t+90_000,60_000),r("b",t+10_000,60_000)),listOf(e(1,t,60_000)))
+        assertEquals(mapOf("b" to 1L),one.mapValues { it.value.id })
+        assertTrue(FirstPass.match(emptyList(),listOf(e(1,t,1))).isEmpty());assertTrue(FirstPass.match(listOf(r("a",t,1)),emptyList()).isEmpty())
     }
 
     @Test fun callsWithoutARecordingAreCountedButNotMissedOrRejectedOnes() {
@@ -188,5 +211,28 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         assertEquals(listOf("a"),CallInbox.parseResults(ok.toString()).map { it.first })
         assertTrue(CallInbox.batchName(5,listOf("x")).startsWith("b-0000000000005-"))
         assertTrue(CallInbox.batchName(5,listOf("x"))<CallInbox.batchName(40,listOf("y")))
+    }
+
+    @Test fun aRecordWithoutAnyKeyIsForgottenAsPersonalOnlyWhenThePersonalEntryIsItsOnlyCandidate() {
+        val id=CallRecordStore.recordId(transcript("x",now,null))
+        CallRecordStore(context){ now }.use { db ->
+            db.insert(transcript("x",now,null))
+            db.reconcileCallLog(listOf(FirstPass.LogEntry(1,"01055556666",null,now,60_000,1,personal=true),FirstPass.LogEntry(2,"01033334444",null,now+10_000,60_000,1)))
+            assertNotNull("two candidates: not paired, not forgotten",db.record(id))
+            assertEquals(1,db.unrecordedCalls()) // entry 2 stays free; the personal one is never stored
+        }
+        CallRecordStore(context){ now }.use { db ->
+            db.reconcileCallLog(listOf(FirstPass.LogEntry(1,"01055556666",null,now,60_000,1,personal=true)).let { it })
+            assertNotNull(db.record(id)) // the ordinary entry is still stored beside it
+        }
+    }
+
+    @Test fun aRecordWithoutAnyKeyAndOnlyAPersonalCandidateIsForgotten() {
+        val id=CallRecordStore.recordId(transcript("y",now,null))
+        CallRecordStore(context){ now }.use { db ->
+            db.insert(transcript("y",now,null))
+            db.reconcileCallLog(listOf(FirstPass.LogEntry(1,"01055556666",null,now,60_000,1,personal=true)))
+            assertNull(db.record(id))
+        }
     }
 }

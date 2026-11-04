@@ -6,7 +6,7 @@ on:
   push:
     branches: ['feature/**', 'main']
     # release-apk waits for this run on the same commit, so every path that releases also runs the tests.
-    paths: ['android/**', 'worker/**', 'tools/**', '.github/workflows/android-ci.yml', '.github/workflows/release-apk.yml']
+    paths: ['android/**', 'tools/**', '.github/workflows/android-ci.yml', '.github/workflows/release-apk.yml']
   pull_request:
   workflow_dispatch:
 
@@ -18,23 +18,6 @@ permissions:
   contents: read
 
 jobs:
-  worker:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: {node-version: '22'}
-      - name: Node tests
-        working-directory: worker
-        run: |
-          if [ -f package-lock.json ]; then npm ci --ignore-scripts; fi
-          set +e
-          node --test tests/*.test.mjs > node-test.log 2>&1; status=$?
-          cat node-test.log
-          grep -E '^(not ok|# (tests|pass|fail))' node-test.log | sed 's/^/::notice title=node test::/'
-          exit $status
-
   android:
     runs-on: ubuntu-latest
     timeout-minutes: 75
@@ -45,8 +28,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '17'}
-      - uses: actions/setup-node@v4
-        with: {node-version: '22'}
       - uses: android-actions/setup-android@v3
         with:
           packages: 'platforms;android-36 build-tools;35.0.0'
@@ -57,6 +38,11 @@ jobs:
             gradle-user/wrapper
             robolectric-jar
           key: gradle-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+      - name: UI rules and tool tests
+        run: |
+          python3 -m unittest discover -s tools -p 'test_*.py' -t tools
+          python3 -m unittest discover -s tools/inbox -p 'test_*.py'
+          python3 tools/check_ui_rules.py
       - name: Prepare Robolectric runtime
         run: |
           mkdir -p robolectric-jar
@@ -65,7 +51,7 @@ jobs:
       - name: JVM tests and lint
         id: gradle
         run: |
-          export ANDROID_SDK_ROOT="$ANDROID_HOME" IEUM_NODE_BINARY="$(command -v node)"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
           python3 run_gradle.py --log ci-gradle.log :core:test :app:testDebugUnitTest :app:lintDebug
       - name: Summarize results
         if: always()

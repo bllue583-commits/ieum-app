@@ -12,9 +12,25 @@ class AndroidWhisperContractTest {
     @Test fun W3402NativeUtf8SegmentsRemainExactAndMonotonic(){
         val raw="""{"transcription":[{"offsets":{"from":0,"to":100},"text":" 공개 😀 확인."}]}""".toByteArray()
         assertEquals(" 공개 😀 확인.",AndroidWhisperEngine.decodeOutput(raw).text)
-        var held=false;try{AndroidWhisperEngine.decodeOutput("""{"transcription":[{"offsets":{"from":10,"to":5},"text":"x"}]}""".toByteArray())}catch(_:IllegalStateException){held=true};assertTrue(held)
+        // A segment that goes backwards is dropped on its own (it used to void the whole piece).
+        val bad=AndroidWhisperEngine.decodeOutput("""{"transcription":[{"offsets":{"from":10,"to":5},"text":"x"}]}""".toByteArray())
+        assertEquals(1,bad.dropped);assertEquals(0,bad.segments.length());assertTrue(bad.text.isEmpty())
     }
-    @Test fun W3404SilenceOrEmptyNativeResultCannotBecomeSuccessfulHistory(){
-        for(raw in listOf("{}","{\"transcription\":[]}","{\"transcription\":[{\"offsets\":{\"from\":0,\"to\":1},\"text\":\" \"}]}")){var held=false;try{AndroidWhisperEngine.decodeOutput(raw.toByteArray())}catch(_:Exception){held=true};assertTrue(held)}
+    @Test fun W3404SilenceGivesNoSegmentsAndOnlyBrokenJsonIsAnError(){
+        for(raw in listOf("{\"transcription\":[]}","{\"transcription\":[{\"offsets\":{\"from\":0,\"to\":1},\"text\":\" \"}]}")){
+            val out=AndroidWhisperEngine.decodeOutput(raw.toByteArray());assertEquals(0,out.segments.length());assertTrue(out.text.isBlank())
+        }
+        for(raw in listOf("{}","not json")){var held=false;try{AndroidWhisperEngine.decodeOutput(raw.toByteArray())}catch(_:Exception){held=true};assertTrue(held)}
+    }
+    @Test fun W3405OneBadSegmentKeepsTheRestOfThePiece(){
+        val raw="""{"transcription":[{"offsets":{"from":0,"to":100},"text":" 가"},{"offsets":{"from":50,"to":40},"text":" 나"},{"offsets":{"from":100,"to":200},"text":" "},{"offsets":{"from":100,"to":300},"text":" 다"}]}"""
+        val out=AndroidWhisperEngine.decodeOutput(raw.toByteArray())
+        assertEquals(" 가 다",out.text);assertEquals(2,out.segments.length());assertEquals(2,out.dropped)
+        assertEquals(300L,out.segments.getJSONObject(1).getLong("endMs"))
+    }
+    @Test fun W3406SegmentLimitIsTheNativeOneOf2048(){
+        fun raw(n:Int)=("""{"transcription":["""+(0 until n).joinToString(","){"""{"offsets":{"from":${it*10},"to":${it*10+5}},"text":" a"}"""}+"]}").toByteArray()
+        assertEquals(2048,AndroidWhisperEngine.decodeOutput(raw(2048)).segments.length())
+        var held=false;try{AndroidWhisperEngine.decodeOutput(raw(2049))}catch(_:IllegalStateException){held=true};assertTrue(held)
     }
 }

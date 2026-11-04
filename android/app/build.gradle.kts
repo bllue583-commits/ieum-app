@@ -6,7 +6,8 @@ android {
     providers.gradleProperty("eumExistingDebugKeystore").orNull?.let { existing ->
         signingConfigs.getByName("debug").storeFile = file(existing)
     }
-    // CI: a stable key derived from a repository secret (tools/derive_signing_key.py), so updates install over the old app.
+    // CI: a stable key derived from the secret IEUM_SIGNING_SEED, or from IEUM_INBOX_TOKEN while that secret is empty
+    // (tools/derive_signing_key.py), so updates install over the old app. The seed itself never reaches Gradle.
     System.getenv("IEUM_SIGNING_KEYSTORE")?.takeIf { it.isNotBlank() }?.let { ks ->
         signingConfigs.getByName("debug").apply { storeFile=file(ks);storeType="pkcs12";storePassword="ieum-signing";keyAlias="ieum";keyPassword="ieum-signing" }
     }
@@ -15,7 +16,8 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = (System.getenv("IEUM_VERSION_CODE") ?: "34").toInt()
-        versionName = "0.13.4-android-local-whisper-dev"
+        // The name people see (v2.0, v2.1 …) comes from docs/VERSION; the build number above only orders updates.
+        versionName = rootProject.file("../docs/VERSION").takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotEmpty() } ?: "0.13.4-android-local-whisper-dev"
         // Subscription mode: fine-grained token for the private inbox repo only (CI secret IEUM_INBOX_TOKEN). Empty = API key mode.
         val inboxToken=(System.getenv("IEUM_INBOX_TOKEN") ?: "").trim()
         require(inboxToken.matches(Regex("[A-Za-z0-9_]*"))) { "IEUM_INBOX_TOKEN format" }

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Smaller than reading size: the text is an aside (caption 16sp, badge 15sp). The tag holds its allowed minimum in sp. -->
+    <item name="ui_min_sp" type="id" />
+    <item name="ui_snack_timer" type="id" />
+</resources>

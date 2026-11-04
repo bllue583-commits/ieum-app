@@ -4,12 +4,9 @@
 
 | 자료 | 출처·성격 | 무결성 |
 | --- | --- | --- |
-| `worker/tests/audio/public-ko.wav` | code33 `evidence/generate_public_audio.py`가 macOS `say` Yuna로 만든 공개 합성 문장, mono PCM16/16kHz | 245870 bytes, SHA256 `69ac671cd328486d14dfdaa413ec0a511c21e5708953fbe3dc2a280a6a2cf20d` |
-| `worker/tests/audio/public-en.wav` | 같은 생성기의 Samantha 공개 합성 문장, mono PCM16/16kHz | 213210 bytes, SHA256 `7d45a0f1af47bc5a212dd2e53d22566c6037b190708bff51782e387caed20df7` |
+| `tools/audio/public-ko.wav` | code33 `evidence/generate_public_audio.py`가 macOS `say` Yuna로 만든 공개 합성 문장, mono PCM16/16kHz | 245870 bytes, SHA256 `69ac671cd328486d14dfdaa413ec0a511c21e5708953fbe3dc2a280a6a2cf20d` |
+| `tools/audio/public-en.wav` | 같은 생성기의 Samantha 공개 합성 문장, mono PCM16/16kHz | 213210 bytes, SHA256 `7d45a0f1af47bc5a212dd2e53d22566c6037b190708bff51782e387caed20df7` |
 | Android `src/test`, `src/debug/assets`, `src/androidTest`, `sg-v1-golden-result.json` | code34 v2 백업의 고정 합성 요청/결과·회귀·device 시험 | 이관 전 355개 파일 SHA 전수 일치, 원 해시는 docs/source-baseline-manifest.json |
-| `worker/tests`, `worker/proof` | 기존 메모리 HTTP/Drive/provider test transport, 테스트 전용 토큰 canary·owner | 실서비스 호출이 아님. Node 29 시험과 실제 호출을 구분 |
-| `docs/plans/context/synthetic_scenarios.json` | 2026-10-26 context 인계의 합성18개/향후 사례30개 | 원 ZIP 해시는 plans/README.md. 제품 사례30 NOT_RUN |
-| `docs/plans/kst-report` | 제안 보고 계약·시간 벡터·향후 사례40개 | 제품 사례40 NOT_RUN |
 
 한국어 합성 원문: “이것은 공개 합성 음성입니다. 다음 주 화요일에 견적서를 확인합니다. 담당자는 아직 정하지 않았습니다.” 영어 원문: “This is public synthetic audio. Please review the proposal tomorrow. The responsible person is not assigned.” Whisper 오인식을 수정 정답처럼 바꾸지 않습니다. TTS 재생성은 OS voice/version에 따라 바이트가 달라질 수 있습니다.
 
