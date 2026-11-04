@@ -260,11 +260,12 @@ internal class ClaudeCallAnalyzer {
             append("[공종 목록] ").append(TRADES.joinToString(", ")).append('\n')
             append("\n[현장 상황 메모] ").append(r.siteMemo?.takeIf { it.isNotBlank() }?.let { clip(it,600) } ?: "아직 없음").append('\n')
             val p=r.person;val c=r.company
+            // ", " not the middle dot: rule 5 bans it in answers, and the request must not show it to be copied (v2.4).
             if(p==null && c==null) append("[상대] 아직 모르는 상대예요. 자막에서 이름과 업체를 찾아 주세요.\n")
-            if(p!=null) append("[상대] ").append(p.name).append(p.role?.let { " · $it" } ?: "").append(" · ").append(if(p.staff) "우리 회사 직원" else p.company ?: "업체 미상").append('\n')
+            if(p!=null) append("[상대] ").append(p.name).append(p.role?.let { ", $it" } ?: "").append(", ").append(if(p.staff) "우리 회사 직원" else p.company ?: "업체 미상").append('\n')
             if(r.sameNumberPeople.isNotEmpty()) append("[이 번호를 쓰는 사람들] ").append(r.sameNumberPeople.joinToString(", ")).append(" (자막에서 본인 이름을 말한 쪽이 이번 상대입니다)\n")
             if(c!=null) {
-                append("[업체] ").append(c.name).append(c.trade?.let { " · 공종 $it" } ?: "").append('\n')
+                append("[업체] ").append(c.name).append(c.trade?.let { ", 공종 $it" } ?: "").append('\n')
                 append("[업체 메모] ").append(c.memo.takeIf { it.isNotBlank() }?.let { clip(it,400) } ?: "아직 없음").append('\n')
                 append("[이 업체와의 최근 통화(새것부터)]")
                 if(r.companyCalls.isEmpty()) append(" 없음") else append(pastCalls(r.companyCalls,5))

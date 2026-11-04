@@ -321,4 +321,23 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         settle { texts(settings).any { it.text.toString()=="현장 메모 보기 ›" } }
         settle { settings.window.decorView.findViewWithTag<TextView>("site_memo")?.text?.toString()=="현장 메모 본문" }
     }
+
+    // ---- v2.4 C5 time rule: an older call never undoes what a newer one changed ---------------------------------------
+    @Test fun anOlderCallDoesNotUndoANewerUpdate() {
+        val t1=call(1);val t2=call(2);val t3=call(3)
+        val made=apply(t1,analysis(cp("김민수","△△철강"),tasks=listOf(create("철근 견적서 보내기")))).single()
+        assertTrue(made.applied)
+        fun update(title:String,due:String)=ClaudeCallAnalysis.Task("update",made.itemId,title,due,"철근 단가는 내일까지")
+        // T3 is answered first (a live call); T2 comes later in a first-pass batch.
+        assertTrue(apply(t3,analysis(cp("김민수","△△철강"),tasks=listOf(update("철근 견적서 금요일까지 보내기","2026-10-31")))).single().applied)
+        val late=apply(t2,analysis(cp("김민수","△△철강"),tasks=listOf(update("철근 견적서 다시 보내기","2026-10-30")))).single()
+        assertFalse(late.applied);assertEquals("older",late.reason)
+        val item=store().use { db -> db.openItems().single { it.id==made.itemId } }
+        assertEquals("철근 견적서 금요일까지 보내기",item.title);assertEquals("2026-10-31",item.due);assertNull(item.aiNote)
+        assertEquals(t3.dayMs,port().use { it.query("SELECT last_call_ms FROM workflow_items WHERE id=?",made.itemId).single()["last_call_ms"] as Number }.toLong())
+        assertEquals("older",store().use { it.record(t2.recordId)!!.applied.single().reason })
+        // "Looks done" from the older call is left out too; from a newer one it still applies.
+        assertFalse(apply(call(4,at=started+150_000L),analysis(null,tasks=listOf(ClaudeCallAnalysis.Task("done_suggested",made.itemId,"철근 견적서","","철근 단가는 내일까지")))).single().applied)
+        assertTrue(apply(call(5),analysis(null,tasks=listOf(ClaudeCallAnalysis.Task("done_suggested",made.itemId,"철근 견적서","","철근 단가는 내일까지")))).single().applied)
+    }
 }

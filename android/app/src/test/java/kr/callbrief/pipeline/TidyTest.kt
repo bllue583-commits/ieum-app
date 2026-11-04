@@ -171,4 +171,26 @@ class TidyTest:ProtectedTextHostTestBase() {
         val batch=JSONObject(CallInbox.batch(listOf(key to r),now))
         assertEquals(job.getString("recordKey"),batch.getJSONArray("items").getJSONObject(0).getString("recordKey"))
     }
+
+    // ---- v2.4 #25: the merge guard reads people_phones, where new people keep their numbers -------------------------
+    @Test fun peopleWithDifferentNumbersAreNotMergedEvenWhenOnlyPeoplePhonesHasThem() {
+        store().close() // the ledger tables
+        AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql")).use { p -> p.transaction {
+            // As addNumber leaves new people: people.phone_key empty, the number in people_phones only.
+            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms,ledger_id) VALUES('e','이정민',NULL,NULL,NULL,0,0,'p_e')")
+            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms,ledger_id) VALUES('f','이정민',NULL,NULL,NULL,0,0,'p_f')")
+            p.execute("INSERT INTO people_phones VALUES('01066660001','e')");p.execute("INSERT INTO people_phones VALUES('01066660002','f')")
+            // One with a number and one without: the same person, merged.
+            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms,ledger_id) VALUES('g','최유진',NULL,NULL,NULL,0,0,'p_g')")
+            p.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms,ledger_id) VALUES('h','최유진',NULL,NULL,NULL,0,0,'p_h')")
+            p.execute("INSERT INTO people_phones VALUES('01066660003','h')");null
+        } }
+        store().use { db -> db.applyLedger(JSONObject().put("rev",1).put("people",JSONArray()
+            .put(JSONObject().put("id","p_e").put("mergedInto","p_f")).put(JSONObject().put("id","p_g").put("mergedInto","p_h")))) }
+        AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql")).use { p ->
+            val ids=p.query("SELECT id FROM people WHERE id IN ('e','f','g','h') ORDER BY id").map { it["id"] }
+            assertEquals("different numbers stay two people; a number-less duplicate joins",listOf("e","f","h"),ids)
+            assertEquals(listOf("e"),p.query("SELECT person_id FROM people_phones WHERE phone_key='01066660001'").map { it["person_id"] })
+        }
+    }
 }

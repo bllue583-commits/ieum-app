@@ -6,6 +6,7 @@ import androidx.work.WorkerParameters
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kr.callbrief.SecureSettings
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.json.JSONObject
 
 /** Sends every stored transcript that is waiting to the scheduled task and applies what comes back. Consent is checked per record, right before sending. */
@@ -20,7 +21,11 @@ internal class CallRecordAnalysisRunner(
     private val callLog:()->List<FirstPass.LogEntry> ={ val rules=kr.callbrief.LocalPrivacy.rules(settings())
         FirstPass.readCallLog(context) { n -> rules.excluded(n,n) } },
     private val smsAllowed:()->Boolean={ context.checkSelfPermission(android.Manifest.permission.READ_SMS)==android.content.pm.PackageManager.PERMISSION_GRANTED },
+    /** Runs after a pass that sent something: the result pass at the next :45 (design D, v2.4). */
+    private val afterSend:()->Unit={ CallResultsWork.schedule(context,1,androidx.work.ExistingWorkPolicy.KEEP) },
 ) {
+    /** Requests this runner put in the inbox (one batch counts once). */
+    var sent=0;private set
     /** Returns false when a network-type failure should be retried later by WorkManager (or when another pass held the
      * lock for longer than [PASS_WAIT_MS]). One pass at a time in the process: the hourly work and the pass right before a
      * report ([CallDigestPrefetch]) could otherwise read the same result files together and apply them twice. A second
@@ -106,7 +111,7 @@ internal class CallRecordAnalysisRunner(
                 db.ledgerIdFor(record)
                 // atMs: the task works in call-time order. A late old recording keeps the old-record marker.
                 store.put(CallInbox.INBOX+"/"+CallInbox.fileName(record.recordId),CallInbox.job(CallInbox.recordKey(record.recordId),request(record,FirstPass.beforeStart(record.dayMs,s)),clock(),record.dayMs))
-                db.markSent(record.recordId,clock())
+                db.markSent(record.recordId,clock());sent++
             }
             val start=FirstPass.start(s)
             if(start!=null && !FirstPass.done(s)) {
@@ -119,7 +124,7 @@ internal class CallRecordAnalysisRunner(
                     if(slots<=0 || (chunk.size<FirstPass.BATCH && bound!=null)) break
                     val items=chunk.map { r -> db.ledgerIdFor(r);CallInbox.recordKey(r.recordId) to request(r,true) }
                     store.put(CallInbox.INBOX+"/"+CallInbox.batchName(chunk.first().dayMs,items.map { it.first }),CallInbox.batch(items,clock(),chunk.map { it.dayMs }))
-                    chunk.forEach { db.markSent(it.recordId,clock()) }
+                    chunk.forEach { db.markSent(it.recordId,clock()) };sent++
                     val today=kstDay()
                     save { it.put(PipelineSettingsKeys.FIRST_PASS_BATCHES_TODAY,(if(it.optString(PipelineSettingsKeys.FIRST_PASS_BATCH_DAY)==today) it.optInt(PipelineSettingsKeys.FIRST_PASS_BATCHES_TODAY,0) else 0)+1)
                         .put(PipelineSettingsKeys.FIRST_PASS_BATCH_DAY,today) }
@@ -134,7 +139,10 @@ internal class CallRecordAnalysisRunner(
                     clock()-since>=12*3_600_000L -> save { it.put(PipelineSettingsKeys.FIRST_PASS_DONE,true) }
                 }
             }
-          } finally { if(consent) runCatching { warnIfStalled(db) } } // from data on the phone, whatever failed above
+          } finally {
+            if(consent) runCatching { warnIfStalled(db) } // from data on the phone, whatever failed above
+            if(sent>0) runCatching { afterSend() }
+          }
         }
         true
     } catch(e:java.io.IOException) { false }
@@ -223,7 +231,10 @@ internal class CallRecordAnalysisRunner(
 
 internal object CallInboxConfig {
     fun store():CallInboxStore? = kr.callbrief.BuildConfig.IEUM_INBOX_TOKEN.takeIf { it.isNotBlank() }
-        ?.let { GitHubInboxStore(kr.callbrief.BuildConfig.IEUM_INBOX_REPO,it) }
+        ?.let { GitHubInboxStore(kr.callbrief.BuildConfig.IEUM_INBOX_REPO,it,client) }
+    /** GitHubInboxStore's own settings plus [InboxETags]. One client for the process, so the kept ETags serve every pass. */
+    private val client by lazy { okhttp3.OkHttpClient.Builder().connectTimeout(20,java.util.concurrent.TimeUnit.SECONDS).readTimeout(40,java.util.concurrent.TimeUnit.SECONDS)
+        .addInterceptor(InboxETags).build() }
     /** The preview build shows the subscription screens but has no token, so nothing is uploaded. */
     val enabled get()=kr.callbrief.BuildConfig.IEUM_INBOX_TOKEN.isNotBlank()||kr.callbrief.BuildConfig.LOCAL_PREVIEW
 }
@@ -240,5 +251,33 @@ internal class CallAnalysisWork(context:Context,params:WorkerParameters):Corouti
     override suspend fun doWork():Result=withContext(Dispatchers.IO) {
         val storage=CallPipelineStartup.storage(applicationContext)
         if(CallRecordAnalysisRunner(storage).runPending()) Result.success() else Result.retry()
+    }
+}
+
+/** Conditional reads (If-None-Match) of what every pass reads and what seldom changes: the results folder listing, the
+ * ledger and the tidy proposal. A 304 is answered with the copy kept from the last 200, so the store sees a plain 200,
+ * nothing is downloaded again and GitHub does not count it against the rate limit. Kept in memory only (the ledger holds
+ * names, it is not written to disk): a new process starts with one full read. */
+internal object InboxETags:okhttp3.Interceptor {
+    private class Kept(val etag:String,val body:ByteArray,val type:okhttp3.MediaType?)
+    private val kept=java.util.concurrent.ConcurrentHashMap<String,Kept>()
+    private val PATHS=listOf(CallInbox.RESULTS,CallInbox.LEDGER,CallInbox.TIDY_PROPOSAL).map { "/contents/$it" }
+    internal fun cacheable(path:String)=PATHS.any { path.endsWith(it) }
+    internal fun clear()=kept.clear()
+    override fun intercept(chain:okhttp3.Interceptor.Chain):okhttp3.Response {
+        val r=chain.request()
+        if(r.method!="GET" || !cacheable(r.url.encodedPath)) return chain.proceed(r)
+        val key=r.url.toString()+"|"+r.header("Accept").orEmpty()
+        val k=kept[key]
+        val res=chain.proceed(if(k==null) r else r.newBuilder().header("If-None-Match",k.etag).build())
+        return when {
+            res.code==304 && k!=null -> { res.close();res.newBuilder().code(200).message("OK").body(k.body.toResponseBody(k.type)).build() }
+            res.code==200 && res.header("ETag")!=null -> {
+                val type=res.body?.contentType();val bytes=res.body?.bytes() ?: ByteArray(0)
+                kept[key]=Kept(res.header("ETag")!!,bytes,type)
+                res.newBuilder().body(bytes.toResponseBody(type)).build()
+            }
+            else -> { if(res.code==404) kept.remove(key);res }
+        }
     }
 }

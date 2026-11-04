@@ -233,4 +233,14 @@ class RequestV3Test:ProtectedTextHostTestBase() {
         personal(call(4,"010-7777-0007"))
         assertTrue("an earlier work record keeps it from being remembered",remembered().isEmpty())
     }
+
+    // ---- v2.4 #18: the request itself shows no middle dot (rule 5 bans it in answers) -----------------------------------
+    @Test fun requestHeadersUseCommasNotMiddleDots() {
+        val r=ClaudeCallAnalyzerTest.request().copy(person=ClaudeCallRequest.PersonCard("김민수","과장",false,"△△철강"),
+            company=ClaudeCallRequest.CompanyCard("△△철강","철근","메모"))
+        val m=ClaudeCallAnalyzer.userMessage(r)
+        assertTrue(m,m.contains("[상대] 김민수, 과장, △△철강\n"));assertTrue(m,m.contains("[업체] △△철강, 공종 철근\n"))
+        assertFalse(m.contains("·"));assertFalse(CallInbox.job("r_1",r,now,started).contains("·"))
+        assertFalse(ClaudeCallAnalyzer.userMessage(r.copy(person=ClaudeCallRequest.PersonCard("박지훈",null,true,null),company=null)).contains("·"))
+    }
 }

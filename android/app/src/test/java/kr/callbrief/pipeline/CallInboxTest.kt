@@ -6,6 +6,7 @@ import kr.callbrief.ProtectedTextHostTestBase
 import kr.callbrief.ShadowTextAtomicFile
 import kr.callbrief.ShadowTextKeys
 import kr.co.callsummary.core.android.AndroidSqlPort
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -147,5 +148,55 @@ class CallInboxTest:ProtectedTextHostTestBase() {
         assertTrue(CallUpdate.check(context,inbox))
         assertEquals("할 일 화면 개선",CallUpdate.ready(context)!!.notes)
         assertEquals(apk,CallUpdate.file(context).readText())
+    }
+
+    // ---- v2.4 #9: the result pass at :45 KST, and only while something waits ---------------------------------------
+    private fun kst(s:String)=java.time.LocalDateTime.parse(s).atZone(CallRecordStore.KST).toInstant().toEpochMilli()
+    @Test fun resultPassRunsAtTheNext45KstAndOnlyWhileSomethingWaits() {
+        assertEquals(kst("2026-11-04T10:45:00"),CallResultsWork.nextSlot(kst("2026-11-04T10:31:00")))
+        assertEquals(kst("2026-11-04T11:45:00"),CallResultsWork.nextSlot(kst("2026-11-04T10:45:00")))
+        assertEquals(kst("2026-11-04T07:45:00"),CallResultsWork.nextSlot(kst("2026-11-04T02:10:00")))
+        assertEquals(kst("2026-11-04T22:45:00"),CallResultsWork.nextSlot(kst("2026-11-04T22:00:00")))
+        assertEquals(kst("2026-11-05T07:45:00"),CallResultsWork.nextSlot(kst("2026-11-04T22:50:00")))
+        // 10:31 KST is 01:31 UTC: the slot is KST 10:45, not UTC.
+        assertEquals(14*60_000L,CallResultsWork.delayMs(kst("2026-11-04T10:31:00"),1,true))
+        assertNull("nothing waits: nothing is registered",CallResultsWork.delayMs(kst("2026-11-04T10:31:00"),1,false))
+        assertNotNull(CallResultsWork.delayMs(kst("2026-11-04T10:31:00"),3,true))
+        assertNull("three tries at most",CallResultsWork.delayMs(kst("2026-11-04T10:31:00"),4,true))
+    }
+    @Test fun aPassSchedulesTheResultPassOnlyWhenItSentSomething() {
+        var scheduled=0
+        val quiet=CallRecordAnalysisRunner(context,ClaudeCallAnalyzer(),{ JSONObject().put(PipelineSettingsKeys.CONSENT_GRANTED,true) },{ now },FakeInbox(),afterSend={ scheduled++ })
+        assertTrue(quiet.runPending());assertEquals(0,scheduled);assertEquals(0,quiet.sent)
+        val text=ClaudeCallAnalyzerTest.TRANSCRIPT
+        val t=CallTranscript("rec1",1,"a".repeat(64),now,125_000,"김과장",text,listOf(CallTranscript.Segment(0,5000,text)),"m","b".repeat(64),true)
+        val id=CallRecordStore(context){ now }.use { it.insert(t);CallRecordStore.recordId(t) }
+        val inbox=FakeInbox()
+        val busy=CallRecordAnalysisRunner(context,ClaudeCallAnalyzer(),{ JSONObject().put(PipelineSettingsKeys.CONSENT_GRANTED,true) },{ now },inbox,afterSend={ scheduled++ })
+        assertTrue(busy.runPending());assertEquals(1,scheduled);assertEquals(1,busy.sent)
+        assertTrue(CallRecordStore(context){ now }.use { it.awaitingResult() })
+        CallRecordStore(context){ now }.use { it.setReceived(id,now) }
+        assertFalse(CallRecordStore(context){ now }.use { it.awaitingResult() })
+    }
+
+    // ---- v2.4 #9: If-None-Match on what every pass reads -------------------------------------------------------------
+    @Test fun unchangedListingIsNotDownloadedAgain() {
+        InboxETags.clear()
+        val seen=mutableListOf<String?>()
+        var listing="[{\"type\":\"file\",\"name\":\"a.json\",\"sha\":\"s1\"}]";var etag="W/\"e1\""
+        val server=okhttp3.Interceptor { chain -> val r=chain.request();seen+=r.header("If-None-Match")
+            val b=okhttp3.Response.Builder().request(r).protocol(okhttp3.Protocol.HTTP_1_1).header("ETag",etag)
+            if(r.header("If-None-Match")==etag) b.code(304).message("Not Modified").body(ByteArray(0).toResponseBody(null)).build()
+            else b.code(200).message("OK").body(listing.toResponseBody(null)).build() }
+        val client=okhttp3.OkHttpClient.Builder().addInterceptor(InboxETags).addInterceptor(server).build()
+        val store=GitHubInboxStore("o/r","t",client)
+        assertEquals(listOf("a.json" to "s1"),store.list(CallInbox.RESULTS))
+        assertEquals(listOf("a.json" to "s1"),store.list(CallInbox.RESULTS)) // 304: the kept copy
+        listing="[]";etag="W/\"e2\""
+        assertEquals(emptyList<Pair<String,String>>(),store.list(CallInbox.RESULTS))
+        assertEquals(listOf(null,"W/\"e1\"","W/\"e1\""),seen)
+        // Result files themselves (read once, then deleted) are never kept.
+        assertFalse(InboxETags.cacheable("/repos/o/r/contents/results/a.json"));assertTrue(InboxETags.cacheable("/repos/o/r/contents/ledger/ledger.json"))
+        InboxETags.clear()
     }
 }
