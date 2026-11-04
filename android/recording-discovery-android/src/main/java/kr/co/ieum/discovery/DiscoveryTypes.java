@@ -30,8 +30,10 @@ public final class DiscoveryTypes {
         public int hashCode(){return Objects.hash(ownerId,treeUri,revision);}
     }
     public static final class Moment {
-        public final String bootId; public final long elapsedMs;
-        public Moment(String bootId,long elapsedMs){if(bootId==null||bootId.isEmpty()||elapsedMs<0)throw new Failure("INVALID_CLOCK");this.bootId=bootId;this.elapsedMs=elapsedMs;}
+        /** bootId/elapsedMs: monotonic time inside one boot (stability, leases). wallMs: wall clock, used for the daily recheck across reboots. */
+        public final String bootId; public final long elapsedMs, wallMs;
+        public Moment(String bootId,long elapsedMs){this(bootId,elapsedMs,System.currentTimeMillis());}
+        public Moment(String bootId,long elapsedMs,long wallMs){if(bootId==null||bootId.isEmpty()||elapsedMs<0||wallMs<0)throw new Failure("INVALID_CLOCK");this.bootId=bootId;this.elapsedMs=elapsedMs;this.wallMs=wallMs;}
     }
     public interface Clock { Moment now(); }
     public static final class Config {

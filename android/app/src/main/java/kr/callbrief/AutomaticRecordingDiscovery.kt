@@ -61,7 +61,7 @@ internal object AutomaticRecordingDiscovery {
         try {
             val cancelled={stopped() || blocked(context,binding,{false})!=null}
             var scan:DiscoveryPump.Cycle?=null;var sawNew=false
-            val local=open(context){!cancelled()} ?: return outcome("WAITING_LOCAL_SOURCE","SELECTED_FOLDER_REQUIRED")
+            val local=open(context,{!cancelled()},stopped) ?: return outcome("WAITING_LOCAL_SOURCE","SELECTED_FOLDER_REQUIRED")
             local.use { session ->
                 active(session)
                 try {
@@ -82,8 +82,8 @@ internal object AutomaticRecordingDiscovery {
         val tree=state.optString("treeUri");if(tree.isBlank())return null
         return Selection(GeneralLocalStore.OWNER+"_"+scope.take(20),tree,state.optLong("automaticDiscoverySelectionRevision",1L).coerceAtLeast(1L))
     }
-    /** The run fence also applies between audio reads, not only around the complete scan. */
-    internal fun guarded(delegate:SelectedRecordingSource,current:()->Boolean)=object:SelectedRecordingSource by delegate {
+    /** The run fence ([current]: settings, folder grant) is checked on every listing, stat and open; reads of an opened file only look at [stopped]. */
+    internal fun guarded(delegate:SelectedRecordingSource,current:()->Boolean,stopped:()->Boolean={false})=object:SelectedRecordingSource by delegate {
         private fun permit(){check(current()) { "DISCOVERY_RUN_FENCE_CHANGED" }}
         override fun checkSelected(){permit();delegate.checkSelected()}
         override fun inventory():SourceInventory {permit();return delegate.inventory().also{permit()}}
@@ -93,19 +93,20 @@ internal object AutomaticRecordingDiscovery {
         override fun open(document:SourceDocument):java.io.InputStream {
             permit()
             return object:java.io.FilterInputStream(delegate.open(document)) {
-                override fun read():Int {permit();return `in`.read()}
-                override fun read(b:ByteArray,o:Int,n:Int):Int {permit();return `in`.read(b,o,n)}
-                override fun skip(n:Long):Long {permit();return `in`.skip(n)}
+                private fun running(){check(!stopped()) { "DISCOVERY_RUN_FENCE_CHANGED" }}
+                override fun read():Int {running();return `in`.read()}
+                override fun read(b:ByteArray,o:Int,n:Int):Int {running();return `in`.read(b,o,n)}
+                override fun skip(n:Long):Long {running();return `in`.skip(n)}
             }
         }
     }
-    fun open(context:Context,current:()->Boolean={true}):NativeDiscoverySession? {
+    fun open(context:Context,current:()->Boolean={true},stopped:()->Boolean={false}):NativeDiscoverySession? {
         val settings=SecureSettings(context);val selected=selection(settings.snapshot()) ?: return null
-        val source=guarded(SafSelectedRecordingSource(context,settings,selected.treeUri),current)
+        val source=guarded(SafSelectedRecordingSource(context,settings,selected.treeUri),current,stopped)
         val store=hostStore?.invoke(context) ?: GeneralLocalStore(context) // Received protected SQL implementation is mandatory.
         return try {
             NativeDiscoverySession(store,source,selected,settings::snapshot,
-                kr.co.ieum.discovery.DiscoveryTypes.Clock { Moment("boot_"+Settings.Global.getInt(context.contentResolver,Settings.Global.BOOT_COUNT),SystemClock.elapsedRealtime()) },syntheticFixture=source.explicitlySyntheticScope,minModifiedMs=kr.callbrief.pipeline.FirstPass.FROM_MS)
+                kr.co.ieum.discovery.DiscoveryTypes.Clock { Moment("boot_"+Settings.Global.getInt(context.contentResolver,Settings.Global.BOOT_COUNT),SystemClock.elapsedRealtime(),System.currentTimeMillis()) },syntheticFixture=source.explicitlySyntheticScope,minModifiedMs=kr.callbrief.pipeline.FirstPass.FROM_MS)
         }catch(error:Exception){store.close();throw error}
     }
     const val FOLLOWUP_NAME="ieum.discovery.followup"

@@ -70,19 +70,33 @@ public final class RecordingDiscovery {
             &&java.util.Objects.equals(r.metadata.modifiedMs,m.modifiedMs)&&r.metadata.partial==m.partial&&r.metadata.virtualDocument==m.virtualDocument;
         if(changed||policyChanged||returning){if(changed||returning)r.headRevision++;r.leaseEpoch++;
             if(r.pending!=null&&!onlyNameChanged){s.audit.add("SUPERSEDED_PENDING:"+r.pending.operationId);r.pending=null;}r.error=null;}
-        boolean reset=isNew||changed||policyChanged||returning||!now.bootId.equals(r.stableBoot)||now.elapsedMs<r.stableSince;
+        boolean fresh=isNew||changed||policyChanged||returning;
+        boolean newBoot=!now.bootId.equals(r.stableBoot)||now.elapsedMs<r.stableSince;
+        // Same name, size and modified time as the stored version: a reboot alone is no reason to read and hash it again.
+        boolean settled=!fresh&&r.pending==null&&r.current()!=null&&(r.status==Status.STORED||r.status==Status.UNCHANGED);
+        boolean reset=fresh||(newBoot&&!settled);
         r.metadata=m;r.decision=d;r.seenRound=round;
         if(reset){r.stableBoot=now.bootId;r.stableSince=now.elapsedMs;r.observations=1;r.status=Status.WAITING_STABLE;}
+        else if(newBoot){r.stableBoot=now.bootId;r.stableSince=now.elapsedMs;r.observations=1;}
         else r.observations=Math.min(2,r.observations+1);
         Status blocked=blocked(m,d);
         if(blocked!=null){if(r.status==Status.READING){r.leaseEpoch++;}r.status=blocked;return;}
+        if(settled&&!recheckDue(r,now))return;
         if(r.pending!=null){if(r.status!=Status.READING)r.status=Status.RETRY;return;}
         if(r.status==Status.READING&&!expired(r,now))return;
         if(r.observations<2||now.elapsedMs-r.stableSince<config.quietMs){r.status=Status.WAITING_STABLE;return;}
-        boolean due=r.current()==null||!now.bootId.equals(r.lastHashBoot)||now.elapsedMs<r.lastHashAt||now.elapsedMs-r.lastHashAt>=config.recheckMs;
+        boolean due=r.current()==null||recheckDue(r,now);
         if(changed||reset||due||r.status==Status.WAITING_STABLE||r.status==Status.WAITING_CONTAINER||r.status==Status.RETRY||r.status==Status.WAITING_SOURCE||r.status==Status.WAITING_GRANT||r.status==Status.WAITING_LOCAL_STORAGE)
             r.status=Status.READY;
     }
+    /** Wall-clock marker in {@link Row#lastHashBoot}: {@link Row#lastHashAt} then holds wall time, so the daily recheck survives reboots. */
+    private static final String WALL_CLOCK="wall";
+    /** A stored file is read again at most every {@code recheckMs} of wall time. Rows hashed before this rule count as hashed now. */
+    private boolean recheckDue(Row r,Moment now){
+        if(!WALL_CLOCK.equals(r.lastHashBoot)||now.wallMs<r.lastHashAt){r.lastHashBoot=WALL_CLOCK;r.lastHashAt=now.wallMs;return false;}
+        return now.wallMs-r.lastHashAt>=config.recheckMs;
+    }
+    private static void hashed(Row r,Moment now){r.lastHashBoot=WALL_CLOCK;r.lastHashAt=now.wallMs;}
     private Status blocked(Metadata m,Decision d){
         // No source read, decrypt, audio hash or sink invocation on either contact hold.
         if(d.permission==Permission.EXCLUDED)return Status.HELD_EXCLUDED;
@@ -144,7 +158,7 @@ public final class RecordingDiscovery {
                 store.transact(s->{Row r=claimed(s,claim);r.pending=observation;return null;});
                 Receipt observed=sink.sameContent(observation,()->allowed(claim));
                 if(observed!=null){finish(claim,observed);return "UNCHANGED_BYTES";}
-                store.transact(s->{Row r=claimed(s,claim);r.pending=null;r.status=Status.UNCHANGED;r.lastHashBoot=clock.now().bootId;r.lastHashAt=clock.now().elapsedMs;return null;});return "UNCHANGED_BYTES";
+                store.transact(s->{Row r=claimed(s,claim);r.pending=null;r.status=Status.UNCHANGED;hashed(r,clock.now());return null;});return "UNCHANGED_BYTES";
             }
             Commit pending=claim.row.pending;
             if(pending!=null){if(!pending.audioSha256.equals(hash)||pending.bytes!=bytes.length)throw new Failure("PENDING_SOURCE_HASH_CHANGED");}
@@ -170,12 +184,13 @@ public final class RecordingDiscovery {
     public boolean isStopped(){return stopped.get();}
     private byte[] read(Claim claim)throws Exception{
         long length=claim.row.metadata.bytes;if(length>config.maxBytes)throw new Failure("SOURCE_TOO_LARGE");byte[] bytes=new byte[(int)length];int offset=0;
-        requireAllowed(claim);
+        // Access was checked by the caller and by open(); between chunks only the stop flag is looked at (no settings, hash or IPC per read).
+        // The full check runs again right after the read, before anything is hashed or stored.
         try(InputStream input=docs.open(selection,claim.row.metadata.documentId)){
             if(input==null)throw new Failure("SOURCE_UNAVAILABLE");
-            while(offset<bytes.length){requireAllowed(claim);int n=input.read(bytes,offset,Math.min(65536,bytes.length-offset));
+            while(offset<bytes.length){if(stopped.get())throw new Failure("DISCOVERY_ACCESS_CHANGED");int n=input.read(bytes,offset,Math.min(65536,bytes.length-offset));
                 if(n<0)throw new Failure("SOURCE_LENGTH_CHANGED");if(n==0)throw new Failure("SOURCE_READ_STALLED");offset+=n;}
-            requireAllowed(claim);if(input.read()!=-1)throw new Failure("SOURCE_LENGTH_CHANGED");return bytes;
+            if(input.read()!=-1)throw new Failure("SOURCE_LENGTH_CHANGED");return bytes;
         }catch(Exception e){Arrays.fill(bytes,(byte)0);throw e;}
     }
     private boolean allowed(Claim claim){
@@ -191,11 +206,11 @@ public final class RecordingDiscovery {
         store.transact(s->{Row r=claimed(s,claim);if(receipt==null||r.pending==null||!r.pending.equals(receipt.commit))throw new Failure("RECEIPT_BINDING_MISMATCH");
             Version current=r.current();
             if(current!=null&&receipt.commit.sourceVersion==r.sourceVersion&&current.audioSha256.equals(receipt.commit.audioSha256)){
-                r.pending=null;r.status=Status.UNCHANGED;Moment observed=clock.now();r.lastHashBoot=observed.bootId;r.lastHashAt=observed.elapsedMs;return null;}
+                r.pending=null;r.status=Status.UNCHANGED;hashed(r,clock.now());return null;}
             if(receipt.commit.sourceVersion!=r.sourceVersion+1)throw new Failure("SOURCE_VERSION_CONFLICT");
             if(current!=null&&current.audioSha256.equals(receipt.commit.audioSha256))throw new Failure("REDUNDANT_CONTENT_VERSION");
             r.versions.add(new Version(receipt.commit.sourceVersion,receipt.commit.audioSha256,receipt.commit.bytes,receipt.commit.operationId,receipt.storageRef));
-            r.sourceVersion=receipt.commit.sourceVersion;r.pending=null;r.status=Status.STORED;Moment now=clock.now();r.lastHashBoot=now.bootId;r.lastHashAt=now.elapsedMs;return null;});
+            r.sourceVersion=receipt.commit.sourceVersion;r.pending=null;r.status=Status.STORED;hashed(r,clock.now());return null;});
     }
     private void fail(Claim claim,String code){store.transact(s->{Row r=s.rows.get(claim.row.metadata.documentId);if(r==null||r.leaseEpoch!=claim.epoch||r.headRevision!=claim.row.headRevision)return null;
         // The queue commit may have succeeded even when its acknowledgement was lost.
@@ -226,7 +241,7 @@ public final class RecordingDiscovery {
                     r.versions.add(new Version(receipt.commit.sourceVersion,receipt.commit.audioSha256,receipt.commit.bytes,receipt.commit.operationId,receipt.storageRef));r.sourceVersion=receipt.commit.sourceVersion;}
                 r.pending=null;r.leaseEpoch++;
                 if(r.status!=Status.WAITING_GRANT&&r.status!=Status.MISSING_ALIAS)r.status=same?Status.UNCHANGED:Status.STORED;
-                Moment now=clock.now();r.lastHashBoot=now.bootId;r.lastHashAt=now.elapsedMs;return "LOCAL_RECEIPT_RECOVERED";
+                hashed(r,clock.now());return "LOCAL_RECEIPT_RECOVERED";
             });
         }catch(Failure e){return e.code;}catch(Exception e){return "LOCAL_RECEIPT_UNAVAILABLE";}
     }

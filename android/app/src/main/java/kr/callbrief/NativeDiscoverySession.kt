@@ -24,14 +24,25 @@ internal class NativeDiscoverySession(
 ) : AutoCloseable {
     private val queue=store.discoveryQueue(selection)
     private var lastDocuments=emptyMap<String,SourceDocument>()
+    /** Inside [cycle] the folder is listed once and its pages come from this copy; a new round lists again only after the quiet time. */
+    private class Listing(val documents:List<SourceDocument>,val complete:Boolean,val bootId:String,val readAt:Long)
+    private var inCycle=false
+    private var listing:Listing?=null
+    private fun listing(fresh:Boolean):Listing {
+        val cached=listing;val at=clock.now()
+        if(inCycle&&cached!=null&&(!fresh||(cached.bootId==at.bootId&&at.elapsedMs-cached.readAt in 0 until config.quietMs)))return cached
+        val inventory=source.inventory()
+        return Listing(inventory.documents.sortedBy { it.documentId },inventory.complete,at.bootId,at.elapsedMs).also {
+            lastDocuments=it.documents.associateBy { d->d.documentId };if(inCycle)listing=it }
+    }
     private fun skipped(d:SourceDocument)=source.excluded(d) || (d.modified in 1 until minModifiedMs)
     private fun document(m:Metadata):SourceDocument=lastDocuments[m.documentId] ?: store.discoveryDocument(selection,m)
     private val documents=object:Documents {
         override fun hasReadGrant(s:Selection):Boolean=s==selection && runCatching { source.checkSelected() }.isSuccess
         override fun listPage(s:Selection,cursor:String?,limit:Int):Page {
             check(s==selection) { "DISCOVERY_SCOPE_MISMATCH" };source.checkSelected()
-            val inventory=source.inventory();lastDocuments=inventory.documents.associateBy { it.documentId }
-            val sorted=inventory.documents.sortedBy { it.documentId }.filter { cursor==null || it.documentId>cursor }
+            val inventory=listing(fresh=cursor==null)
+            val sorted=inventory.documents.filter { cursor==null || it.documentId>cursor }
             val page=sorted.take(limit)
             return Page(page.map { metadata(it) },if(sorted.size>limit)page.last().documentId else null,inventory.complete)
         }
@@ -46,12 +57,8 @@ internal class NativeDiscoverySession(
         }
         override fun open(s:Selection,id:String):InputStream {
             check(s==selection);val d=lastDocuments[id] ?: store.discoveryDocumentById(selection,id,queue.snapshot())
-            source.checkSelected();source.checkReadable(d)
-            return object:java.io.FilterInputStream(source.open(d)) {
-                private fun permit(){source.checkSelected();source.checkReadable(d)}
-                override fun read():Int {permit();return `in`.read()}
-                override fun read(b:ByteArray,o:Int,n:Int):Int {permit();return `in`.read(b,o,n)}
-            }
+            // The source checks folder grant and contact rules once here; reads after that only watch the stop flag (RecordingDiscovery.read).
+            return source.open(d)
         }
     }
     private fun metadata(d:SourceDocument)=Metadata(d.documentId,d.name,d.mime,
@@ -89,6 +96,10 @@ internal class NativeDiscoverySession(
         Bootstrap { selected,m,_ ->store.discoverySeed(selected,m) })
     /** [budgetMs]>0: keep going until the line is empty or the time is up; otherwise one bounded pass of [pages] and [jobs]. */
     fun cycle(pages:Int=4,jobs:Int=4,budgetMs:Long=0L):DiscoveryPump.Cycle {
+        inCycle=true;listing=null
+        try { return pass(pages,jobs,budgetMs) } finally { inCycle=false;listing=null }
+    }
+    private fun pass(pages:Int,jobs:Int,budgetMs:Long):DiscoveryPump.Cycle {
         if(!source.collectionAccepted) {
             val result=DiscoveryPump.Cycle();repeat(pages){result.observed+=engine.scanPage()};result.localOutcomes.add("PERSONAL_DATA_COLLECTION_NOT_ACCEPTED");return result
         }

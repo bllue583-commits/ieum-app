@@ -41,20 +41,23 @@ class NativeAutomaticDiscoveryTest {
         override fun decrypt(alias:String,iv:ByteArray):Cipher{decrypts++;return Cipher.getInstance("AES/GCM/NoPadding").apply{init(Cipher.DECRYPT_MODE,checkNotNull(key),GCMParameterSpec(128,iv))}}
     }
     private lateinit var keys:Keys
-    private class Time:kr.co.ieum.discovery.DiscoveryTypes.Clock {var elapsed=0L;var boot="host_boot_1";override fun now()=Moment(boot,elapsed)}
+    /** Wall time moves with [elapsed]; a simulated reboot resets [elapsed] and moves [wallBase] forward. */
+    private class Time:kr.co.ieum.discovery.DiscoveryTypes.Clock {var elapsed=0L;var boot="host_boot_1";var wallBase=1_000_000_000L
+        override fun now()=Moment(boot,elapsed,wallBase+elapsed)
+        fun reboot(id:String,gapMs:Long){wallBase+=elapsed+gapMs;elapsed=0;boot=id}}
     private class Source:SelectedRecordingSource {
         override val explicitlySyntheticScope=true
         override val rootUri="content://ieum.synthetic/tree/chosen"
         val docs=linkedMapOf<String,SourceDocument>();val bytes=hashMapOf<String,ByteArray>();var grant=true;var allowed=true;var excluded=false;var complete=true
-        var opens=0;var stats=0;var onRead:()->Unit={};var onInventory:()->Unit={};val failOpens=mutableSetOf<String>()
-        override fun checkSelected(){check(grant){"SELECTED_FOLDER_READ_GRANT_REQUIRED"}}
+        var opens=0;var stats=0;var checks=0;var onRead:()->Unit={};var onInventory:()->Unit={};val failOpens=mutableSetOf<String>();val revoked=mutableSetOf<String>()
+        override fun checkSelected(){checks++;check(grant){"SELECTED_FOLDER_READ_GRANT_REQUIRED"}}
         override fun inventory():SourceInventory {onInventory();return SourceInventory(docs.values.toList(),docs.keys.toSet(),complete)}
         override fun stat(document:SourceDocument):SourceDocument {stats++;checkSelected();if(!bytes.containsKey(document.documentId))throw FileNotFoundException("SYNTHETIC_MISSING");return docs.getValue(document.documentId)}
         override fun excluded(document:SourceDocument)=excluded
-        override fun checkReadable(document:SourceDocument){checkSelected();check(!excluded){"EXCLUDED_BEFORE_READ"};check(allowed){"CONTACT_OR_IDENTITY_REVIEW_REQUIRED"}}
+        override fun checkReadable(document:SourceDocument){checkSelected();check(!excluded){"EXCLUDED_BEFORE_READ"};check(allowed && document.documentId !in revoked){"CONTACT_OR_IDENTITY_REVIEW_REQUIRED"}}
         override fun open(document:SourceDocument):InputStream {checkReadable(document);opens++;if(document.documentId in failOpens)throw IOException("SYNTHETIC_RETRY");return object:ByteArrayInputStream(bytes.getValue(document.documentId)){override fun read(b:ByteArray,o:Int,n:Int):Int{val count=super.read(b,o,n);onRead();return count}}}
-        fun put(id:String="one",sample:Int=0,modified:Long=0,partial:Boolean=false,name:String="SYNTHETIC_FILENAME_CANARY.wav") {
-            val b=ByteBuffer.allocate(52).order(ByteOrder.LITTLE_ENDIAN).apply{put("RIFF".toByteArray());putInt(44);put("WAVEfmt ".toByteArray());putInt(16);putShort(1);putShort(1);putInt(8000);putInt(16000);putShort(2);putShort(16);put("data".toByteArray());putInt(8);repeat(4){putShort(sample.toShort())}}.array()
+        fun put(id:String="one",sample:Int=0,modified:Long=0,partial:Boolean=false,name:String="SYNTHETIC_FILENAME_CANARY.wav",samples:Int=4) {
+            val b=ByteBuffer.allocate(44+2*samples).order(ByteOrder.LITTLE_ENDIAN).apply{put("RIFF".toByteArray());putInt(36+2*samples);put("WAVEfmt ".toByteArray());putInt(16);putShort(1);putShort(1);putInt(8000);putInt(16000);putShort(2);putShort(16);put("data".toByteArray());putInt(2*samples);repeat(samples){putShort(sample.toShort())}}.array()
             bytes[id]=b;docs[id]=SourceDocument(id,"$rootUri/document/$id",name,b.size.toLong(),"audio/wav",modified,partial)
         }
     }
@@ -195,6 +198,42 @@ class NativeAutomaticDiscoveryTest {
             NativeDiscoverySession(s,src,selected(src),{JSONObject()},t,{now},true,wide).use{n->
                 n.cycle(1,1,8000L)
                 assertEquals(3,s.snapshot().length());assertTrue(n.engine.rows().all{it.status==Status.STORED})}}
+    }
+    @Test fun N29ARebootDoesNotHashStoredFilesAgainButTheDailyRecheckStays()=worker {
+        val day=Config(10,10000,86_400_000L,25000000,10);val src=Source().apply{put("a",modified=now-900000);put("b",modified=now-300000)};val t=Time()
+        fun session(s:GeneralLocalStore)=NativeDiscoverySession(s,src,selected(src),{JSONObject()},t,{now},true,day)
+        store().use{s->s.initializeEmpty();session(s).use{n->n.cycle(1,2);t.elapsed+=10;n.cycle(1,2)}}
+        assertEquals(2,src.opens)
+        t.reboot("host_boot_2",600_000)
+        store().use{s->session(s).use{n->repeat(3){n.cycle(1,2);t.elapsed+=10}
+            assertEquals(2,src.opens);assertTrue(n.engine.rows().all{it.status==Status.STORED})}}
+        t.reboot("host_boot_3",3_600_000)
+        store().use{s->session(s).use{n->n.cycle(1,2);t.elapsed+=10;n.cycle(1,2);assertEquals(2,src.opens)
+            t.elapsed+=86_400_000;n.cycle(1,2);n.cycle(1,2)
+            assertEquals(4,src.opens);assertTrue(n.engine.rows().all{it.status==Status.UNCHANGED})}}
+    }
+    @Test fun N30ReadsOnlyWatchTheStopFlagAndARevokedFileIsCaughtWhenItIsOpened()=worker {
+        val src=Source().apply{put("a",modified=now-900000,samples=100_000);put("b",modified=now-300000,samples=100_000)}
+        var fence=0;val guarded=AutomaticRecordingDiscovery.guarded(src,{fence++;true})
+        val atRead=mutableListOf<Pair<Int,Int>>();src.onRead={atRead+=src.checks to fence;src.revoked+="a"}
+        val t=Time();val wide=Config(10,10000,1000,25000000,10)
+        store().use{s->s.initializeEmpty()
+            NativeDiscoverySession(s,guarded,selected(src),{JSONObject()},t,{now},true,wide).use{n->
+                n.engine.scanPage();t.elapsed+=10;n.engine.scanPage()
+                assertEquals("STORED_LOCAL",n.engine.processNext())
+                assertTrue(atRead.size>=3);assertEquals("no permission check between chunks",1,atRead.toSet().size)
+                assertEquals(1,src.opens)
+                assertEquals("DISCOVERY_ACCESS_CHANGED",n.engine.processNext())
+                assertEquals(1,src.opens);assertEquals(1,s.snapshot().length())
+                assertEquals(Status.HELD_UNCONFIRMED,n.engine.rows().single{it.metadata.documentId=="a"}.status)}}
+    }
+    @Test fun N31OneCycleListsTheFolderOnce()=worker {
+        val src=Source().apply{put("a",modified=now-900000);put("b",modified=now-600000);put("c",modified=now-300000)};var listings=0;src.onInventory={listings++}
+        val t=Time();val paged=Config(10,10000,1000,25000000,1)
+        store().use{s->s.initializeEmpty()
+            NativeDiscoverySession(s,src,selected(src),{JSONObject()},t,{now},true,paged).use{n->
+                n.cycle(4,1);assertEquals(1,listings);assertEquals(3,n.engine.rows().size)
+                t.elapsed+=10;n.cycle(4,3);assertEquals(2,listings);assertEquals(3,s.snapshot().length())}}
     }
 
     @Test fun N28PruneVaultDeletesOriginalOnlyAfterTranscriptWasDoneFor14Days()=worker {
