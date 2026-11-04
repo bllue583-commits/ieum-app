@@ -132,7 +132,7 @@ internal object CallUi {
         }
         // Back from a main screen goes home; the screens with a detail view of their own add a callback that wins over this.
         if(tab!=null && tab!=Tab.HOME && a is ComponentActivity)
-            a.onBackPressedDispatcher.addCallback(a,object:OnBackPressedCallback(true) { override fun handleOnBackPressed() { leave(a) } })
+            a.onBackPressedDispatcher.addCallback(a,object:OnBackPressedCallback(true) { override fun handleOnBackPressed() { go(a,Tab.HOME) } })
         a.setContentView(root);return column
     }
 
@@ -171,10 +171,12 @@ internal object CallUi {
         // The bar is a sheet with a hairline on top.
         background=android.graphics.drawable.LayerDrawable(arrayOf(GradientDrawable().apply { setColor(LINE) },GradientDrawable().apply { setColor(CARD) })).apply { setLayerInset(1,0,dp(a,1),0,0) }
     }
-    /** Switches main screens, reusing a screen that is already open. The only motion is the 120 ms fade from the theme. */
-    fun go(a:Activity,t:Tab) { a.startActivity(Intent(a,t.target).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)) }
-    /** Back out of a main screen: home, with everything opened since on top of it closed. */
-    fun leave(a:Activity) { a.startActivity(Intent(a,HomeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)) }
+    /** Switches main screens, reusing a screen that is already open (REORDER_TO_FRONT). Home is the bottom of the stack: going there closes
+     * everything above it, so back from home leaves the app. The only motion is the 120 ms fade from the theme. */
+    fun go(a:Activity,t:Tab) { a.startActivity(Intent(a,t.target).addFlags(flagsFor(t))) }
+    internal fun flagsFor(t:Tab)=if(t==Tab.HOME) Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP else Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+    /** Back out of a main screen: home. */
+    fun leave(a:Activity) { go(a,Tab.HOME) }
 
     /** Scroll position of the page now, to put back after a screen is built again (so a list does not jump to the top). */
     fun scrollY(content:View):Int=scrollOf(content)?.scrollY ?: 0
@@ -367,10 +369,10 @@ internal object CallUi {
 
     /** Badge for a person (a circle) or a company (a rounded square): the first letter on a soft tint picked from the name. */
     fun avatar(a:Activity,name:String,sizeDp:Int=44,company:Boolean=false)=TextView(a).apply {
-        val fgs=listOf("#3268F0","#0B8A5F","#B26B00","#7B4FD6","#D0455C")
+        val fgs=listOf("#3268F0","#0B8A5F","#B26B00","#7B4FD6","#8A5A2B")
         val night=night
         val clean=name.filter { it.isLetter() }
-        val fg=Color.parseColor(if(night) listOf("#6B93FF","#3DD598","#F2B84B","#A98BFF","#FF8296")[(clean.hashCode() and 0x7fffffff)%fgs.size] else fgs[(clean.hashCode() and 0x7fffffff)%fgs.size])
+        val fg=Color.parseColor(if(night) listOf("#6B93FF","#3DD598","#F2B84B","#A98BFF","#D9A66B")[(clean.hashCode() and 0x7fffffff)%fgs.size] else fgs[(clean.hashCode() and 0x7fffffff)%fgs.size])
         val bg=blend(fg,CARD,if(night) 0.22f else 0.10f)
         text=clean.firstOrNull()?.toString() ?: "";textSize=18f;setTextColor(fg);typeface=font(a,Weight.SEMIBOLD);gravity=Gravity.CENTER
         if(clean.isEmpty()) foreground=android.graphics.drawable.InsetDrawable(icon(a,if(company) "company" else "person",fg,22),dp(a,(sizeDp-22)/2)) // no letter to show
@@ -567,7 +569,7 @@ internal object CallUi {
     fun greeting(hour:Int=java.time.ZonedDateTime.now(CallRecordStore.KST).hour)=when(hour) { in 5..11 -> "좋은 아침이에요";in 12..17 -> "좋은 오후예요";else -> "좋은 저녁이에요" }
     /** "오늘까지", "내일까지", "2일 지남", "11월 3일까지"; free text is shown as written. */
     fun dueWords(due:String?):String {
-        val d=due?.trim().orEmpty();if(d.isEmpty())return "기한 없음"
+        val d=due?.trim().orEmpty();if(d.isEmpty())return ""
         val date=runCatching{LocalDate.parse(d)}.getOrNull() ?: return d
         val days=java.time.temporal.ChronoUnit.DAYS.between(today(),date)
         return when { days<0 -> "${-days}일 지남";days==0L -> "오늘까지";days==1L -> "내일까지";else -> "${date(date)}까지" }

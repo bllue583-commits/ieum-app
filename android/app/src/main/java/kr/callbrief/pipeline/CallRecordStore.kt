@@ -105,7 +105,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         /** Columns added after the first release: the repository-ledger id of a person and the user's name lock. */
         private val PEOPLE_COLUMNS=listOf("ledger_id" to "TEXT","name_locked" to "INTEGER NOT NULL DEFAULT 0","name_key" to "TEXT")
         private val COMPANY_COLUMNS=listOf("name_key" to "TEXT")
-        private val ITEM_COLUMNS=listOf("done_ms" to "INTEGER","ai_note" to "TEXT")
+        private val ITEM_COLUMNS=listOf("done_ms" to "INTEGER","ai_note" to "TEXT","source" to "TEXT")
         fun recordId(t:CallTranscript)="${t.recordingId}|${t.sourceVersion}|${t.audioSha256}"
         /** Digits only for a phone number, otherwise the trimmed name; null when unknown. */
         fun counterpartKey(counterpart:String?):String? {
@@ -612,6 +612,28 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         rows("SELECT person_id,phone_key FROM people_phones ORDER BY rowid").forEach { r -> dialable(r.str("phone_key"))?.let { out.putIfAbsent(r.str("person_id")!!,it) } }
         return out
     }
+    // ---- v2 screens: a check item the user wrote down, and the ones finished lately -------------------------------------------
+    /** The user's own check item ("+ 직접 적기"): no call made it, so analysis never touches it. [company] is an existing or new company name.
+     * Returns the item id, or null for an empty title. */
+    fun addUserItem(title:String,company:String?=null):String? = port.transaction {
+        val clean=title.trim().take(240);if(clean.isEmpty()) return@transaction null
+        val now=clock()
+        port.execute("INSERT OR IGNORE INTO folder_grants VALUES('messages',?,'content://messages',1,1,1)",GeneralLocalStore.OWNER)
+        port.execute("INSERT OR IGNORE INTO recordings(recording_id,owner_key,grant_id,document_id,display_name,mime_type,byte_count,first_seen_ms,last_seen_ms,source_seq,source_version,head_revision) VALUES('user:items',?,'messages','user:items','직접 적은 일','text/plain',0,?,?,1,1,1)",
+            GeneralLocalStore.OWNER,now,now)
+        val item="wf_item_"+UUID.randomUUID().toString().replace("-","")
+        port.execute("INSERT INTO workflow_items(id,recording_id,case_id,kind,title,edition,due_text,status,revision,source_key,evidence_quote,created_ms,source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            item,"user:items",null,"TODO",clean,"","","open",1,null,"",now,"user")
+        company?.takeIf { normName(it)!=null }?.let { port.execute("INSERT OR REPLACE INTO task_companies VALUES(?,?)",item,upsertCompany(it,now)) }
+        port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER)
+        item
+    }
+    /** Check items the user finished at or after [sinceMs], the latest first (the folded "끝낸 일 보기"). Undo works on them like on open ones. */
+    fun doneItems(sinceMs:Long):List<OpenItem> =rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.edition,i.created_ms,
+        (SELECT c.counterpart FROM call_records c WHERE c.recording_id=i.recording_id ORDER BY c.created_ms DESC LIMIT 1) AS counterpart,
+        (SELECT co.name FROM task_companies tc JOIN companies co ON co.id=tc.company_id WHERE tc.item_id=i.id) AS cname,i.ai_note,i.done_ms
+        FROM workflow_items i WHERE i.status='done' AND i.kind='TODO' AND COALESCE(i.done_ms,0)>=CAST(? AS INTEGER) ORDER BY i.done_ms DESC LIMIT 100""",sinceMs)
+        .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),it.str("counterpart"),it.str("cname"),it.long("created_ms") ?: 0,it.str("ai_note")) }
     /** When the oldest call still waiting for its summary was stored, or null when none waits (settings: "지금 상태"). */
     fun oldestWaitingMs():Long? =rows("SELECT MIN(created_ms) AS m FROM call_records WHERE state IN ('TRANSCRIBED','WAITING_CONSENT')").firstOrNull()?.long("m")
 

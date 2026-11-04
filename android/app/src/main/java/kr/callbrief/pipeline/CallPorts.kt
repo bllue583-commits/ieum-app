@@ -80,6 +80,10 @@ object PipelineSettingsKeys {
     const val TRANSCRIPT_CLEANED="transcriptCleaned"
     /** A2: when the daily self-check last had to register a lost work again (0/absent = never). */
     const val RESCHEDULED_MS="rescheduledMs"
+    /** The last failed self-update install: "code: message" (cleared when an install succeeds). Shown on the settings update light. */
+    const val LAST_UPDATE_ERROR="lastUpdateError"
+    /** When the evening or morning report was last actually posted (ms). */
+    const val LAST_DIGEST_MS="lastDigestMs"
 }
 
 /** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets

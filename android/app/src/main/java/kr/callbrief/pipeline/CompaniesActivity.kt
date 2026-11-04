@@ -40,7 +40,7 @@ class CompaniesActivity:ComponentActivity() {
     }
     /** Opened from a call's company link: back returns to that call. Otherwise detail goes back to the list, the list to home. */
     private fun fromOutside()=intent?.hasExtra(EXTRA_COMPANY_NAME)==true
-    private fun closeDetail() { if(fromOutside()) finish() else if(detailId!=null) { detailId=null;load() } else CallUi.leave(this) }
+    private fun closeDetail() { if(fromOutside()) finish() else if(detailId!=null) { detailId=null;load() } else CallUi.go(this,CallUi.Tab.HOME) }
     override fun onResume() { super.onResume();load() }
     override fun onSaveInstanceState(out:Bundle) { super.onSaveInstanceState(out);detailId?.let { out.putString("company",it) } }
 
@@ -73,14 +73,30 @@ class CompaniesActivity:ComponentActivity() {
         detailId=null
         CallUi.band(body,"업체와 사람",if(rows.isEmpty()) null else "업체 ${rows.size}곳, 최근에 통화한 순서예요")
         if(rows.isEmpty()) body.addView(CallUi.card(this).apply { addView(CallUi.text(this@CompaniesActivity,"아직 업체가 없어요. 통화가 정리되면 자동으로 채워져요.",CallUi.BODY,color=CallUi.SUBTLE)) })
+        if(rows.isNotEmpty() || loose.isNotEmpty()) {
+            body.addView(ScreenParts.searchBox(this,"업체, 사람 찾기",query,"companies_search") { q -> query=q;fill() })
+            listBox=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL;tag="companies_box" }
+            body.addView(listBox);fill()
+        }
+        CallUi.restoreScroll(body,keep)
+    }
+
+    private var query=""
+    private lateinit var listBox:LinearLayout
+    internal fun matches(c:CompanyRow,q:String)=ScreenParts.matches(q,c.name,c.trade)
+    /** The company list under the search line: the companies whose name or trade has what is typed (people without a company by their name). */
+    private fun fill() {
+        listBox.removeAllViews()
+        val found=rows.filter { matches(it,query) }
+        val people=loose.filter { ScreenParts.matches(query,it.name,it.role) }
+        if(found.isEmpty() && people.isEmpty()) { listBox.addView(CallUi.card(this).apply { tag="companies_none";addView(CallUi.text(this@CompaniesActivity,"찾는 업체가 없어요.",CallUi.BODY,color=CallUi.SUBTLE)) });return }
         // One grouped list: rounded-square badge, name, trade on the right, check items and last call below.
-        if(rows.isNotEmpty()) body.addView(CallUi.list(this,rows.map { c ->
+        if(found.isNotEmpty()) listBox.addView(CallUi.list(this,found.map { c ->
             CallUi.memoRow(this,c.trade.orEmpty(),c.name,(if(c.openTasks>0) "체크할 일 ${c.openTasks}개" else "체크할 일 없음")+", "+
-                (c.lastCallMs?.let { "${CallUi.dayWord(CallRecordStore.kstDay(it))} 마지막 통화" } ?: "통화 기록 없음"),company=true) { detailId=c.id;load() }
+                (c.lastCallMs?.let { "${CallUi.dayWord(CallRecordStore.kstDay(it))} 마지막 통화" } ?: "통화 기록 없음"),company=true) { detailId=c.id;query="";load() }
                 .apply { tag="company_${c.id}";contentDescription="${c.name}, 사람과 메모 자세히 보기" }
         }))
-        if(loose.isNotEmpty()) { body.addView(CallUi.section(this,"업체 없는 사람 (우리 직원 등)"));body.addView(CallUi.list(this,loose.map(::personRow))) }
-        CallUi.restoreScroll(body,keep)
+        if(people.isNotEmpty()) { listBox.addView(CallUi.section(this,"업체 없는 사람 (우리 직원 등)"));listBox.addView(CallUi.list(this,people.map(::personRow))) }
     }
 
     /** One person: round badge, name, role, a quiet [이름 고치기] for misheard names, and a phone button when the number is known. */

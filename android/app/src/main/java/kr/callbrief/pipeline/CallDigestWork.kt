@@ -26,15 +26,14 @@ internal object CallDigestText {
     data class Message(val title:String,val text:String,val lines:List<String> =emptyList())
     const val MAX_LINES=7
     private fun more(lines:List<String>)=if(lines.size>MAX_LINES) lines.take(MAX_LINES-1)+"외 ${lines.size-MAX_LINES+1}개" else lines
+    /** The body's first line is the latest call, one line ("오후 2:10 △△철강 김민수, 단가를 다시 받기로 했어요"), then the waiting count; the expanded
+     * notification lists every call, the latest first. */
     fun evening(calls:List<CallRecord>,newTasks:Int):Message {
-        val names=calls.map { it.displayName }.filter { it!="상대 미상" }.distinct().take(2)
-        // Names listed without a particle after them (와/과 depends on the last sound): no wrong grammar.
-        val who=if(names.isEmpty()) "" else "연락한 사람 "+names.joinToString(", ")+(if(calls.size>names.size) " 등. " else ". ")
-        val lines=calls.sortedBy { it.startedMs ?: 0 }.map { c ->
+        val lines=calls.sortedByDescending { it.startedMs ?: it.createdMs }.map { c ->
             "${CallUi.time(c.startedMs)} ${c.displayName}, "+(c.summary?.let(CallUi::firstSentence) ?: CallUi.state(c))
         }
         val waiting=calls.count { it.summary==null && it.state!=CallRecordStore.FAILED }
-        val text=if(calls.isEmpty()) "오늘 정리된 통화가 없어요" else "${who}펼치면 통화별 요약이 보여요"+(if(waiting>0) ", 아직 정리 중인 통화가 ${waiting}건 있어요" else "")
+        val text=if(calls.isEmpty()) "오늘 정리된 통화가 없어요" else lines.first()+(if(waiting>0) ", 아직 정리 중인 통화가 ${waiting}건 있어요" else "")
         return Message("오늘 통화 ${calls.size}건, 새 체크할 일 ${newTasks}개",text,more(lines))
     }
     /** Up to [ISSUE_LINES] "진행 중인 일" lead the morning lines (design: 새벽 정리). */
@@ -129,14 +128,15 @@ internal object CallDigestNotifier {
         manager.createNotificationChannel(NotificationChannel(CallDigestWork.CHANNEL,"이음 통화 정리",NotificationManager.IMPORTANCE_DEFAULT))
         val intent=Intent(context,if(kind==CallDigestSchedule.MORNING) CallTasksActivity::class.java else TodayCallsActivity::class.java).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         val pending=PendingIntent.getActivity(context,kind.hashCode(),intent,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val notification=Notification.Builder(context,CallDigestWork.CHANNEL).setSmallIcon(R.drawable.ic_callbrief)
+        val notification=Notification.Builder(context,CallDigestWork.CHANNEL).setSmallIcon(R.drawable.ic_stat_ieum)
             .setContentTitle(m.title).setContentText(m.text).setContentIntent(pending).setAutoCancel(true).setLocalOnly(true)
             // Whole lines, wrapped: an inbox style cuts each line with "…" (user rule: nothing cut off).
             .setStyle(Notification.BigTextStyle().setBigContentTitle(m.title).bigText(m.lines.joinToString("\n").ifEmpty { m.text }))
             .setVisibility(Notification.VISIBILITY_PRIVATE)
             // Lock screen shows only the counts; the list appears once unlocked.
-            .setPublicVersion(Notification.Builder(context,CallDigestWork.CHANNEL).setSmallIcon(R.drawable.ic_callbrief).setContentTitle(m.title).setContentText("잠금을 풀면 내용이 보여요").build())
+            .setPublicVersion(Notification.Builder(context,CallDigestWork.CHANNEL).setSmallIcon(R.drawable.ic_stat_ieum).setContentTitle(m.title).setContentText("잠금을 풀면 내용이 보여요").build())
             .build()
         manager.notify("ieum.calls.$kind",700,notification)
+        if(kind==CallDigestSchedule.EVENING||kind==CallDigestSchedule.MORNING) runCatching { SecureSettings(CallPipelineStartup.storage(context)).update { it.put(PipelineSettingsKeys.LAST_DIGEST_MS,System.currentTimeMillis()) } }
     }
 }
