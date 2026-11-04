@@ -239,6 +239,18 @@ internal object CallUi {
         background=ripple(a,fill?.let { GradientDrawable().apply { shape=GradientDrawable.OVAL;setColor(it) } },oval=true)
         layoutParams=LinearLayout.LayoutParams(dp(a,sizeDp),dp(a,sizeDp));setOnClickListener { action() }
     }
+    /** A person as the rows show them: a name gets "님", a bare number is shown as a number (010-1234-5678), never "010… 님". */
+    fun who(person:String):String {
+        val d=person.filter { it.isDigit() }
+        if(d.isEmpty() || person.any { it.isLetter() }) return "$person 님"
+        return when {
+            d.length==11 && d.startsWith("01") -> "${d.take(3)}-${d.substring(3,7)}-${d.takeLast(4)}"
+            d.length==10 && d.startsWith("02") -> "02-${d.substring(2,6)}-${d.takeLast(4)}"
+            d.length==9 && d.startsWith("02") -> "02-${d.substring(2,5)}-${d.takeLast(4)}"
+            d.length==10 -> "${d.take(3)}-${d.substring(3,6)}-${d.takeLast(4)}"
+            else -> person
+        }
+    }
     /** The 44dp phone button of a person or company: opens the dialer with the number typed in (no permission needed).
      * Null when there is no number, so no empty button is drawn. */
     fun dialButton(a:Activity,number:String?,name:String):View? {
@@ -313,7 +325,7 @@ internal object CallUi {
         val outer=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;setPadding(dp(a,16),dp(a,14),dp(a,16),dp(a,14)) }
         if(onOpen!=null) outer.apply { isClickable=true;isFocusable=true;background=rowRipple();setOnClickListener { onOpen() };contentDescription=null }
         outer.addView(text(a,title,SUMMARY,true).apply { tag="task_title";setPadding(0,0,0,0) })
-        val who=listOfNotNull(person?.let { "$it 님" },requested(requestedMs).takeIf { it.isNotEmpty() }).joinToString(", ")
+        val who=listOfNotNull(person?.let { who(it) },requested(requestedMs).takeIf { it.isNotEmpty() }).joinToString(", ")
         // Badge and words side by side while the words still get most of the line; else the words go under the badge.
         val meta=if(company.isNullOrBlank() && who.isEmpty()) null else FitRow(a,flex=if(company.isNullOrBlank()) 0 else 1,minFraction=0.6f,gapDp=8).apply {
             tag="task_meta"

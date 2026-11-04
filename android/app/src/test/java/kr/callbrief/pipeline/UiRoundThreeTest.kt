@@ -152,4 +152,11 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
         settle { texts(c).any { it.text.toString().startsWith("사람 (") } }
         assertTrue(texts(c).any { it.text.toString()=="△△철강" })
     }
+
+    @Test fun aBareNumberIsShownAsANumberWithoutHonorific() {
+        assertEquals("김민수 님",CallUi.who("김민수"))
+        assertEquals("010-1111-0001",CallUi.who("01011110001"))
+        assertEquals("02-123-4567",CallUi.who("021234567"))
+        assertEquals("010-5555-6666",CallUi.who("010-5555-6666"))
+    }
 }
