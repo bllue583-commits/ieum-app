@@ -1028,6 +1028,15 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
             WHERE j.state IN ('QUEUED','RUNNING') AND COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)>=CAST(? AS INTEGER)
             AND COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)<CAST(? AS INTEGER)""",FirstPass.FROM_MS,old).single().long("m")
     }
+    /** Read only (r8-4, the call list): when the recordings still waiting for their words (QUEUED or RUNNING) were made,
+     * between [fromMs] and [toMs]. A call-log line within 2 minutes of one is a call being turned into text right now. */
+    fun transcribingStarts(fromMs:Long,toMs:Long):List<Long> {
+        if(rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name='call_transcription_jobs'").isEmpty()) return emptyList()
+        val at="COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)"
+        return rows("""SELECT $at AS m FROM call_transcription_jobs j JOIN recordings r ON r.recording_id=j.recording_id
+            LEFT JOIN local_files l ON l.recording_id=j.recording_id WHERE j.state IN ('QUEUED','RUNNING') AND $at>=CAST(? AS INTEGER) AND $at<CAST(? AS INTEGER)""",
+            fromMs,toMs).mapNotNull { it.long("m") }
+    }
     /** A recording found to be with the personal number: the record, its words and anything sent or linked go. The
      * transcription job stays done, so it is not transcribed again. */
     private fun forgetCall(recordId:String) {

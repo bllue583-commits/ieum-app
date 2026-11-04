@@ -309,10 +309,13 @@ class UiV2Test:ProtectedTextHostTestBase() {
         settle { tag(a,"calls_search")!=null && tagged(a,"call_").isNotEmpty() }
         val box=tag(a,"calls_search") as EditText
         box.setText("철강")
+        // The search waits until typing stops for a moment (r8-4, 250 ms).
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(CallsScreen.SEARCH_WAIT_MS+50))
         settle { tagged(a,"call_").isNotEmpty() && tag(a,"calls_search_wait")==null }
         assertTrue(tagged(a,"call_").all { it.tag != "calls_search_wait" })
         val hits=tagged(a,"call_").size;assertTrue(hits>=1)
         box.setText("전혀없는말")
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(CallsScreen.SEARCH_WAIT_MS+50))
         settle { tag(a,"calls_search_none")!=null }
     }
 
