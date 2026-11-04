@@ -85,7 +85,8 @@ internal class CallTranscriptionRunner(
                 }
                 for((index,chunk) in decoded.chunks.withIndex()) {
                     val (offset,pcm)=chunk
-                    finished[index]?.let { segments+=it;continue }
+                    val kept=finished[index]
+                    if(kept!=null) { segments+=kept;continue }
                     if(pcm.size>=MIN_SPLIT_SAMPLES && store.stalls(c.key,index)>=SPLIT_AFTER_STOPS) {
                         // Stopped three times in a row on this piece: do it as two halves (saved separately, ids -1,-2,-3...).
                         val mid=PipelineAudioMath.halfPoint(pcm)
