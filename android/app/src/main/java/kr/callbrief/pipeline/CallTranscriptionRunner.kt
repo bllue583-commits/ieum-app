@@ -151,7 +151,8 @@ internal class CallTranscriptionRunner(
                 store.clearParts(c.key)
                 val cleaned=TranscriptClean.clean(segments) // A9: just before saving; the pieces kept in the store stay raw
                 if(cleaned.removed>0)cleanedCount(cleaned.removed)
-                val text=cleaned.segments.joinToString(""){it.text}.trim()
+                // One line per recognised piece (prompt rule 2); quotes are checked on bare text, so the line ends change nothing there.
+                val text=cleaned.segments.map{it.text.trim()}.filter{it.isNotEmpty()}.joinToString("\n")
                 skipReason(c)?.let { store.finish(c.key,"SKIPPED",it);return@repeat }
                 if(text.isEmpty()){store.finish(c.key,"SKIPPED","NO_SPEECH");return@repeat}
                 target.onTranscript(CallTranscript(c.key.recordingId,c.key.sourceVersion,c.key.audioSha,c.startedAtMs,decoded.durationMs,

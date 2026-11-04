@@ -46,7 +46,10 @@ data class PrivacyRules(val phones: Set<String>, val aliases: List<ExcludedAlias
             return phoneMatches(value).map { normalizePhone(it.value) }.toSet()
         }
         fun phoneTokenCount(value: String): Int = phoneMatches(Normalizer.normalize(value, Normalizer.Form.NFKC)).size
-        fun removePhoneTokens(value: String): String {
+        fun removePhoneTokens(value: String): String = replacePhoneTokens(value, "")
+        /** Every phone-number span (mobile, 9 and 10 digit landlines like "031 123 4567", +82 forms, 1588 numbers) replaced
+         * by [replacement]; the rest stays character for character. */
+        fun replacePhoneTokens(value: String, replacement: String): String {
             // Detect normalized phone spans but retain the original alias character-for-character.
             // Compatibility folding is safe for exclusions, never for permission/identity reuse.
             val normalized=StringBuilder();val starts=mutableListOf<Int>();val ends=mutableListOf<Int>()
@@ -58,7 +61,7 @@ data class PrivacyRules(val phones: Set<String>, val aliases: List<ExcludedAlias
             }
             var result=value
             for(match in phoneMatches(normalized.toString()).sortedByDescending { it.range.first }) {
-                result=result.removeRange(starts[match.range.first],ends[match.range.last])
+                result=result.replaceRange(starts[match.range.first],ends[match.range.last],replacement)
             }
             return result
         }

@@ -98,6 +98,13 @@ object PipelineSettingsKeys {
     const val MY_ROLE="myRole"
     /** Check items the AI proposed that were left out as the same as an existing one: a running count (design E5). */
     const val DUPLICATE_SKIPPED="duplicateSkipped"
+    /** Near-duplicate check items left out (design 3.4): a JSON array, newest last, at most 50, of [kept item id, record key of
+     * the call that proposed the other]; the morning tidy's state carries it as mergeCandidates. */
+    const val MERGE_CANDIDATES="mergeCandidates"
+    /** People the v3 key migration merged (same number or same company): a JSON array of {"from":id,"into":id}, ledger ids where known. */
+    const val MERGE_LOG="mergeLog"
+    /** Why recordings did or did not pair with the call log (design 3.4): a JSON string, see [FirstPass.MatchStats.mergeInto]. */
+    const val CALLLOG_MATCH_STATS="callLogMatchStats"
     /** First-pass batches put up on one KST day (design C7: at most [FirstPass.BATCHES_PER_DAY]): the day and the count. */
     const val FIRST_PASS_BATCH_DAY="firstPassBatchDay"
     const val FIRST_PASS_BATCHES_TODAY="firstPassBatchesToday"

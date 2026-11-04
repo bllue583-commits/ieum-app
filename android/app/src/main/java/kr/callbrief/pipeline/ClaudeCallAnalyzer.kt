@@ -175,10 +175,21 @@ internal class ClaudeCallAnalyzer {
         const val NUMBER_MASK="[번호]"
         // 11 or more digits in a row, single hyphens or spaces between them allowed (a phone number); an account number shape.
         private val LONG_NUMBER=Regex("(?<!\\d)\\d(?:[- ]?\\d){10,}(?!\\d)")
+        // A 9 or 10 digit landline: area code 02 or 0xx, then 3 or 4 digits and 4, spaces or hyphens allowed (review 19).
+        private val LANDLINE=Regex("(?<!\\d)0(?:2|[3-6]\\d|70)[- ]?\\d{3,4}[- ]?\\d{4}(?!\\d)")
         private val ACCOUNT=Regex("(?<!\\d)\\d{2,6}-\\d{2,6}-\\d{2,8}(?!\\d)")
         private val ISO_DAY=Regex("^(19|20)\\d{2}-\\d{1,2}-\\d{1,2}$")
         /** Phone and account numbers in a transcript or text replaced by [NUMBER_MASK] (a date like 2026-11-04 stays). */
-        fun maskNumbers(text:String):String=ACCOUNT.replace(LONG_NUMBER.replace(text,NUMBER_MASK)) { m -> if(ISO_DAY.matches(m.value)) m.value else NUMBER_MASK }
+        fun maskNumbers(text:String):String {
+            // Phone numbers of every shape first (a 10-digit landline "031 123 4567" too, review 19), then long digit runs and accounts.
+            // The landline shape also when a particle sticks to it ("031 123 4567로"), which the phone rule's word edge misses.
+            val phones=LANDLINE.replace(kr.callbrief.core.PrivacyRules.replacePhoneTokens(text,NUMBER_MASK),NUMBER_MASK)
+            return ACCOUNT.replace(LONG_NUMBER.replace(phones,NUMBER_MASK)) { m -> if(ISO_DAY.matches(m.value)) m.value else NUMBER_MASK }
+        }
+        /** A name as it may leave the phone: number-shaped parts gone, any other long number masked; null when nothing is left. */
+        fun safeName(name:String?):String? = CallRecordStore.noNumber(name)?.let { maskNumbers(it).trim() }?.takeIf { it.isNotEmpty() && it!=NUMBER_MASK }
+        /** The sender of a mail as sent: the name only, never the address (the person is known by id, review 18). */
+        fun mailSender(raw:String?):String? = raw?.trim()?.takeIf { it.isNotEmpty() && !(it.contains('@') && !it.contains(' ')) }?.let { safeName(it) }
         /** Who the user is, in roles only (no name, company or site): the first block of every request when "내 정보" is empty. */
         const val USER_PROFILE="건설사 직원(부장), 건설 현장 한 곳을 맡고 있습니다. 협력업체와 같은 회사 직원에게 일을 시키고 받는 통화가 많습니다. 상대가 \"부장님\"이라고 부르면 듣는 쪽이 사용자입니다."
         val SYSTEM="""
@@ -250,10 +261,12 @@ internal class ClaudeCallAnalyzer {
             append("종류: ").append(r.kind).append('\n')
             append(r.kind).append(" 시각: ").append(r.callTimeKst).append('\n')
             // A bare phone number is not sent: the person is known by id (design: 장부의 원본).
-            val shown=r.counterpart?.takeIf { it.isNotBlank() }?.let { c -> if(r.kind!="메일" && CallRecordStore.isContact(CallRecordStore.counterpartKey(c))) "전화부에 없는 번호" else CallRecordStore.noNumber(c) ?: "전화부에 없는 번호" }
+            // Mail: the sender's name only, the address never (review 18); a name with a number in it loses the number.
+            val shown=if(r.kind=="메일") mailSender(r.counterpart) ?: r.person?.name?.let { safeName(it) }
+                else r.counterpart?.takeIf { it.isNotBlank() }?.let { c -> if(CallRecordStore.isContact(CallRecordStore.counterpartKey(c))) "전화부에 없는 번호" else safeName(c) ?: "전화부에 없는 번호" }
             append(if(r.kind=="메일") "보낸 사람: " else "전화부 이름: ").append(shown ?: "미상").append('\n')
             r.counterpartId?.let { append("상대 id: ").append(it).append('\n') }
-            r.callLog?.let { l -> append("[통화기록] ").append(listOfNotNull(l.phoneBookName?.let { "전화부 이름 $it" },l.direction,"실제 시각 ${l.startTime}",
+            r.callLog?.let { l -> append("[통화기록] ").append(listOfNotNull(safeName(l.phoneBookName)?.let { "전화부 이름 $it" },l.direction,"실제 시각 ${l.startTime}",
                 "길이 ${durationText(l.durationMs)}").joinToString(", ")).append('\n') }
             if(r.kind=="통화") append("통화 길이: ").append(durationText(r.durationMs)).append('\n')
             (r.direction ?: r.callLog?.direction)?.let { append("[통화 방향] ").append(it).append('\n') }
@@ -303,16 +316,41 @@ internal class ClaudeCallAnalyzer {
         val known=r.knownTaskIds+stillOpen
         // Spaces and punctuation are ignored: segments are joined without spaces and the model tidies them when copying.
         // Compared with the text as it was sent: long numbers masked (J2).
-        val inCall=NameKey.bare(maskNumbers(r.transcript));val inTexts=NameKey.bare(maskNumbers(r.recentTexts))
-        val pieces by lazy { NameKey.trigrams(inCall+"\n"+inTexts) }
+        val callText=maskNumbers(r.transcript);val textsText=maskNumbers(r.recentTexts)
+        val inCall=NameKey.bare(callText);val inTexts=NameKey.bare(textsText)
         fun count(text:String,q:String):Int { var n=0;var i=text.indexOf(q);while(i>=0) { n++;i=text.indexOf(q,i+1) };return n }
+        /** The sentences of a text (split at line ends and . ? ! 。), each bare; joined they are the bare text. */
+        fun sentences(t:String)=t.split(Regex("[\\n.?!。]+")).map { NameKey.bare(it) }.filter { it.isNotEmpty() }
+        /** A quote said more than once proves an item only when a key word of its title is said next to one of its times:
+         * in the sentences it spans, the one before or the one after (design E7, 3.4). */
+        fun nearTitleWord(b:String,title:String):Boolean {
+            val words=title.split(Regex("\\s+")).map { NameKey.bare(it) }.filter { it.length>=2 && it !in NameKey.ACTIONS && it !in NameKey.TITLES }
+            if(words.isEmpty()) return false
+            for(raw in listOf(callText,textsText)) {
+                val list=sentences(raw);val ends=IntArray(list.size);var at=0
+                list.forEachIndexed { i,s -> at+=s.length;ends[i]=at } // sentence i covers [ends[i]-len, ends[i])
+                val bare=list.joinToString("")
+                fun sentenceAt(pos:Int)=ends.indexOfFirst { pos<it }
+                var p=bare.indexOf(b)
+                while(p>=0) {
+                    val first=sentenceAt(p);val last=sentenceAt(p+b.length-1)
+                    val from=if(first>0) ends[first-1]-list[first-1].length else 0
+                    val to=ends[minOf(list.size-1,last+1)]
+                    if(words.any { bare.substring(from,to).contains(it) }) return true
+                    p=bare.indexOf(b,p+1)
+                }
+            }
+            return false
+        }
         /** null: no proof; false: found letter for letter; true: found closely. */
-        fun proof(q:String):Boolean? {
+        fun proof(q:String,title:String):Boolean? {
             val b=NameKey.bare(q);if(b.length<MIN_QUOTE) return null
             val c=count(inCall,b);val t=count(inTexts,b)
             if(c==1 || (c==0 && t==1)) return false
-            if(c+t>1) return true // said several times (a repeated phrase, a looping transcript): kept, but only as a close match
-            return if(NameKey.coverage3(b,pieces)>=FUZZY_COVERAGE) true else null
+            // Said several times (a repeated phrase, a looping transcript): only next to what the title is about, and only as a close match.
+            if(c+t>1) return if(nearTitleWord(b,title)) true else null
+            // Close: one stretch of the call (or of the texts) the quote's length plus 20% holds 90% of its 3-letter pieces.
+            return if(maxOf(NameKey.windowCoverage3(b,inCall),NameKey.windowCoverage3(b,inTexts))>=FUZZY_COVERAGE) true else null
         }
         fun iso(d:String?)=d?.trim()?.takeIf { Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(it) && runCatching { java.time.LocalDate.parse(it) }.isSuccess }
         val heard=NameKey.squash(r.transcript+r.recentTexts+(r.callLog?.phoneBookName ?: ""))
@@ -325,8 +363,8 @@ internal class ClaudeCallAnalyzer {
             ?.let { if(it.personName==null) it.copy(role=null) else it }?.let { if(it.isStaff) it.copy(companyName=null) else it }?.takeIf { it.personName!=null || it.companyName!=null }
         return a.copy(
             counterpart=cp,siteMemo=memo(a.siteMemo,600),companyMemo=memo(a.companyMemo,400),companyTrade=memo(a.companyTrade,20),
-            promises=a.promises.mapNotNull { p -> proof(p.quote)?.takeIf { p.text.isNotEmpty() }?.let { p.copy(owner=owner(p.owner),due=iso(p.due),quoteFuzzy=it) } },
-            tasks=a.tasks.mapNotNull { t -> val fuzzy=proof(t.quote)
+            promises=a.promises.mapNotNull { p -> proof(p.quote,p.text)?.takeIf { p.text.isNotEmpty() }?.let { p.copy(owner=owner(p.owner),due=iso(p.due),quoteFuzzy=it) } },
+            tasks=a.tasks.mapNotNull { t -> val fuzzy=proof(t.quote,t.title)
                 if(fuzzy==null || t.title.isEmpty() || !when(t.op) { "create" -> true;"update","done_suggested" -> t.taskId in known;else -> false }) null
                 else t.copy(taskId=if(t.op=="create") null else t.taskId,company=seen(t.company),due=iso(t.due),owner=owner(t.owner),quoteFuzzy=fuzzy) }.take(MAX_TASKS))
     }
