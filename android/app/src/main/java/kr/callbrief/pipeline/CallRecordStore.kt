@@ -396,6 +396,15 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
      * all other open work with its company, and the name list for typo correction. */
     /** [wide]: when a result is checked, the texts are read more widely than when it was sent. An old record older than
      * [FirstPass.TASK_DAYS] makes no check items, so its request carries no open work (smaller, round 2). */
+    /** Who does item [itemId] as the call [recordId] that made it said: the owner of its task in the stored answer (the applied list
+     * runs in the same order as the tasks); null when not stored (an old answer shrunk after 90 days, an item a person wrote). */
+    private fun madeOwner(recordId:String,itemId:String):String? {
+        val root=rows("SELECT analysis_json FROM call_records WHERE record_id=?",recordId).singleOrNull()?.str("analysis_json")?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return null
+        val applied=root.optJSONArray("applied") ?: return null
+        val tasks=root.optJSONObject("analysis")?.optJSONArray("tasks") ?: return null
+        val i=(0 until applied.length()).firstOrNull { applied.optJSONObject(it)?.optString("itemId")==itemId } ?: return null
+        return tasks.optJSONObject(i)?.optString("owner")?.trim()?.lowercase()?.takeIf { it in setOf("me","them","unknown") }
+    }
     fun request(r:CallRecord,old:Boolean=false,wide:Boolean=false):ClaudeCallRequest {
         val lean=old && clock()-r.dayMs>FirstPass.TASK_DAYS*86_400_000L
         val key=r.counterpartKey
@@ -406,12 +415,16 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         // Only what existed at this call's time (review B7): a record analysed late must not see what came after it.
         val before=r.dayMs
         val sameCounterpart=if(key==null) emptySet() else rows("SELECT b.item_id FROM call_task_bindings b JOIN call_records c ON c.record_id=b.record_id WHERE c.counterpart_key=?",key).mapNotNull { it.str("item_id") }.toSet()
-        class Open(val task:ClaudeCallRequest.OpenTask,val companyId:String?)
-        val all=rows("""SELECT i.id,i.title,i.due_text,i.status,i.created_ms,co.id AS cid,co.name AS cname FROM workflow_items i
+        class Open(val task:ClaudeCallRequest.OpenTask,val companyId:String?,val madeBy:String?)
+        // The call that made each item (binding) gives who asked for it, by the name the screens show (design C5); the quote is the item's own evidence.
+        val all=rows("""SELECT i.id,i.title,i.due_text,i.status,i.created_ms,i.evidence_quote,co.id AS cid,co.name AS cname,b.record_id AS made_by,p.name AS pname FROM workflow_items i
             LEFT JOIN task_companies tc ON tc.item_id=i.id LEFT JOIN companies co ON co.id=tc.company_id
+            LEFT JOIN call_task_bindings b ON b.item_id=i.id LEFT JOIN call_links l ON l.record_id=b.record_id LEFT JOIN people p ON p.id=l.person_id
             WHERE i.status NOT IN ('done','merged') AND i.kind='TODO' AND i.created_ms<=CAST(? AS INTEGER) ORDER BY i.created_ms DESC LIMIT 300""",before)
-            .map { Open(ClaudeCallRequest.OpenTask(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty(),it.str("status")!!,it.str("cname"),it.long("created_ms")?.let { ms -> kstDay(ms).toString() }),it.str("cid")) }
+            .map { Open(ClaudeCallRequest.OpenTask(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty(),it.str("status")!!,it.str("cname"),it.long("created_ms")?.let { ms -> kstDay(ms).toString() },
+                person=it.str("pname"),quote=it.str("evidence_quote")),it.str("cid"),it.str("made_by")) }
         val own=if(lean) emptyList() else all.filter { (companyId!=null && it.companyId==companyId) || it.task.id in sameCounterpart }.take(30)
+            .map { o -> o.task.copy(owner=o.madeBy?.let { madeOwner(it,o.task.id) }) }
         // The same person's calls (design E4): by the person linked to them, so calls known by name and by number meet; by the key when no person is known.
         val personId=person?.str("id")
         val summaries=if(personId!=null) rows("""SELECT c.summary FROM call_links l JOIN call_records c ON c.record_id=l.record_id WHERE l.person_id=? AND c.state='ANALYZED' AND c.record_id!=?
@@ -437,7 +450,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         val phone=person?.let { p -> p.str("phone_key") ?: key?.takeIf { isContact(it) } }
         val sameNumber=if(phone==null) emptyList() else peopleByNumber(phone).filter { it.str("id")!=person?.str("id") && it.str("name").orEmpty().isNotBlank() }
             .map { o -> o.str("name")!!+(listOfNotNull(companyById(o.str("company_id"))?.str("name"),o.str("role")).joinToString(" ").takeIf { it.isNotBlank() }?.let { "($it)" } ?: "") }
-        return ClaudeCallRequest(r.transcript,kstTime(r.startedMs),r.counterpart,r.durationMs,own.map { it.task },summaries,
+        return ClaudeCallRequest(r.transcript,kstTime(r.startedMs),r.counterpart,r.durationMs,own,summaries,
             siteMemo = siteMemo(),
             person = person?.let { ClaudeCallRequest.PersonCard(it.str("name")!!,it.str("role"),it.long("is_staff")==1L,company?.str("name")) },
             company = company?.let { ClaudeCallRequest.CompanyCard(it.str("name")!!,trade,it.str("memo").orEmpty()) },

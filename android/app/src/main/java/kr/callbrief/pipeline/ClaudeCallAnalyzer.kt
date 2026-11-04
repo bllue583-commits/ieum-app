@@ -51,8 +51,11 @@ internal data class ClaudeCallRequest(
         val empty get()=listOf(name,company,role).all { it.isNullOrBlank() }
     }
     data class CallLogView(val phoneBookName:String?,val direction:String?,val startTime:String,val durationMs:Long)
-    /** [asked]: the day it was asked for (YYYY-MM-DD), [company] the company it belongs to. */
-    data class OpenTask(val id:String,val title:String,val due:String,val status:String,val company:String?=null,val asked:String?=null)
+    /** [asked]: the day it was asked for (YYYY-MM-DD), [company] the company it belongs to. From the call that made it (design C5),
+     * each only when stored: [owner] "me", "them" or "unknown", [person] that call's counterpart by the name the screens show
+     * (not the ledger id), [quote] the evidence text (masked and cut to [QUOTE_HEAD] when sent). */
+    data class OpenTask(val id:String,val title:String,val due:String,val status:String,val company:String?=null,val asked:String?=null,
+        val owner:String?=null,val person:String?=null,val quote:String?=null)
     data class PersonCard(val name:String,val role:String?,val staff:Boolean,val company:String?)
     data class CompanyCard(val name:String,val trade:String?,val memo:String)
     data class PastCall(val date:String,val who:String?,val summary:String)
@@ -203,7 +206,7 @@ internal class ClaudeCallAnalyzer {
 [체크할 일]
 10. tasks는 사용자가 나중에 "됐는지 확인할 일" 목록입니다. 사용자는 부장이라 상대에게 일을 시키는 경우가 많습니다. 상대가 하기로 한 약속(owner "them")과 사용자가 하기로 한 약속(owner "me") 모두 넣으세요. 상대가 할 일의 title은 "김민수 과장 견적서 회신 확인"처럼 누가 무엇을 했는지 확인하는 꼴로 짧게 쓰세요.
 11. "~하겠다", "~하기로 했다", "~보내드리겠다"처럼 정해진 것만 certainty "sure"로 만드세요. "~해 볼게요", "알아볼게요", "검토해 보겠습니다"는 certainty "tentative"로 하고 title을 "회신 확인"처럼 쓰세요. "~하면 좋겠다", "~일 것 같다"는 만들지 마세요.
-12. 체크할 일을 정하는 순서: (1) [열린 체크할 일]에 같은 업체의 같은 대상(문서 이름, 공정, 회차)이 있으면 op "update"와 그 taskId를 쓰세요. 새 날짜가 분명할 때만 due를 쓰고 아니면 null로 두세요(기존 날짜가 유지됩니다). (2) 이번 통화에서 그 일이 끝났다고 누군가 말했으면 op "done_suggested"로 제안만 하세요(quote는 끝났다고 말한 부분). 일이 끝났다고 스스로 결정하지 마세요. (3) 둘 다 아니면 "create"(taskId null). 같은 일에 update와 create를 함께 내지 마세요. 회차나 날짜가 다른 일(11/5 타설과 11/12 타설)은 새 일입니다. taskId는 메시지에 있는 것만 쓸 수 있습니다. 기록 하나에서 tasks는 5개까지입니다. [최근 끝낸 체크할 일]에 있는 일은 새로 요청받지 않는 한 다시 만들지 마세요. tasks의 company에는 그 일이 속한 업체 이름을 [이름 목록]의 표기로 쓰고 모르면 null로 두세요.
+12. 체크할 일을 정하는 순서: (1) [열린 체크할 일]에 같은 업체의 같은 대상(문서 이름, 공정, 회차)이 있으면 op "update"와 그 taskId를 쓰세요. 새 날짜가 분명할 때만 due를 쓰고 아니면 null로 두세요(기존 날짜가 유지됩니다). (2) 이번 통화에서 그 일이 끝났다고 누군가 말했으면 op "done_suggested"로 제안만 하세요(quote는 끝났다고 말한 부분). 일이 끝났다고 스스로 결정하지 마세요. (3) 둘 다 아니면 "create"(taskId null). 같은 일에 update와 create를 함께 내지 마세요. 회차나 날짜가 다른 일(11/5 타설과 11/12 타설)은 새 일입니다. taskId는 메시지에 있는 것만 쓸 수 있습니다. 기록 하나에서 tasks는 5개까지입니다. [최근 끝낸 체크할 일]에 있는 일은 새로 요청받지 않는 한 다시 만들지 마세요. tasks의 company에는 그 일이 속한 업체 이름을 [이름 목록]의 표기로 쓰고 모르면 null로 두세요. [열린 체크할 일]의 각 항목에는 taskId, title, due, status, company와 함께 askedOn(요청한 날), owner(그때 정한 맡는 쪽), person(요청한 통화 상대 이름), quote(그때 근거 원문의 앞 40자)가 있을 수 있고, 없는 키는 알 수 없다는 뜻입니다.
 
 [이름]
 13. counterpart에는 이번 통화 상대의 personName, companyName, role, isStaff(우리 회사 직원이면 true, 이때 companyName은 null)를 씁니다. 자막이나 [이름 목록]에서 확인되지 않으면 null로 두고, 자막과 [이름 목록]에 없는 이름은 절대 지어내지 마세요. counterpartName과 counterpartCompany에는 같은 값을 넣습니다. 호칭(과장, 소장, 님)은 이름에 붙이지 말고 role에 씁니다.
@@ -223,8 +226,15 @@ internal class ClaudeCallAnalyzer {
 """.trim()
         private fun durationText(ms:Long)=if(ms<=0) "미상" else "${ms/60000}분 ${(ms/1000)%60}초"
         private fun clip(t:String,n:Int)=t.replace(Regex("\\s+")," ").trim().let { if(it.length>n) it.take(n-1)+"…" else it }
+        /** Letters of an open task's evidence quote sent with it (design C5). */
+        const val QUOTE_HEAD=40
+        /** Open tasks as sent: owner, person and quote only when known (a missing key = not known); the quote's numbers masked before it is cut. */
         private fun tasksJson(list:List<ClaudeCallRequest.OpenTask>,max:Int)=JSONArray().apply { list.take(max).forEach { t ->
-            put(JSONObject().put("taskId",t.id).put("title",clip(t.title,80)).put("due",t.due).put("status",t.status).put("company",t.company ?: JSONObject.NULL).apply { t.asked?.let { put("askedOn",it) } }) } }
+            put(JSONObject().put("taskId",t.id).put("title",clip(t.title,80)).put("due",t.due).put("status",t.status).put("company",t.company ?: JSONObject.NULL).apply {
+                t.asked?.let { put("askedOn",it) }
+                t.owner?.trim()?.lowercase()?.takeIf { it in setOf("me","them","unknown") }?.let { put("owner",it) }
+                CallRecordStore.noNumber(t.person)?.let { put("person",clip(it,20)) }
+                t.quote?.let { maskNumbers(it).replace(Regex("\\s+")," ").trim() }?.takeIf { it.isNotEmpty() }?.let { put("quote",it.take(QUOTE_HEAD)) } }) } }
         private fun pastCalls(list:List<ClaudeCallRequest.PastCall>,max:Int)=list.take(max).joinToString("") { c ->
             val head=listOfNotNull(c.date.takeIf { it.isNotBlank() },c.who?.takeIf { it.isNotBlank() }).joinToString(" ")
             "\n- "+(if(head.isEmpty()) "" else "$head: ")+clip(c.summary,240) }

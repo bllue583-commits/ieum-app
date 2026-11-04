@@ -109,6 +109,21 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         assertEquals(all.map { it.id }.toSet(),req.knownTaskIds)
     }
 
+    /** Design C5: open items sent with the call that made them: owner from that answer, the person by name, the evidence; a person's own item has none. */
+    @Test fun openItemsCarryOwnerPersonAndQuoteFromTheCallThatMadeThem() {
+        val made=ClaudeCallAnalysis.Task("create",null,"김민수 과장 견적서 회신 확인","2026-10-30","철근 단가는 내일까지 다시 견적서 보내드릴게요","△△철강",owner="them")
+        apply(call(1),analysis(cp("김민수","△△철강","과장"),"견적 통화",listOf(made)))
+        store().use { it.addUserItem("직접 적은 확인","△△철강") }
+        val req=store().use { it.request(call(2,at=now+60_000)) } // after the user's item was written
+        val auto=req.openTasks.single { it.title=="김민수 과장 견적서 회신 확인" }
+        assertEquals("them",auto.owner);assertEquals("김민수",auto.person);assertEquals("철근 단가는 내일까지 다시 견적서 보내드릴게요",auto.quote)
+        val own=req.openTasks.single { it.title=="직접 적은 확인" }
+        assertNull(own.owner);assertNull(own.person)
+        val m=ClaudeCallAnalyzer.userMessage(req)
+        assertTrue(m.contains("\"owner\":\"them\""));assertTrue(m.contains("\"person\":\"김민수\""));assertTrue(m.contains("\"quote\":\"철근 단가는 내일까지"))
+        assertFalse("the ledger id is not the person",m.contains("\"person\":\"p_"))
+    }
+
     @Test fun unknownCounterpartStillGetsSiteTodayAllTasksAndDirectory() {
         apply(call(1),analysis(cp("김민수","△△철강"),"오전 통화 요약",listOf(create("단가 재견적 받기")),"현장 메모"))
         val unknown=call(2,null,at=started+120_000L)
