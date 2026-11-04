@@ -56,7 +56,7 @@ internal object FirstPass {
     /** Each recording to its call-log entry (design: 처음 정리, 대조). The log time is when the call was placed and the
      * recording starts once connected, so the recording may be up to 1 minute early or 2 minutes late; the lengths must
      * agree within 20% or 15 s. A number in the filename must match the entry's number, a name the entry's phone-book
-     * name; with neither, time and length alone. When several pairs fit (a call placed again within a minute or two),
+     * name; with neither, time and length alone. A recording with neither number nor name pairs only when exactly one entry fits. When several pairs fit (a call placed again within a minute or two),
      * every fitting pair gets a score, the start gap in 30 s units plus the length gap in 5% units, and the best pairs
      * are taken first across all recordings and entries, each recording and each entry once (review B14). */
     fun match(records:List<RecordForMatch>,log:List<LogEntry>):Map<String,LogEntry> {
@@ -66,6 +66,7 @@ internal object FirstPass {
         val fits=ArrayList<Fit>()
         for(r in records) {
             val key=r.counterpartKey
+            val mine=ArrayList<Fit>()
             // Entries placed from 2 minutes before to 1 minute after the recording started.
             var i=java.util.Arrays.binarySearch(starts,r.startedMs-120_000L).let { if(it>=0) { var k=it;while(k>0 && starts[k-1]==starts[it]) k--;k } else -it-1 }
             while(i<starts.size && starts[i]<=r.startedMs+60_000L) {
@@ -80,8 +81,11 @@ internal object FirstPass {
                 }
                 if(!named) continue
                 val lengthTerm=if(r.durationMs>0 && longer>0) gap.toDouble()/longer/0.05 else 0.0
-                fits+=Fit(r,e,kotlin.math.abs(r.startedMs-e.startMs)/30_000.0+lengthTerm)
+                mine+=Fit(r,e,kotlin.math.abs(r.startedMs-e.startMs)/30_000.0+lengthTerm)
             }
+            // Nothing in the file name says who it was (no number, no name): only a single fitting entry is certain enough,
+            // personal ones included; two or more candidates are left unpaired (review M4).
+            if(key!=null || mine.size==1) fits+=mine
         }
         val usedEntries=mutableSetOf<Long>();val out=LinkedHashMap<String,LogEntry>()
         for(f in fits.sortedWith(compareBy<Fit>({ it.score },{ it.r.startedMs },{ it.r.recordId },{ it.e.id }))) {

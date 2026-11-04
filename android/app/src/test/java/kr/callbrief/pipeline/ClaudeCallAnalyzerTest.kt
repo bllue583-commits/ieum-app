@@ -61,14 +61,17 @@ class ClaudeCallAnalyzerTest {
         assertEquals("김과장",result.counterpartName);assertNull(result.counterpartCompany)
     }
 
-    @Test fun shortAndRepeatedQuotesProveNothing() {
+    @Test fun shortQuotesProveNothingAndRepeatedOnesAreKeptAsFuzzy() {
         val said="네 알겠습니다 그렇게 할게요. 철근 반입은 금요일 오전으로 확정했습니다. 네 알겠습니다 그렇게 할게요."
         val t=tasks(task("create",null,"짧은 인용","네네"),task("create",null,"일곱 글자","철근 반입은 금요일"),task("create",null,"두 번 나온 말","네 알겠습니다 그렇게 할게요"),
             task("create",null,"한 번 나온 말","철근 반입은 금요일 오전으로 확정했습니다"))
         val r=filter.filter(parsed(t),request(transcript=said))
-        // "철근 반입은 금요일" has 8 letters once in the call: it passes the length rule.
-        assertEquals(listOf("일곱 글자","한 번 나온 말"),r.tasks.map { it.title });assertTrue(r.tasks.none { it.quoteFuzzy })
+        // "철근 반입은 금요일" has 8 letters once in the call: it passes the length rule. The repeated line (Whisper loops) stays, but only as a close match.
+        assertEquals(listOf("일곱 글자","두 번 나온 말","한 번 나온 말"),r.tasks.map { it.title });assertEquals(listOf(false,true,false),r.tasks.map { it.quoteFuzzy })
         assertEquals(0,filter.filter(parsed(tasks(task("create",null,"일곱","철근 반입은 금"))),request(transcript=said)).tasks.size)
+        // Said twice in the texts only: also kept as close.
+        val inTexts=filter.filter(parsed(tasks(task("create",null,"문자","도면은 금요일까지 보내주세요"))),request(transcript="네 알겠습니다 그렇게 할게요",texts="도면은 금요일까지 보내주세요 / 도면은 금요일까지 보내주세요"))
+        assertTrue(inTexts.tasks.single().quoteFuzzy)
     }
 
     @Test fun aQuoteTidiedFromTheSpeechIsKeptAsFuzzyOnlyWhenNearlyAllItsPiecesAreThere() {

@@ -250,7 +250,7 @@ internal class ClaudeCallAnalyzer {
     /** Keeps only items whose quote really is in the transcript and whose taskId was offered. Names the model
      * could not have read anywhere (transcript, phone-book name, name list) are dropped; memos are length-limited.
      * A quote must be at least [MIN_QUOTE] letters, appear once in the transcript (or, failing that, once in the texts),
-     * or else cover [FUZZY_COVERAGE] of its 3-letter pieces (kept with quoteFuzzy). At most [MAX_TASKS] items stay.
+     * or else cover [FUZZY_COVERAGE] of its 3-letter pieces (kept with quoteFuzzy); a quote said more than once is kept with quoteFuzzy too. At most [MAX_TASKS] items stay.
      * [stillOpen]: task ids open now, besides those the request offered (a result may arrive after the list changed). */
     internal fun filter(a:ClaudeCallAnalysis,r:ClaudeCallRequest,stillOpen:Set<String> =emptySet()):ClaudeCallAnalysis {
         val known=r.knownTaskIds+stillOpen
@@ -263,13 +263,14 @@ internal class ClaudeCallAnalyzer {
             val b=NameKey.bare(q);if(b.length<MIN_QUOTE) return null
             val c=count(inCall,b);val t=count(inTexts,b)
             if(c==1 || (c==0 && t==1)) return false
-            if(c+t>1) return null // said several times: it points at no one place
+            if(c+t>1) return true // said several times (a repeated phrase, a looping transcript): kept, but only as a close match
             return if(NameKey.coverage3(b,pieces)>=FUZZY_COVERAGE) true else null
         }
         fun iso(d:String?)=d?.trim()?.takeIf { Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(it) && runCatching { java.time.LocalDate.parse(it) }.isSuccess }
         val heard=NameKey.squash(r.transcript+r.recentTexts+(r.callLog?.phoneBookName ?: ""))
-        val listed=(r.companyNames+r.personNames+listOfNotNull(r.counterpart,r.person?.name,r.person?.company,r.company?.name)+(r.openTasks+r.tradeTasks+r.otherTasks).mapNotNull { it.company }).map(NameKey::canon).toSet()
-        fun seen(n:String?)=n?.trim()?.takeIf { it.isNotEmpty() }?.takeIf { val k=NameKey.canon(it);k.isNotEmpty() && (k in listed || heard.contains(k)) }
+        val names=r.companyNames+r.personNames+listOfNotNull(r.counterpart,r.person?.name,r.person?.company,r.company?.name)+(r.openTasks+r.tradeTasks+r.otherTasks).mapNotNull { it.company }
+        val listed=(names.map(NameKey::canon)+names.map(NameKey::canonCompany)).toSet() // a name may be a person's or a company's
+        fun seen(n:String?)=n?.trim()?.takeIf { it.isNotEmpty() }?.takeIf { x -> listOf(NameKey.canon(x),NameKey.canonCompany(x)).any { k -> k.isNotEmpty() && (k in listed || heard.contains(k)) } }
         fun memo(t:String?,max:Int)=t?.trim()?.takeIf { it.isNotEmpty() }?.take(max)
         fun owner(o:String)=if(o in setOf("me","them")) o else "unknown"
         val cp=a.counterpart?.let { ClaudeCallAnalysis.Counterpart(seen(it.personName),seen(it.companyName),it.role?.trim()?.takeIf { x -> x.isNotEmpty() }?.take(20),it.isStaff) }

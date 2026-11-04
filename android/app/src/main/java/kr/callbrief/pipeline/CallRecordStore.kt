@@ -81,6 +81,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
             "CREATE TABLE IF NOT EXISTS call_task_bindings(item_id TEXT PRIMARY KEY,record_id TEXT NOT NULL REFERENCES call_records(record_id),last_revision INTEGER NOT NULL,created_ms INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS call_inbox_sent(record_id TEXT PRIMARY KEY REFERENCES call_records(record_id),sent_ms INTEGER NOT NULL)",
             // Context ledger: what the phone remembers for the model, which has no memory between calls.
+            // Which migration pass this database has had (PRAGMA user_version did not stay set in the sealed store).
+            "CREATE TABLE IF NOT EXISTS app_migration(id INTEGER PRIMARY KEY CHECK(id=1),version INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS site_memo(id INTEGER PRIMARY KEY CHECK(id=1),text TEXT NOT NULL,updated_ms INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS companies(id TEXT PRIMARY KEY,name TEXT NOT NULL UNIQUE,trade TEXT,memo TEXT NOT NULL DEFAULT '',updated_ms INTEGER NOT NULL,name_key TEXT)",
             "CREATE TABLE IF NOT EXISTS people(id TEXT PRIMARY KEY,name TEXT NOT NULL,phone_key TEXT UNIQUE,company_id TEXT,role TEXT,is_staff INTEGER NOT NULL DEFAULT 0,updated_ms INTEGER NOT NULL,name_key TEXT)",
@@ -113,6 +115,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         }
         /** The one key every name is compared by (spaces, honorifics, company-form marks and punctuation out, lower case). */
         fun canonName(name:String?):String=NameKey.canon(name)
+        fun canonCompany(name:String?):String=NameKey.canonCompany(name)
+        /** Bump when the key rules or the stored data need one more pass in [migrate]. */
+        const val MIGRATION_VERSION=2
         /** Name as stored: trimmed, inner whitespace collapsed; null when empty. */
         fun normName(name:String?):String? = name?.trim()?.replace(Regex("\\s+")," ")?.takeIf { it.isNotEmpty() }
         /** A name with any phone-number-shaped part removed (a filename like "홍길동 010-…"): numbers stay on the phone. */
@@ -150,11 +155,13 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
             }
             null } } catch(e:Exception) { port.close();throw e }
     }
-    /** Brings what older versions stored to the current design (review B9, B10, B20); every step is safe to repeat. */
+    /** Brings what older versions stored to the current design (review B9, B10, B20); every step is safe to repeat, and the
+     * whole pass runs once per [MIGRATION_VERSION] (table app_migration), not at every open (review L3). */
     private fun migrate() {
-        // One key for every name (B10): rows from before have none, and companies that now share a key become one.
-        rows("SELECT id,name FROM people WHERE name_key IS NULL").forEach { port.execute("UPDATE people SET name_key=? WHERE id=?",nameKey(it.str("name")),it.str("id")) }
-        rows("SELECT id,name FROM companies WHERE name_key IS NULL").forEach { port.execute("UPDATE companies SET name_key=? WHERE id=?",nameKey(it.str("name")),it.str("id")) }
+        if((rows("SELECT version FROM app_migration WHERE id=1").firstOrNull()?.long("version") ?: 0)>=MIGRATION_VERSION) return
+        // One key for every name (B10, M1): every row gets the key of the current rule, and companies that now share a key become one.
+        rows("SELECT id,name FROM people").forEach { port.execute("UPDATE people SET name_key=? WHERE id=?",personKey(it.str("name")),it.str("id")) }
+        rows("SELECT id,name FROM companies").forEach { port.execute("UPDATE companies SET name_key=? WHERE id=?",companyKey(it.str("name")),it.str("id")) }
         rows("SELECT id,name_key FROM companies ORDER BY updated_ms DESC,id").groupBy { it.str("name_key").orEmpty() }.forEach { (_,same) ->
             same.drop(1).forEach { mergeCompany(it.str("id")!!,same.first().str("id")!!) } }
         rows("SELECT name_key,person_id FROM person_aliases").forEach { a ->
@@ -170,6 +177,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
             val bytes=(rows("PRAGMA page_count").single().long("page_count") ?: 0)*(rows("PRAGMA page_size").single().long("page_size") ?: 0)
             if(bytes>=DB_LIMIT_BYTES*DB_WARN_SHARE) android.util.Log.w(TAG,"database ${bytes/1024/1024} MB of ${DB_LIMIT_BYTES/1024/1024} MB")
         }
+        port.execute("INSERT OR REPLACE INTO app_migration VALUES(1,?)",MIGRATION_VERSION)
     }
     override fun close()=port.close()
     private fun rows(sql:String,vararg args:Any?)=port.query(sql,*args)
@@ -193,10 +201,15 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
     fun trim(now:Long) {
         port.execute("UPDATE call_records SET transcript='' WHERE analyzed_ms IS NOT NULL AND created_ms<CAST(? AS INTEGER) AND transcript!=''",now-TRANSCRIPT_KEEP_DAYS*86_400_000L)
         rows("""SELECT record_id,analysis_json FROM call_records WHERE analysis_json LIKE '%"keyPoints"%' AND COALESCE(started_ms,created_ms)<CAST(? AS INTEGER) LIMIT 200""",now-ANALYSIS_KEEP_DAYS*86_400_000L).forEach { r ->
-            val a=runCatching { JSONObject(r.str("analysis_json")!!).getJSONObject("analysis") }.getOrNull() ?: return@forEach
+            val root=runCatching { JSONObject(r.str("analysis_json")!!) }.getOrNull() ?: return@forEach
+            val a=root.optJSONObject("analysis") ?: return@forEach
             val small=JSONObject().put("summary",a.optString("summary")).put("business",a.optBoolean("business",true))
             listOf("counterpartName","counterpartCompany").forEach { k -> a.optString(k).takeIf { v -> v.isNotEmpty() && v!="null" }?.let { v -> small.put(k,v) } }
-            port.execute("UPDATE call_records SET analysis_json=? WHERE record_id=?",JSONObject().put("analysis",small).toString(),r.str("record_id")) }
+            // The items this call made or changed stay known (id and title), so "통화 보기" still finds them (review L2).
+            val kept=JSONArray()
+            root.optJSONArray("applied")?.let { list -> for(i in 0 until list.length()) { val x=list.optJSONObject(i) ?: continue
+                if(x.optString("itemId").isNotEmpty()) kept.put(JSONObject().put("op",x.optString("op")).put("itemId",x.optString("itemId")).put("title",x.optString("title")).put("due","").put("applied",x.optBoolean("applied",false))) } }
+            port.execute("UPDATE call_records SET analysis_json=? WHERE record_id=?",JSONObject().put("analysis",small).put("applied",kept).toString(),r.str("record_id")) }
     }
 
     /** Stores one text-message thread or mail as a record the analysis treats like a call. A pseudo recording row
@@ -247,8 +260,10 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
     // ---- ledger ---------------------------------------------------------------
     private fun personById(id:String?)=if(id==null) null else rows("SELECT * FROM people WHERE id=?",id).firstOrNull()
     private fun companyById(id:String?)=if(id==null) null else rows("SELECT * FROM companies WHERE id=?",id).firstOrNull()
-    /** The one key every name is stored and found by (spaces, titles, company-form marks removed). */
-    private fun nameKey(name:String?):String=NameKey.canon(name).ifEmpty { name.orEmpty().lowercase().filterNot { it.isWhitespace() } }
+    /** The key a person's name is stored and found by (spaces, titles, company-form marks removed). */
+    private fun personKey(name:String?):String=NameKey.canon(name).ifEmpty { name.orEmpty().lowercase().filterNot { it.isWhitespace() } }
+    /** Companies are keyed without the title removal people get (review L1). */
+    private fun companyKey(name:String?):String=NameKey.canonCompany(name).ifEmpty { name.orEmpty().lowercase().filterNot { it.isWhitespace() } }
     /** People who answer this phone number (mail address), the one who answered last first. */
     private fun peopleByNumber(phone:String)=rows("SELECT p.* FROM people_phones x JOIN people p ON p.id=x.person_id WHERE x.phone_key=? ORDER BY p.updated_ms DESC",phone)
     private fun hasNumber(p:Map<String,Any?>)=p.str("phone_key")!=null || rows("SELECT 1 FROM people_phones WHERE person_id=?",p.str("id")).isNotEmpty()
@@ -267,23 +282,23 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
     }
     /** People with this name (honorifics and spaces ignored), or whose earlier wrong name the user corrected. */
     private fun personNamed(name:String):List<Map<String,Any?>> {
-        val k=nameKey(name)
+        val k=personKey(name)
         return rows("SELECT * FROM people WHERE name_key=?",k).ifEmpty { rows("SELECT p.* FROM person_aliases a JOIN people p ON p.id=a.person_id WHERE a.name_key=?",k) }
     }
-    private fun isNamed(p:Map<String,Any?>,name:String):Boolean { val k=nameKey(name)
+    private fun isNamed(p:Map<String,Any?>,name:String):Boolean { val k=personKey(name)
         return p.str("name_key")==k || rows("SELECT 1 FROM person_aliases WHERE name_key=? AND person_id=?",k,p.str("id")).isNotEmpty() }
-    private fun findCompany(name:String):String? { val k=nameKey(name)
+    private fun findCompany(name:String):String? { val k=companyKey(name)
         return rows("SELECT id FROM companies WHERE name_key=? ORDER BY updated_ms DESC",k).firstOrNull()?.str("id")
             ?: rows("SELECT a.company_id AS id FROM company_aliases a JOIN companies c ON c.id=a.company_id WHERE a.name_key=?",k).firstOrNull()?.str("id") }
     /** The company of this name; a spelling one jamo off the company [near] (the one the same number already belongs to)
      * is that company, and is remembered as another spelling of it. Otherwise a new company. */
     private fun upsertCompany(name:String,now:Long,near:String?=null):String {
         val clean=normName(name)!!
-        val old=findCompany(clean) ?: near?.takeIf { id -> companyById(id)?.let { NameKey.similar(clean,it.str("name")) } == true }
-            ?.also { port.execute("INSERT OR IGNORE INTO company_aliases VALUES(?,?)",nameKey(clean),it) }
+        val old=findCompany(clean) ?: near?.takeIf { id -> companyById(id)?.let { NameKey.similar(clean,it.str("name"),company=true) } == true }
+            ?.also { port.execute("INSERT OR IGNORE INTO company_aliases VALUES(?,?)",companyKey(clean),it) }
         if(old!=null) { port.execute("UPDATE companies SET updated_ms=? WHERE id=?",now,old);return old }
         val id="co_"+UUID.randomUUID().toString().replace("-","")
-        port.execute("INSERT INTO companies(id,name,trade,memo,updated_ms,name_key) VALUES(?,?,NULL,'',?,?)",id,clean,now,nameKey(clean));return id
+        port.execute("INSERT INTO companies(id,name,trade,memo,updated_ms,name_key) VALUES(?,?,NULL,'',?,?)",id,clean,now,companyKey(clean));return id
     }
     /** [from] becomes [into]: its people, calls and check items move over, and its spelling stays as another name. */
     private fun mergeCompany(from:String,into:String) {
@@ -291,7 +306,10 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         val gone=companyById(from) ?: return
         port.execute("UPDATE people SET company_id=? WHERE company_id=?",into,from);port.execute("UPDATE call_links SET company_id=? WHERE company_id=?",into,from)
         port.execute("UPDATE task_companies SET company_id=? WHERE company_id=?",into,from);port.execute("UPDATE company_aliases SET company_id=? WHERE company_id=?",into,from)
-        port.execute("UPDATE companies SET trade=COALESCE(trade,?),memo=CASE WHEN memo='' THEN ? ELSE memo END WHERE id=?",gone.str("trade"),gone.str("memo").orEmpty(),into)
+        // Both memos are kept: the surviving company's first, then the other's, cut at the limit (review L1).
+        val keepMemo=companyById(into)?.str("memo").orEmpty().trim();val goneMemo=gone.str("memo").orEmpty().trim()
+        val memo=when { goneMemo.isEmpty() || goneMemo==keepMemo -> keepMemo;keepMemo.isEmpty() -> goneMemo;else -> (keepMemo+"\n"+goneMemo).take(COMPANY_MEMO_MAX) }
+        port.execute("UPDATE companies SET trade=COALESCE(trade,?),memo=? WHERE id=?",gone.str("trade"),memo,into)
         port.execute("DELETE FROM companies WHERE id=?",from)
         gone.str("name_key")?.takeIf { it.isNotEmpty() && it!=companyById(into)?.str("name_key") }?.let { port.execute("INSERT OR IGNORE INTO company_aliases VALUES(?,?)",it,into) }
     }
@@ -315,7 +333,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         val role=normName(cp.role)
         if(row==null) {
             val id="pe_"+UUID.randomUUID().toString().replace("-","")
-            port.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms,name_key) VALUES(?,?,NULL,?,?,?,?,?)",id,name,companyId,role,if(cp.isStaff) 1 else 0,now,nameKey(name))
+            port.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms,name_key) VALUES(?,?,NULL,?,?,?,?,?)",id,name,companyId,role,if(cp.isStaff) 1 else 0,now,personKey(name))
             phone?.let { addNumber(id,it) };return id
         }
         val id=row.str("id")!!
@@ -323,7 +341,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         port.execute("UPDATE people SET company_id=COALESCE(?,company_id),role=COALESCE(?,role),is_staff=?,updated_ms=? WHERE id=?",companyId,role,staff,now,id)
         phone?.let { addNumber(id,it) }
         // A person known so far only by number gets the name heard in the call (the repository ledger may correct it).
-        if(row.str("name").isNullOrBlank()) port.execute("UPDATE people SET name=?,name_key=? WHERE id=? AND name_locked=0",name,nameKey(name),id)
+        if(row.str("name").isNullOrBlank()) port.execute("UPDATE people SET name=?,name_key=? WHERE id=? AND name_locked=0",name,personKey(name),id)
         return id
     }
     fun siteMemo():String? = rows("SELECT text FROM site_memo WHERE id=1").firstOrNull()?.str("text")?.takeIf { it.isNotBlank() }
@@ -355,12 +373,12 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         val clean=normName(name)?.take(30) ?: return@transaction false
         val old=personById(id)?.str("name") ?: return@transaction false
         if(old==clean) return@transaction true
-        port.execute("UPDATE people SET name=?,name_key=?,name_locked=1,updated_ms=? WHERE id=?",clean,nameKey(clean),clock(),id)
+        port.execute("UPDATE people SET name=?,name_key=?,name_locked=1,updated_ms=? WHERE id=?",clean,personKey(clean),clock(),id)
         val lid=ensureLedgerId(id)
         port.execute("INSERT INTO ledger_edits VALUES(?,?,?)","e_"+UUID.randomUUID().toString().replace("-",""),
             JSONObject().put("type","rename").put("id",lid).put("name",clean).put("atMs",clock()).toString(),clock())
-        port.execute("DELETE FROM person_aliases WHERE name_key=?",nameKey(clean))
-        if(nameKey(old)!=nameKey(clean)) port.execute("INSERT OR REPLACE INTO person_aliases VALUES(?,?)",nameKey(old),id)
+        port.execute("DELETE FROM person_aliases WHERE name_key=?",personKey(clean))
+        if(personKey(old)!=personKey(clean)) port.execute("INSERT OR REPLACE INTO person_aliases VALUES(?,?)",personKey(old),id)
         true
     }
 
@@ -401,7 +419,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         val personNames=people.mapNotNull { it.str("name") }.distinct()
         val personDetails=LinkedHashMap<String,String>()
         for(p in people) { val n=p.str("name") ?: continue;if(n in personDetails) continue
-            val wrong=aliases[p.str("id")].orEmpty().filter { it.isNotBlank() && it!=nameKey(n) }
+            val wrong=aliases[p.str("id")].orEmpty().filter { it.isNotBlank() && it!=personKey(n) }
             val base=listOfNotNull(if(p.long("is_staff")==1L) "우리 회사" else p.str("cname"),p.str("role")).joinToString(" ")
             val about=base+(if(wrong.isEmpty()) "" else (if(base.isEmpty()) "" else ", ")+"오인식 "+wrong.joinToString(" "))
             if(about.isNotBlank()) personDetails[n]=about }
@@ -585,9 +603,15 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         port.execute("UPDATE workflow_items SET status=?,revision=revision+1 WHERE id=?",status,item)
         port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER);null
     }
-    /** Phone numbers (digits, maybe a leading plus) of the people the phone knows, by person id, for the dial buttons. Read only; never leaves the phone. */
-    fun dialNumbers():Map<String,String> =rows("SELECT id,phone_key FROM people WHERE phone_key IS NOT NULL").mapNotNull { r ->
-        val k=r.str("phone_key")?.trim().orEmpty();if(k.length>=6 && k.all { it.isDigit() || it=='+' }) r.str("id")!! to k else null }.toMap()
+    /** Phone numbers (digits, maybe a leading plus) of the people the phone knows, by person id, for the dial buttons: the person's own
+     * number, else the first of the numbers they answer (an office line shared by several people counts for each, review L6). Read only; never leaves the phone. */
+    fun dialNumbers():Map<String,String> {
+        fun dialable(k:String?)=k?.trim()?.takeIf { it.length>=6 && it.all { c -> c.isDigit() || c=='+' } }
+        val out=LinkedHashMap<String,String>()
+        rows("SELECT id,phone_key FROM people WHERE phone_key IS NOT NULL").forEach { r -> dialable(r.str("phone_key"))?.let { out[r.str("id")!!]=it } }
+        rows("SELECT person_id,phone_key FROM people_phones ORDER BY rowid").forEach { r -> dialable(r.str("phone_key"))?.let { out.putIfAbsent(r.str("person_id")!!,it) } }
+        return out
+    }
     /** When the oldest call still waiting for its summary was stored, or null when none waits (settings: "지금 상태"). */
     fun oldestWaitingMs():Long? =rows("SELECT MIN(created_ms) AS m FROM call_records WHERE state IN ('TRANSCRIBED','WAITING_CONSENT')").firstOrNull()?.long("m")
 
@@ -607,7 +631,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         val row=personFor(key) ?: run {
             val id="pe_"+UUID.randomUUID().toString().replace("-","")
             val name=if(isContact(key)) "" else normName(r.counterpart) ?: key
-            port.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms,name_key) VALUES(?,?,NULL,NULL,NULL,0,?,?)",id,name,clock(),nameKey(name))
+            port.execute("INSERT INTO people(id,name,phone_key,company_id,role,is_staff,updated_ms,name_key) VALUES(?,?,NULL,NULL,NULL,0,?,?)",id,name,clock(),personKey(name))
             if(isContact(key)) addNumber(id,key)
             rows("SELECT * FROM people WHERE id=?",id).single()
         }
@@ -635,13 +659,13 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
             normName(p.text("name"))?.take(30)?.let { n ->
                 if(row.long("name_locked")==1L && n!=row.str("name")) return@let
                 // Once the ledger carries the user's name the lock is no longer needed: the ledger is the source again.
-                port.execute("UPDATE people SET name=?,name_key=?,name_locked=0,updated_ms=? WHERE id=?",n,nameKey(n),now,id) }
+                port.execute("UPDATE people SET name=?,name_key=?,name_locked=0,updated_ms=? WHERE id=?",n,personKey(n),now,id) }
             val staff=p.optBoolean("isStaff",false)
             val company=if(staff) null else normName(p.text("company"))?.let { upsertCompany(it,now) }
             port.execute("UPDATE people SET company_id=CASE WHEN ?=1 THEN NULL ELSE COALESCE(?,company_id) END,role=COALESCE(?,role),is_staff=CASE WHEN ?=1 THEN 1 WHEN ? IS NOT NULL THEN 0 ELSE is_staff END WHERE id=?",
                 if(staff) 1 else 0,company,normName(p.text("role"))?.take(20),if(staff) 1 else 0,company,id)
             val aliases=p.optJSONArray("aliases") ?: JSONArray()
-            for(k in 0 until aliases.length()) { val a=nameKey(aliases.optString(k));if(a.isNotEmpty() && a!=nameKey(row.str("name"))) port.execute("INSERT OR REPLACE INTO person_aliases VALUES(?,?)",a,id) }
+            for(k in 0 until aliases.length()) { val a=personKey(aliases.optString(k));if(a.isNotEmpty() && a!=personKey(row.str("name"))) port.execute("INSERT OR REPLACE INTO person_aliases VALUES(?,?)",a,id) }
         }
         // Duplicates the morning tidy found: a company spelled two ways, a person known twice without a number between them.
         for(i in 0 until companies.length()) { val c=companies.optJSONObject(i) ?: continue
@@ -658,7 +682,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
             val numbers=rows("SELECT phone_key FROM people_phones WHERE person_id=?",a.str("id")).mapNotNull { it.str("phone_key") }
             port.execute("DELETE FROM people_phones WHERE person_id=?",a.str("id"));port.execute("DELETE FROM people WHERE id=?",a.str("id"))
             numbers.forEach { addNumber(b.str("id")!!,it) }
-            nameKey(a.str("name")).takeIf { it.isNotEmpty() && it!=nameKey(b.str("name")) }?.let { port.execute("INSERT OR REPLACE INTO person_aliases VALUES(?,?)",it,b.str("id")) } }
+            personKey(a.str("name")).takeIf { it.isNotEmpty() && it!=personKey(b.str("name")) }?.let { port.execute("INSERT OR REPLACE INTO person_aliases VALUES(?,?)",it,b.str("id")) } }
         o.optJSONArray("issues")?.let { list ->
             port.execute("DELETE FROM issues")
             for(i in 0 until list.length()) { val x=list.optJSONObject(i) ?: continue
@@ -670,7 +694,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
     /** "진행 중인 일" in the ledger's order; with [company], only those that name it. */
     fun issues(company:String?=null):List<Issue> =rows("SELECT * FROM issues ORDER BY ord").map { r ->
         val names=JSONArray(r.str("companies") ?: "[]").let { a -> (0 until a.length()).map { a.optString(it) } }
-        Issue(r.str("title")!!,r.str("status").orEmpty(),names) }.filter { company==null || it.companies.any { n -> nameKey(n)==nameKey(company) } }
+        Issue(r.str("title")!!,r.str("status").orEmpty(),names) }.filter { company==null || it.companies.any { n -> companyKey(n)==companyKey(company) } }
 
     // ---- 새벽 정리 (design: 새벽 정리) ------------------------------------------------------------------------------
     /** What the morning tidy reads: open check items (marked when the user changed them, which it must leave alone) and
@@ -780,14 +804,18 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         listOf("call_inbox_sent","call_links","call_record_log").forEach { port.execute("DELETE FROM $it WHERE record_id=?",recordId) }
         port.execute("DELETE FROM call_records WHERE record_id=?",recordId)
     }
-    /** An open item with the same words, or a near one of the same company (2-letter pieces, 0.6), or one finished or merged
-     * in the last 14 days (B11). [companyId] null means the company is unknown, which counts as the same as an unknown one;
-     * "?" is a company not yet in the ledger, which only an identical title can match. */
+    /** An item with the same words (spaces and punctuation ignored), or an open one of the same known company that is near it
+     * (2-letter pieces, 0.6) and has the same numbers: "3층"/"4층", "11/5"/"11/12" and "2공구"/"3공구" are different jobs. Items
+     * finished or merged in the last 14 days (B11) only block an identical title. [companyId] null means the company is unknown:
+     * unknown against unknown matches by identical title only; "?" is a company not yet in the ledger, which only an identical
+     * title can match. */
     private fun isDuplicate(title:String,companyId:String?,now:Long):Boolean {
-        val b=NameKey.bare(title);if(b.isEmpty()) return false
-        return rows("""SELECT i.title,tc.company_id AS cid FROM workflow_items i LEFT JOIN task_companies tc ON tc.item_id=i.id
+        if(NameKey.bare(title).isEmpty()) return false
+        return rows("""SELECT i.title,i.status,tc.company_id AS cid FROM workflow_items i LEFT JOIN task_companies tc ON tc.item_id=i.id
             WHERE i.kind='TODO' AND (i.status NOT IN ('done','merged') OR COALESCE(i.done_ms,i.created_ms)>=CAST(? AS INTEGER))""",now-14*86_400_000L)
-            .any { val other=it.str("title").orEmpty();NameKey.bare(other)==b || (it.str("cid")==companyId && NameKey.jaccard2(title,other)>=NameKey.SAME_TITLE) }
+            .any { val other=it.str("title").orEmpty()
+                NameKey.sameWords(title,other) ||
+                    (it.str("status") !in setOf("done","merged") && companyId!=null && it.str("cid")==companyId && NameKey.nearTitle(title,other)) }
     }
     /** Answered calls in the log since 10/1 with no recording (missed and rejected calls are not counted). */
     fun unrecordedCalls():Int=(rows("SELECT COUNT(*) AS n FROM call_log WHERE duration_ms>0 AND type IN (1,2) AND log_id NOT IN (SELECT log_id FROM call_record_log)").single().long("n") ?: 0).toInt()

@@ -142,9 +142,15 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         // Lengths must agree within 20% or 15 s.
         assertEquals(1L,FirstPass.match(listOf(r("a",t,null,null,dur=70_000)),listOf(e(1,null,null,t,dur=60_000)))["a"]?.id)
         assertNull(FirstPass.match(listOf(r("a",t,null,null,dur=120_000)),listOf(e(1,null,null,t,dur=60_000)))["a"])
-        // Two candidates in the same window: the better score wins (start gap in 30 s, length gap in 5%), no longer a give-up.
-        assertEquals(1L,FirstPass.match(listOf(r("a",t,null,null)),listOf(e(1,"01011112222",null,t),e(2,"01033334444",null,t+30_000)))["a"]?.id)
-        assertEquals(2L,FirstPass.match(listOf(r("a",t,null,null,dur=60_000)),listOf(e(1,"01011112222",null,t,dur=50_000),e(2,"01033334444",null,t+10_000,dur=60_000)))["a"]?.id)
+        // A recording whose filename gave no number or name pairs only when exactly one entry fits (two fitting ones: the old give-up rule).
+        assertNull(FirstPass.match(listOf(r("a",t,null,null)),listOf(e(1,"01011112222",null,t),e(2,"01033334444",null,t+30_000)))["a"])
+        assertNull(FirstPass.match(listOf(r("a",t,null,null,dur=60_000)),listOf(e(1,"01011112222",null,t,dur=50_000),e(2,"01033334444",null,t+10_000,dur=60_000)))["a"])
+        assertEquals(2L,FirstPass.match(listOf(r("a",t,null,null,dur=60_000)),listOf(e(1,"01011112222",null,t,dur=10_000),e(2,"01033334444",null,t+10_000,dur=60_000)))["a"]?.id) // only one fits in length
+        // The personal number counts as a candidate too, and pairs only when it is the only one.
+        assertEquals(7L,FirstPass.match(listOf(r("a",t,null,null)),listOf(FirstPass.LogEntry(7,"01055556666",null,t,60_000,1,personal=true)))["a"]?.id)
+        assertNull(FirstPass.match(listOf(r("a",t,null,null)),listOf(FirstPass.LogEntry(7,"01055556666",null,t,60_000,1,personal=true),e(2,"01033334444",null,t+10_000)))["a"])
+        // With a number from the filename the entry is picked even among several.
+        assertEquals(2L,FirstPass.match(listOf(r("a",t,"010-3333-4444","01033334444")),listOf(FirstPass.LogEntry(7,"01055556666",null,t,60_000,1,personal=true),e(2,"01033334444",null,t+10_000)))["a"]?.id)
         // A number in the filename picks its entry even with another call nearby; a name picks the phone-book name.
         assertEquals(2L,FirstPass.match(listOf(r("a",t,"010-3333-4444","01033334444")),listOf(e(1,"01011112222",null,t),e(2,"01033334444",null,t+30_000)))["a"]?.id)
         assertEquals(1L,FirstPass.match(listOf(r("a",t,"홍 길동","홍 길동")),listOf(e(1,"01011112222","홍길동",t),e(2,"01033334444","김민수",t)))["a"]?.id)
@@ -205,5 +211,28 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         assertEquals(listOf("a"),CallInbox.parseResults(ok.toString()).map { it.first })
         assertTrue(CallInbox.batchName(5,listOf("x")).startsWith("b-0000000000005-"))
         assertTrue(CallInbox.batchName(5,listOf("x"))<CallInbox.batchName(40,listOf("y")))
+    }
+
+    @Test fun aRecordWithoutAnyKeyIsForgottenAsPersonalOnlyWhenThePersonalEntryIsItsOnlyCandidate() {
+        val id=CallRecordStore.recordId(transcript("x",now,null))
+        CallRecordStore(context){ now }.use { db ->
+            db.insert(transcript("x",now,null))
+            db.reconcileCallLog(listOf(FirstPass.LogEntry(1,"01055556666",null,now,60_000,1,personal=true),FirstPass.LogEntry(2,"01033334444",null,now+10_000,60_000,1)))
+            assertNotNull("two candidates: not paired, not forgotten",db.record(id))
+            assertEquals(1,db.unrecordedCalls()) // entry 2 stays free; the personal one is never stored
+        }
+        CallRecordStore(context){ now }.use { db ->
+            db.reconcileCallLog(listOf(FirstPass.LogEntry(1,"01055556666",null,now,60_000,1,personal=true)).let { it })
+            assertNotNull(db.record(id)) // the ordinary entry is still stored beside it
+        }
+    }
+
+    @Test fun aRecordWithoutAnyKeyAndOnlyAPersonalCandidateIsForgotten() {
+        val id=CallRecordStore.recordId(transcript("y",now,null))
+        CallRecordStore(context){ now }.use { db ->
+            db.insert(transcript("y",now,null))
+            db.reconcileCallLog(listOf(FirstPass.LogEntry(1,"01055556666",null,now,60_000,1,personal=true)))
+            assertNull(db.record(id))
+        }
     }
 }
