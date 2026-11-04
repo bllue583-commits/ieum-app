@@ -37,9 +37,6 @@ jobs:
       - uses: actions/setup-java@v4
         if: steps.look.outputs.skip != '1'
         with: {distribution: temurin, java-version: '17'}
-      - uses: actions/setup-node@v4
-        if: steps.look.outputs.skip != '1'
-        with: {node-version: '22'}
       - uses: android-actions/setup-android@v3
         if: steps.look.outputs.skip != '1'
         with: {packages: 'platforms;android-36 build-tools;35.0.0'}
@@ -60,7 +57,7 @@ jobs:
       - name: Check results from the scheduled task
         if: steps.look.outputs.results != ''
         run: |
-          export ANDROID_SDK_ROOT="$ANDROID_HOME" IEUM_NODE_BINARY="$(command -v node)"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
           status=0
           for n in ${{ steps.look.outputs.results }}; do
             gh api "repos/$INBOX/contents/results/$n" -H 'Accept: application/vnd.github.raw+json' > "e2e/$n"
@@ -76,7 +73,7 @@ jobs:
       - name: Put a new synthetic job
         if: github.event_name != 'schedule'
         run: |
-          export ANDROID_SDK_ROOT="$ANDROID_HOME" IEUM_NODE_BINARY="$(command -v node)"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
           IEUM_SELFTEST_JOB="$PWD/e2e/job.json" python3 run_gradle.py --log e2e-put.log :app:testDebugUnitTest --tests 'kr.callbrief.pipeline.InboxSelfTest'
           name="selftest-$GITHUB_RUN_ID.json"
           gh api -X PUT "repos/$INBOX/contents/inbox/$name" -f message="selftest job" -f content="$(base64 -w0 e2e/job.json)" > /dev/null

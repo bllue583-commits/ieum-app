@@ -296,7 +296,7 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         assertTrue(m.lines.toString(),m.lines.any { it.startsWith("[△△철강] 단가 재견적 받기, ") && it.endsWith(" 요청") })
         val home=Robolectric.buildActivity(HomeActivity::class.java).setup().get()
         settle { home.window.decorView.findViewWithTag<View>("home_calls_button")!=null }
-        home.render(HomeActivity.Snapshot(true,true,true,"READY",0,0,0,0,0,0,companies=3))
+        home.render(HomeActivity.Snapshot(true,true,"READY",0,0,0,0,0,0,companies=3))
         val door=home.window.decorView.findViewWithTag<View>("home_companies_button")
         assertNotNull(door);assertTrue(views(door).filterIsInstance<TextView>().joinToString { it.text }.contains("업체"))
         val settings=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()

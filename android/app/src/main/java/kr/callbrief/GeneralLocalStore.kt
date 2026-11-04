@@ -182,7 +182,7 @@ CREATE TABLE IF NOT EXISTS local_intakes(event_id TEXT PRIMARY KEY,root_uri TEXT
     }
 
     /** Deletes the encrypted original of recordings whose transcript has been DONE for 14 days (review B21). The reference
-     * rows are immutable and stay; `vault_pruned` remembers which blobs are gone. Returns how many blobs were deleted. */
+     * rows are immutable and stay; `vault_pruned` remembers which blobs are gone (a negative at_ms: deleting it failed, not retried). Returns how many blobs were deleted. */
     fun pruneVault(nowMs:Long=now(),limit:Int=200):Int {
         token.check()
         if(port.query("SELECT name FROM sqlite_master WHERE type='table' AND name='call_transcription_jobs'").isEmpty()) return 0
@@ -194,9 +194,10 @@ CREATE TABLE IF NOT EXISTS local_intakes(event_id TEXT PRIMARY KEY,root_uri TEXT
         var deleted=0
         for(row in due) {
             token.check()
-            val ref=encrypted.reference(row["recording_id"].toString(),number(row,"source_version"))
-            if(encrypted.deleteBlob(ref)) deleted++
-            port.transaction { port.execute("INSERT OR IGNORE INTO vault_pruned VALUES(?,?)",row["ciphertext_sha256"],nowMs) }
+            // One bad row (CORRUPT_STORAGE...) must not block the rest every day: it is marked failed (negative at_ms) and skipped from now on.
+            val ok=runCatching { encrypted.deleteBlob(encrypted.reference(row["recording_id"].toString(),number(row,"source_version"))) }
+            if(ok.getOrDefault(false)) deleted++
+            port.transaction { port.execute("INSERT OR IGNORE INTO vault_pruned VALUES(?,?)",row["ciphertext_sha256"],if(ok.isSuccess) nowMs else -nowMs) }
         }
         return deleted
     }

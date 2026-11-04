@@ -14,7 +14,7 @@ import kr.callbrief.SecureSettings
 /** App home, a dashboard: today's numbers, the first-run checklist until setup is done, today's call memos,
  * open to-dos per company and this week's calls per day. The bottom bar leads to every other screen. */
 class HomeActivity:ComponentActivity() {
-    internal data class Snapshot(val folder:Boolean,val key:Boolean,val consent:Boolean,val model:String,
+    internal data class Snapshot(val folder:Boolean,val consent:Boolean,val model:String,
                                  val calls:Int,val working:Int,val newTasks:Int,val due:Int,val overdue:Int,val lastAnalyzedMs:Long,
                                  val notify:Boolean=true,val battery:Boolean=true,val modelPercent:Int=-1,val nextReport:String="",val companies:Int=0,
                                  /** Calls per day, six days ago .. today. */
@@ -80,7 +80,7 @@ class HomeActivity:ComponentActivity() {
         val mm=PipelineModelManager(storage)
         val percent=if(mm.partFile.isFile) (mm.partFile.length()*100/574041195L).toInt().coerceIn(0,99) else -1
         val next=CallUi.nextReport(s.optInt(PipelineSettingsKeys.EVENING_HOUR,19),s.optInt(PipelineSettingsKeys.MORNING_HOUR,6))
-        return Snapshot(folder,s.optString(PipelineSettingsKeys.CLAUDE_API_KEY).isNotBlank(),s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false),
+        return Snapshot(folder,s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false),
             s.optString(PipelineSettingsKeys.MODEL_STATE),calls.size,calls.count{it.state!=CallRecordStore.ANALYZED},newTasks,
             due.size,due.count{CallUi.overdue(it.due)},s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),batteryFree(),percent,next,companies,
             week,byCompany,calls.sortedByDescending { it.startedMs ?: 0 }.take(4),
@@ -137,7 +137,6 @@ class HomeActivity:ComponentActivity() {
             Step(s.folder,"녹음 폴더 연결","통화 녹음 폴더(보통 Recordings › Call)가 열리면 아래 [이 폴더 사용]을 누르세요.","녹음 폴더 고르기") { pickFolder.launch(CallFolder.pickIntent()) },
             readingStep(s.sms,android.Manifest.permission.READ_SMS,"문자","업무 문자도 통화와 함께 정리해요. 문자는 휴대폰 안에서 읽어요.",askSms),
             readingStep(s.callLog,android.Manifest.permission.READ_CALL_LOG,"통화기록","녹음과 통화기록을 맞춰서 상대 번호를 찾아요. 통화기록은 휴대폰 밖으로 나가지 않아요.",askCallLog),
-            if(CallInboxConfig.enabled) null else Step(s.key,"Claude 키 넣기","통화를 요약하는 데 쓰는 키예요. 설정 화면에 붙여 넣으면 돼요.","설정에서 키 넣기") { open(CallSettingsActivity::class.java) },
             Step(s.consent,"정리 동의","녹음 파일은 휴대폰에 그대로 두고, 글자로 바꾼 통화 내용만 보내 정리해요. 설정에서 언제든 끌 수 있어요.","동의하고 켜기") { agree() },
             Step(s.model=="READY","음성 인식 모델 받기",
                 if(s.model=="DOWNLOADING") "받는 중이에요"+(if(s.modelPercent>=0) " ${s.modelPercent}%" else "")+". Wi-Fi에 연결해 두세요. (약 570MB)" else "Wi-Fi에서 한 번만 받아요. (약 570MB)",
@@ -154,7 +153,7 @@ class HomeActivity:ComponentActivity() {
         if(!steps.all{it.done}) {
             val c=CallUi.card(this,rail=CallUi.AMBER_RAIL).apply { tag="home_setup" }
             val doneCount=steps.count{it.done}
-            // Title with "4/8" on the right and a progress bar; every step keeps its own number, so the open one reads "1단계".
+            // Title with "4/7" on the right and a progress bar; every step keeps its own number, so the open one reads "1단계".
             c.addView(LinearLayout(this).apply {
                 orientation=LinearLayout.HORIZONTAL;gravity=android.view.Gravity.CENTER_VERTICAL
                 addView(CallUi.text(this@HomeActivity,"처음 설정",CallUi.HEADING,true).apply { setPadding(0,0,0,0) },LinearLayout.LayoutParams(0,-2,1f))
