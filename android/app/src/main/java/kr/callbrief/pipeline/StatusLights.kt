@@ -41,7 +41,8 @@ internal object StatusLights {
             else -> null }
         val notify=if(!i.notifyAllowed) "알림이 꺼져 있어요. 휴대폰 설정에서 이음 알림을 켜 주세요." else null
         val update=when {
-            i.updateError.isNotBlank() -> "새 버전 설치가 안 됐어요 (${i.updateError.take(80)}). 홈에서 지금 업데이트를 다시 눌러 주세요."
+            // The stored value is a code for the heartbeat; the light shows only its Korean words (a cancel is no error).
+            CallUpdate.errorWords(i.updateError)!=null -> CallUpdate.errorWords(i.updateError)!!.sentence
             i.updateReady -> "새 버전이 준비됐어요. 홈에서 지금 업데이트를 눌러 주세요."
             else -> null }
         return listOf(light("status_import","녹음 가져오기",import),light("status_transcribe","글자로 바꾸기",transcribe),

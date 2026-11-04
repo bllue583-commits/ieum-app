@@ -98,10 +98,29 @@ internal object CallDigestSchedule {
     fun next(context:Context,kind:String) = enqueue(context,kind,ExistingWorkPolicy.APPEND_OR_REPLACE)
 }
 
+/** Before a report is composed, one try at the analysis pass (inbox results in), at most [TIMEOUT_MS]: the report
+ * then has the latest summaries. Whatever happens (no network, an error, too slow) the report goes out as it is. */
+internal object CallDigestPrefetch {
+    const val TIMEOUT_MS=60_000L
+    enum class Outcome { DONE, FAILED, TIMED_OUT }
+    /** Runs [block] on its own thread and waits at most [timeoutMs]; a slow block is left to finish by itself. Never throws. */
+    fun run(timeoutMs:Long=TIMEOUT_MS,block:()->Boolean):Outcome {
+        val task=java.util.concurrent.FutureTask(block)
+        return try {
+            Thread(task,"ieum-digest-prefetch").apply { isDaemon=true }.start()
+            if(task.get(timeoutMs,TimeUnit.MILLISECONDS)) Outcome.DONE else Outcome.FAILED
+        } catch(_:java.util.concurrent.TimeoutException) { Outcome.TIMED_OUT }
+        catch(_:InterruptedException) { Thread.currentThread().interrupt();Outcome.TIMED_OUT }
+        catch(_:Throwable) { Outcome.FAILED }
+    }
+}
+
 internal class CallDigestWork(context:Context,params:WorkerParameters):CoroutineWorker(context,params) {
     companion object { const val CHANNEL="ieum.calls.digest"
         /** Self-check notices (design B4: 정리가 멈췄어요, 연결이 끊겼어요), apart from the reports. */
-        const val STATUS_CHANNEL="ieum.calls.status";const val STATUS="stall";private const val TAG="ieum.digest" }
+        const val STATUS_CHANNEL="ieum.calls.status";const val STATUS="stall"
+        /** The evening self-check notice ([SelfCheckNotices]): same channel as [STATUS], its own slot, opens the settings. */
+        const val SELF_CHECK="selfcheck";private const val TAG="ieum.digest" }
     override suspend fun doWork():Result=withContext(Dispatchers.IO) {
         val kind=inputData.getString("kind") ?: CallDigestSchedule.EVENING
         val now=Instant.now()
@@ -110,27 +129,74 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
         val plan=CallDigestTime.plan(now,target)
         if(plan.skip) Log.w(TAG,"$kind report skipped: ran ${Duration.between(target,now).toHours()} hours after its time")
         else try {
+            val fetched=fetchResults()
+            if(fetched!=CallDigestPrefetch.Outcome.DONE) Log.w(TAG,"$kind report without fresh results: $fetched")
             val message=CallRecordStore(CallPipelineStartup.storage(applicationContext)).use {
                 if(kind==CallDigestSchedule.MORNING) CallDigestText.morning(it,plan.day) else CallDigestText.evening(it,plan.day)
             }
             post(kind,message)
         } catch(e:Exception) { Log.w(TAG,"$kind report not posted: ${e.javaClass.simpleName}") } // class only, never a message with names
         CallDigestSchedule.next(applicationContext,kind)
-        if(kind==CallDigestSchedule.EVENING)CallPipelineStartup.selfHeal(applicationContext) // A2
+        if(kind==CallDigestSchedule.EVENING) {
+            CallPipelineStartup.selfHeal(applicationContext) // A2
+            if(!plan.skip) selfCheck() // B4: not in the middle of the night
+        }
         Result.success()
     }
     private fun post(kind:String,m:CallDigestText.Message)=CallDigestNotifier.post(applicationContext,kind,m)
+
+    /** One analysis pass. When the hourly one is running right now, waits for it instead of starting a second pass beside it. */
+    private fun fetchResults():CallDigestPrefetch.Outcome {
+        val storage=CallPipelineStartup.storage(applicationContext)
+        fun running()=runCatching { WorkManager.getInstance(storage).getWorkInfosForUniqueWork(CallPipelineStartup.ANALYSIS_WORK).get()
+            .any { it.state==WorkInfo.State.RUNNING } }.getOrDefault(false)
+        return CallDigestPrefetch.run {
+            if(running()) { var n=0;while(running() && n++<CallDigestPrefetch.TIMEOUT_MS/2_000) Thread.sleep(2_000);true }
+            else CallRecordAnalysisRunner(storage).runPending()
+        }
+    }
+
+    /** B4: reads the state, posts what was not told today, records it. Never throws. */
+    private fun selfCheck() {
+        try {
+            val app=CallPipelineStartup.storage(applicationContext);val now=System.currentTimeMillis()
+            val settings=SecureSettings(app);val s=settings.snapshot()
+            val due=SelfCheckNotices.due(SelfCheckNotices.check(selfCheckInput(app,s,now)),now,s)
+            val m=SelfCheckNotices.message(due) ?: return
+            if(CallDigestNotifier.post(app,SELF_CHECK,m)) settings.update { SelfCheckNotices.remember(it,due,now) }
+        } catch(e:Exception) { Log.w(TAG,"self-check not done: ${e.javaClass.simpleName}") }
+    }
+    private fun selfCheckInput(app:Context,s:org.json.JSONObject,now:Long):SelfCheckNotices.Input {
+        val tree=s.optString("treeUri")
+        val readable=tree.isNotBlank() && runCatching { app.contentResolver.persistedUriPermissions.any { it.uri.toString()==tree && it.isReadPermission } }.getOrDefault(true)
+        var queued=0;var oldestQueued:Long?=null
+        runCatching { CallTranscriptionStore(app).use { t ->
+            val waiting=t.rows().filter { it.second=="QUEUED" }.map { it.first }.toSet()
+            queued=waiting.size
+            if(waiting.isNotEmpty()) oldestQueued=t.candidates().filter { it.key in waiting }.mapNotNull { (it.startedAtMs ?: it.modifiedMs).takeIf { ms -> ms>0 } }.minOrNull()
+        } }.onFailure { Log.w(TAG,"queue not read: ${it.javaClass.simpleName}") }
+        // Recent calls only: old first-pass records may rightly wait for the charger (as the stall notice counts them).
+        val oldestWaiting=runCatching { CallRecordStore(app).use { db -> db.pending().filter { !FirstPass.isOld(it.dayMs,s) }.minOfOrNull { it.createdMs } } }.getOrNull()
+        val dbBytes=runCatching { app.getDatabasePath(kr.callbrief.GeneralLocalStore.DATABASE).takeIf { it.isFile }?.length() }.getOrNull()
+        return SelfCheckNotices.Input(now,tree.isNotBlank(),readable,s.optString(PipelineSettingsKeys.MODEL_STATE),
+            queued,oldestQueued,s.optLong(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,0),
+            s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false) && CallInboxConfig.enabled && !kr.callbrief.BuildConfig.LOCAL_PREVIEW,
+            oldestWaiting,s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),dbBytes,
+            s.optString(PipelineSettingsKeys.STALL_WARNED_DAY),s.optString(PipelineSettingsKeys.DISCONNECT_WARNED_DAY))
+    }
 }
 
 /** Posts the morning/evening report. Also used by the device test. */
 internal object CallDigestNotifier {
-    fun post(context:Context,kind:String,m:CallDigestText.Message) {
-        if(Build.VERSION.SDK_INT>=33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) return
+    /** False when notifications are not allowed (nothing was posted). */
+    fun post(context:Context,kind:String,m:CallDigestText.Message):Boolean {
+        if(Build.VERSION.SDK_INT>=33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) return false
         val manager=context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(CallDigestWork.CHANNEL,"이음 통화 정리",NotificationManager.IMPORTANCE_DEFAULT))
         manager.createNotificationChannel(NotificationChannel(CallDigestWork.STATUS_CHANNEL,"이음 상태",NotificationManager.IMPORTANCE_DEFAULT))
-        val channel=if(kind==CallDigestWork.STATUS) CallDigestWork.STATUS_CHANNEL else CallDigestWork.CHANNEL
-        val intent=Intent(context,if(kind==CallDigestSchedule.MORNING) CallTasksActivity::class.java else TodayCallsActivity::class.java).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        val channel=if(kind==CallDigestWork.STATUS||kind==CallDigestWork.SELF_CHECK) CallDigestWork.STATUS_CHANNEL else CallDigestWork.CHANNEL
+        val screen=when(kind) { CallDigestSchedule.MORNING -> CallTasksActivity::class.java;CallDigestWork.SELF_CHECK -> CallSettingsActivity::class.java;else -> TodayCallsActivity::class.java }
+        val intent=Intent(context,screen).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         val pending=PendingIntent.getActivity(context,kind.hashCode(),intent,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val notification=Notification.Builder(context,channel).setSmallIcon(R.drawable.ic_stat_ieum)
             .setContentTitle(m.title).setContentText(m.text).setContentIntent(pending).setAutoCancel(true).setLocalOnly(true)
@@ -142,5 +208,6 @@ internal object CallDigestNotifier {
             .build()
         manager.notify("ieum.calls.$kind",700,notification)
         if(kind==CallDigestSchedule.EVENING||kind==CallDigestSchedule.MORNING) runCatching { SecureSettings(CallPipelineStartup.storage(context)).update { it.put(PipelineSettingsKeys.LAST_DIGEST_MS,System.currentTimeMillis()) } }
+        return true
     }
 }
