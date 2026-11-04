@@ -76,6 +76,10 @@ object PipelineSettingsKeys {
     const val SMS_BACKFILL_UNTIL="firstPassSmsUntil"
     const val MAIL_BACKFILL_CURSOR="firstPassMailCursor"
     const val MAIL_BACKFILL_UNTIL="firstPassMailUntil"
+    /** A9: hallucinated segments and repeated sentences removed from transcripts (a running count). */
+    const val TRANSCRIPT_CLEANED="transcriptCleaned"
+    /** A2: when the daily self-check last had to register a lost work again (0/absent = never). */
+    const val RESCHEDULED_MS="rescheduledMs"
 }
 
 /** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets

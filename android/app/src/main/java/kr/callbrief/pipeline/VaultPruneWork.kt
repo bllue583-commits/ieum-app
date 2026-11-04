@@ -9,8 +9,9 @@ import java.util.concurrent.TimeUnit
 internal class VaultPruneWork(context:Context,params:WorkerParameters):Worker(context,params) {
     override fun doWork():Result = try {
         GeneralLocalStore(CallPipelineStartup.storage(applicationContext)).use { it.pruneVault() }
+        CallPipelineStartup.selfHeal(applicationContext) // A2: daily check that the other works are still registered
         Result.success()
-    } catch(e:Exception) { Result.failure() } // the next daily run tries again; no retry loop on a stuck row
+    } catch(e:Exception) { CallPipelineStartup.selfHeal(applicationContext);Result.failure() } // the next daily run tries again; no retry loop on a stuck row
 
     companion object {
         const val NAME="ieum.calls.vault-prune"

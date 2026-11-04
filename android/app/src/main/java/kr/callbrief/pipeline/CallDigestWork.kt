@@ -115,6 +115,7 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
             post(kind,message)
         } catch(e:Exception) { Log.w(TAG,"$kind report not posted: ${e.javaClass.simpleName}") } // class only, never a message with names
         CallDigestSchedule.next(applicationContext,kind)
+        if(kind==CallDigestSchedule.EVENING)CallPipelineStartup.selfHeal(applicationContext) // A2
         Result.success()
     }
     private fun post(kind:String,m:CallDigestText.Message)=CallDigestNotifier.post(applicationContext,kind,m)

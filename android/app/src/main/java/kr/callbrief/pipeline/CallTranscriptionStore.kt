@@ -65,10 +65,12 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         SELECT 1 FROM recordings r JOIN source_versions v ON v.recording_id=r.recording_id AND v.source_version=r.source_version
         WHERE r.recording_id=call_transcription_jobs.recording_id AND r.source_version=call_transcription_jobs.source_version AND v.audio_sha256=call_transcription_jobs.audio_sha)""",now())
 
-    /** Rows left RUNNING by a process that died. The attempt stays counted, so a crash loop ends in FAILED. */
-    fun recoverRunning(maxAttempts:Int)=db.transaction {
-        db.execute("UPDATE call_transcription_jobs SET state='FAILED',reason='INTERRUPTED',updated_ms=? WHERE state='RUNNING' AND attempts>=?",now(),maxAttempts)
-        db.execute("UPDATE call_transcription_jobs SET state='QUEUED',reason='INTERRUPTED',updated_ms=? WHERE state='RUNNING'",now());null
+    /** Rows left RUNNING by a process that died. The attempt stays counted, so a crash loop ends in FAILED.
+     * Only rows untouched for [staleMs] (a bit over the 10 minute work limit): a RUNNING row younger than that may belong to a worker that is still going. */
+    fun recoverRunning(maxAttempts:Int,staleMs:Long=STALE_RUNNING_MS)=db.transaction {
+        val limit=now()-staleMs
+        db.execute("UPDATE call_transcription_jobs SET state='FAILED',reason='INTERRUPTED',updated_ms=? WHERE state='RUNNING' AND attempts>=? AND updated_ms<?",now(),maxAttempts,limit)
+        db.execute("UPDATE call_transcription_jobs SET state='QUEUED',reason='INTERRUPTED',updated_ms=? WHERE state='RUNNING' AND updated_ms<?",now(),limit);null
     }
 
     /** Newest first; with [oldBefore] (처음 정리) recordings before it come after all newer ones, oldest first, so the
@@ -131,4 +133,5 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
     }
 
     override fun close()=db.close()
+    companion object { const val STALE_RUNNING_MS=11*60_000L }
 }

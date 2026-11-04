@@ -52,11 +52,40 @@ internal object CallPipelineStartup {
             // The hourly tick only queues the one analysis work, so two passes never apply results side by side.
             // UPDATE, not cancel and re-enqueue: starting the app must not push the next tick back. (Phones from before
             // v1026 have the old periodic analysis registered under this name; the update replaces its worker.)
-            WorkManager.getInstance(app).enqueueUniquePeriodicWork("ieum.calls.inbox",ExistingPeriodicWorkPolicy.UPDATE,
+            WorkManager.getInstance(app).enqueueUniquePeriodicWork(INBOX_WORK,ExistingPeriodicWorkPolicy.UPDATE,
                 PeriodicWorkRequestBuilder<CallAnalysisTick>(1,java.util.concurrent.TimeUnit.HOURS)
                     .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build())
         }
     }
+    /** A2: once a day (end of the vault prune and of the evening report) check that the periodic works are still registered. */
+    private val ACTIVE_STATES=setOf(WorkInfo.State.ENQUEUED,WorkInfo.State.RUNNING,WorkInfo.State.BLOCKED)
+    /** Unique names of the works that have to exist; which of them apply depends on the build and the settings. */
+    internal fun expectedWork(app:Context):List<String> = buildList {
+        if(!kr.callbrief.BuildConfig.LOCAL_PREVIEW) {
+            if(kr.callbrief.AutomaticRecordingDiscovery.capture(app)!=null)add(kr.callbrief.AutomaticRecordingDiscovery.TAG+"."+kr.callbrief.AutomaticRecordingDiscovery.SCOPE)
+            add(CallTranscriptionWork.PERIODIC)
+        }
+        add("ieum.calls.digest.${CallDigestSchedule.EVENING}");add("ieum.calls.digest.${CallDigestSchedule.MORNING}")
+        add("ieum.update");add("ieum.messages")
+        if(CallInboxConfig.enabled)add(INBOX_WORK)
+    }
+    /** Names in [expectedWork] without any ENQUEUED/RUNNING/BLOCKED work. */
+    internal fun lostWork(app:Context,names:List<String> = expectedWork(app)):List<String> {
+        val wm=WorkManager.getInstance(app)
+        return names.filter { n -> runCatching { wm.getWorkInfosForUniqueWork(n).get().none { it.state in ACTIVE_STATES } }.getOrDefault(false) }
+    }
+    /** Registers what is missing again ([ensureWork]) and, when something was missing, records the time in RESCHEDULED_MS. Never throws. */
+    fun selfHeal(app:Context) {
+        try {
+            val lost=lostWork(app)
+            ensureWork(app)
+            if(lost.isNotEmpty()) {
+                Log.w(TAG,"registered again: ${lost.joinToString()}")
+                kr.callbrief.SecureSettings(app).update { it.put(PipelineSettingsKeys.RESCHEDULED_MS,System.currentTimeMillis()) }
+            }
+        } catch(e:Exception) { Log.w(TAG,"self-check failed: ${e.javaClass.simpleName}") }
+    }
+    private const val INBOX_WORK="ieum.calls.inbox"
     private const val TAG="ieum.startup"
     private inline fun step(name:String,block:()->Unit) {
         try { block() } catch(e:Exception) { Log.w(TAG,"$name not registered: ${e.javaClass.simpleName}") }

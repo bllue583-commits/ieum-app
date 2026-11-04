@@ -24,6 +24,7 @@ internal object AutomaticRecordingDiscovery {
     /** Stable local scope; the storage layout predates accounts and must not change. */
     private val scope=kr.co.callsummary.core.JsonCanonical.digest(mapOf("owner" to ""))
 
+    internal val SCOPE get()=scope
     /** Work input holds the selection fence only. Never a credential or grant. */
     internal data class Binding(val selectionFence:String) {
         fun data()=workDataOf("selection_fence" to selectionFence)
@@ -53,18 +54,24 @@ internal object AutomaticRecordingDiscovery {
         return null
     }
     /** One bounded pass per frozen binding. */
-    fun cycle(context:Context,binding:Binding?,stopped:()->Boolean,active:(NativeDiscoverySession?)->Unit={},observed:(DiscoveryPump.Cycle)->Unit={}):JSONObject {
+    fun cycle(context:Context,binding:Binding?,stopped:()->Boolean,active:(NativeDiscoverySession?)->Unit={},observed:(DiscoveryPump.Cycle)->Unit={},fromFollowup:Boolean=false):JSONObject {
         if(binding==null)return outcome("WAITING_DISCOVERY_BINDING","DISCOVERY_WORK_REARM_REQUIRED")
         blocked(context,binding,stopped)?.let{return it}
         if(!running.add(binding.selectionFence))return outcome("DISCOVERY_ALREADY_RUNNING")
         try {
             val cancelled={stopped() || blocked(context,binding,{false})!=null}
-            var scan:DiscoveryPump.Cycle?=null
+            var scan:DiscoveryPump.Cycle?=null;var sawNew=false
             val local=open(context){!cancelled()} ?: return outcome("WAITING_LOCAL_SOURCE","SELECTED_FOLDER_REQUIRED")
             local.use { session ->
                 active(session)
-                try {if(cancelled())session.cancel();scan=session.cycle(32,4,CYCLE_BUDGET_MS)}finally{active(null)}
+                try {
+                    if(cancelled())session.cancel()
+                    val before=runCatching{session.knownFiles()}.getOrDefault(-1)
+                    scan=session.cycle(32,4,CYCLE_BUDGET_MS)
+                    sawNew=before>=0 && runCatching{session.knownFiles()}.getOrDefault(-1)>before
+                }finally{active(null)}
             }
+            if(sawNew&&!cancelled())runCatching{scheduleFollowup(context,binding,fromFollowup)} // A4: look again soon instead of waiting for the next 15 minutes
             if(!cancelled())runCatching{kr.callbrief.pipeline.CallTranscriptionWork.enqueue(context)} // new recordings -> transcribe soon
             blocked(context,binding,stopped)?.let{return it}
             scan?.let(observed)
@@ -101,7 +108,31 @@ internal object AutomaticRecordingDiscovery {
                 kr.co.ieum.discovery.DiscoveryTypes.Clock { Moment("boot_"+Settings.Global.getInt(context.contentResolver,Settings.Global.BOOT_COUNT),SystemClock.elapsedRealtime()) },syntheticFixture=source.explicitlySyntheticScope,minModifiedMs=kr.callbrief.pipeline.FirstPass.FROM_MS)
         }catch(error:Exception){store.close();throw error}
     }
+    const val FOLLOWUP_NAME="ieum.discovery.followup"
+    const val CALLLOG_NAME="ieum.discovery.calllog"
+    /** NativeDiscoverySession keeps a new file back until it was seen twice and was quiet (its 2 minute "partial" rule), so look again after 150 s. */
+    const val FOLLOWUP_DELAY_SECONDS=150L
+    internal fun followupRequest(binding:Binding)=OneTimeWorkRequestBuilder<AutomaticRecordingDiscoveryWorker>()
+        .setInitialDelay(FOLLOWUP_DELAY_SECONDS,TimeUnit.SECONDS).setInputData(binding.data()).addTag(TAG).addTag(FOLLOWUP_NAME).build()
+    /** [fromFollowup]: called from the follow-up work itself, which REPLACE would cancel; its next one is appended instead. */
+    internal fun scheduleFollowup(context:Context,binding:Binding,fromFollowup:Boolean=false) {
+        WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(FOLLOWUP_NAME,
+            if(fromFollowup)ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.REPLACE,followupRequest(binding))
+    }
+    /** A5: one-time work that waits for a change of the call log (a call ended), runs one cycle and registers itself again. */
+    internal fun callLogRequest(binding:Binding?=null)=OneTimeWorkRequestBuilder<CallLogDiscoveryWorker>()
+        .setConstraints(Constraints.Builder().addContentUriTrigger(android.provider.CallLog.Calls.CONTENT_URI,true)
+            .setTriggerContentUpdateDelay(45,TimeUnit.SECONDS).build())
+        .also { if(binding!=null)it.setInputData(binding.data()) }.addTag(TAG).addTag(CALLLOG_NAME).build()
+    fun canWatchCallLog(context:Context)=context.checkSelfPermission(android.Manifest.permission.READ_CALL_LOG)==android.content.pm.PackageManager.PERMISSION_GRANTED
+    /** [policy] KEEP at app start; APPEND_OR_REPLACE from the running work itself (a content trigger fires once, so it is registered again every time). */
+    fun ensureCallLogTrigger(context:Context,policy:ExistingWorkPolicy=ExistingWorkPolicy.KEEP):Boolean {
+        if(!canWatchCallLog(context)||capture(context)==null)return false
+        WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(CALLLOG_NAME,policy,callLogRequest())
+        return true
+    }
     fun ensure(context:Context) {
+        runCatching{ensureCallLogTrigger(context)}
         val binding=capture(context) ?: return
         val name=TAG+"."+scope
         val request=PeriodicWorkRequestBuilder<AutomaticRecordingDiscoveryWorker>(15,TimeUnit.MINUTES)
@@ -119,11 +150,26 @@ class AutomaticRecordingDiscoveryWorker(context:Context,parameters:WorkerParamet
         if(isStopped)return Result.failure(workDataOf("automation_state" to "LOCAL_WORK_STOPPED"))
         if(runAttemptCount>=6)return Result.failure(workDataOf("automation_state" to "DISCOVERY_CHECK_RETRY_LIMIT"))
         return try {
-            val result=AutomaticRecordingDiscovery.cycle(applicationContext,AutomaticRecordingDiscovery.binding(inputData),{isStopped},{active=it})
+            val result=AutomaticRecordingDiscovery.cycle(applicationContext,AutomaticRecordingDiscovery.binding(inputData),{isStopped},{active=it},
+                fromFollowup=tags.contains(AutomaticRecordingDiscovery.FOLLOWUP_NAME))
             val state=result.getString("state")
             val output=workDataOf("automation_state" to state,"automation_reason" to result.getString("reason"))
             if(state in setOf("LOCAL_WORK_STOPPED","WAITING_DISCOVERY_BINDING","HELD_SOURCE"))Result.failure(output) else Result.success(output)
         }catch(_:Exception){if(isStopped)Result.failure(workDataOf("automation_state" to "LOCAL_WORK_STOPPED"))else Result.retry()}
+    }
+    override fun onStopped(){active?.cancel();super.onStopped()}
+}
+
+/** A5: runs when the call log changes (45 s after the last change), looks for new recordings once, and registers itself again. */
+class CallLogDiscoveryWorker(context:Context,parameters:WorkerParameters):Worker(context,parameters) {
+    @Volatile private var active:NativeDiscoverySession?=null
+    override fun doWork():Result {
+        try {
+            // The folder may have changed since this work was registered: the binding is taken fresh, not from the input.
+            AutomaticRecordingDiscovery.cycle(applicationContext,AutomaticRecordingDiscovery.capture(applicationContext),{isStopped},{active=it})
+        } catch(_:Exception) { /* the 15 minute work is the safety net */ }
+        if(!isStopped)runCatching{AutomaticRecordingDiscovery.ensureCallLogTrigger(applicationContext,ExistingWorkPolicy.APPEND_OR_REPLACE)}
+        return Result.success()
     }
     override fun onStopped(){active?.cancel();super.onStopped()}
 }
