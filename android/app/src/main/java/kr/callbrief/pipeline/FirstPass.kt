@@ -48,9 +48,20 @@ internal object FirstPass {
     }
 
     // ---- call log --------------------------------------------------------------------------------------------------
-    /** [personal]: a number excluded as personal (일상 통화 상대). Kept only to recognise its recordings, never stored. */
-    data class LogEntry(val id:Long,val numberKey:String?,val name:String?,val startMs:Long,val durationMs:Long,val type:Int,val personal:Boolean=false) {
+    /** One call of the phone's call log. [excluded]: a number the user's own exclusion rule ([kr.callbrief.LocalPrivacy]:
+     * the 일상 통화 상대 and the numbers added in settings) keeps off every record, the call log included; such an entry is
+     * only used to recognise its recording and is never stored. Numbers found personal by the analysis (personal_numbers)
+     * are not excluded here: their calls are stored and listed as "개인 통화" (11/4 user). */
+    data class LogEntry(val id:Long,val numberKey:String?,val name:String?,val startMs:Long,val durationMs:Long,val type:Int,val excluded:Boolean=false) {
         val direction:String? get()=when(type) { CallLog.Calls.INCOMING_TYPE -> "받은 전화";CallLog.Calls.OUTGOING_TYPE -> "건 전화";else -> null }
+    }
+    /** How the call list shows a call-log entry that has no recording to open. */
+    enum class LogKind { MISSED, NOT_CONNECTED, BLOCKED, NO_RECORDING }
+    fun kindOf(type:Int,durationMs:Long):LogKind=when {
+        durationMs>0 && type in setOf(CallLog.Calls.INCOMING_TYPE,CallLog.Calls.OUTGOING_TYPE) -> LogKind.NO_RECORDING
+        type==CallLog.Calls.OUTGOING_TYPE -> LogKind.NOT_CONNECTED
+        type==CallLog.Calls.BLOCKED_TYPE -> LogKind.BLOCKED
+        else -> LogKind.MISSED // missed, rejected, voicemail, and a ringing call with no length
     }
     data class RecordForMatch(val recordId:String,val startedMs:Long,val counterpart:String?,val counterpartKey:String?,val durationMs:Long=0)
     private fun noSpace(s:String?)=s.orEmpty().filterNot { it.isWhitespace() }
@@ -88,7 +99,7 @@ internal object FirstPass {
                 mine+=Fit(r,e,kotlin.math.abs(r.startedMs-e.startMs)/30_000.0+lengthTerm)
             }
             // Nothing in the file name says who it was (no number, no name): only a single fitting entry is certain enough,
-            // personal ones included; two or more candidates are left unpaired (review M4).
+            // excluded ones included; two or more candidates are left unpaired (review M4).
             if(key!=null || mine.size==1) fits+=mine
         }
         val usedEntries=mutableSetOf<Long>();val out=LinkedHashMap<String,LogEntry>()
@@ -99,7 +110,8 @@ internal object FirstPass {
         return out
     }
 
-    /** The phone's call log since [FROM_MS]; numbers excluded as personal are marked. Stays on the phone. */
+    /** The phone's call log since [FROM_MS], every kind (missed, rejected, unanswered, answered); numbers the user's
+     * exclusion rule keeps off are marked [LogEntry.excluded]. Stays on the phone. */
     fun readCallLog(context:Context,excluded:(String)->Boolean):List<LogEntry> {
         if(context.checkSelfPermission(Manifest.permission.READ_CALL_LOG)!=PackageManager.PERMISSION_GRANTED) return emptyList()
         val out=mutableListOf<LogEntry>()
@@ -113,5 +125,10 @@ internal object FirstPass {
             }
         }
         return out
+    }
+    /** [readCallLog] with the exclusion rules saved on this phone. */
+    fun readCallLog(context:Context,settings:JSONObject):List<LogEntry> {
+        val rules=kr.callbrief.LocalPrivacy.rules(settings)
+        return readCallLog(context) { n -> rules.excluded(n,n) }
     }
 }

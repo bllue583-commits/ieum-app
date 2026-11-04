@@ -60,7 +60,7 @@ class ReviewRoundOneTest:ProtectedTextHostTestBase() {
     @Test fun aRecordingMatchedToThePersonalNumberIsForgotten() {
         val id=store().use { it.insert(call());CallRecordStore.recordId(call()) }
         store().use { db ->
-            db.reconcileCallLog(listOf(FirstPass.LogEntry(1,"01011112222",null,now-20_000,60_000,1,personal=true)))
+            db.reconcileCallLog(listOf(FirstPass.LogEntry(1,"01011112222",null,now-20_000,60_000,1,excluded=true)))
             assertNull(db.record(id));assertEquals(0,db.unrecordedCalls())
         }
         // Texts: the same exclusion rule the calls use (here with a stand-in number's hash).

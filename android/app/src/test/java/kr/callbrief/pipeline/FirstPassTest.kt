@@ -147,10 +147,10 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         assertNull(FirstPass.match(listOf(r("a",t,null,null,dur=60_000)),listOf(e(1,"01011112222",null,t,dur=50_000),e(2,"01033334444",null,t+10_000,dur=60_000)))["a"])
         assertEquals(2L,FirstPass.match(listOf(r("a",t,null,null,dur=60_000)),listOf(e(1,"01011112222",null,t,dur=10_000),e(2,"01033334444",null,t+10_000,dur=60_000)))["a"]?.id) // only one fits in length
         // The personal number counts as a candidate too, and pairs only when it is the only one.
-        assertEquals(7L,FirstPass.match(listOf(r("a",t,null,null)),listOf(FirstPass.LogEntry(7,"01055556666",null,t,60_000,1,personal=true)))["a"]?.id)
-        assertNull(FirstPass.match(listOf(r("a",t,null,null)),listOf(FirstPass.LogEntry(7,"01055556666",null,t,60_000,1,personal=true),e(2,"01033334444",null,t+10_000)))["a"])
+        assertEquals(7L,FirstPass.match(listOf(r("a",t,null,null)),listOf(FirstPass.LogEntry(7,"01055556666",null,t,60_000,1,excluded=true)))["a"]?.id)
+        assertNull(FirstPass.match(listOf(r("a",t,null,null)),listOf(FirstPass.LogEntry(7,"01055556666",null,t,60_000,1,excluded=true),e(2,"01033334444",null,t+10_000)))["a"])
         // With a number from the filename the entry is picked even among several.
-        assertEquals(2L,FirstPass.match(listOf(r("a",t,"010-3333-4444","01033334444")),listOf(FirstPass.LogEntry(7,"01055556666",null,t,60_000,1,personal=true),e(2,"01033334444",null,t+10_000)))["a"]?.id)
+        assertEquals(2L,FirstPass.match(listOf(r("a",t,"010-3333-4444","01033334444")),listOf(FirstPass.LogEntry(7,"01055556666",null,t,60_000,1,excluded=true),e(2,"01033334444",null,t+10_000)))["a"]?.id)
         // A number in the filename picks its entry even with another call nearby; a name picks the phone-book name.
         assertEquals(2L,FirstPass.match(listOf(r("a",t,"010-3333-4444","01033334444")),listOf(e(1,"01011112222",null,t),e(2,"01033334444",null,t+30_000)))["a"]?.id)
         assertEquals(1L,FirstPass.match(listOf(r("a",t,"홍 길동","홍 길동")),listOf(e(1,"01011112222","홍길동",t),e(2,"01033334444","김민수",t)))["a"]?.id)
@@ -217,12 +217,12 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         val id=CallRecordStore.recordId(transcript("x",now,null))
         CallRecordStore(context){ now }.use { db ->
             db.insert(transcript("x",now,null))
-            db.reconcileCallLog(listOf(FirstPass.LogEntry(1,"01055556666",null,now,60_000,1,personal=true),FirstPass.LogEntry(2,"01033334444",null,now+10_000,60_000,1)))
+            db.reconcileCallLog(listOf(FirstPass.LogEntry(1,"01055556666",null,now,60_000,1,excluded=true),FirstPass.LogEntry(2,"01033334444",null,now+10_000,60_000,1)))
             assertNotNull("two candidates: not paired, not forgotten",db.record(id))
             assertEquals(1,db.unrecordedCalls()) // entry 2 stays free; the personal one is never stored
         }
         CallRecordStore(context){ now }.use { db ->
-            db.reconcileCallLog(listOf(FirstPass.LogEntry(1,"01055556666",null,now,60_000,1,personal=true)).let { it })
+            db.reconcileCallLog(listOf(FirstPass.LogEntry(1,"01055556666",null,now,60_000,1,excluded=true)).let { it })
             assertNotNull(db.record(id)) // the ordinary entry is still stored beside it
         }
     }
@@ -231,8 +231,60 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         val id=CallRecordStore.recordId(transcript("y",now,null))
         CallRecordStore(context){ now }.use { db ->
             db.insert(transcript("y",now,null))
-            db.reconcileCallLog(listOf(FirstPass.LogEntry(1,"01055556666",null,now,60_000,1,personal=true)))
+            db.reconcileCallLog(listOf(FirstPass.LogEntry(1,"01055556666",null,now,60_000,1,excluded=true)))
             assertNull(db.record(id))
+        }
+    }
+
+    // ---- v2.4: every call is stored and listed (11/4 user) ----
+    @Test fun everyCallIsStoredExceptTheUsersOwnExclusion() {
+        val missed=android.provider.CallLog.Calls.MISSED_TYPE;val rejected=android.provider.CallLog.Calls.REJECTED_TYPE
+        CallRecordStore(context){ now }.use { db ->
+            db.rememberPersonal("01077778888")
+            db.reconcileCallLog(listOf(FirstPass.LogEntry(1,"01011112222","홍길동",now,0,missed),FirstPass.LogEntry(2,"01033334444",null,now+60_000,0,rejected),
+                FirstPass.LogEntry(3,"01055556666",null,now+120_000,90_000,1),FirstPass.LogEntry(4,"01077778888","집",now+180_000,300_000,1),
+                FirstPass.LogEntry(5,"01099990000",null,now+240_000,60_000,1,excluded=true)))
+            val day=db.dayLog(CallRecordStore.kstDay(now))
+            assertEquals(listOf(4L,3L,2L,1L),day.map { it.logId }) // newest first; the excluded number is not there at all
+            assertEquals(listOf(FirstPass.LogKind.NO_RECORDING,FirstPass.LogKind.NO_RECORDING,FirstPass.LogKind.MISSED,FirstPass.LogKind.MISSED),day.map { it.kind })
+            assertEquals(listOf(true,false,false,false),day.map { it.personal })
+            assertEquals("홍길동",day.last().name)
+            assertEquals(2,db.unrecordedCalls()) // answered ones only, the personal number's included
+        }
+        // A number the user excludes later: what was stored of it goes.
+        CallRecordStore(context){ now }.use { db ->
+            db.reconcileCallLog(listOf(FirstPass.LogEntry(3,"01055556666",null,now+120_000,90_000,1,excluded=true)))
+            assertEquals(listOf(4L,2L,1L),db.dayLog(CallRecordStore.kstDay(now)).map { it.logId })
+        }
+    }
+
+    @Test fun aRecordedCallIsListedOnceAndAPersonalRecordAsAPersonalLine() {
+        val work=transcript("work",now,"홍길동");val home=transcript("home",now+3_600_000L,"엄마")
+        CallRecordStore(context){ now }.use { db -> db.insert(work);db.insert(home)
+            db.reconcileCallLog(listOf(FirstPass.LogEntry(1,"01012345678","홍길동",now-20_000,60_000,2),FirstPass.LogEntry(2,"01022223333","엄마",now+3_600_000L-20_000,60_000,1)))
+            db.keepPersonal(CallRecordStore.recordId(home))
+            val day=db.dayLog(CallRecordStore.kstDay(now))
+            assertEquals(listOf(2L),day.map { it.logId }) // the work call shows as its record
+            assertTrue(day.single().personal)
+            assertEquals(listOf(CallRecordStore.recordId(work)),db.day(CallRecordStore.kstDay(now)).map { it.recordId })
+        }
+    }
+
+    @Test fun aPersonalNumbersCallIsStoredButNotSentAndMissedCallsAreNeverSent() {
+        val s=JSONObject().put(PipelineSettingsKeys.CONSENT_GRANTED,true)
+        val home=transcript("home",now,"엄마");val work=transcript("work",now+3_600_000L,"홍길동")
+        CallRecordStore(context){ now }.use { db -> db.insert(home);db.insert(work);db.rememberPersonal("01022223333") }
+        val log=listOf(FirstPass.LogEntry(1,"01022223333","엄마",now-20_000,60_000,1),FirstPass.LogEntry(2,"01012345678","홍길동",now+3_600_000L-20_000,60_000,2),
+            FirstPass.LogEntry(3,"01044445555","박부재",now+600_000,0,android.provider.CallLog.Calls.MISSED_TYPE))
+        val inbox=FakeInbox()
+        assertTrue(runner(inbox,s,log,now+2*3_600_000L).runPending())
+        val sent=inbox.files.filterKeys { it.startsWith("inbox/") }.values
+        assertEquals(1,sent.size)
+        assertTrue(sent.single().contains("[통화 방향] 건 전화"))
+        assertFalse(sent.any { it.contains("엄마") || it.contains("박부재") || it.contains("01044445555") || it.contains("부재중") })
+        CallRecordStore(context){ now }.use { db ->
+            assertEquals(false,db.record(CallRecordStore.recordId(home))!!.analysis?.business) // kept on the phone as personal
+            assertEquals(3,db.dayLog(CallRecordStore.kstDay(now)).size+db.day(CallRecordStore.kstDay(now)).size)
         }
     }
 }

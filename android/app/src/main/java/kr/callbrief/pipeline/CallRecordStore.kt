@@ -103,6 +103,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
             // The phone's call log since 10/1 (처음 정리), kept on the phone only, and which recording each entry was.
             "CREATE TABLE IF NOT EXISTS call_log(log_id INTEGER PRIMARY KEY,number_key TEXT,name TEXT,start_ms INTEGER NOT NULL,duration_ms INTEGER NOT NULL,type INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS call_record_log(record_id TEXT PRIMARY KEY,log_id INTEGER NOT NULL UNIQUE,direction TEXT)",
+            // The call list reads the log one day at a time (v2.4: every call is listed, recorded or not).
+            "CREATE INDEX IF NOT EXISTS call_log_start ON call_log(start_ms)",
             // The user's corrections waiting to go to the repository ledger (ledger/edits/).
             "CREATE TABLE IF NOT EXISTS ledger_edits(id TEXT PRIMARY KEY,json TEXT NOT NULL,created_ms INTEGER NOT NULL)",
             // "진행 중인 일" from the repository ledger (design: 새벽 정리), in the ledger's order.
@@ -867,14 +869,19 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
     /** Stores the call log and ties each recorded call to its entry. A call known only by a phone-book name gets
      * the entry's number as its key, so it reaches the same person as calls named by number. */
     fun reconcileCallLog(log:List<FirstPass.LogEntry>)=port.transaction {
-        log.filterNot { it.personal }.forEach { port.execute("INSERT OR REPLACE INTO call_log VALUES(?,?,?,?,?,?)",it.id,it.numberKey,it.name,it.startMs,it.durationMs,it.type) }
+        // Every call since 10/1 is kept (missed, rejected, unrecorded, numbers found personal); only the user's own
+        // exclusion rule keeps an entry out, and one stored before the rule was added goes now.
+        for(e in log) {
+            if(e.excluded) { port.execute("DELETE FROM call_record_log WHERE log_id=?",e.id);port.execute("DELETE FROM call_log WHERE log_id=?",e.id) }
+            else port.execute("INSERT OR REPLACE INTO call_log VALUES(?,?,?,?,?,?)",e.id,e.numberKey,e.name,e.startMs,e.durationMs,e.type)
+        }
         val open=rows("""SELECT record_id,started_ms,duration_ms,counterpart,counterpart_key FROM call_records WHERE started_ms IS NOT NULL AND recording_id NOT LIKE 'sms:%' AND recording_id NOT LIKE 'mail:%'
             AND record_id NOT IN (SELECT record_id FROM call_record_log)""").map { FirstPass.RecordForMatch(it.str("record_id")!!,it.long("started_ms")!!,it.str("counterpart"),it.str("counterpart_key"),it.long("duration_ms") ?: 0) }
         val free=rows("SELECT * FROM call_log WHERE log_id NOT IN (SELECT log_id FROM call_record_log)")
-            .map { FirstPass.LogEntry(it.long("log_id")!!,it.str("number_key"),it.str("name"),it.long("start_ms")!!,it.long("duration_ms")!!,(it.long("type") ?: 0).toInt()) }+log.filter { it.personal }
+            .map { FirstPass.LogEntry(it.long("log_id")!!,it.str("number_key"),it.str("name"),it.long("start_ms")!!,it.long("duration_ms")!!,(it.long("type") ?: 0).toInt()) }+log.filter { it.excluded }
         for((recordId,e) in FirstPass.match(open,free)) {
-            // A call with the personal number: its words are wiped here and nothing about it goes anywhere.
-            if(e.personal) { forgetCall(recordId);continue }
+            // A call with an excluded number: its words are wiped here and nothing about it goes anywhere.
+            if(e.excluded) { forgetCall(recordId);continue }
             port.execute("INSERT OR IGNORE INTO call_record_log VALUES(?,?,?)",recordId,e.id,e.direction)
             val number=e.numberKey ?: continue
             port.execute("UPDATE call_records SET counterpart_key=? WHERE record_id=? AND (counterpart_key IS NULL OR counterpart_key GLOB '*[^0-9]*')",number,recordId)
@@ -910,6 +917,22 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
                 NameKey.sameWords(title,other) ||
                     (it.str("status") !in setOf("done","merged") && companyId!=null && it.str("cid")==companyId && NameKey.nearTitle(title,other)) }
     }
+    /** Call-log entries of one KST day that the call list shows beside the records, newest first: every entry except
+     * those tied to a record the list already shows. An entry is [LoggedCall.personal] when its number is one found
+     * personal (personal_numbers) or its recording was found personal; such a line shows only who and when. */
+    fun dayLog(day:LocalDate):List<LoggedCall> =rows("""SELECT l.*,c.record_id AS rec,c.analysis_json,
+            (SELECT 1 FROM personal_numbers n WHERE n.phone_key=l.number_key) AS personal_number,
+            (SELECT p.name FROM people_phones pp JOIN people p ON p.id=pp.person_id WHERE pp.phone_key=l.number_key ORDER BY p.updated_ms DESC LIMIT 1) AS person
+            FROM call_log l LEFT JOIN call_record_log x ON x.log_id=l.log_id LEFT JOIN call_records c ON c.record_id=x.record_id
+            WHERE l.start_ms>=CAST(? AS INTEGER) AND l.start_ms<CAST(? AS INTEGER) ORDER BY l.start_ms DESC,l.log_id DESC""",startOf(day),startOf(day.plusDays(1))).mapNotNull { r ->
+        val linked=r.str("rec")
+        val personalRecord=linked!=null && r.str("analysis_json")?.let { j -> runCatching { JSONObject(j).optJSONObject("analysis")?.optBoolean("business",true) }.getOrNull() }==false
+        if(linked!=null && !personalRecord) return@mapNotNull null // the record's own line shows it
+        LoggedCall(r.long("log_id")!!,r.str("number_key"),normName(r.str("person")) ?: normName(r.str("name")),r.long("start_ms")!!,r.long("duration_ms") ?: 0,(r.long("type") ?: 0).toInt(),
+            personal=personalRecord || r.long("personal_number")!=null)
+    }
+    /** Remembers [key] as personal at once (the preview data and tests; the analysis needs [PERSONAL_STREAK] verdicts in a row). */
+    internal fun rememberPersonal(key:String)=port.execute("INSERT OR IGNORE INTO personal_numbers VALUES(?,?)",key,clock())
     /** Answered calls in the log since 10/1 with no recording (missed and rejected calls are not counted). */
     fun unrecordedCalls():Int=(rows("SELECT COUNT(*) AS n FROM call_log WHERE duration_ms>0 AND type IN (1,2) AND log_id NOT IN (SELECT log_id FROM call_record_log)").single().long("n") ?: 0).toInt()
     /** Start of the earliest stored text ("sms:") or mail ("mail:") record, or null. */
@@ -928,4 +951,11 @@ internal class CallRecordStore(context:Context,private val clock:()->Long=System
         return FirstPassProgress((jobs?.long("n") ?: 0).toInt(),jobs?.long("b") ?: 0,rate,waiting,unrecordedCalls())
     }
 
+}
+
+/** A call-log entry the call list shows as its own line (no record to open): a missed or rejected call, an answered one
+ * with no recording, or a call with a number found personal. [name]: the person's name in the ledger, else the phone
+ * book's, else null (the number is shown). */
+internal data class LoggedCall(val logId:Long,val numberKey:String?,val name:String?,val startMs:Long,val durationMs:Long,val type:Int,val personal:Boolean) {
+    val kind:FirstPass.LogKind get()=FirstPass.kindOf(type,durationMs)
 }

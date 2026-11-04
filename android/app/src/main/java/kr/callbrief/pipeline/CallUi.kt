@@ -364,8 +364,10 @@ internal object CallUi {
     fun list(a:Activity,rows:List<View>,inset:Int=72)=card(a).apply {
         background=sheet(a,CARD,radius=16)
         setPadding(0,0,0,0)
-        rows.forEachIndexed { i,r -> if(i>0) addView(hairline(a,inset));addView(r) }
+        addRows(a,this,rows,inset)
     }
+    /** More rows at the end of a [list] sheet (a long day is built a screenful at a time). */
+    fun addRows(a:Activity,list:LinearLayout,rows:List<View>,inset:Int=72) { rows.forEach { r -> if(list.childCount>0) list.addView(hairline(a,inset));list.addView(r) } }
 
     /** Badge for a person (a circle) or a company (a rounded square): the first letter on a soft tint picked from the name. */
     fun avatar(a:Activity,name:String,sizeDp:Int=44,company:Boolean=false)=TextView(a).apply {
@@ -400,6 +402,34 @@ internal object CallUi {
         words.addView(text(a,memo,BODY,color=if(quiet) MUTED else SUBTLE).apply { setPadding(0,dp(a,2),0,0) })
         addView(words,LinearLayout.LayoutParams(0,-2,1f))
         setOnClickListener { onOpen() }
+    }
+
+    /** A call-log line with nothing to open (a missed call, a call with no recording, a personal call): badge, who and
+     * the time on top, [label] below in [labelColor], and an optional [trailing] button (다시 걸기) under them. */
+    fun logRow(a:Activity,time:String,who:String,label:String,labelColor:Int,avatarName:String?=null,trailing:View?=null)=LinearLayout(a).apply {
+        orientation=LinearLayout.HORIZONTAL;gravity=Gravity.TOP;setPadding(dp(a,16),dp(a,14),dp(a,16),dp(a,14));minimumHeight=dp(a,72)
+        contentDescription="$time $who, $label"
+        addView(avatar(a,avatarName ?: who,44))
+        val words=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
+        val head=FitRow(a,flex=0,minFraction=1f,gapDp=10).apply { tag="memo_head" }
+        head.addView(text(a,who,BODY,true).apply { tag="memo_who";setPadding(0,0,0,0) },LinearLayout.LayoutParams(-2,-2))
+        head.addView(caption(a,time,SUBTLE).apply { tag="memo_time";maxLines=1;setPadding(0,0,0,0) },LinearLayout.LayoutParams(-2,-2))
+        words.addView(head)
+        words.addView(text(a,label,BODY,color=labelColor).apply { tag="log_label";setPadding(0,dp(a,2),0,0) })
+        // The button goes under the words, so a long number or name always keeps its whole line.
+        trailing?.let { words.addView(it,LinearLayout.LayoutParams(-2,-2).apply { topMargin=dp(a,8) }) }
+        addView(words,LinearLayout.LayoutParams(0,-2,1f))
+    }
+    /** "다시 걸기": a 48dp soft-blue button with the phone icon that opens the dialer with [number] typed in ([dial]). Null
+     * when there is no number to call. */
+    fun redialButton(a:Activity,number:String?,name:String):View? {
+        val n=number?.trim().orEmpty().takeIf { it.isNotEmpty() && it.all { ch -> ch.isDigit() || ch=='+' || ch=='-' } } ?: return null
+        return Button(a).apply {
+            text="다시 걸기";isAllCaps=false;stateListAnimator=null;textSize=CAPTION;typeface=font(a,Weight.SEMIBOLD);setTextColor(ACCENT)
+            setCompoundDrawablesRelativeWithIntrinsicBounds(icon(a,"dial",ACCENT,18),null,null,null);compoundDrawablePadding=dp(a,6)
+            background=ripple(a,sheet(a,ACCENT_SOFT,radius=14));minHeight=dp(a,48);minimumHeight=minHeight;minWidth=0;minimumWidth=0
+            setPadding(dp(a,14),0,dp(a,14),0);contentDescription="$name 님께 다시 걸기";tag="redial_button";setOnClickListener { dial(a,n) }
+        }
     }
 
     // ---- bottom sheet (design G2: no AlertDialog) -------------------------------------------------------------------------

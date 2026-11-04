@@ -80,6 +80,16 @@ internal object PreviewSeed {
             CallRecordStore(storage) { at+c.minutes*60_000L }.use { s -> s.insert(t)
                 if(s.record(CallRecordStore.recordId(t))?.state!=CallRecordStore.ANALYZED) c.a?.let { s.applyAnalysis(CallRecordStore.recordId(t),it) } }
         }
+        // The call log of today beside the recordings: a missed call, an answered one with no recording, a call that did
+        // not connect, and a call with a number found personal (v2.4: the list shows every call).
+        CallRecordStore(storage).use { s ->
+            fun at(h:Int,m:Int)=LocalDate.parse(d(0)).atTime(h,m).atZone(CallRecordStore.KST).toInstant().toEpochMilli()
+            s.reconcileCallLog(listOf(FirstPass.LogEntry(900_001,"01011112222",null,at(10,30),0,android.provider.CallLog.Calls.MISSED_TYPE),
+                FirstPass.LogEntry(900_002,"01066667777","박정우",at(13,45),134_000,android.provider.CallLog.Calls.INCOMING_TYPE),
+                FirstPass.LogEntry(900_003,"01077778888","집",at(12,40),300_000,android.provider.CallLog.Calls.INCOMING_TYPE),
+                FirstPass.LogEntry(900_004,"01088889999",null,at(15,5),0,android.provider.CallLog.Calls.OUTGOING_TYPE)))
+            s.rememberPersonal("01077778888")
+        }
         SecureSettings(storage).update { it.put(DONE,true) }
     }
 }

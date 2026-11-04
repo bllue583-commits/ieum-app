@@ -37,7 +37,7 @@ class CallSettingsActivityTest:ProtectedTextHostTestBase() {
     @Test fun todayCallsOpensEmpty() {
         val a=Robolectric.buildActivity(TodayCallsActivity::class.java).setup().get()
         until(a) { views(root(a)).filterIsInstance<TextView>().any { it.text.toString().endsWith("의 통화") } }
-        assertTrue(views(root(a)).filterIsInstance<TextView>().any { it.text.toString().contains("정리된 통화가 없어요") })
+        assertTrue(views(root(a)).filterIsInstance<TextView>().any { it.text.toString().contains("이 날짜에 통화가 없어요") })
     }
 
     @Test fun settingsShowMyInfoAndPersonalNumbers() {
