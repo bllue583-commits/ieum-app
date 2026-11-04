@@ -1,6 +1,7 @@
 package kr.callbrief.pipeline
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.content.res.Configuration
@@ -26,6 +27,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
+import androidx.lifecycle.coroutineScope
+import androidx.lifecycle.findViewTreeLifecycleOwner
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -54,9 +60,9 @@ internal object CallUi {
     // ---- colours: the light set and the night set; every colour is read from the current set when a view is built. ------
     private class Palette(val page:String,val card:String,val line:String,val ink:String,val subtle:String,val muted:String,val faint:String,
                           val accent:String,val accentSoft:String,val onAccent:String,val amber:String,val amberSoft:String,val amberRail:String,
-                          val ok:String,val mutedBar:String,val chip:String,val snack:String)
-    private val LIGHT=Palette("#F2F4F6","#FFFFFF","#EEF0F2","#191F28","#6B7684","#8B95A1","#B0B8C1","#3268F0","#EDF2FE","#FFFFFF","#B26B00","#FFF4E0","#F5A524","#0B8A5F","#D9E3FC","#F2F4F6","#2B323B")
-    private val NIGHT=Palette("#111418","#1A1F26","#2A3038","#F2F4F6","#A4ADB8","#8B95A1","#4A525C","#6B93FF","#1F2B4A","#0B1020","#F2B84B","#33291A","#F2B84B","#3DD598","#2C3C66","#232A33","#2E3640")
+                          val ok:String,val mutedBar:String,val chip:String,val snack:String,val pageCaption:String)
+    private val LIGHT=Palette("#F2F4F6","#FFFFFF","#EEF0F2","#191F28","#6B7684","#6B7684","#B0B8C1","#3268F0","#EDF2FE","#FFFFFF","#B26B00","#FFF4E0","#F5A524","#0B8A5F","#D9E3FC","#F2F4F6","#2B323B","#5F6B78")
+    private val NIGHT=Palette("#111418","#1A1F26","#2A3038","#F2F4F6","#A4ADB8","#8B95A1","#4A525C","#6B93FF","#1F2B4A","#0B1020","#F2B84B","#33291A","#F2B84B","#3DD598","#2C3C66","#232A33","#2E3640","#A4ADB8")
     /** True while the phone is in night mode; set by [page] from the screen's configuration. */
     @Volatile var night=false
         private set
@@ -69,8 +75,11 @@ internal object CallUi {
     val LINE:Int get()=c(p.line)
     val INK:Int get()=c(p.ink)
     val SUBTLE:Int get()=c(p.subtle)
-    /** Quietest grey that is still text (asides that may be a little lighter than SUBTLE). */
+    /** Quietest grey that is still text. In the light set it is the same as SUBTLE (#6B7684, 4.6:1 on white; review #29:
+     * the old #8B95A1 was 3.0:1); the night set keeps #8B95A1 (5.4:1 on the night sheet). */
     val MUTED:Int get()=c(p.muted)
+    /** A caption straight on the grey page (not on a sheet): #5F6B78, 4.9:1 on #F2F4F6. */
+    val PAGE_CAPTION:Int get()=c(p.pageCaption)
     /** Lines and inactive icons only, never text. */
     val FAINT:Int get()=c(p.faint)
     val ACCENT:Int get()=c(p.accent)
@@ -87,7 +96,65 @@ internal object CallUi {
     /** Pressed-state ripple: the ink colour at about 14%. */
     val RIPPLE:Int get()=(INK and 0x00FFFFFF) or (0x24 shl 24)
 
-    fun dp(a:Activity,v:Int)=(v*a.resources.displayMetrics.density+0.5f).toInt()
+    fun dp(a:Context,v:Int)=(v*a.resources.displayMetrics.density+0.5f).toInt()
+
+    // ---- immediate response (v2.7 r8-3, review 2 "원인 C"): every press shows something at once and counts once ------------
+    /** Time window in which a second press of the same view is ignored. */
+    const val ONCE_MS=600L
+    /** Runs [action] unless [view] was pressed less than [ms] ago (the last press time is kept in a tag of the view). Returns
+     * whether it ran. Every listener of the shared parts goes through here, so a quick double tap never opens a screen twice. */
+    fun once(view:View,ms:Long=ONCE_MS,action:()->Unit):Boolean {
+        val now=android.os.SystemClock.uptimeMillis()
+        val last=view.getTag(kr.callbrief.R.id.ui_last_tap) as? Long
+        if(last!=null && now-last<ms) return false
+        view.setTag(kr.callbrief.R.id.ui_last_tap,now);action();return true
+    }
+    /** setOnClickListener through [once]. */
+    fun onTap(view:View,ms:Long=ONCE_MS,action:()->Unit) { view.setOnClickListener { once(it,ms,action) } }
+    /** The button is working: off at once, its words replaced by [words] ("저장하는 중이에요"). [idle] puts it back. */
+    fun busy(button:TextView,words:String) {
+        if(button.getTag(kr.callbrief.R.id.ui_busy_text)==null) button.setTag(kr.callbrief.R.id.ui_busy_text,button.text)
+        button.isEnabled=false;button.text=clean(words);button.alpha=0.6f
+    }
+    fun idle(button:TextView) {
+        (button.getTag(kr.callbrief.R.id.ui_busy_text) as? CharSequence)?.let { button.text=it }
+        button.setTag(kr.callbrief.R.id.ui_busy_text,null);button.isEnabled=true;button.alpha=1f
+    }
+    fun isBusy(button:View)=button.getTag(kr.callbrief.R.id.ui_busy_text)!=null
+    /** [busy] for [button], [io] on a background thread, then [idle] and [done] on the main thread. Runs in the lifecycle of the
+     * window the button is in (no Activity needed); nothing runs when the button is not on a screen yet. */
+    fun <T> work(button:TextView,words:String,io:()->T,done:(Result<T>)->Unit={}) {
+        val owner=button.findViewTreeLifecycleOwner() ?: return
+        busy(button,words)
+        owner.lifecycle.coroutineScope.launch {
+            val r=withContext(Dispatchers.IO) { runCatching(io) }
+            idle(button);done(r)
+        }
+    }
+    /** Turns a view and everything inside it on or off (setEnabled alone does not reach the children, review #4). */
+    fun enableAll(v:View,on:Boolean) { v.isEnabled=on;if(v is android.view.ViewGroup) for(i in 0 until v.childCount) enableAll(v.getChildAt(i),on) }
+
+    /** "불러오는 중이에요" at the end of [column] while a screen reads; [retryCard] or the real content replaces it. */
+    fun loading(column:LinearLayout,words:String="불러오는 중이에요"):View {
+        val a=column.context
+        column.findViewWithTag<View>("loading")?.let { (it.parent as? android.view.ViewGroup)?.removeView(it) }
+        val v=LinearLayout(a).apply {
+            orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;tag="loading";setPadding(dp(a,4),dp(a,24),dp(a,4),dp(a,24))
+            addView(android.widget.ProgressBar(a).apply { isIndeterminate=true;indeterminateTintList=ColorStateList.valueOf(ACCENT) },LinearLayout.LayoutParams(dp(a,24),dp(a,24)).apply { marginEnd=dp(a,12) })
+            addView(text(a,words,BODY,color=SUBTLE).apply { tag="loading_text";setPadding(0,0,0,0) })
+            contentDescription=words
+        }
+        column.addView(v,LinearLayout.LayoutParams(-1,-2));return v
+    }
+    /** A read failed: [message] and one [다시 불러오기] button that runs [onRetry] (review #22). Takes the place of [loading]. */
+    fun retryCard(column:LinearLayout,message:String="잠시 후 다시 열어주세요",onRetry:()->Unit):View {
+        val a=column.context
+        listOf("loading","retry_card").forEach { t -> column.findViewWithTag<View>(t)?.let { (it.parent as? android.view.ViewGroup)?.removeView(it) } }
+        val c=card(a,warn=true).apply { tag="retry_card" }
+        c.addView(text(a,message,BODY).apply { tag="retry_message" })
+        c.addView(button(a,"다시 불러오기") { onRetry() }.apply { tag="retry_button" })
+        column.addView(c);return c
+    }
 
     /** Pretendard (SIL OFL), bundled: one typeface family everywhere, weight for hierarchy. */
     enum class Weight(val res:Int) { REGULAR(kr.callbrief.R.font.pretendard_regular),MEDIUM(kr.callbrief.R.font.pretendard_medium),
@@ -144,12 +211,12 @@ internal object CallUi {
         val holder=content.parent as LinearLayout
         val band=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;tag="page_band";setPadding(dp(a,20),dp(a,if(back!=null) 4 else 24),dp(a,20),dp(a,8)) }
         if(back!=null) band.addView(iconButton(a,"back","뒤로",44,24,INK,null) { back() }.apply { tag="page_back" },LinearLayout.LayoutParams(dp(a,44),dp(a,44)).apply { marginStart=-dp(a,10);bottomMargin=dp(a,4) })
-        eyebrow?.let { band.addView(caption(a,it,SUBTLE).apply { setPadding(0,0,0,dp(a,2)) }) }
+        eyebrow?.let { band.addView(caption(a,it,PAGE_CAPTION).apply { setPadding(0,0,0,dp(a,2)) }) }
         val head=LinearLayout(a).apply { orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL }
         head.addView(text(a,title,TITLE,true).apply { tag="page_title";letterSpacing=-0.02f;setPadding(0,0,0,0) },LinearLayout.LayoutParams(0,-2,1f))
         if(trailing!=null) head.addView(trailing,LinearLayout.LayoutParams(trailing.layoutParams?.width ?: -2,trailing.layoutParams?.height ?: -2).apply { marginStart=dp(a,12) })
         band.addView(head)
-        subtitle?.let { band.addView(caption(a,it,SUBTLE).apply { tag="page_subtitle";setPadding(0,dp(a,6),0,0) }) }
+        subtitle?.let { band.addView(caption(a,it,PAGE_CAPTION).apply { tag="page_subtitle";setPadding(0,dp(a,6),0,0) }) }
         holder.removeViewAt(0);holder.addView(band,0)
     }
 
@@ -157,12 +224,11 @@ internal object CallUi {
         orientation=LinearLayout.HORIZONTAL;tag="bottom_bar"
         val wrap=this
         Tab.entries.forEach { t ->
-            val on=t==current;val color=if(on) INK else MUTED
+            val on=t==current
             wrap.addView(Button(a).apply {
-                text=t.label;textSize=TAB;isAllCaps=false;stateListAnimator=null;setTextColor(color);tag=t.tag
+                text=t.label;textSize=TAB;isAllCaps=false;stateListAnimator=null;tag=t.tag
                 background=RippleDrawable(ColorStateList.valueOf(RIPPLE),null,ColorDrawable(Color.BLACK))
-                typeface=font(a,if(on) Weight.SEMIBOLD else Weight.MEDIUM)
-                setCompoundDrawablesWithIntrinsicBounds(null,icon(a,t.icon,color,26),null,null);compoundDrawablePadding=dp(a,2)
+                tabLook(this,t.icon,on);compoundDrawablePadding=dp(a,2)
                 minHeight=dp(a,60);minimumHeight=dp(a,60);minWidth=0;minimumWidth=0;setPadding(0,dp(a,4),0,dp(a,2))
                 contentDescription=if(on) "${t.label}, 지금 보는 화면" else t.label
                 setOnClickListener { if(!on) go(a,t) }
@@ -170,6 +236,13 @@ internal object CallUi {
         }
         // The bar is a sheet with a hairline on top.
         background=android.graphics.drawable.LayerDrawable(arrayOf(GradientDrawable().apply { setColor(LINE) },GradientDrawable().apply { setColor(CARD) })).apply { setLayerInset(1,0,dp(a,1),0,0) }
+    }
+    /** How a bottom-bar tab shows whether it is the current one: by weight and a filled icon, not by a pale colour (review #29).
+     * On: ink, SemiBold, the icon filled; off: [MUTED] (4.6:1), Regular, the icon as a line. */
+    fun tabLook(b:TextView,iconKind:String,on:Boolean) {
+        val color=if(on) INK else MUTED
+        b.setTextColor(color);b.typeface=font(b.context,if(on) Weight.SEMIBOLD else Weight.REGULAR)
+        b.setCompoundDrawablesWithIntrinsicBounds(null,icon(b.context,iconKind,color,26,filled=on),null,null)
     }
     /** Switches main screens, reusing a screen that is already open (REORDER_TO_FRONT). Home is the bottom of the stack: going there closes
      * everything above it, so back from home leaves the app. The only motion is the 120 ms fade from the theme. */
@@ -184,7 +257,7 @@ internal object CallUi {
     private fun scrollOf(content:View):ScrollView? { var v:View?=content;while(v!=null) { if(v is ScrollView) return v;v=v.parent as? View };return null }
 
     // ---- text ---------------------------------------------------------------------------------------------------------
-    fun text(a:Activity,value:String,size:Float=BODY,bold:Boolean=false,color:Int=INK)=TextView(a).apply {
+    fun text(a:Context,value:String,size:Float=BODY,bold:Boolean=false,color:Int=INK)=TextView(a).apply {
         // Text the analysis wrote is shown as is; the screen rules still hold (no middle dot, no ellipsis).
         text=clean(value);textSize=size;setTextColor(color);setLineSpacing(0f,if(size>=24f) 1.15f else 1.3f);setPadding(0,dp(a,2),0,dp(a,2))
         textLocale=Locale.KOREAN // phrase-based line breaking needs the text's language
@@ -195,51 +268,59 @@ internal object CallUi {
         if(size<18f) setTag(kr.callbrief.R.id.ui_min_sp,if(size<CAPTION) BADGE else CAPTION)
     }
     /** An aside to the text above it (a time, a request date, a trade): 16sp. */
-    fun caption(a:Activity,value:String,color:Int=SUBTLE,bold:Boolean=false)=text(a,value,CAPTION,bold,color)
-    fun title(a:Activity,value:String)=text(a,value,TITLE,true).apply { letterSpacing=-0.02f;setPadding(0,dp(a,8),0,dp(a,2)) }
-    fun heading(a:Activity,value:String)=text(a,value,HEADING,true).apply { setPadding(dp(a,4),dp(a,24),0,dp(a,8)) }
+    fun caption(a:Context,value:String,color:Int=SUBTLE,bold:Boolean=false)=text(a,value,CAPTION,bold,color)
+    fun title(a:Context,value:String)=text(a,value,TITLE,true).apply { letterSpacing=-0.02f;setPadding(0,dp(a,8),0,dp(a,2)) }
+    fun heading(a:Context,value:String)=text(a,value,HEADING,true).apply { setPadding(dp(a,4),dp(a,24),0,dp(a,8)) }
     /** Section heading with a text link on the right ("전체 보기 ›"). */
-    fun section(a:Activity,value:String,link:String?=null,action:(()->Unit)?=null)=LinearLayout(a).apply {
+    fun section(a:Context,value:String,link:String?=null,action:(()->Unit)?=null)=LinearLayout(a).apply {
         orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setPadding(dp(a,4),dp(a,24),0,dp(a,4))
         addView(text(a,value,HEADING,true),LinearLayout.LayoutParams(0,-2,1f))
-        if(link!=null) addView(if(action!=null) linkButton(a,link,action) else caption(a,link,SUBTLE,true).apply { setPadding(0,0,dp(a,4),0) })
+        if(link!=null) addView(if(action!=null) linkButton(a,link,action) else caption(a,link,PAGE_CAPTION,true).apply { setPadding(0,0,dp(a,4),0) })
     }
 
     // ---- sheets and buttons ---------------------------------------------------------------------------------------------
-    internal fun sheet(a:Activity,fill:Int,stroke:Int?=null,radius:Int=14)=GradientDrawable().apply {
+    internal fun sheet(a:Context,fill:Int,stroke:Int?=null,radius:Int=14)=GradientDrawable().apply {
         setColor(fill);cornerRadius=dp(a,radius).toFloat();if(stroke!=null)setStroke(dp(a,1),stroke) }
     /** [fill] wrapped in a ripple that is cut to the same rounded shape (or a circle). */
-    fun ripple(a:Activity,fill:Drawable?,radiusDp:Int=14,oval:Boolean=false):Drawable {
+    fun ripple(a:Context,fill:Drawable?,radiusDp:Int=14,oval:Boolean=false):Drawable {
         val mask=GradientDrawable().apply { setColor(Color.BLACK);if(oval) shape=GradientDrawable.OVAL else cornerRadius=dp(a,radiusDp).toFloat() }
         return RippleDrawable(ColorStateList.valueOf(RIPPLE),fill,mask)
     }
     /** Press feedback for a whole row inside a sheet (the sheet clips it to its corners). */
     fun rowRipple():Drawable=RippleDrawable(ColorStateList.valueOf(RIPPLE),null,ColorDrawable(Color.BLACK))
-    private fun Button.base(a:Activity,label:String,action:()->Unit) {
+    /** Every button: one press counts once ([once]); with [busyText] the button goes [busy] the moment it is pressed, and the
+     * caller puts it back with [idle] when the work is done (or uses [work], which does both). */
+    private fun Button.base(a:Context,label:String,busyText:String?=null,action:()->Unit) {
         text=label;isAllCaps=false;stateListAnimator=null;textSize=18f;typeface=font(a,Weight.SEMIBOLD)
-        minHeight=dp(a,56);minimumHeight=dp(a,56);setPadding(dp(a,16),0,dp(a,16),0);setOnClickListener { action() }
+        minHeight=dp(a,56);minimumHeight=dp(a,56);setPadding(dp(a,16),0,dp(a,16),0)
+        val self=this
+        onTap(this) { if(busyText!=null) busy(self,busyText);action() }
     }
     /** Primary action (at most one per screen): solid blue. [icon] is kept for call sites; words carry the meaning. */
-    fun bigButton(a:Activity,@Suppress("UNUSED_PARAMETER") icon:String,label:String,action:()->Unit)=Button(a).apply {
-        base(a,label,action);setTextColor(ON_ACCENT);background=ripple(a,sheet(a,ACCENT,radius=14))
+    fun bigButton(a:Context,icon:String,label:String,action:()->Unit)=bigButton(a,icon,label,null,action)
+    /** [bigButton] that shows [busyText] the moment it is pressed (one line at the call site; [idle] puts it back). */
+    fun bigButton(a:Context,@Suppress("UNUSED_PARAMETER") icon:String,label:String,busyText:String?,action:()->Unit)=Button(a).apply {
+        base(a,label,busyText,action);setTextColor(ON_ACCENT);background=ripple(a,sheet(a,ACCENT,radius=14))
         layoutParams=LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,16);bottomMargin=dp(a,2) }
     }
     /** Secondary action: neutral fill, ink text, no outline (blue is kept for the one primary place of a screen). */
-    fun button(a:Activity,label:String,action:()->Unit)=Button(a).apply {
-        base(a,label,action);setTextColor(INK);background=ripple(a,sheet(a,CHIP,radius=14))
+    fun button(a:Context,label:String,action:()->Unit)=button(a,label,null,action)
+    /** [button] that shows [busyText] the moment it is pressed. */
+    fun button(a:Context,label:String,busyText:String?,action:()->Unit)=Button(a).apply {
+        base(a,label,busyText,action);setTextColor(INK);background=ripple(a,sheet(a,CHIP,radius=14))
         layoutParams=LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,12);bottomMargin=dp(a,2) }
     }
     /** Cleans a screen text: no middle dot, no ellipsis. */
     fun clean(t:String)=t.replace(" · ",", ").replace("·",", ").replace("…","").replace("...","")
     /** Text link button ("전체 보기 ›"), 48dp tall. */
-    fun linkButton(a:Activity,label:String,action:()->Unit)=Button(a).apply {
-        base(a,label,action);setTextColor(SUBTLE);textSize=17f;background=ripple(a,null,12);minHeight=dp(a,48);minimumHeight=dp(a,48);setPadding(dp(a,10),0,dp(a,8),0)
+    fun linkButton(a:Context,label:String,action:()->Unit)=Button(a).apply {
+        base(a,label,null,action);setTextColor(SUBTLE);textSize=17f;background=ripple(a,null,12);minHeight=dp(a,48);minimumHeight=dp(a,48);setPadding(dp(a,10),0,dp(a,8),0)
     }
     /** A round button with only an icon (44dp by default): dial, back, more. Always has a spoken [description]. */
-    fun iconButton(a:Activity,kind:String,description:String,sizeDp:Int=44,iconDp:Int=22,tint:Int=INK,fill:Int?=CHIP,action:()->Unit)=ImageView(a).apply {
+    fun iconButton(a:Context,kind:String,description:String,sizeDp:Int=44,iconDp:Int=22,tint:Int=INK,fill:Int?=CHIP,action:()->Unit)=ImageView(a).apply {
         setImageDrawable(icon(a,kind,tint,iconDp));scaleType=ImageView.ScaleType.CENTER;contentDescription=description;isClickable=true;isFocusable=true
         background=ripple(a,fill?.let { GradientDrawable().apply { shape=GradientDrawable.OVAL;setColor(it) } },oval=true)
-        layoutParams=LinearLayout.LayoutParams(dp(a,sizeDp),dp(a,sizeDp));setOnClickListener { action() }
+        layoutParams=LinearLayout.LayoutParams(dp(a,sizeDp),dp(a,sizeDp));onTap(this,action=action)
     }
     /** A person as the rows show them: a name gets "님", a bare number is shown as a number (010-1234-5678), never "010… 님". */
     fun who(person:String):String {
@@ -255,33 +336,33 @@ internal object CallUi {
     }
     /** The 44dp phone button of a person or company: opens the dialer with the number typed in (no permission needed).
      * Null when there is no number, so no empty button is drawn. */
-    fun dialButton(a:Activity,number:String?,name:String):View? {
+    fun dialButton(a:Context,number:String?,name:String):View? {
         val n=number?.trim().orEmpty().takeIf { it.isNotEmpty() && it.all { ch -> ch.isDigit() || ch=='+' || ch=='-' } } ?: return null
         return iconButton(a,"dial","$name 님께 전화 걸기",44,22,ACCENT,ACCENT_SOFT) { dial(a,n) }.apply { tag="dial_button" }
     }
-    fun dial(a:Activity,number:String) { runCatching { a.startActivity(Intent(Intent.ACTION_DIAL,android.net.Uri.fromParts("tel",number,null))) } }
+    fun dial(a:Context,number:String) { runCatching { a.startActivity(Intent(Intent.ACTION_DIAL,android.net.Uri.fromParts("tel",number,null)).apply { if(a !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }) } }
     /** A white sheet: rounded 20, no edge, no shadow. [rail] tints the sheet instead of drawing a stripe; [warn] is the amber
      * tint (a call that could not be sorted out): there is no red in the app. */
-    fun card(a:Activity,warn:Boolean=false,rail:Int?=if(warn) AMBER else null)=LinearLayout(a).apply {
+    fun card(a:Context,warn:Boolean=false,rail:Int?=if(warn) AMBER else null)=LinearLayout(a).apply {
         orientation=LinearLayout.VERTICAL
         background=sheet(a,when(rail) { null -> CARD;AMBER_RAIL,AMBER -> AMBER_SOFT;else -> ACCENT_SOFT },radius=20);clipToOutline=true
         val p=dp(a,16);setPadding(p,p,p,p)
         layoutParams=LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,6);bottomMargin=dp(a,6) }
     }
     /** Small status word on a soft fill (e.g. "정리 중 1건"): 15sp SemiBold, corner 8. */
-    fun pill(a:Activity,value:String,color:Int)=text(a,value,BADGE,true,color).apply {
+    fun pill(a:Context,value:String,color:Int)=text(a,value,BADGE,true,color).apply {
         val fill=when(color) { AMBER -> AMBER_SOFT;ACCENT -> ACCENT_SOFT;else -> CHIP }
         background=sheet(a,fill,radius=8);setPadding(dp(a,10),dp(a,3),dp(a,10),dp(a,3));gravity=Gravity.CENTER
         layoutParams=LinearLayout.LayoutParams(-2,-2).apply { topMargin=dp(a,6) }
     }
     /** Neutral badge for a company inside a row. */
-    fun chip(a:Activity,value:String)=text(a,value,BADGE,true,SUBTLE).apply {
+    fun chip(a:Context,value:String)=text(a,value,BADGE,true,SUBTLE).apply {
         background=sheet(a,CHIP,radius=8);setPadding(dp(a,8),dp(a,2),dp(a,8),dp(a,2));gravity=Gravity.CENTER;setLineSpacing(0f,1.1f)
     }
-    fun gap(a:Activity,h:Int=12)=View(a).apply { layoutParams=LinearLayout.LayoutParams(-1,dp(a,h)) }
-    fun divider(a:Activity)=View(a).apply { setBackgroundColor(LINE);layoutParams=LinearLayout.LayoutParams(-1,dp(a,1)).apply { topMargin=dp(a,12);bottomMargin=dp(a,12) } }
+    fun gap(a:Context,h:Int=12)=View(a).apply { layoutParams=LinearLayout.LayoutParams(-1,dp(a,h)) }
+    fun divider(a:Context)=View(a).apply { setBackgroundColor(LINE);layoutParams=LinearLayout.LayoutParams(-1,dp(a,1)).apply { topMargin=dp(a,12);bottomMargin=dp(a,12) } }
     /** A grey hairline inside a grouped list, inset by [inset] dp on the left. */
-    private fun hairline(a:Activity,inset:Int)=View(a).apply { setBackgroundColor(LINE);layoutParams=LinearLayout.LayoutParams(-1,dp(a,1)).apply { marginStart=dp(a,inset);marginEnd=dp(a,16) } }
+    private fun hairline(a:Context,inset:Int)=View(a).apply { setBackgroundColor(LINE);layoutParams=LinearLayout.LayoutParams(-1,dp(a,1)).apply { marginStart=dp(a,inset);marginEnd=dp(a,16) } }
 
     /** "오늘 요청", "어제 요청", "10월 28일 요청". */
     fun requested(ms:Long)=if(ms<=0) "" else when(val d=CallRecordStore.kstDay(ms)) {
@@ -291,7 +372,7 @@ internal object CallUi {
      * Child [flex] takes the room left by the others; the row stays side by side while that room is at least
      * [minFraction] of the width (or all the flex child needs), otherwise each child gets its own line, the later ones at
      * the end ([endWhenStacked]) or the start. Works for every screen width and font size, because it decides at measure time. */
-    class FitRow(a:Activity,private val flex:Int=0,private val minFraction:Float=0.5f,private val gapDp:Int=12,private val endWhenStacked:Boolean=false):LinearLayout(a) {
+    class FitRow(a:Context,private val flex:Int=0,private val minFraction:Float=0.5f,private val gapDp:Int=12,private val endWhenStacked:Boolean=false):LinearLayout(a) {
         private val gapPx=dp(a,gapDp);private val stackGapPx=dp(a,8)
         /** True while the children are side by side (for tests). */
         var sideBySide=true
@@ -312,7 +393,7 @@ internal object CallUi {
                 if(sideBySide) { lp.width=if(v===f) 0 else -2;lp.weight=if(v===f) 1f else 0f;lp.marginStart=if(i>0) gapPx else 0;lp.topMargin=0;lp.gravity=Gravity.CENTER_VERTICAL }
                 else { lp.width=if(v===f) -1 else -2;lp.weight=0f;lp.marginStart=0;lp.topMargin=if(i>0) stackGapPx else 0
                     lp.gravity=if(i>0 && endWhenStacked) Gravity.END else Gravity.START
-                    if(i>0 && v.getTag(kr.callbrief.R.id.ui_min_sp)!=null) lp.topMargin=dp(context as Activity,2) }
+                    if(i>0 && v.getTag(kr.callbrief.R.id.ui_min_sp)!=null) lp.topMargin=dp(context,2) }
             }
             super.onMeasure(widthSpec,heightSpec)
         }
@@ -322,10 +403,10 @@ internal object CallUi {
      * below it a company badge with who and when it was asked for, and the [다 됐어요] button on the right of that line
      * (or under it, at the end, when the screen is narrow or the letters large); the AI's note at the bottom when there is one.
      * The whole row opens the call it came from when [onOpen] is given. Calm on purpose: no red, no countdown. */
-    fun taskRow(a:Activity,title:String,requestedMs:Long,company:String?,person:String?=null,status:String="",onDone:((View)->Unit)?=null,
+    fun taskRow(a:Context,title:String,requestedMs:Long,company:String?,person:String?=null,status:String="",onDone:((View)->Unit)?=null,
                 onOpen:(()->Unit)?=null,aiNote:String?=null):LinearLayout {
         val outer=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;setPadding(dp(a,16),dp(a,14),dp(a,16),dp(a,14)) }
-        if(onOpen!=null) outer.apply { isClickable=true;isFocusable=true;background=rowRipple();setOnClickListener { onOpen() };contentDescription=null }
+        if(onOpen!=null) outer.apply { isClickable=true;isFocusable=true;background=rowRipple();onTap(this,action=onOpen);contentDescription=null }
         outer.addView(text(a,title,SUMMARY,true).apply { tag="task_title";setPadding(0,0,0,0) })
         val who=listOfNotNull(person?.let { who(it) },requested(requestedMs).takeIf { it.isNotEmpty() }).joinToString(", ")
         // Badge and words side by side while the words still get most of the line; else the words go under the badge.
@@ -340,7 +421,7 @@ internal object CallUi {
             maxLines=1;isSingleLine=true;background=ripple(a,sheet(a,CHIP,radius=14))
             setCompoundDrawablesWithIntrinsicBounds(icon(a,"tick",SUBTLE,20),null,null,null);compoundDrawablePadding=dp(a,6)
             minHeight=dp(a,48);minimumHeight=dp(a,48);minWidth=0;minimumWidth=0;setPadding(dp(a,12),0,dp(a,14),0)
-            contentDescription="$title, 다 됐어요";setOnClickListener { it(outer) }
+            contentDescription="$title, 다 됐어요";onTap(this) { it(outer) }
         } }
         val left=if(meta!=null && pill!=null) LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;addView(meta);addView(pill) } else meta ?: pill
         if(done!=null) {
@@ -355,22 +436,22 @@ internal object CallUi {
     }
 
     /** The AI's one-line note on an item the user touched (an aside under the row); null when there is none. */
-    fun aiNoteRow(a:Activity,text:String?):View? {
+    fun aiNoteRow(a:Context,text:String?):View? {
         val t=text?.trim().orEmpty();if(t.isEmpty()) return null
         return caption(a,"AI 메모: "+firstSentence(t),SUBTLE).apply { tag="ai_note";setPadding(0,dp(a,6),0,0) }
     }
 
     /** Rows grouped in one sheet (corner 16) with hairlines between them, inset by [inset] dp past the badge (iOS-style grouped list). */
-    fun list(a:Activity,rows:List<View>,inset:Int=72)=card(a).apply {
+    fun list(a:Context,rows:List<View>,inset:Int=72)=card(a).apply {
         background=sheet(a,CARD,radius=16)
         setPadding(0,0,0,0)
         addRows(a,this,rows,inset)
     }
     /** More rows at the end of a [list] sheet (a long day is built a screenful at a time). */
-    fun addRows(a:Activity,list:LinearLayout,rows:List<View>,inset:Int=72) { rows.forEach { r -> if(list.childCount>0) list.addView(hairline(a,inset));list.addView(r) } }
+    fun addRows(a:Context,list:LinearLayout,rows:List<View>,inset:Int=72) { rows.forEach { r -> if(list.childCount>0) list.addView(hairline(a,inset));list.addView(r) } }
 
     /** Badge for a person (a circle) or a company (a rounded square): the first letter on a soft tint picked from the name. */
-    fun avatar(a:Activity,name:String,sizeDp:Int=44,company:Boolean=false)=TextView(a).apply {
+    fun avatar(a:Context,name:String,sizeDp:Int=44,company:Boolean=false)=TextView(a).apply {
         val fgs=listOf("#3268F0","#0B8A5F","#B26B00","#7B4FD6","#8A5A2B")
         val night=night
         val clean=name.filter { it.isLetter() }
@@ -388,7 +469,7 @@ internal object CallUi {
 
     /** One call (or company) inside a list sheet: badge, who and the time on top, one sentence below. The whole row is the button.
      * [company] draws the badge as a rounded square, [avatarName] picks the badge letter when it is not the first word of [who]. */
-    fun memoRow(a:Activity,time:String,who:String,memo:String,quiet:Boolean=false,company:Boolean=false,avatarName:String?=null,onOpen:()->Unit)=LinearLayout(a).apply {
+    fun memoRow(a:Context,time:String,who:String,memo:String,quiet:Boolean=false,company:Boolean=false,avatarName:String?=null,onOpen:()->Unit)=LinearLayout(a).apply {
         orientation=LinearLayout.HORIZONTAL;isClickable=true;isFocusable=true;background=rowRipple()
         gravity=Gravity.TOP;setPadding(dp(a,16),dp(a,14),dp(a,16),dp(a,14));minimumHeight=dp(a,72);contentDescription="$time $who, $memo. 눌러서 자세히 보기"
         addView(avatar(a,avatarName ?: who.removePrefix("(주)").trim().split(' ').first(),44,company))
@@ -401,12 +482,12 @@ internal object CallUi {
         words.addView(head)
         words.addView(text(a,memo,BODY,color=if(quiet) MUTED else SUBTLE).apply { setPadding(0,dp(a,2),0,0) })
         addView(words,LinearLayout.LayoutParams(0,-2,1f))
-        setOnClickListener { onOpen() }
+        onTap(this,action=onOpen)
     }
 
     /** A call-log line with nothing to open (a missed call, a call with no recording, a personal call): badge, who and
      * the time on top, [label] below in [labelColor], and an optional [trailing] button (다시 걸기) under them. */
-    fun logRow(a:Activity,time:String,who:String,label:String,labelColor:Int,avatarName:String?=null,trailing:View?=null)=LinearLayout(a).apply {
+    fun logRow(a:Context,time:String,who:String,label:String,labelColor:Int,avatarName:String?=null,trailing:View?=null)=LinearLayout(a).apply {
         orientation=LinearLayout.HORIZONTAL;gravity=Gravity.TOP;setPadding(dp(a,16),dp(a,14),dp(a,16),dp(a,14));minimumHeight=dp(a,72)
         contentDescription="$time $who, $label"
         addView(avatar(a,avatarName ?: who,44))
@@ -422,13 +503,13 @@ internal object CallUi {
     }
     /** "다시 걸기": a 48dp soft-blue button with the phone icon that opens the dialer with [number] typed in ([dial]). Null
      * when there is no number to call. */
-    fun redialButton(a:Activity,number:String?,name:String):View? {
+    fun redialButton(a:Context,number:String?,name:String):View? {
         val n=number?.trim().orEmpty().takeIf { it.isNotEmpty() && it.all { ch -> ch.isDigit() || ch=='+' || ch=='-' } } ?: return null
         return Button(a).apply {
             text="다시 걸기";isAllCaps=false;stateListAnimator=null;textSize=CAPTION;typeface=font(a,Weight.SEMIBOLD);setTextColor(ACCENT)
             setCompoundDrawablesRelativeWithIntrinsicBounds(icon(a,"dial",ACCENT,18),null,null,null);compoundDrawablePadding=dp(a,6)
             background=ripple(a,sheet(a,ACCENT_SOFT,radius=14));minHeight=dp(a,48);minimumHeight=minHeight;minWidth=0;minimumWidth=0
-            setPadding(dp(a,14),0,dp(a,14),0);contentDescription="$name 님께 다시 걸기";tag="redial_button";setOnClickListener { dial(a,n) }
+            setPadding(dp(a,14),0,dp(a,14),0);contentDescription="$name 님께 다시 걸기";tag="redial_button";onTap(this) { dial(a,n) }
         }
     }
 
@@ -437,10 +518,14 @@ internal object CallUi {
      * SemiBold), an optional [message] (body 19sp), an optional [body] view (an input), then one big button per entry of
      * [options] (a list to pick from) and the actions stacked under each other, full width, 56dp tall: [primary] in blue on
      * top, [secondary] ("닫기", "취소") in grey below. Every button closes the sheet first and then does its work; back and a
-     * touch outside the sheet close it without doing anything. Colours follow the phone's night setting. Tags for tests:
-     * sheet_root, sheet_title, sheet_message, sheet_option_<i>, sheet_primary, sheet_secondary. */
-    fun sheetDialog(a:Activity,title:String,message:String?=null,body:View?=null,options:List<String> =emptyList(),onOption:((Int)->Unit)?=null,
-                    primary:String?=null,onPrimary:(()->Unit)?=null,secondary:String?="닫기",onSecondary:(()->Unit)?=null):android.app.Dialog {
+     * touch outside the sheet close it without doing anything. Colours follow the phone's night setting.
+     * [validate] runs before [primary] does anything: when it returns words, the sheet stays open and shows them on an amber
+     * tint above the buttons (review #26: an empty title closed the sheet and lost what was picked). When [body] holds a text
+     * field, it gets the focus and the keyboard comes up by itself. Tags for tests:
+     * sheet_root, sheet_title, sheet_message, sheet_problem, sheet_option_<i>, sheet_primary, sheet_secondary. */
+    fun sheetDialog(a:Context,title:String,message:String?=null,body:View?=null,options:List<String> =emptyList(),onOption:((Int)->Unit)?=null,
+                    primary:String?=null,onPrimary:(()->Unit)?=null,secondary:String?="닫기",onSecondary:(()->Unit)?=null,
+                    validate:(()->String?)?=null):android.app.Dialog {
         applyTheme(a)
         val d=android.app.Dialog(a,if(night) android.R.style.Theme_DeviceDefault_Dialog_NoActionBar else android.R.style.Theme_DeviceDefault_Light_Dialog_NoActionBar)
         d.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
@@ -453,14 +538,23 @@ internal object CallUi {
         sheet.addView(text(a,title,HEADING,true).apply { tag="sheet_title";setPadding(0,0,0,dp(a,4)) })
         message?.let { sheet.addView(text(a,it,BODY,false,SUBTLE).apply { tag="sheet_message";setPadding(0,dp(a,6),0,0) }) }
         body?.let { sheet.addView(it,LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,12) }) }
-        fun act(view:Button,tag:String,then:(()->Unit)?):Button=view.apply { this.tag=tag;setOnClickListener { d.dismiss();then?.invoke() } }
+        // The words of a failed [validate], hidden until there is a problem; it sits right above the buttons.
+        val problem=text(a,"",BODY,false,INK).apply {
+            tag="sheet_problem";visibility=View.GONE;background=sheet(a,AMBER_SOFT,radius=12);setPadding(dp(a,14),dp(a,10),dp(a,14),dp(a,10))
+            accessibilityLiveRegion=View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
+        sheet.addView(problem,LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,12) })
+        fun act(view:Button,tag:String,check:Boolean=false,then:(()->Unit)?):Button=view.apply { this.tag=tag;onTap(this) {
+            val wrong=if(check) validate?.invoke()?.takeIf { it.isNotBlank() } else null
+            if(wrong!=null) { problem.text=clean(wrong);problem.visibility=View.VISIBLE;return@onTap }
+            d.dismiss();then?.invoke() } }
         options.forEachIndexed { i,label ->
             sheet.addView(act(button(a,label) {},"sheet_option_$i") { onOption?.invoke(i) }.apply {
                 gravity=Gravity.CENTER_VERTICAL or Gravity.START;setPadding(dp(a,18),dp(a,10),dp(a,18),dp(a,10))
             },LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,if(i==0) 16 else 8) })
         }
-        primary?.let { sheet.addView(act(bigButton(a,"",it) {},"sheet_primary",onPrimary),LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,20) }) }
-        secondary?.let { sheet.addView(act(button(a,it) {},"sheet_secondary",onSecondary),LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,if(primary==null && options.isEmpty()) 20 else 10) }) }
+        primary?.let { sheet.addView(act(bigButton(a,"",it) {},"sheet_primary",check=true,then=onPrimary),LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,20) }) }
+        secondary?.let { sheet.addView(act(button(a,it) {},"sheet_secondary",then=onSecondary),LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,if(primary==null && options.isEmpty()) 20 else 10) }) }
         // Long contents (many numbers, a long result) scroll inside the sheet; the navigation bar and keyboard never cover it.
         val scroll=ScrollView(a).apply { isFillViewport=true;addView(sheet,android.widget.FrameLayout.LayoutParams(-1,-2)) }
         val frame=android.widget.FrameLayout(a).apply { addView(scroll) }
@@ -474,16 +568,25 @@ internal object CallUi {
             setGravity(Gravity.BOTTOM)
             setWindowAnimations(android.R.style.Animation_InputMethod)
             addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND);setDimAmount(if(night) 0.6f else 0.4f)
-            @Suppress("DEPRECATION") setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+            val field=body?.let { firstField(it) }
+            @Suppress("DEPRECATION") setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
+                (if(field!=null) android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE else 0))
             decorView.setPadding(0,0,0,0)
         }
         d.show()
         // setLayout again after show: some phones reset the width of a dialog window when it is first shown.
         d.window?.setLayout(android.view.WindowManager.LayoutParams.MATCH_PARENT,android.view.WindowManager.LayoutParams.WRAP_CONTENT)
+        body?.let { firstField(it) }?.requestFocus()
         return d
     }
+    /** The first text field in [v] (itself or inside it), for the sheet to focus. */
+    internal fun firstField(v:View):android.widget.EditText? {
+        if(v is android.widget.EditText) return v
+        if(v is android.view.ViewGroup) for(i in 0 until v.childCount) firstField(v.getChildAt(i))?.let { return it }
+        return null
+    }
     /** A text field for a sheet: body size, 56dp tall, single line. */
-    fun sheetInput(a:Activity,value:String="",hint:String?=null,tag:String?=null)=android.widget.EditText(a).apply {
+    fun sheetInput(a:Context,value:String="",hint:String?=null,tag:String?=null)=android.widget.EditText(a).apply {
         setText(value);setSelection(value.length);hint?.let { this.hint=it };textSize=BODY;isSingleLine=true
         inputType=android.text.InputType.TYPE_CLASS_TEXT;typeface=font(a,Weight.REGULAR);setTextColor(INK);setHintTextColor(MUTED)
         minHeight=dp(a,56);setPadding(dp(a,16),0,dp(a,16),0);background=sheet(a,CHIP,radius=14);this.tag=tag
@@ -512,12 +615,19 @@ internal object CallUi {
         holder.setTag(kr.callbrief.R.id.ui_snack_timer,timeout);holder.postDelayed(timeout,ms)
     }
 
+    /** Takes the undo bar away at once without calling its callbacks (a [다 됐어요] that could not be saved). */
+    fun hideSnack(a:Activity) {
+        val holder=a.window.decorView.findViewWithTag<LinearLayout>("snack_holder") ?: return
+        (holder.getTag(kr.callbrief.R.id.ui_snack_timer) as? Runnable)?.let(holder::removeCallbacks)
+        holder.setTag(kr.callbrief.R.id.ui_snack_timer,null);holder.removeAllViews();holder.visibility=View.GONE
+    }
+
     // ---- numbers and charts ---------------------------------------------------------------------------------------------
     /** Big numbers in one sheet: grey label on top, the number large with its unit small ("5건"). Only one number is blue.
      * The columns share the width equally; when a label would not fit its column on one line (a narrow phone, large letters),
      * the numbers become rows instead (label on the left, number on the right), so labels never run into each other. */
-    fun stats(a:Activity,items:List<Triple<String,String,Int>>,units:List<String> =emptyList()):LinearLayout=Stats(a,items,units)
-    class Stats(a:Activity,items:List<Triple<String,String,Int>>,units:List<String>):LinearLayout(a) {
+    fun stats(a:Context,items:List<Triple<String,String,Int>>,units:List<String> =emptyList()):LinearLayout=Stats(a,items,units)
+    class Stats(a:Context,items:List<Triple<String,String,Int>>,units:List<String>):LinearLayout(a) {
         private val labels=ArrayList<TextView>();private val cols=ArrayList<LinearLayout>()
         private val gapPx=dp(a,12)
         /** True while the numbers sit in columns (for tests). */
@@ -546,7 +656,7 @@ internal object CallUi {
                 val lp=col.layoutParams as LayoutParams
                 if(columns) { col.orientation=VERTICAL;col.gravity=Gravity.START;lp.width=0;lp.weight=1f;lp.marginStart=if(i>0) gapPx else 0;lp.topMargin=0
                     (labels[i].layoutParams as LayoutParams).apply { width=-2;weight=0f } }
-                else { col.orientation=HORIZONTAL;col.gravity=Gravity.CENTER_VERTICAL;lp.width=-1;lp.weight=0f;lp.marginStart=0;lp.topMargin=if(i>0) dp(context as Activity,10) else 0
+                else { col.orientation=HORIZONTAL;col.gravity=Gravity.CENTER_VERTICAL;lp.width=-1;lp.weight=0f;lp.marginStart=0;lp.topMargin=if(i>0) dp(context,10) else 0
                     (labels[i].layoutParams as LayoutParams).apply { width=0;weight=1f } }
             }
             super.onMeasure(widthSpec,heightSpec)
@@ -554,7 +664,7 @@ internal object CallUi {
     }
 
     /** Vertical bars (e.g. calls per day this week); the last bar is today and drawn in the accent. */
-    class BarChart(a:Activity,private val values:List<Int>,private val labels:List<String>):View(a) {
+    class BarChart(a:Context,private val values:List<Int>,private val labels:List<String>):View(a) {
         private val d=a.resources.displayMetrics.density
         private val bar=Paint(Paint.ANTI_ALIAS_FLAG)
         private val regular=font(a,Weight.MEDIUM);private val strong=font(a,Weight.BOLD)
@@ -579,7 +689,7 @@ internal object CallUi {
     }
 
     /** One horizontal bar split into coloured parts, or a filled track with a part over it. */
-    class StackBar(a:Activity,private val parts:List<Pair<Int,Int>>,private val split:Boolean=true):View(a) {
+    class StackBar(a:Context,private val parts:List<Pair<Int,Int>>,private val split:Boolean=true):View(a) {
         private val d=a.resources.displayMetrics.density;private val p=Paint(Paint.ANTI_ALIAS_FLAG)
         init { minimumHeight=(14*d).toInt() }
         override fun onDraw(c:Canvas) {
@@ -596,7 +706,7 @@ internal object CallUi {
         }
     }
     /** Labelled horizontal bar (e.g. open to-dos of one company), scaled to [max]. */
-    fun barRow(a:Activity,label:String,n:Int,max:Int)=LinearLayout(a).apply {
+    fun barRow(a:Context,label:String,n:Int,max:Int)=LinearLayout(a).apply {
         orientation=LinearLayout.VERTICAL;setPadding(0,dp(a,6),0,dp(a,8));contentDescription="$label ${n}개"
         val head=LinearLayout(a).apply { orientation=LinearLayout.HORIZONTAL }
         head.addView(text(a,label,BODY).apply { setPadding(0,0,0,0) },LinearLayout.LayoutParams(0,-2,1f))
@@ -605,7 +715,7 @@ internal object CallUi {
         addView(StackBar(a,listOf(n to ACCENT,(max-n).coerceAtLeast(0) to ACCENT_SOFT),split=false),LinearLayout.LayoutParams(-1,dp(a,10)).apply { topMargin=dp(a,8) })
     }
     /** Legend line: colour dot, label, count on the right. */
-    fun legend(a:Activity,label:String,n:Int,color:Int)=LinearLayout(a).apply {
+    fun legend(a:Context,label:String,n:Int,color:Int)=LinearLayout(a).apply {
         orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setPadding(0,dp(a,4),0,dp(a,4))
         addView(View(a).apply { background=GradientDrawable().apply { shape=GradientDrawable.OVAL;setColor(color) } },LinearLayout.LayoutParams(dp(a,12),dp(a,12)).apply { marginEnd=dp(a,10) })
         addView(text(a,label,BODY,color=INK).apply { setPadding(0,0,0,0) },LinearLayout.LayoutParams(0,-2,1f))
@@ -613,8 +723,10 @@ internal object CallUi {
     }
     /** A traffic light for a status line: the [label] as a grey aside on top, then the [value] in SemiBold with a round dot
      * in front of it (green when [good], amber otherwise). The same shape at every width, so the lights of one sheet line up. */
-    fun signalRow(a:Activity,label:String,value:String,good:Boolean)=LinearLayout(a).apply {
+    fun signalRow(a:Context,label:String,value:String,good:Boolean,onPress:(()->Unit)?=null)=LinearLayout(a).apply {
         orientation=LinearLayout.VERTICAL;setPadding(0,dp(a,8),0,dp(a,8))
+        // A light that names a place on the screen goes there when it is pressed (the screen does the scrolling).
+        if(onPress!=null) { isClickable=true;isFocusable=true;background=ripple(a,null,12);onTap(this,action=onPress) }
         val color=if(good) OK else AMBER
         contentDescription="$label, $value, "+(if(good) "정상" else "확인이 필요해요")
         val indent=dp(a,10+10)
@@ -627,15 +739,18 @@ internal object CallUi {
     }
 
     // ---- line icons: the set in [CallIcons], stroked 2 units wide on a 24 unit grid -------------------------------------------
-    fun icon(a:Activity,kind:String,color:Int,sizeDp:Int=24,stroke:Float=2f):Drawable = object:Drawable() {
+    /** [filled]: the first (outline) path is also filled, for the current tab of the bottom bar. */
+    fun icon(a:Context,kind:String,color:Int,sizeDp:Int=24,stroke:Float=2f,filled:Boolean=false):Drawable = object:Drawable() {
         private val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply { style=Paint.Style.STROKE;strokeWidth=stroke;strokeCap=Paint.Cap.ROUND;strokeJoin=Paint.Join.ROUND;this.color=color }
+        private val fill=Paint(Paint.ANTI_ALIAS_FLAG).apply { style=Paint.Style.FILL;this.color=color;alpha=0x40 }
         override fun draw(c:Canvas) {
             val save=c.save();c.translate(bounds.left.toFloat(),bounds.top.toFloat());c.scale(bounds.width()/24f,bounds.height()/24f)
+            if(filled) CallIcons.paths(kind).firstOrNull()?.let { c.drawPath(it,fill) }
             CallIcons.paths(kind).forEach { c.drawPath(it,paint) }
             c.restoreToCount(save)
         }
-        override fun setAlpha(alpha:Int) { paint.alpha=alpha }
-        override fun setColorFilter(filter:ColorFilter?) { paint.colorFilter=filter }
+        override fun setAlpha(alpha:Int) { paint.alpha=alpha;fill.alpha=alpha*0x40/0xFF }
+        override fun setColorFilter(filter:ColorFilter?) { paint.colorFilter=filter;fill.colorFilter=filter }
         @Deprecated("Deprecated in Java") override fun getOpacity()=PixelFormat.TRANSLUCENT
         override fun getIntrinsicWidth()=dp(a,sizeDp)
         override fun getIntrinsicHeight()=dp(a,sizeDp)

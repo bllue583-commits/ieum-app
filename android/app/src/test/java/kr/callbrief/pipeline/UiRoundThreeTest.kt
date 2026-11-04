@@ -29,7 +29,7 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
     private fun tagged(a:android.app.Activity,prefix:String)=views(a.window.decorView).filter { (it.tag as? String)?.startsWith(prefix)==true }
     private fun settle(check:()->Boolean) { repeat(400) { shadowOf(Looper.getMainLooper()).idle();if(check())return;Thread.sleep(10) };fail("UI did not settle") }
     private val english=Regex("[A-Z]{3,}_[A-Z_]+|\\b(WAITING|FAILED|TRANSCRIBED|ANALYZED|null)\\b")
-    @After fun backToDay() { CallUi.applyTheme(RuntimeEnvironment.getApplication()) }
+    @After fun backToDay() { CallUi.applyTheme(RuntimeEnvironment.getApplication());TaskActions.resetIo() }
 
     private fun seeded() { PreviewSeed.ensure(RuntimeEnvironment.getApplication()) }
 
@@ -120,8 +120,9 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
         val before=CallRecordStore(RuntimeEnvironment.getApplication()).use { it.openItems().size }
         val row=tagged(a,"task_").first { it.tag!="task_done" }
         views(row).first { it.tag=="task_done" }.performClick()
-        settle { a.window.decorView.findViewWithTag<View>("snack_undo")!=null }
-        assertEquals(before-1,CallRecordStore(RuntimeEnvironment.getApplication()).use { it.openItems().size })
+        // The bar is there the moment the button is pressed; the store follows.
+        assertNotNull(a.window.decorView.findViewWithTag<View>("snack_undo"))
+        settle { CallRecordStore(RuntimeEnvironment.getApplication()).use { it.openItems().size }==before-1 }
         // The bar goes after about five seconds and the list is built again without that row.
         shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(6))
         settle { a.window.decorView.findViewWithTag<View>("snack_undo")==null }
@@ -153,6 +154,121 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
         val c=Robolectric.buildActivity(CompaniesActivity::class.java,next).setup().get()
         settle { texts(c).any { it.text.toString().startsWith("사람 (") } }
         assertTrue(texts(c).any { it.text.toString()=="△△철강" })
+    }
+
+    // ---- v2.7 r8-3: parts that answer at once ----
+
+    @Test fun oncePassesTheFirstPressAndIgnoresASecondWithin600ms() {
+        val a=Robolectric.buildActivity(android.app.Activity::class.java).setup().get()
+        val v=View(a);var n=0
+        assertTrue(CallUi.once(v) { n++ })
+        assertFalse(CallUi.once(v) { n++ })
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(300))
+        assertFalse(CallUi.once(v) { n++ })
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(400))
+        assertTrue(CallUi.once(v) { n++ })
+        assertEquals(2,n)
+        // The shared parts count a press once: a double tap on a row or a button runs its action once.
+        var opened=0;var pressed=0
+        val row=CallUi.memoRow(a,"오후 2:05","김민수","견적서 보내기로 했어요.") { opened++ }
+        row.performClick();row.performClick()
+        val b=CallUi.button(a,"저장") { pressed++ }
+        b.performClick();b.performClick()
+        assertEquals(1,opened);assertEquals(1,pressed)
+    }
+
+    @Test fun busyTurnsTheButtonOffWithNewWordsAndIdlePutsItBack() {
+        val a=Robolectric.buildActivity(android.app.Activity::class.java).setup().get()
+        var ran=0
+        val b=CallUi.button(a,"저장","저장하는 중이에요") { ran++ }
+        b.performClick()
+        assertEquals(1,ran);assertFalse(b.isEnabled);assertEquals("저장하는 중이에요",b.text.toString());assertTrue(CallUi.isBusy(b))
+        CallUi.idle(b)
+        assertTrue(b.isEnabled);assertEquals("저장",b.text.toString());assertFalse(CallUi.isBusy(b))
+        // A view and all of its children go off together.
+        val row=CallUi.taskRow(a,"견적서 보내기",System.currentTimeMillis(),"△△철강",onDone={})
+        CallUi.enableAll(row,false)
+        assertTrue(views(row).none { it.isEnabled })
+    }
+
+    @Test fun loadingThenRetryCardWithAButtonThatReloads() {
+        val a=Robolectric.buildActivity(android.app.Activity::class.java).setup().get()
+        val column=android.widget.LinearLayout(a)
+        CallUi.loading(column)
+        assertEquals("불러오는 중이에요",(column.findViewWithTag<View>("loading_text") as TextView).text.toString())
+        var again=0
+        CallUi.retryCard(column) { again++ }
+        assertNull("the card takes the place of the loading line",column.findViewWithTag<View>("loading"))
+        assertEquals("잠시 후 다시 열어주세요",(column.findViewWithTag<View>("retry_message") as TextView).text.toString())
+        val retry=column.findViewWithTag<android.widget.Button>("retry_button")
+        assertEquals("다시 불러오기",retry.text.toString())
+        retry.performClick();assertEquals(1,again)
+        CallUi.retryCard(column) {};assertEquals(1,views(column).count { it.tag=="retry_card" })
+    }
+
+    private fun tasksWithBlockedSave(fail:Boolean):Triple<CallTasksActivity,java.util.concurrent.CountDownLatch,java.util.concurrent.atomic.AtomicInteger> {
+        seeded()
+        val gate=java.util.concurrent.CountDownLatch(1);val calls=java.util.concurrent.atomic.AtomicInteger()
+        TaskActions.completeIo={ _,_ -> calls.incrementAndGet();gate.await(5,java.util.concurrent.TimeUnit.SECONDS);if(fail) error("disk") }
+        val a=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get()
+        settle { tagged(a,"task_done").isNotEmpty() }
+        return Triple(a,gate,calls)
+    }
+
+    /** The row a [다 됐어요] button sits in (the view the row builder returned: the first one up that is pale after a press). */
+    private fun rowOf(done:View):View { var v:View=done;while(v.parent is View && (v.parent as View).tag!="page_holder" && v.alpha==1f) v=v.parent as View;return v }
+
+    @Test fun doneGoesOffAndShowsTheBarBeforeTheStoreAndCountsOnce() {
+        val (a,gate,calls)=tasksWithBlockedSave(fail=false)
+        val done=tagged(a,"task_done").first()
+        done.performClick()
+        // Before any IO is done: the button is off, the row is pale and off with all it holds, the bar is up with the G3 words.
+        assertFalse(done.isEnabled)
+        val row=rowOf(done)
+        assertEquals(0.35f,row.alpha,0.01f);assertTrue(views(row).none { it.isEnabled })
+        val bar=a.window.decorView.findViewWithTag<View>("snack_bar")!!
+        assertTrue(views(bar).filterIsInstance<TextView>().any { it.text.toString()=="끝낸 일로 옮겼어요" })
+        // A second press (past the double-tap window, straight to the action) is ignored while the first is being saved.
+        val item=CallRecordStore(RuntimeEnvironment.getApplication()).use { it.openItems() }.first { TaskActions.inFlight(it.id) }
+        TaskActions.complete(a,item,row) {}
+        gate.countDown()
+        settle { !TaskActions.inFlight(item.id) }
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(1,calls.get())
+    }
+
+    @Test fun doneComesBackWhenTheStoreFails() {
+        val (a,gate,_)=tasksWithBlockedSave(fail=true)
+        val done=tagged(a,"task_done").first()
+        done.performClick()
+        assertFalse(done.isEnabled);assertNotNull(a.window.decorView.findViewWithTag<View>("snack_undo"))
+        gate.countDown()
+        settle { done.isEnabled }
+        var p:View?=done;while(p!=null && p.tag!="page_holder") { assertTrue(p.isEnabled);assertEquals(1f,p.alpha,0.01f);p=p.parent as? View }
+        assertNull("the bar goes",a.window.decorView.findViewWithTag<View>("snack_undo"))
+        assertEquals("바꾸지 못했어요. 다시 눌러 주세요.",org.robolectric.shadows.ShadowToast.getTextOfLatestToast())
+    }
+
+    @Test fun statusLightsSayWhereTheFixIsAndNameTheGroup() {
+        val ok=StatusLights.Input(now=100L*3_600_000,folderConnected=true,modelState="READY",consent=true)
+        assertTrue(StatusLights.lights(ok).all { it.target==null })
+        val noFolder=StatusLights.lights(ok.copy(folderConnected=false)).single { !it.ok }
+        assertTrue(noFolder.words,noFolder.words.contains("위 연결 묶음에서"));assertEquals(StatusLights.GROUP_CONNECT,noFolder.target)
+        val noConsent=StatusLights.lights(ok.copy(consent=false)).single { !it.ok }
+        assertTrue(noConsent.words,noConsent.words.contains("위 정리 묶음에서"));assertEquals(StatusLights.GROUP_SUMMARY,noConsent.target)
+        assertEquals(StatusLights.GROUP_STATUS,StatusLights.lights(ok.copy(modelState="FAILED")).single { !it.ok }.target)
+        assertNull("the phone's own settings",StatusLights.lights(ok.copy(notifyAllowed=false)).single { !it.ok }.target)
+        StatusLights.lights(ok.copy(folderConnected=false,consent=false,modelState="FAILED")).forEach { assertFalse(it.words,it.words.contains("아래 연결") || it.words.contains("아래 정리")) }
+        // The groups the targets name are the ones settings draws.
+        seeded()
+        val a=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        settle { a.window.decorView.findViewWithTag<View>("settings_status")!=null }
+        listOf(StatusLights.GROUP_CONNECT,StatusLights.GROUP_SUMMARY,StatusLights.GROUP_STATUS).forEach { assertNotNull(it,a.window.decorView.findViewWithTag<View>(it)) }
+        // A light row given a press action is a button.
+        var went=0
+        val light=CallUi.signalRow(a,"녹음 가져오기",noFolder.words,false) { went++ }
+        assertTrue(light.isClickable);light.performClick();assertEquals(1,went)
+        assertFalse(CallUi.signalRow(a,"알림","정상",true).isClickable)
     }
 
     @Test fun aBareNumberIsShownAsANumberWithoutHonorific() {
