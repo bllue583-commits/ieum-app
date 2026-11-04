@@ -30,6 +30,18 @@ internal object PersonLinks {
         badge?.tag="memo_person";who?.foreground=CallUi.rowRipple()
         return row
     }
+    /** One person as a row (company people, call search): avatar, name, role or company under it; the row opens their page. */
+    fun row(a:MainActivity,p:PersonRow,under:String?,end:View?=null)=LinearLayout(a).apply {
+        tag="person_${p.id}";orientation=LinearLayout.HORIZONTAL;gravity=android.view.Gravity.CENTER_VERTICAL
+        setPadding(CallUi.dp(a,16),CallUi.dp(a,12),CallUi.dp(a,16),CallUi.dp(a,12));minimumHeight=CallUi.dp(a,64)
+        isClickable=true;isFocusable=true;background=CallUi.rowRipple();contentDescription="${p.name} 님 보기";CallUi.onTap(this) { a.openPerson(p.id) }
+        addView(CallUi.avatar(a,p.name))
+        val words=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
+        words.addView(CallUi.text(a,p.name,CallUi.BODY,true).apply { setPadding(0,0,0,0) })
+        under?.takeIf { it.isNotEmpty() }?.let { words.addView(CallUi.caption(a,it).apply { setPadding(0,0,0,0) }) }
+        addView(words,LinearLayout.LayoutParams(0,-2,1f))
+        end?.let { addView(it) }
+    }
 }
 
 /** "사람" (v2.8 r9-3): one person, opened from a name anywhere. The title is the name, under it the role and company; on the right

@@ -55,7 +55,7 @@ internal data class CallTodoItem(val id:String,val title:String,val due:String,v
                                  val tentative:Boolean=false)
 /** One company of the ledger with what the list screen shows. */
 internal data class CompanyRow(val id:String,val name:String,val trade:String?,val openTasks:Int,val lastCallMs:Long?)
-internal data class CompanyCall(val recordId:String,val dayMs:Long,val person:String?,val summary:String?)
+internal data class CompanyCall(val recordId:String,val dayMs:Long,val person:String?,val summary:String?,val personId:String?=null)
 internal data class PersonRow(val id:String,val name:String,val role:String?,val isStaff:Boolean)
 internal data class CompanyDetail(val id:String,val name:String,val trade:String?,val memo:String,val tasks:List<OpenItem>,val calls:List<CompanyCall>,val people:List<PersonRow> =emptyList(),
                                   val issues:List<Issue> =emptyList())
@@ -483,12 +483,16 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
             WHERE tc.company_id=? AND i.status NOT IN ('done','merged') AND i.kind='TODO' ORDER BY i.created_ms DESC""",id)
             .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),it.str("counterpart"),name,it.long("created_ms") ?: 0,it.str("ai_note"),it.long("tentative")==1L,
                 it.str("recording_id"),it.str("call_id"),it.long("call_ms")) }
-        val calls=rows("""SELECT c.record_id,COALESCE(c.started_ms,c.created_ms) AS day_ms,c.summary,p.name AS person FROM call_links l JOIN call_records c ON c.record_id=l.record_id
+        val calls=rows("""SELECT c.record_id,COALESCE(c.started_ms,c.created_ms) AS day_ms,c.summary,p.name AS person,l.person_id FROM call_links l JOIN call_records c ON c.record_id=l.record_id
             LEFT JOIN people p ON p.id=l.person_id WHERE l.company_id=? ORDER BY day_ms DESC LIMIT 10""",id)
-            .map { CompanyCall(it.str("record_id")!!,it.long("day_ms") ?: 0,it.str("person"),it.str("summary")) }
+            .map { CompanyCall(it.str("record_id")!!,it.long("day_ms") ?: 0,it.str("person"),it.str("summary"),it.str("person_id")) }
         return CompanyDetail(id,name,co.str("trade"),co.str("memo").orEmpty(),tasks,calls,peopleOf(id),issues(name))
     }
     private fun personRow(r:Map<String,Any?>)=PersonRow(r.str("id")!!,r.str("name")!!,r.str("role"),r.long("is_staff")==1L)
+    /** Every named person with their company name, latest first: the "사람" part of the call search (v2.8 r9-3). */
+    fun peopleForSearch():List<Pair<PersonRow,String?>> =
+        rows("SELECT p.*,c.name AS company_name FROM people p LEFT JOIN companies c ON c.id=p.company_id WHERE p.name!='' ORDER BY p.updated_ms DESC")
+            .map { personRow(it) to it.str("company_name") }
     /** People of one company, or with [companyId] null those without a company (staff and unknown). */
     fun peopleOf(companyId:String?):List<PersonRow> =
         (if(companyId==null) rows("SELECT * FROM people WHERE (company_id IS NULL OR is_staff=1) AND name!='' ORDER BY updated_ms DESC")
@@ -1137,7 +1141,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
             personal=personalRecord || r.long("personal_number")!=null)
     }
     /** Remembers [key] as personal at once (the preview data and tests; the analysis needs [PERSONAL_STREAK] verdicts in a row). */
-    internal fun rememberPersonal(key:String)=port.execute("INSERT OR IGNORE INTO personal_numbers VALUES(?,?)",key,clock())
+    internal fun rememberPersonal(key:String) { port.execute("INSERT OR IGNORE INTO personal_numbers VALUES(?,?)",key,clock());ContactCards.touch(this,listOf(key)) }
     /** Read only, for the heartbeat's callLog check: the stored call log from [fromMs] (to [toMs]) as counts and a time. */
     data class LogTally(val total:Int,val latestMs:Long?,val recorded:Int,val unrecorded:Int)
     fun callLogTally(fromMs:Long,toMs:Long=Long.MAX_VALUE):LogTally {

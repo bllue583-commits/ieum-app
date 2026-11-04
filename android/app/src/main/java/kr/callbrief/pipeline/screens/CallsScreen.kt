@@ -160,6 +160,8 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
     private class Read(val calls:List<CallRecord>,val logs:List<LoggedCall>,val jobs:List<Long>,val folder:Boolean,val people:Map<String,String>)
     /** The person each shown call is linked to, by record id: the badge and the name open the person page (v2.8). */
     private var people:Map<String,String> =emptyMap()
+    /** Named people and their company, read with the search pool: a search shows matching people above the calls (v2.8). */
+    private var peoplePool:List<Pair<PersonRow,String?>> =emptyList()
     /** ‹ ›: the new date and arrows at once with "불러오는 중이에요" in place of the list, then the read (review #16). */
     private fun go(d:LocalDate) {
         if(d>CallUi.today()) return
@@ -267,6 +269,10 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
         (calls.map { c -> (c.startedMs ?: c.createdMs) to { row(c) } }+logs.map { e -> e.startMs to { logRow(e,now) } }).sortedByDescending { it.first }
 
     internal fun matches(c:CallRecord,q:String)=searchable(c).matches(queryWords(q))
+    /** At most five people whose name, role or company holds every typed word. */
+    private fun peopleMatching(words:List<String>)=peoplePool.filter { (p,co) ->
+        val hay=listOfNotNull(p.name,p.role,co).joinToString(" ").lowercase();val packed=hay.filterNot { it.isWhitespace() }
+        words.all { hay.contains(it) || packed.contains(it) } }.take(5)
 
     private fun fillSearch() {
         ++fills
@@ -279,17 +285,25 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
                         val from=CallRecordStore.kstDay(FirstPass.FROM_MS);val to=CallUi.today()
                         val all=generateSequence(to) { it.minusDays(1) }.takeWhile { !it.isBefore(from) }.flatMap { s.day(it) }
                             .map(::searchable).toList()
-                        all to runCatching { s.personIdsOf(all.filter { it.record.linkedPerson!=null }.map { it.record.recordId }) }.getOrDefault(emptyMap()) } }.getOrNull() }
+                        Triple(all,runCatching { s.personIdsOf(all.filter { it.record.linkedPerson!=null }.map { it.record.recordId }) }.getOrDefault(emptyMap()),
+                            runCatching { s.peopleForSearch() }.getOrDefault(emptyList())) } }.getOrNull() }
                     poolLoading=false
                     if(!live())return@launch
                     if(found==null) { if(query.isNotBlank()&&detail==null) { listBox.removeAllViews()
                         CallUi.retryCard(listBox,"통화를 찾지 못했어요. 잠시 후 다시 해 주세요.") { fill() } };return@launch }
-                    pool=found.first;people=people+found.second;if(query.isNotBlank()&&detail==null) fill()
+                    pool=found.first;people=people+found.second;peoplePool=found.third;if(query.isNotBlank()&&detail==null) fill()
                 } }
             return
         }
         val words=queryWords(query)
         val hits=all.filter { it.matches(words) }.map { it.record }.sortedByDescending { it.startedMs ?: it.createdMs }
+        val who=peopleMatching(words)
+        if(who.isNotEmpty()) {
+            listBox.addView(CallUi.section(a,"사람").apply { tag="calls_search_people" })
+            listBox.addView(CallUi.list(a,who.map { (p,co) -> PersonLinks.row(a,p,listOfNotNull(co,p.role,"우리 직원".takeIf { p.isStaff }).joinToString(", ")) }).apply { setPadding(0,0,0,0) })
+            if(hits.isNotEmpty()) listBox.addView(CallUi.section(a,"통화"))
+        }
+        if(hits.isEmpty() && who.isNotEmpty()) return
         if(hits.isEmpty()) listBox.addView(CallUi.card(a).apply { addView(CallUi.text(a,"찾는 통화가 없어요.",CallUi.BODY,color=CallUi.SUBTLE)).also { tag="calls_search_none" } })
         else listBox.addView(CallUi.list(a,hits.take(60).map { row(it) }).apply { setPadding(0,0,0,0) })
     }

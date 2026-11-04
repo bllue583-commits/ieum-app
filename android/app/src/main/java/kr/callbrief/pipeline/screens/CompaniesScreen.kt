@@ -126,18 +126,7 @@ internal class CompaniesScreen(a:MainActivity):AppScreen(a) {
 
     /** One person: round badge, name, role, and a phone button when the number is known. The row opens the person page (v2.8),
      * where the name is fixed ([이름 고치기] moved there). */
-    private fun personRow(p:PersonRow)=LinearLayout(a).apply {
-        tag="person_${p.id}";orientation=LinearLayout.HORIZONTAL;gravity=android.view.Gravity.CENTER_VERTICAL
-        setPadding(CallUi.dp(a,16),CallUi.dp(a,12),CallUi.dp(a,16),CallUi.dp(a,12));minimumHeight=CallUi.dp(a,64)
-        isClickable=true;isFocusable=true;background=CallUi.rowRipple();contentDescription="${p.name} 님 보기";CallUi.onTap(this) { a.openPerson(p.id) }
-        addView(CallUi.avatar(a,p.name))
-        val words=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
-        words.addView(CallUi.text(a,p.name,CallUi.BODY,true).apply { setPadding(0,0,0,0) })
-        listOfNotNull(p.role,"우리 직원".takeIf { p.isStaff }).joinToString(", ").takeIf { it.isNotEmpty() }
-            ?.let { words.addView(CallUi.caption(a,it).apply { setPadding(0,0,0,0) }) }
-        addView(words,LinearLayout.LayoutParams(0,-2,1f))
-        CallUi.dialButton(a,numbers[p.id],p.name)?.let { addView(it) }
-    }
+    private fun personRow(p:PersonRow)=PersonLinks.row(a,p,listOfNotNull(p.role,"우리 직원".takeIf { p.isStaff }).joinToString(", "),CallUi.dialButton(a,numbers[p.id],p.name))
 
     private fun nameSheet(title:String,value:String,tag:String,empty:String,save:(String)->Unit)=NameSheet.show(a,title,value,tag,empty,save)
 
@@ -185,6 +174,6 @@ internal class CompaniesScreen(a:MainActivity):AppScreen(a) {
             // The whole row opens that call.
             CallUi.memoRow(a,CallUi.dayWord(CallRecordStore.kstDay(call.dayMs)),call.person?.let { "$it 님과 통화" } ?: "통화",call.summary?.let(CallUi::firstSentence) ?: "아직 정리 중이에요",call.summary==null,avatarName=call.person) {
                 a.openCall(call.recordId,call.dayMs)
-            }.apply { tag="company_call_${call.recordId}" } }))
+            }.let { PersonLinks.onWho(a,it,call.personId,call.person) }.apply { tag="company_call_${call.recordId}" } }))
     }
 }
