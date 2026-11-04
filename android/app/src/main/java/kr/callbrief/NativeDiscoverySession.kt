@@ -101,6 +101,8 @@ internal class NativeDiscoverySession(
         }
         return if(budgetMs>0) DiscoveryPump(engine).runBudget(pages,budgetMs,config.quietMs) else DiscoveryPump(engine).run(pages,jobs)
     }
+    /** Files the line has seen so far (for "was something new seen in this pass"). */
+    fun knownFiles():Int=queue.snapshot().rows.size
     fun cancel(){engine.cancelRun();store.cancel()}
     override fun close(){engine.cancelRun();store.close()}
 }
