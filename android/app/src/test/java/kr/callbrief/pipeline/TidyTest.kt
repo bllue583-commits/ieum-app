@@ -135,6 +135,33 @@ class TidyTest:ProtectedTextHostTestBase() {
         assertEquals("needs_confirmation",item("견적서 보내기").status);assertEquals(1L,s.getLong(PipelineSettingsKeys.TIDY_REV))
     }
 
+    @Test fun theSameNightlyStateIsNotSentAgain() {
+        seed()
+        val files=LinkedHashMap<String,String>();var writes=0
+        val inbox=object:CallInboxStore {
+            override fun put(path:String,json:String){ files.putIfAbsent(path,json) }
+            override fun replace(path:String,json:String){ files[path]=json;writes++ }
+            override fun list(dir:String)=files.keys.filter{it.startsWith("$dir/")}.map{it.removePrefix("$dir/") to "sha"}
+            override fun get(path:String)=files[path] ?: throw ClaudeCallException("INBOX_HTTP_404")
+            override fun delete(path:String,sha:String){ files.remove(path) }
+        }
+        val night=java.time.LocalDate.of(2026,10,28).atTime(22,0).atZone(CallRecordStore.KST).toInstant().toEpochMilli()
+        val s=JSONObject().put(PipelineSettingsKeys.CONSENT_GRANTED,true).put(PipelineSettingsKeys.FIRST_PASS_START_MS,now-86_400_000L).put(PipelineSettingsKeys.FIRST_PASS_DONE,true)
+        fun run(at:Long)=CallRecordAnalysisRunner(context,ClaudeCallAnalyzer(),{ s },{ at },inbox,save={ e -> e(s) },callLog={ emptyList() },smsAllowed={ false }).runPending()
+        run(night);assertEquals(1,writes)
+        val first=JSONObject(files.getValue(CallInbox.TIDY_STATE))
+        assertEquals(night,first.getLong("generatedMs"));assertEquals(tidyHash(first),s.getString(TIDY_STATE_HASH))
+        // Next night nothing changed: only the time stamp would differ, so nothing goes up and the old state ages past a day.
+        run(night+86_400_000L);assertEquals("same content, not sent again",1,writes)
+        assertEquals(night,JSONObject(files.getValue(CallInbox.TIDY_STATE)).getLong("generatedMs"));assertEquals(night,s.getLong(PipelineSettingsKeys.TIDY_SENT_MS))
+        assertEquals("the time stamp alone does not change the hash",tidyHash(first),tidyHash(JSONObject(first.toString()).put("generatedMs",night+1)))
+        // The user changes an item: the content differs and the next night it goes up again.
+        AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql")).use { p ->
+            p.execute("INSERT INTO workflow_item_history VALUES('h1',?,1,'{}')",item("계약서 초안 받기").id) }
+        run(night+2*86_400_000L);assertEquals(2,writes)
+        assertEquals(night+2*86_400_000L,JSONObject(files.getValue(CallInbox.TIDY_STATE)).getLong("generatedMs"))
+    }
+
     @Test fun requestsCarryTheRecordKey() {
         val r=ClaudeCallAnalyzerTest.request()
         val key=CallInbox.recordKey("sms:01012345678:7")

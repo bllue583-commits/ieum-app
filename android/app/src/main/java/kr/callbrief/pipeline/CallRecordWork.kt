@@ -184,8 +184,13 @@ internal class CallRecordAnalysisRunner(
         val s=settings();val now=clock()
         val hour=java.time.Instant.ofEpochMilli(now).atZone(CallRecordStore.KST).hour
         if(!consent || !FirstPass.done(s) || hour in 5..20 || now-s.optLong(PipelineSettingsKeys.TIDY_SENT_MS,0)<12*3_600_000L) return
-        store.replace(CallInbox.TIDY_STATE,db.tidyState(true,now,all=!s.optBoolean(PipelineSettingsKeys.TIDIED_ONCE,false)).toString())
-        save { it.put(PipelineSettingsKeys.TIDY_SENT_MS,now) }
+        val state=db.tidyState(true,now,all=!s.optBoolean(PipelineSettingsKeys.TIDIED_ONCE,false))
+        // The same content as last time is not sent again (round 6): the state on the inbox then gets older than a day and
+        // the morning tidy rests by its own rule. The next run tries again, so a change later in the night still goes up.
+        val hash=tidyHash(state)
+        if(hash==s.optString(TIDY_STATE_HASH)) return
+        store.replace(CallInbox.TIDY_STATE,state.toString())
+        save { it.put(PipelineSettingsKeys.TIDY_SENT_MS,now).put(TIDY_STATE_HASH,hash) }
     }
     /** From when old texts or mail may still come in (their first-pass reading goes forward from 10/1), or null when
      * both are read to the end or cannot be read (no permission, no mailbox, a mailbox that refuses the password). */
@@ -211,6 +216,13 @@ internal object CallInboxConfig {
     val enabled get()=kr.callbrief.BuildConfig.IEUM_INBOX_TOKEN.isNotBlank()||kr.callbrief.BuildConfig.LOCAL_PREVIEW
 }
 internal const val RESEND_MS=6*3_600_000L
+/** Settings key: SHA-256 of the last tidy state that went up, without its time stamp (round 6). */
+internal const val TIDY_STATE_HASH="tidyStateHash"
+/** The tidy state's content hash: generatedMs is left out, everything else counts. */
+internal fun tidyHash(state:JSONObject):String {
+    val body=JSONObject(state.toString()).apply { remove("generatedMs") }.toString()
+    return java.security.MessageDigest.getInstance("SHA-256").digest(body.toByteArray()).joinToString("") { "%02x".format(it) }
+}
 
 internal class CallAnalysisWork(context:Context,params:WorkerParameters):CoroutineWorker(context,params) {
     override suspend fun doWork():Result=withContext(Dispatchers.IO) {

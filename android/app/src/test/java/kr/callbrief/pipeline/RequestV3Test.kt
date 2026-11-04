@@ -179,8 +179,8 @@ class RequestV3Test:ProtectedTextHostTestBase() {
 
     // ---- E9: personal numbers -----------------------------------------------------------------------------------
     @Test fun aNumberFoundPersonalIsNotSentAgain() {
-        val first=call(1,"010-7777-0007")
-        store().use { it.applyAnalysis(first.recordId,analysis(null,"개인 내용",business=false)) }
+        val first=call(1,"010-7777-0007");val again=call(5,"010-7777-0007")
+        store().use { it.applyAnalysis(first.recordId,analysis(null,"개인 내용",business=false));it.applyAnalysis(again.recordId,analysis(null,"개인 내용",business=false)) }
         assertEquals(listOf("01077770007"),store().use { it.personalNumbers().map { p -> p.first } })
         val second=call(2,"010-7777-0007");val other=call(3,"010-1111-0001")
         store().use { db -> assertTrue(db.insertMessage("sms:01077770007:9",started+200_000L,"010-7777-0007","[11/4 10:03 받은 문자]\n저녁 뭐 먹을까")) }
@@ -192,7 +192,7 @@ class RequestV3Test:ProtectedTextHostTestBase() {
             val kept=db.record(second.recordId)!!
             assertEquals(CallRecordStore.ANALYZED,kept.state);assertEquals(false,kept.analysis?.business);assertEquals("",kept.transcript)
             assertTrue(db.pending().none { it.recordingId.startsWith("sms:") })
-            assertEquals("the personal text is gone",0,db.counts().values.sum()-3)
+            assertEquals("the personal text is gone",0,db.counts().values.sum()-4)
             assertTrue(db.day(LocalDate.of(2026,11,4)).none { it.recordId==second.recordId })
             // Taken back: the next call of that number goes up again.
             db.forgetPersonal("01077770007");assertTrue(db.personalNumbers().isEmpty())
@@ -200,5 +200,37 @@ class RequestV3Test:ProtectedTextHostTestBase() {
         val third=call(4,"010-7777-0007")
         runner(inbox,settings()).runPending()
         assertTrue(inbox.files.values.any { it.contains(CallInbox.recordKey(third.recordId)) })
+    }
+
+    // ---- E9 safety (round 6): two personal verdicts in a row, and no tie to work ---------------------------------------
+    private fun personal(r:CallRecord)=store().use { it.applyAnalysis(r.recordId,analysis(null,"개인 내용",business=false)) }
+    private fun remembered()=store().use { it.personalNumbers().map { p -> p.first } }
+    @Test fun oneVerdictIsNotRemembered() {
+        personal(call(1,"010-7777-0007"))
+        assertTrue(remembered().isEmpty());assertFalse(store().use { it.isPersonal("01077770007") })
+        assertEquals(1,store().use { it.personalStreak("01077770007") })
+    }
+    @Test fun twoVerdictsInARowAreRemembered() {
+        personal(call(1,"010-7777-0007"));personal(call(2,"010-7777-0007"))
+        assertEquals(listOf("01077770007"),remembered())
+        // Taken back by the user: the run starts again, so one more verdict does not hide it at once.
+        store().use { it.forgetPersonal("01077770007") };personal(call(3,"010-7777-0007"))
+        assertTrue(remembered().isEmpty())
+    }
+    @Test fun aNumberOfACompanyIsNotRemembered() {
+        val first=call(1,"010-7777-0007")
+        store().use { db -> val lid=db.ledgerIdFor(first)!!
+            db.applyLedger(JSONObject().put("people",JSONArray().put(JSONObject().put("id",lid).put("name","김민수").put("company","△△철강")))) }
+        personal(first);personal(call(2,"010-7777-0007"))
+        assertTrue("a company is on this number",remembered().isEmpty())
+    }
+    @Test fun aWorkCallInBetweenStartsTheRunAgain() {
+        personal(call(1,"010-7777-0007"))
+        store().use { it.applyAnalysis(call(2,"010-7777-0007").recordId,analysis(null,"자재 문의")) }
+        assertEquals(0,store().use { it.personalStreak("01077770007") })
+        personal(call(3,"010-7777-0007"))
+        assertEquals(1,store().use { it.personalStreak("01077770007") })
+        personal(call(4,"010-7777-0007"))
+        assertTrue("an earlier work record keeps it from being remembered",remembered().isEmpty())
     }
 }
