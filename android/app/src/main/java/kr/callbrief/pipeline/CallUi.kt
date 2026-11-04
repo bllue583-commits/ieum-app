@@ -147,7 +147,7 @@ internal object CallUi {
         eyebrow?.let { band.addView(caption(a,it,SUBTLE).apply { setPadding(0,0,0,dp(a,2)) }) }
         val head=LinearLayout(a).apply { orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL }
         head.addView(text(a,title,TITLE,true).apply { tag="page_title";letterSpacing=-0.02f;setPadding(0,0,0,0) },LinearLayout.LayoutParams(0,-2,1f))
-        if(trailing!=null) head.addView(trailing,LinearLayout.LayoutParams(-2,-2).apply { marginStart=dp(a,12) })
+        if(trailing!=null) head.addView(trailing,LinearLayout.LayoutParams(trailing.layoutParams?.width ?: -2,trailing.layoutParams?.height ?: -2).apply { marginStart=dp(a,12) })
         band.addView(head)
         subtitle?.let { band.addView(caption(a,it,SUBTLE).apply { tag="page_subtitle";setPadding(0,dp(a,6),0,0) }) }
         holder.removeViewAt(0);holder.addView(band,0)

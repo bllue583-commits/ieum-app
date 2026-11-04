@@ -79,7 +79,7 @@ class CompaniesActivity:ComponentActivity() {
                 (c.lastCallMs?.let { "${CallUi.dayWord(CallRecordStore.kstDay(it))} 마지막 통화" } ?: "통화 기록 없음"),company=true) { detailId=c.id;load() }
                 .apply { tag="company_${c.id}";contentDescription="${c.name}, 사람과 메모 자세히 보기" }
         }))
-        if(loose.isNotEmpty()) { body.addView(CallUi.section(this,"업체 없는 사람, 우리 직원 등"));body.addView(CallUi.list(this,loose.map(::personRow))) }
+        if(loose.isNotEmpty()) { body.addView(CallUi.section(this,"업체 없는 사람 (우리 직원 등)"));body.addView(CallUi.list(this,loose.map(::personRow))) }
         CallUi.restoreScroll(body,keep)
     }
 

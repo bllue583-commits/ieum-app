@@ -57,17 +57,17 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
         fun c(h:String)=android.graphics.Color.parseColor(h)
         assertEquals(c("#111418"),CallUi.PAGE);assertEquals(c("#1A1F26"),CallUi.CARD);assertEquals(c("#2A3038"),CallUi.LINE);assertEquals(c("#F2F4F6"),CallUi.INK)
         assertEquals(c("#A4ADB8"),CallUi.SUBTLE);assertEquals(c("#6B93FF"),CallUi.ACCENT);assertEquals(c("#8B95A1"),CallUi.MUTED)
-        RuntimeEnvironment.setQualifiers("-night")
+        RuntimeEnvironment.setQualifiers("+notnight")
     }
 
     @Test fun noRedAnywhereInThePalette() {
         fun red(c:Int)=android.graphics.Color.red(c)>180 && android.graphics.Color.green(c)<110 && android.graphics.Color.blue(c)<110
         listOf(false,true).forEach { n ->
-            if(n) RuntimeEnvironment.setQualifiers("+night") else RuntimeEnvironment.setQualifiers("-night")
+            if(n) RuntimeEnvironment.setQualifiers("+night") else RuntimeEnvironment.setQualifiers("+notnight")
             val a=Robolectric.buildActivity(HomeActivity::class.java).get();CallUi.page(a)
             listOf(CallUi.INK,CallUi.SUBTLE,CallUi.MUTED,CallUi.ACCENT,CallUi.ACCENT_SOFT,CallUi.AMBER,CallUi.AMBER_SOFT,CallUi.AMBER_RAIL,CallUi.OK,CallUi.CHIP,CallUi.MUTED_BAR).forEach { assertFalse(java.lang.Integer.toHexString(it),red(it)) }
         }
-        RuntimeEnvironment.setQualifiers("-night")
+        RuntimeEnvironment.setQualifiers("+notnight")
     }
 
     @Test fun dialButtonIsHiddenWithoutANumberAndOpensTheDialerWithOne() {
@@ -96,12 +96,13 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
     @Test fun homeShowsThreeTasksAboveTheCallMemosAndDoneFadesWithUndo() {
         seeded()
         val a=Robolectric.buildActivity(HomeActivity::class.java).setup().get()
-        settle { tagged(a,"home_task_").isNotEmpty() }
+        fun homeTasks()=tagged(a,"home_task_").filter { it.tag!="home_task_mix" }
+        settle { homeTasks().isNotEmpty() }
         val root=a.window.decorView
         val order=listOf("home_today","home_tasks","home_memos").map { t -> views(root).indexOfFirst { it.tag==t } }
         assertTrue(order.toString(),order.all { it>=0 } && order==order.sorted())
-        assertTrue(tagged(a,"home_task_").size<=3)
-        val first=tagged(a,"home_task_").first()
+        assertTrue(homeTasks().size<=3)
+        val first=homeTasks().first()
         val done=views(first).first { it.tag=="task_done" }
         done.performClick()
         settle { root.findViewWithTag<View>("snack_undo")!=null }
