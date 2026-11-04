@@ -143,7 +143,7 @@ class SheetDialogTest:ProtectedTextHostTestBase() {
     }
 
     @Test fun aFailedCheckKeepsTheSheetOpenWithItsWordsAndTheKeyboardComesUp() {
-        val a=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get()
+        val a=launchMain(Screen.TASKS)
         var saved=0
         val input=CallUi.sheetInput(a,"",tag="item_title_input")
         val d=CallUi.sheetDialog(a,"체크할 일 적기",body=LinearLayout(a).apply { addView(input) },primary="저장",onPrimary={ saved++ },secondary="취소",
@@ -167,7 +167,7 @@ class SheetDialogTest:ProtectedTextHostTestBase() {
     }
 
     @Test fun aSheetWithoutAFieldDoesNotAskForTheKeyboard() {
-        val a=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get()
+        val a=launchMain(Screen.TASKS)
         val d=CallUi.sheetDialog(a,"속도 측정 결과",message="녹음 40초를 처리했어요.",secondary="확인")
         val mode=d.window!!.attributes.softInputMode and android.view.WindowManager.LayoutParams.SOFT_INPUT_MASK_STATE
         assertNotEquals(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE,mode)

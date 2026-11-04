@@ -102,7 +102,7 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
     }
 
     @Test fun theCurrentTabIsShownByWeightAndAFilledIconNotByAPaleColour() {
-        val a=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get()
+        val a=launchMain(Screen.TASKS)
         settle(a) { a.window.decorView.findViewWithTag<View>("home_tasks_button")!=null }
         val on=a.window.decorView.findViewWithTag<Button>("home_tasks_button");val off=a.window.decorView.findViewWithTag<Button>("home_home_button")
         assertEquals(CallUi.font(a,CallUi.Weight.SEMIBOLD),on.typeface);assertEquals(CallUi.font(a,CallUi.Weight.REGULAR),off.typeface)

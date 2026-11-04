@@ -205,11 +205,11 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
         CallUi.retryCard(column) {};assertEquals(1,views(column).count { it.tag=="retry_card" })
     }
 
-    private fun tasksWithBlockedSave(fail:Boolean):Triple<CallTasksActivity,java.util.concurrent.CountDownLatch,java.util.concurrent.atomic.AtomicInteger> {
+    private fun tasksWithBlockedSave(fail:Boolean):Triple<MainActivity,java.util.concurrent.CountDownLatch,java.util.concurrent.atomic.AtomicInteger> {
         seeded()
         val gate=java.util.concurrent.CountDownLatch(1);val calls=java.util.concurrent.atomic.AtomicInteger()
         TaskActions.completeIo={ _,_ -> calls.incrementAndGet();gate.await(5,java.util.concurrent.TimeUnit.SECONDS);if(fail) error("disk") }
-        val a=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get()
+        val a=launchMain(Screen.TASKS)
         settle { tagged(a,"task_done").isNotEmpty() }
         return Triple(a,gate,calls)
     }
@@ -260,7 +260,7 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
         StatusLights.lights(ok.copy(folderConnected=false,consent=false,modelState="FAILED")).forEach { assertFalse(it.words,it.words.contains("아래 연결") || it.words.contains("아래 정리")) }
         // The groups the targets name are the ones settings draws.
         seeded()
-        val a=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val a=launchMain(Screen.SETTINGS)
         settle { a.window.decorView.findViewWithTag<View>("settings_status")!=null }
         listOf(StatusLights.GROUP_CONNECT,StatusLights.GROUP_SUMMARY,StatusLights.GROUP_STATUS).forEach { assertNotNull(it,a.window.decorView.findViewWithTag<View>(it)) }
         // A light row given a press action is a button.
