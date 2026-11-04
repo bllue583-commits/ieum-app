@@ -28,7 +28,7 @@ class ClaudeCallAnalyzerTest {
 
     @Test fun schemaHasTasksWithOwnerAndNoSeparatePromises() {
         val schema=ClaudeCallAnalyzer.SCHEMA;assertFalse(schema.getBoolean("additionalProperties"))
-        assertEquals(setOf("summary","keyPoints","counterpartName","counterpartCompany","counterpart","siteMemo","companyMemo","companyTrade","business","tasks"),
+        assertEquals(setOf("summary","keyPoints","counterpartName","counterpartCompany","counterpart","siteMemo","companyMemo","companyTrade","business","speakerNotes","tasks"),
             (0 until schema.getJSONArray("required").length()).map { schema.getJSONArray("required").getString(it) }.toSet())
         val item=schema.getJSONObject("properties").getJSONObject("tasks").getJSONObject("items").getJSONObject("properties")
         assertEquals(setOf("op","taskId","title","due","quote","company","owner","certainty"),item.keys().asSequence().toSet())
@@ -42,15 +42,45 @@ class ClaudeCallAnalyzerTest {
         assertTrue(content.startsWith("[사용자] 건설사 직원(부장)"))
         assertTrue(content.contains(TRANSCRIPT));assertTrue(content.contains("wf_item_1"));assertTrue(content.contains("지난 통화 요약"));assertTrue(content.contains("2026-10-29 10:00"))
         assertTrue(content.contains("\"askedOn\":\"2026-10-27\""));assertTrue(content.contains("\"company\":\"△△철강\""))
-        assertTrue(content.contains("김민수(△△철강 과장, 오인식 김민서 김민숙), 박대리"));assertTrue(content.contains("[같은 번호를 쓰는 다른 사람] 박대리(△△철강)"))
+        assertTrue(content.contains("김민수(△△철강 과장, 오인식 김민서 김민숙), 박대리"));assertTrue(content.contains("[이 번호를 쓰는 사람들] 박대리(△△철강)"))
         listOf("audio","base64","wav","m4a").forEach { assertFalse(it,content.lowercase().contains(it)) }
     }
 
     @Test fun instructionsAreGroupedHaveTwoExamplesAndTellWhoSpoke() {
         val sys=ClaudeCallAnalyzer.SYSTEM
-        listOf("[사용자와 현장]","[출력 형식]","[근거와 인용]","[누가 말했나]","[체크할 일]","[이름]","[장부]","[문자와 메일]","[개인 내용]","[처음 정리]","[예시 1","[예시 2").forEach { assertTrue(it,sys.contains(it)) }
-        assertTrue(sys.contains("화자")||sys.contains("누가 말했는지 표시가 없습니다"));assertTrue(sys.contains("owner를 \"unknown\""));assertTrue(sys.contains("데이터"))
+        listOf("[데이터]","[출력 형식]","[근거와 인용]","[누가 말했나]","[날짜]","[숫자와 용어]","[체크할 일]","[이름]","[장부 메모]","[문자와 메일]","[개인 내용]","[처음 정리]","[예시 1","[예시 2").forEach { assertTrue(it,sys.contains(it)) }
+        assertTrue(sys.contains("화자")||sys.contains("누가 말했는지 표시가 없습니다"));assertTrue(sys.contains("owner는 \"unknown\""));assertTrue(sys.contains("데이터"))
         assertFalse("promises section is gone",sys.contains("promises"))
+    }
+
+    @Test fun rulesV4CarryTheNewWordingWithTheKeptExceptions() {
+        val sys=ClaudeCallAnalyzer.SYSTEM
+        assertEquals(4,ClaudeCallAnalyzer.PROMPT_VERSION)
+        listOf("speakerNotes","줄바꿈은 말이 끊긴 자리일 뿐 화자가 바뀐 표시가 아닙니다","(숫자 확인 필요)","\"다음 주 초\"는 다음 주 월요일","\"내일모레\"는 이틀 뒤",
+            "호칭(과장, 소장, 님)은 이름에 붙이지 말고 role","[이 번호를 쓰는 사람들]","[통화 방향]","\"첨부: 견적서.pdf\"","siteMemo는","600자","companyMemo","400자",
+            "certainty \"sure\"","<transcript>","<texts>").forEach { assertTrue(it,sys.contains(it)) }
+        // Exceptions decided at the v2.0 check: certainty stays sure/tentative, memos stay whole strings.
+        listOf("firm","siteMemoLines","companyMemoLines","]]>").forEach { assertFalse(it,sys.contains(it)) }
+        assertEquals(2,Regex("\"certainty\":\"sure\"").findAll(sys).count())
+    }
+
+    @Test fun blockNamesTheRulesUseAreInTheMessage() {
+        val m=ClaudeCallAnalyzer.userMessage(request().copy(direction="받은 전화",sameNumberPeople=listOf("박대리(△△철강)"),personNames=listOf("김민수"),personDetails=mapOf("김민수" to "오인식 김민서")))
+        listOf("[통화 방향] 받은 전화","[이 번호를 쓰는 사람들] 박대리(△△철강)","[달력]","[용어]","[공종 목록]","김민수(오인식 김민서)").forEach { assertTrue(it,m.contains(it)) }
+        val logged=ClaudeCallAnalyzer.userMessage(request().copy(callLog=ClaudeCallRequest.CallLogView(null,"건 전화","2026-10-29 10:00 (목)",60_000)))
+        assertTrue("direction from the call log when the record has none",logged.contains("[통화 방향] 건 전화"))
+    }
+
+    @Test fun speakerNotesAreReadButNotKept() {
+        val withNotes=analysis(tasks(task("create",null,"견적서 보내기","견적서는 내일까지 메일로 보내드릴게요").put("owner","me").put("certainty","sure")))
+            .put("speakerNotes","건 전화이고 상대가 부장님이라고 불러 보내드린다는 쪽이 사용자다.").put("siteMemo",JSONObject.NULL).put("companyMemo",JSONObject.NULL)
+        val a=ClaudeCallAnalysis.parse(withNotes)
+        assertEquals("me",a.tasks.single().owner);assertFalse(a.tasks.single().tentative)
+        assertFalse(a.toJson().has("speakerNotes"))
+        assertEquals("null notes too",1,ClaudeCallAnalysis.parse(withNotes.put("speakerNotes",JSONObject.NULL)).tasks.size)
+        // An old answer (promises, string memos, no speakerNotes) still reads.
+        val old=ClaudeCallAnalysis.parse(analysis(promises=JSONArray().put(JSONObject().put("text","견적서 보내기").put("owner","me").put("quote","견적서는 내일까지"))).put("siteMemo","3층 타설 준비 중"))
+        assertEquals(1,old.promises.size);assertEquals("3층 타설 준비 중",old.siteMemo)
     }
 
     @Test fun quotesNotInTranscriptAndUnknownTaskIdsAreDropped() {

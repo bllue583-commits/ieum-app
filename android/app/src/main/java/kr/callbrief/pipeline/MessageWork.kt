@@ -132,6 +132,14 @@ internal object MessageIntake {
                 (t.startsWith("On ") && t.endsWith("wrote:")) || t.matches(Regex("^(보낸 사람|From)\\s*:.*")) }
         return (if(cut>0) lines.take(cut) else lines).joinToString("\n").replace(Regex("\n{3,}"),"\n\n").trim()
     }
+    /** "첨부: 견적서.pdf, 도면.dwg" under the body (design C4 rule 18: a sent file is a sign the "보내기" item is done); empty without files. */
+    internal fun attachedLine(names:List<String>)=names.map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(10)
+        .takeIf { it.isNotEmpty() }?.joinToString(", ",prefix="\n첨부: ") { it.take(80) } ?: ""
+    private fun attachments(part:javax.mail.Part):List<String> = when {
+        part.isMimeType("multipart/*") -> (part.content as javax.mail.Multipart).let { mp -> (0 until mp.count).flatMap { attachments(mp.getBodyPart(it)) } }
+        else -> listOfNotNull(part.fileName?.let { runCatching { javax.mail.internet.MimeUtility.decodeText(it) }.getOrDefault(it) }
+            ?.takeIf { javax.mail.Part.ATTACHMENT.equals(part.disposition,true) || !part.isMimeType("text/*") })
+    }
     private fun text(part:javax.mail.Part):String? = when {
         part.isMimeType("text/plain") -> part.content as? String
         part.isMimeType("multipart/*") -> (part.content as javax.mail.Multipart).let { mp ->
@@ -169,7 +177,8 @@ internal object MessageIntake {
                         val body=newPart(runCatching { text(m) }.getOrNull().orEmpty()).take(3000)
                         // The address identifies the sender (design: 장부의 원본); the name is in the text.
                         val who=from?.address?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: from?.personal
-                        val content="제목: ${m.subject.orEmpty()}\n보낸 사람: ${listOfNotNull(from?.personal,from?.address).joinToString(" ")}\n\n$body"
+                        val files=runCatching { attachments(m) }.getOrDefault(emptyList())
+                        val content="제목: ${m.subject.orEmpty()}\n보낸 사람: ${listOfNotNull(from?.personal,from?.address).joinToString(" ")}\n\n$body"+attachedLine(files)
                         val id=MessageKind.MAIL+(uidFolder?.let { "${it.uidValidity}:${it.getUID(m)}" } ?: "${m.messageNumber}:$at")
                         if(store.insertMessage(id,at,who,content)) added++
                     }

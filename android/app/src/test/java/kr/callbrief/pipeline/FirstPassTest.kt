@@ -191,7 +191,7 @@ class FirstPassTest:ProtectedTextHostTestBase() {
             val r=db.record(id)!!
             assertEquals("01012345678",r.counterpartKey);assertEquals("홍길동",r.counterpart)
             assertEquals("건 전화",db.request(r).direction)
-            assertTrue(ClaudeCallAnalyzer.userMessage(db.request(r)).contains("통화 방향: 건 전화"))
+            assertTrue(ClaudeCallAnalyzer.userMessage(db.request(r)).contains("[통화 방향] 건 전화"))
             assertEquals(1,db.unrecordedCalls())
         }
     }

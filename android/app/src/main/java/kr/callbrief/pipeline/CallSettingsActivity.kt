@@ -163,6 +163,17 @@ class CallSettingsActivity:ComponentActivity() {
                 Toast.makeText(this@CallSettingsActivity,"${n}건을 다시 정리할게요.",Toast.LENGTH_SHORT).show();refresh()
             }
         }.apply { tag="reanalyze_all" })
+
+        // Sends the heartbeat now so whoever looks after the app sees the phone's state (design B5).
+        body.addView(CallUi.divider(this))
+        body.addView(button("문제 알리기") {
+            busy=true
+            lifecycleScope.launch {
+                val ok=withContext(Dispatchers.IO) { PhoneStatus.report(this@CallSettingsActivity) }
+                busy=false
+                Toast.makeText(this@CallSettingsActivity,if(ok) "관리하는 분께 상태를 보냈어요" else "보내지 못했어요. 인터넷을 확인해 주세요",Toast.LENGTH_SHORT).show()
+            }
+        }.apply { tag="report_problem" })
     }
 
     private fun notifyAllowed()=android.os.Build.VERSION.SDK_INT<33||checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)==android.content.pm.PackageManager.PERMISSION_GRANTED

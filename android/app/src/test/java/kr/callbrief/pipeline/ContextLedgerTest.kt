@@ -172,7 +172,7 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         val next=call(5,office)
         val req=store().use { it.request(next) }
         assertEquals("박지훈",req.person!!.name);assertEquals(listOf("김민수(△△철강 과장)"),req.sameNumberPeople)
-        assertTrue(ClaudeCallAnalyzer.userMessage(req).contains("[같은 번호를 쓰는 다른 사람] 김민수(△△철강 과장)"))
+        assertTrue(ClaudeCallAnalyzer.userMessage(req).contains("[이 번호를 쓰는 사람들] 김민수(△△철강 과장)"))
         // Someone known only by number takes the first name that is heard.
         val ledgerId=store().use { it.ledgerIdFor(call(6,"010-7777-0007")) }
         assertNotNull(ledgerId);assertEquals(3,count("people"))

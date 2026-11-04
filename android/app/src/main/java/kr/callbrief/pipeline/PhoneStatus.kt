@@ -31,6 +31,14 @@ internal object PhoneStatus {
     /** Error values are codes (INBOX_HTTP_401, STATUS_FAILURE_...). Anything longer or odder is cut so free text cannot leak. */
     internal fun code(raw:String):String = raw.trim().take(60).filter { it.code<128 && it.isLetterOrDigit() || it=='_' || it=='-' || it==':' }
 
+    /** Where [report] sends; a test swaps in a fake mailbox. */
+    @Volatile internal var reportStore:()->CallInboxStore? ={ CallInboxConfig.store() }
+    /** "문제 알리기" (design B5): the heartbeat now, on the caller's background thread. False when it could not be sent. */
+    fun report(context:Context,now:Long=System.currentTimeMillis()):Boolean = try {
+        val store=reportStore() ?: return false
+        store.replace(PATH,build(collect(context.applicationContext,now)).toString());true
+    } catch(e:Exception) { Log.w(TAG,"report not sent: ${e.javaClass.simpleName}");false }
+
     /** Reads the current state and writes the file. Never throws: the hourly tick must not fail because of this. */
     fun publish(context:Context,store:CallInboxStore? =CallInboxConfig.store(),now:Long=System.currentTimeMillis()) {
         try {

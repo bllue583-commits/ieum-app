@@ -93,7 +93,7 @@ internal object CallInbox {
     /** While the scheduled task's prompt still reads its rules from each request (it can only be replaced with the user's approval),
      * v3 requests also carry the same rules and answer format, so the current task and the new docs/routines/hourly.md give the
      * same result. Set to false once the task runs hourly.md (design C1, review B6). */
-    const val CARRY_RULES=true
+    const val CARRY_RULES=false
     private fun rules(o:JSONObject):JSONObject = if(!CARRY_RULES) o else o.put("system",ClaudeCallAnalyzer.SYSTEM).put("schema",ClaudeCallAnalyzer.SCHEMA)
     /** Request format v3 (design C1): the rules and the answer format live in the routine (docs/routines/hourly.md), not in
      * the request; the request says which version of them it was made for ([ClaudeCallAnalyzer.PROMPT_VERSION]).

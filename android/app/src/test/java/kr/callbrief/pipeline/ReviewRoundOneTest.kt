@@ -141,6 +141,53 @@ class ReviewRoundOneTest:ProtectedTextHostTestBase() {
         assertEquals("2026-10-28",s.getString(PipelineSettingsKeys.STALL_WARNED_DAY))
     }
 
+    @Test fun theStallNoticeUsesItsOwnStatusChannel() {
+        org.robolectric.Shadows.shadowOf(context as android.app.Application).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        CallDigestNotifier.post(context,CallDigestWork.STATUS,CallDigestText.Message("정리가 멈췄어요","통화가 6시간 넘게 정리되지 않고 있어요."))
+        val m=context.getSystemService(android.app.NotificationManager::class.java)
+        assertEquals("이음 상태",m.getNotificationChannel(CallDigestWork.STATUS_CHANNEL).name.toString())
+        assertEquals("이음 통화 정리",m.getNotificationChannel(CallDigestWork.CHANNEL).name.toString())
+        val posted=org.robolectric.Shadows.shadowOf(m).allNotifications.single()
+        assertEquals(CallDigestWork.STATUS_CHANNEL,posted.channelId)
+        CallDigestNotifier.post(context,CallDigestSchedule.EVENING,CallDigestText.Message("오늘 통화","1건"))
+        assertTrue(org.robolectric.Shadows.shadowOf(m).allNotifications.any { it.channelId==CallDigestWork.CHANNEL })
+    }
+
+    private fun settingsView(tag:String):android.view.View {
+        val a=org.robolectric.Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        repeat(300) { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            if(a.window.decorView.findViewWithTag<android.view.View>(tag)!=null) return@repeat;Thread.sleep(10) }
+        return a.window.decorView.findViewWithTag<android.view.View>(tag)!!
+    }
+    private fun toastAfter(click:android.view.View):String? {
+        click.performClick()
+        repeat(300) { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            org.robolectric.shadows.ShadowToast.getTextOfLatestToast()?.let { return it };Thread.sleep(10) }
+        return null
+    }
+
+    @Test fun reportProblemSendsTheHeartbeatNow() {
+        val inbox=object:CallInboxStore by Inbox() { val sent=LinkedHashMap<String,String>()
+            override fun replace(path:String,json:String){ sent[path]=json } }
+        val before=PhoneStatus.reportStore
+        try {
+            PhoneStatus.reportStore={ inbox }
+            val b=settingsView("report_problem")
+            assertEquals("문제 알리기",(b as android.widget.TextView).text.toString())
+            assertEquals("관리하는 분께 상태를 보냈어요",toastAfter(b))
+            assertTrue(JSONObject(inbox.sent.getValue(PhoneStatus.PATH)).has("atMs"))
+            org.robolectric.shadows.ShadowToast.reset()
+            PhoneStatus.reportStore={ object:CallInboxStore by Inbox() { override fun replace(path:String,json:String){ throw java.io.IOException("offline") } } }
+            assertEquals("보내지 못했어요. 인터넷을 확인해 주세요",toastAfter(settingsView("report_problem")))
+        } finally { PhoneStatus.reportStore=before }
+    }
+
+    @Test fun settingsHelpGroupHasTheSiteMemoToggle() {
+        val t=settingsView("site_memo_toggle")
+        val memo=t.rootView.findViewWithTag<android.view.View>("site_memo")
+        assertEquals(android.view.View.GONE,memo.visibility);t.performClick();assertEquals(android.view.View.VISIBLE,memo.visibility)
+    }
+
     @Test fun settingsShowTheInstalledVersion() {
         val a=org.robolectric.Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
         repeat(300) { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()

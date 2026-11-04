@@ -99,7 +99,9 @@ internal object CallDigestSchedule {
 }
 
 internal class CallDigestWork(context:Context,params:WorkerParameters):CoroutineWorker(context,params) {
-    companion object { const val CHANNEL="ieum.calls.digest";private const val TAG="ieum.digest" }
+    companion object { const val CHANNEL="ieum.calls.digest"
+        /** Self-check notices (design B4: 정리가 멈췄어요, 연결이 끊겼어요), apart from the reports. */
+        const val STATUS_CHANNEL="ieum.calls.status";const val STATUS="stall";private const val TAG="ieum.digest" }
     override suspend fun doWork():Result=withContext(Dispatchers.IO) {
         val kind=inputData.getString("kind") ?: CallDigestSchedule.EVENING
         val now=Instant.now()
@@ -126,15 +128,17 @@ internal object CallDigestNotifier {
         if(Build.VERSION.SDK_INT>=33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) return
         val manager=context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(CallDigestWork.CHANNEL,"이음 통화 정리",NotificationManager.IMPORTANCE_DEFAULT))
+        manager.createNotificationChannel(NotificationChannel(CallDigestWork.STATUS_CHANNEL,"이음 상태",NotificationManager.IMPORTANCE_DEFAULT))
+        val channel=if(kind==CallDigestWork.STATUS) CallDigestWork.STATUS_CHANNEL else CallDigestWork.CHANNEL
         val intent=Intent(context,if(kind==CallDigestSchedule.MORNING) CallTasksActivity::class.java else TodayCallsActivity::class.java).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         val pending=PendingIntent.getActivity(context,kind.hashCode(),intent,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val notification=Notification.Builder(context,CallDigestWork.CHANNEL).setSmallIcon(R.drawable.ic_stat_ieum)
+        val notification=Notification.Builder(context,channel).setSmallIcon(R.drawable.ic_stat_ieum)
             .setContentTitle(m.title).setContentText(m.text).setContentIntent(pending).setAutoCancel(true).setLocalOnly(true)
             // Whole lines, wrapped: an inbox style cuts each line with "…" (user rule: nothing cut off).
             .setStyle(Notification.BigTextStyle().setBigContentTitle(m.title).bigText(m.lines.joinToString("\n").ifEmpty { m.text }))
             .setVisibility(Notification.VISIBILITY_PRIVATE)
             // Lock screen shows only the counts; the list appears once unlocked.
-            .setPublicVersion(Notification.Builder(context,CallDigestWork.CHANNEL).setSmallIcon(R.drawable.ic_stat_ieum).setContentTitle(m.title).setContentText("잠금을 풀면 내용이 보여요").build())
+            .setPublicVersion(Notification.Builder(context,channel).setSmallIcon(R.drawable.ic_stat_ieum).setContentTitle(m.title).setContentText("잠금을 풀면 내용이 보여요").build())
             .build()
         manager.notify("ieum.calls.$kind",700,notification)
         if(kind==CallDigestSchedule.EVENING||kind==CallDigestSchedule.MORNING) runCatching { SecureSettings(CallPipelineStartup.storage(context)).update { it.put(PipelineSettingsKeys.LAST_DIGEST_MS,System.currentTimeMillis()) } }
