@@ -31,32 +31,32 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
     private fun settle(a:android.app.Activity,check:()->Boolean) { repeat(300) { shadowOf(Looper.getMainLooper()).idle();if(check())return;Thread.sleep(10) };fail("UI did not settle") }
     private val english=Regex("[A-Z]{3,}_[A-Z_]+|\\b(WAITING|FAILED|TRANSCRIBED|ANALYZED|null)\\b")
 
-    private fun home(snapshot:HomeActivity.Snapshot):HomeActivity {
-        val a=Robolectric.buildActivity(HomeActivity::class.java).setup().get()
+    private fun home(snapshot:HomeScreen.Snapshot):MainActivity {
+        val a=launchMain(Screen.HOME)
         settle(a) { a.window.decorView.findViewWithTag<View>("home_calls_button")!=null }
-        a.render(snapshot);return a
+        a.home.render(snapshot);return a
     }
 
     @Test fun homeShowsTodayCardThreeDoorsAndSetupUntilDone() {
-        val a=home(HomeActivity.Snapshot(folder=true,consent=false,model="DOWNLOADING",calls=3,working=1,newTasks=2,due=4,overdue=1,lastAnalyzedMs=0))
+        val a=home(HomeScreen.Snapshot(folder=true,consent=false,model="DOWNLOADING",calls=3,working=1,newTasks=2,due=4,overdue=1,lastAnalyzedMs=0))
         val root=a.window.decorView
         for(tag in listOf("home_today","home_calls_button","home_tasks_button","home_settings_button","home_setup"))assertNotNull(tag,root.findViewWithTag<View>(tag))
         val all=texts(a).joinToString("\n"){it.text.toString()}
-        assertTrue(all,all.contains("오늘 통화"));assertTrue(all.contains("정리 중 1건"));assertTrue(all.contains("새 체크"));assertTrue(all,all.contains("처음 설정") && all.contains("5/7"))
+        assertTrue(all,all.contains("오늘 통화"));assertTrue(all.contains("정리 중 1건"));assertTrue(all.contains("오늘 생긴 체크") && all.contains("남은 체크할 일"));assertTrue(all,all.contains("처음 설정") && all.contains("5/7"))
         assertFalse(all,english.containsMatchIn(all))
         val buttons=views(root).filterIsInstance<Button>().filter{(it.tag as? String)?.startsWith("home_")==true}
         assertTrue(buttons.all{ it.minHeight>=(56*it.resources.displayMetrics.density).toInt() })
-        val done=home(HomeActivity.Snapshot(true,true,"READY",0,0,0,0,0,0))
+        val done=home(HomeScreen.Snapshot(true,true,"READY",0,0,0,0,0,0))
         assertNull(done.window.decorView.findViewWithTag<View>("home_setup"))
     }
 
     @Test fun mainScreensUseLargeTextAndPlainWords() {
-        val a=home(HomeActivity.Snapshot(true,true,"READY",1,0,1,1,0,1_793_300_000_000))
+        val a=home(HomeScreen.Snapshot(true,true,"READY",1,0,1,1,0,1_793_300_000_000))
         assertTrue(texts(a).filter{it !is Button}.filterNot(::sizeOk).joinToString { "${it.text} ${sp(it)}" },texts(a).filter{it !is Button}.all(::sizeOk))
-        val today=Robolectric.buildActivity(TodayCallsActivity::class.java).setup().get()
+        val today=launchMain(Screen.CALLS)
         settle(today) { texts(today).any { it.text.toString().endsWith("의 통화") } }
         assertTrue(texts(today).filter{it !is Button}.all(::sizeOk))
-        val settings=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val settings=launchMain(Screen.SETTINGS)
         settle(settings) { texts(settings).any { it.text.toString()=="설정" } }
         val all=texts(settings).joinToString("\n"){it.text.toString()}
         assertFalse(all,english.containsMatchIn(all));assertTrue(texts(settings).filter{it !is Button && it !is android.widget.EditText}.all(::sizeOk))
@@ -75,10 +75,38 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
     @Test fun tasksAreGroupedByRequestDay() {
         val now=System.currentTimeMillis();val day=86_400_000L
         fun item(id:String,at:Long,status:String="open")=OpenItem(id,id,"",status,1,"",null,createdMs=at)
-        val a=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get()
-        val groups=a.groups(listOf(item("old",now-5*day),item("today",now),item("yesterday",now-day),item("check",now,"needs_confirmation")))
+        val a=launchMain(Screen.TASKS)
+        val groups=a.tasks.groups(listOf(item("old",now-5*day),item("today",now),item("yesterday",now-day),item("check",now,"needs_confirmation")))
         assertEquals(listOf("끝났는지 확인해 주세요","오늘 요청한 일","어제 요청한 일","그전에 요청한 일"),groups.map{it.first})
         assertEquals("오늘 요청",CallUi.requested(now))
+    }
+
+    /** WCAG relative luminance and contrast of two colours. */
+    private fun luminance(c:Int):Double { fun ch(v:Int):Double { val x=v/255.0;return if(x<=0.03928) x/12.92 else Math.pow((x+0.055)/1.055,2.4) }
+        return 0.2126*ch(android.graphics.Color.red(c))+0.7152*ch(android.graphics.Color.green(c))+0.0722*ch(android.graphics.Color.blue(c)) }
+    private fun contrast(a:Int,b:Int):Double { val (lo,hi)=listOf(luminance(a),luminance(b)).sorted();return (hi+0.05)/(lo+0.05) }
+
+    @Test fun textColoursReachFourAndAHalfToOne() {
+        listOf("+notnight","+night").forEach { q ->
+            org.robolectric.RuntimeEnvironment.setQualifiers(q)
+            CallUi.applyTheme(org.robolectric.RuntimeEnvironment.getApplication())
+            // Grey text on a white sheet (rows, captions, the tab words), and captions straight on the grey page.
+            listOf("INK" to CallUi.INK,"SUBTLE" to CallUi.SUBTLE,"MUTED" to CallUi.MUTED).forEach { (n,c) ->
+                assertTrue("$q $n on the sheet ${contrast(c,CallUi.CARD)}",contrast(c,CallUi.CARD)>=4.5) }
+            listOf("INK" to CallUi.INK,"PAGE_CAPTION" to CallUi.PAGE_CAPTION).forEach { (n,c) ->
+                assertTrue("$q $n on the page ${contrast(c,CallUi.PAGE)}",contrast(c,CallUi.PAGE)>=4.5) }
+        }
+        org.robolectric.RuntimeEnvironment.setQualifiers("+notnight");CallUi.applyTheme(org.robolectric.RuntimeEnvironment.getApplication())
+        assertEquals(android.graphics.Color.parseColor("#6B7684"),CallUi.MUTED);assertEquals(android.graphics.Color.parseColor("#5F6B78"),CallUi.PAGE_CAPTION)
+        assertEquals("lines keep their light grey",android.graphics.Color.parseColor("#B0B8C1"),CallUi.FAINT)
+    }
+
+    @Test fun theCurrentTabIsShownByWeightAndAFilledIconNotByAPaleColour() {
+        val a=launchMain(Screen.TASKS)
+        settle(a) { a.window.decorView.findViewWithTag<View>("home_tasks_button")!=null }
+        val on=a.window.decorView.findViewWithTag<Button>("home_tasks_button");val off=a.window.decorView.findViewWithTag<Button>("home_home_button")
+        assertEquals(CallUi.font(a,CallUi.Weight.SEMIBOLD),on.typeface);assertEquals(CallUi.font(a,CallUi.Weight.REGULAR),off.typeface)
+        assertTrue(contrast(off.currentTextColor,CallUi.CARD)>=4.5)
     }
 
     @Test fun nextReportTimeIsPlainKorean() {

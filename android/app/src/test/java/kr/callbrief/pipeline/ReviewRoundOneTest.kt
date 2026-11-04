@@ -160,7 +160,7 @@ class ReviewRoundOneTest:ProtectedTextHostTestBase() {
     }
 
     private fun settingsView(tag:String):android.view.View {
-        val a=org.robolectric.Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val a=launchMain(Screen.SETTINGS)
         repeat(300) { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
             if(a.window.decorView.findViewWithTag<android.view.View>(tag)!=null) return@repeat;Thread.sleep(10) }
         return a.window.decorView.findViewWithTag<android.view.View>(tag)!!
@@ -195,7 +195,7 @@ class ReviewRoundOneTest:ProtectedTextHostTestBase() {
     }
 
     @Test fun settingsShowTheInstalledVersion() {
-        val a=org.robolectric.Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val a=launchMain(Screen.SETTINGS)
         repeat(300) { org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
             if(a.window.decorView.findViewWithTag<android.widget.TextView>("app_version")!=null) return@repeat;Thread.sleep(10) }
         val v=a.window.decorView.findViewWithTag<android.widget.TextView>("app_version")

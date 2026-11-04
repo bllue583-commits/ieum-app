@@ -3,4 +3,7 @@
     <!-- Smaller than reading size: the text is an aside (caption 16sp, badge 15sp). The tag holds its allowed minimum in sp. -->
     <item name="ui_min_sp" type="id" />
     <item name="ui_snack_timer" type="id" />
+    <!-- CallUi.once: when the view was last pressed (uptime ms). CallUi.busy: the words of the button before it went busy. -->
+    <item name="ui_last_tap" type="id" />
+    <item name="ui_busy_text" type="id" />
 </resources>

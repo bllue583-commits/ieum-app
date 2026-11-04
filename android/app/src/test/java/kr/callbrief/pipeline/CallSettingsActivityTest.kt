@@ -28,20 +28,21 @@ class CallSettingsActivityTest:ProtectedTextHostTestBase() {
     private fun root(a:android.app.Activity)=a.window.decorView
 
     @Test fun settingsHaveNoApiKeyInputAnyMore() {
-        val a=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val a=launchMain(Screen.SETTINGS)
         until(a) { views(root(a)).filterIsInstance<TextView>().any { it.text.toString()=="정리 동의" } }
         assertNull(root(a).findViewWithTag<View>("api_key_input"));assertNull(root(a).findViewWithTag<View>("api_key_save"))
         assertTrue(views(root(a)).filterIsInstance<TextView>().none { it.text.toString().contains("키 저장") || it.text.toString().contains("platform.claude.com") })
     }
 
     @Test fun todayCallsOpensEmpty() {
-        val a=Robolectric.buildActivity(TodayCallsActivity::class.java).setup().get()
-        until(a) { views(root(a)).filterIsInstance<TextView>().any { it.text.toString().endsWith("의 통화") } }
+        val a=launchMain(Screen.CALLS)
+        // The title shows at once with "불러오는 중이에요" (r8-4); the empty day once it is read.
+        until(a) { views(root(a)).filterIsInstance<TextView>().any { it.text.toString().endsWith("의 통화") } && root(a).findViewWithTag<View>("loading")==null }
         assertTrue(views(root(a)).filterIsInstance<TextView>().any { it.text.toString().contains("이 날짜에 통화가 없어요") })
     }
 
     @Test fun settingsShowMyInfoAndPersonalNumbers() {
-        val a=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val a=launchMain(Screen.SETTINGS)
         until(a) { root(a).findViewWithTag<View>("personal_state")!=null }
         val texts=views(root(a)).filterIsInstance<TextView>().map { it.text.toString() }
         assertTrue(texts.contains("내 정보"));assertTrue(texts.contains("개인으로 둔 번호"))

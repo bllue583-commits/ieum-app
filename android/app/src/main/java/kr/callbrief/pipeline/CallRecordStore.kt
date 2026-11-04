@@ -46,7 +46,11 @@ internal object MessageKind {
 internal data class OpenItem(val id:String,val title:String,val due:String,val status:String,val revision:Long,val edition:String,val counterpart:String?,val company:String?=null,
                               /** When the to-do was asked for (the call it came from). */ val createdMs:Long=0,
                               /** One line from a later call about an item the user had changed ("11/5 통화: 끝난 것으로 보여요"); the item itself is untouched. */ val aiNote:String?=null,
-                              /** Asked for only loosely ("알아볼게요", certainty "tentative"). */ val tentative:Boolean=false)
+                              /** Asked for only loosely ("알아볼게요", certainty "tentative"). */ val tentative:Boolean=false,
+                              /** Where it came from: a call or message recording, "user:items" (written by the user) or "tidy:followups" (the morning tidy). */ val recordingId:String?=null,
+                              /** The call record that made it and that call's time; null when no call made it (r8-5: only those rows open a call). */ val recordId:String?=null,val callMs:Long?=null) {
+    val fromCall:Boolean get()=recordId!=null
+}
 internal data class CallTodoItem(val id:String,val title:String,val due:String,val status:String,val revision:Long,val company:String?=null,val createdMs:Long=0,val aiNote:String?=null,
                                  val tentative:Boolean=false)
 /** One company of the ledger with what the list screen shows. */
@@ -140,6 +144,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         fun canonCompany(name:String?):String=NameKey.canonCompany(name)
         /** Bump when the key rules or the stored data need one more pass in [migrate]. */
         const val MIGRATION_VERSION=3
+        /** Marks the schema pass done on one loaded store state ([AndroidSqlPort.needs]). */
+        private const val SCHEMA_STEP="callRecordStore.schema.v$MIGRATION_VERSION"
         /** Name as stored: trimmed, inner whitespace collapsed; null when empty. */
         fun normName(name:String?):String? = name?.trim()?.replace(Regex("\\s+")," ")?.takeIf { it.isNotEmpty() }
         /** A name with any phone-number-shaped part removed (a filename like "홍길동 010-…"): numbers stay on the phone. */
@@ -162,7 +168,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     private val migrationMerges=mutableListOf<Pair<String,String>>()
     private val port=AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql"))
     init {
-        try { port.transaction { SCHEMA.forEach { port.execute(it) }
+        // The schema check, column additions, migration and repairs run once per loaded store state (r8-1): the state stays
+        // in memory while the app holds its store (IeumApplication.store), so a later open skips this transaction.
+        if(port.needs(SCHEMA_STEP)) try { port.transaction { SCHEMA.forEach { port.execute(it) }
             fun addColumns(table:String,columns:List<Pair<String,String>>) {
                 val have=rows("PRAGMA table_info($table)").mapNotNull { it.str("name") }.toSet()
                 columns.filter { it.first !in have }.forEach { (c,t) -> port.execute("ALTER TABLE $table ADD COLUMN $c $t") }
@@ -186,7 +194,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
                 if(rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name='call_transcription_jobs'").isNotEmpty())
                     port.execute(CallTranscriptionStore.SKIP_BEFORE_START_SQL,clock(),FirstPass.FROM_MS)
             }
-            null } } catch(e:Exception) { port.close();throw e }
+            null };port.markDone(SCHEMA_STEP) } catch(e:Exception) { port.close();throw e }
         flushMigrationMerges()
     }
     /** Brings what older versions stored to the current design (review B9, B10, B20); every step is safe to repeat, and the
@@ -251,6 +259,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         }
     }
     override fun close()=port.close()
+    /** Still open and not held for review (the process store is replaced when it is not). */
+    fun usable():Boolean=port.usable()
     private fun rows(sql:String,vararg args:Any?)=port.query(sql,*args)
     private fun Map<String,Any?>.long(k:String)=(this[k] as? Number)?.toLong()
     private fun Map<String,Any?>.str(k:String)=this[k] as? String
@@ -316,6 +326,10 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     /** When the task's answer for this record was received (null: not yet, or set aside as broken). A received record is not sent again. */
     fun receivedMs(id:String):Long?=rows("SELECT result_ms FROM call_inbox_sent WHERE record_id=?",id).singleOrNull()?.long("result_ms")
     fun setReceived(id:String,ms:Long?)=port.execute("UPDATE call_inbox_sent SET result_ms=? WHERE record_id=?",ms,id)
+    /** When the oldest waiting record (TRANSCRIBED or WAITING_CONSENT) that went up and has no answer yet was sent, or null:
+     * the first-pass stall test in one query (pending JOIN call_inbox_sent) instead of two lookups per record (r8-1). */
+    fun oldestUnansweredSentMs():Long? =rows("""SELECT MIN(s.sent_ms) AS m FROM call_records c JOIN call_inbox_sent s ON s.record_id=c.record_id
+        WHERE c.state IN ('TRANSCRIBED','WAITING_CONSENT') AND s.result_ms IS NULL""").firstOrNull()?.long("m")
     /** A record went up and its answer has not come yet (what the :45 result pass waits for, v2.4). */
     fun awaitingResult():Boolean =rows("SELECT 1 FROM call_records c JOIN call_inbox_sent s ON s.record_id=c.record_id WHERE c.state='TRANSCRIBED' AND s.result_ms IS NULL LIMIT 1").isNotEmpty()
     private val withPerson="SELECT c.*,p.name AS linked_person FROM call_records c LEFT JOIN call_links l ON l.record_id=c.record_id LEFT JOIN people p ON p.id=l.person_id"
@@ -450,9 +464,12 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     fun companyDetail(id:String):CompanyDetail? {
         val co=companyById(id) ?: return null
         val name=co.str("name")!!
-        val tasks=rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.edition,i.created_ms,i.ai_note,i.tentative FROM task_companies tc JOIN workflow_items i ON i.id=tc.item_id
+        val tasks=rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.edition,i.created_ms,i.ai_note,i.tentative,i.recording_id,
+            c.counterpart,c.record_id AS call_id,COALESCE(c.started_ms,c.created_ms) AS call_ms FROM task_companies tc JOIN workflow_items i ON i.id=tc.item_id
+            LEFT JOIN call_records c ON c.record_id=(SELECT x.record_id FROM call_records x WHERE x.recording_id=i.recording_id ORDER BY x.created_ms DESC LIMIT 1)
             WHERE tc.company_id=? AND i.status NOT IN ('done','merged') AND i.kind='TODO' ORDER BY i.created_ms DESC""",id)
-            .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),null,name,it.long("created_ms") ?: 0,it.str("ai_note"),it.long("tentative")==1L) }
+            .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),it.str("counterpart"),name,it.long("created_ms") ?: 0,it.str("ai_note"),it.long("tentative")==1L,
+                it.str("recording_id"),it.str("call_id"),it.long("call_ms")) }
         val calls=rows("""SELECT c.record_id,COALESCE(c.started_ms,c.created_ms) AS day_ms,c.summary,p.name AS person FROM call_links l JOIN call_records c ON c.record_id=l.record_id
             LEFT JOIN people p ON p.id=l.person_id WHERE l.company_id=? ORDER BY day_ms DESC LIMIT 10""",id)
             .map { CompanyCall(it.str("record_id")!!,it.long("day_ms") ?: 0,it.str("person"),it.str("summary")) }
@@ -463,6 +480,22 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     fun peopleOf(companyId:String?):List<PersonRow> =
         (if(companyId==null) rows("SELECT * FROM people WHERE (company_id IS NULL OR is_staff=1) AND name!='' ORDER BY updated_ms DESC")
          else rows("SELECT * FROM people WHERE company_id=? AND is_staff=0 AND name!='' ORDER BY updated_ms DESC",companyId)).map(::personRow)
+    /** The user fixes a company name (r8-5, "업체 이름 고치기"). The old spelling stays in company_aliases, so a later call or the
+     * ledger that still says it finds this company. When the new name is another company's, the two become one (that one stays).
+     * Returns the id of the company that now carries the name, or null for an empty name or an unknown id. */
+    fun renameCompany(id:String,name:String):String? = port.transaction {
+        val clean=normName(name)?.take(40) ?: return@transaction null
+        val old=companyById(id) ?: return@transaction null
+        if(old.str("name")==clean) return@transaction id
+        val other=findCompany(clean)?.takeIf { it!=id }
+        if(other!=null) { mergeCompany(id,other);return@transaction other }
+        val oldKey=old.str("name_key") ?: companyKey(old.str("name"));val newKey=companyKey(clean)
+        port.execute("UPDATE companies SET name=?,name_key=? WHERE id=?",clean,newKey,id)
+        port.execute("DELETE FROM company_aliases WHERE name_key=?",newKey)
+        if(oldKey.isNotEmpty() && oldKey!=newKey) port.execute("INSERT OR REPLACE INTO company_aliases VALUES(?,?)",oldKey,id)
+        port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER)
+        id
+    }
     /** The user fixes a misheard name. The old name is kept as an alias so the same mishearing maps back to this person. */
     fun renamePerson(id:String,name:String):Boolean=port.transaction {
         val clean=normName(name)?.take(30) ?: return@transaction false
@@ -706,11 +739,13 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         .filter { val d=it.str("due_text")!!.trim();d.matches(ISO_DATE) && d<=today.toString() }
         .map { CallTodoItem(it.str("id")!!,it.str("title")!!,it.str("due_text")!!.trim(),it.str("status")!!,it.long("revision")!!,it.str("cname"),it.long("created_ms") ?: 0,it.str("ai_note"),it.long("tentative")==1L) }
     /** Every open to-do (any source), newest first, with the latest call counterpart of its recording. */
-    fun openItems():List<OpenItem> =rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.edition,i.created_ms,
-        (SELECT c.counterpart FROM call_records c WHERE c.recording_id=i.recording_id ORDER BY c.created_ms DESC LIMIT 1) AS counterpart,
+    fun openItems():List<OpenItem> =rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.edition,i.created_ms,i.recording_id,
+        c.counterpart,c.record_id AS call_id,COALESCE(c.started_ms,c.created_ms) AS call_ms,
         (SELECT co.name FROM task_companies tc JOIN companies co ON co.id=tc.company_id WHERE tc.item_id=i.id) AS cname,i.ai_note,i.tentative
-        FROM workflow_items i WHERE i.status NOT IN ('done','merged') AND i.kind='TODO' ORDER BY i.created_ms DESC LIMIT 300""")
-        .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),it.str("counterpart"),it.str("cname"),it.long("created_ms") ?: 0,it.str("ai_note"),it.long("tentative")==1L) }
+        FROM workflow_items i LEFT JOIN call_records c ON c.record_id=(SELECT x.record_id FROM call_records x WHERE x.recording_id=i.recording_id ORDER BY x.created_ms DESC LIMIT 1)
+        WHERE i.status NOT IN ('done','merged') AND i.kind='TODO' ORDER BY i.created_ms DESC LIMIT 300""")
+        .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),it.str("counterpart"),it.str("cname"),it.long("created_ms") ?: 0,it.str("ai_note"),it.long("tentative")==1L,
+            it.str("recording_id"),it.str("call_id"),it.long("call_ms")) }
     /** The user's "완료했어요": marks one item done and records the edit so analysis never touches it again. */
     fun completeItem(item:String,revision:Long)=port.transaction {
         val old=rows("SELECT * FROM workflow_items WHERE id=?",item).single()
@@ -1017,6 +1052,15 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
             JOIN recordings r ON r.recording_id=j.recording_id LEFT JOIN local_files l ON l.recording_id=j.recording_id
             WHERE j.state IN ('QUEUED','RUNNING') AND COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)>=CAST(? AS INTEGER)
             AND COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)<CAST(? AS INTEGER)""",FirstPass.FROM_MS,old).single().long("m")
+    }
+    /** Read only (r8-4, the call list): when the recordings still waiting for their words (QUEUED or RUNNING) were made,
+     * between [fromMs] and [toMs]. A call-log line within 2 minutes of one is a call being turned into text right now. */
+    fun transcribingStarts(fromMs:Long,toMs:Long):List<Long> {
+        if(rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name='call_transcription_jobs'").isEmpty()) return emptyList()
+        val at="COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)"
+        return rows("""SELECT $at AS m FROM call_transcription_jobs j JOIN recordings r ON r.recording_id=j.recording_id
+            LEFT JOIN local_files l ON l.recording_id=j.recording_id WHERE j.state IN ('QUEUED','RUNNING') AND $at>=CAST(? AS INTEGER) AND $at<CAST(? AS INTEGER)""",
+            fromMs,toMs).mapNotNull { it.long("m") }
     }
     /** A recording found to be with the personal number: the record, its words and anything sent or linked go. The
      * transcription job stays done, so it is not transcribed again. */

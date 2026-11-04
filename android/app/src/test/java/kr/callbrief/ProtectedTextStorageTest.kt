@@ -67,7 +67,11 @@ class ProtectedTextStorageTest : ProtectedTextHostTestBase() {
     }
     @Test fun T05MissingKeyDuringOpenCannotReadOrOverwrite()=io{
         port().use {p->seed(p);val file=ProtectedDatabase.file(context,name);val prior=sha(file);val created=ShadowTextKeys.CREATES.get();ShadowTextKeys.KEYS.clear()
-            assertEquals("TEXT_STORE_KEY_UNAVAILABLE",blocked{row(p)});assertEquals("TEXT_STORE_KEY_UNAVAILABLE",blocked{p.execute("UPDATE notes SET note=?",canaries[3])});assertEquals(prior,sha(file));assertEquals(created,ShadowTextKeys.CREATES.get())
+            // r8-1: the key was proved when the store was loaded, so a read of the memory copy no longer asks the Keystore
+            // (like P09, a RAM read is not disk authentication). Every write and the explicit capability gate still do.
+            assertEquals(canaries[0],row(p)["note"])
+            assertEquals("TEXT_STORE_KEY_UNAVAILABLE",blocked{p.execute("UPDATE notes SET note=?",canaries[3])});assertEquals(prior,sha(file));assertEquals(created,ShadowTextKeys.CREATES.get())
+            assertEquals("TEXT_STORE_KEY_UNAVAILABLE",blocked{p.requireProtectedPersistence()});assertEquals("TEXT_STORE_KEY_UNAVAILABLE",blocked{row(p)})
         };evidence("T05","recreated_key" to 0,"overwrite" to 0)
     }
     @Test fun T06MissingKeyAfterReopenCannotInitializeEmptyReplacement()=io{

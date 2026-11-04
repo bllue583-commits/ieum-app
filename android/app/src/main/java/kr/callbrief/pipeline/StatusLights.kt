@@ -6,7 +6,13 @@ import org.json.JSONObject
 /** The five lights of settings "지금 상태" (design B5): 녹음 가져오기, 글자로 바꾸기, 통화 정리, 알림, 업데이트.
  * Each is green ("정상") or amber with the reason and one thing the user can do, in a single sentence. Never red. */
 internal object StatusLights {
-    data class Light(val tag:String,val label:String,val ok:Boolean,val words:String)
+    /** [target]: the tag of the settings group the words point to ("group_연결"), so pressing the line can scroll there; null
+     * when the fix is outside the app (the phone's own settings) or there is nothing to do. */
+    data class Light(val tag:String,val label:String,val ok:Boolean,val words:String,val target:String?=null)
+    /** Tags of the settings groups (CallSettingsActivity.group: "group_" + its name). */
+    const val GROUP_CONNECT="group_연결"
+    const val GROUP_SUMMARY="group_정리"
+    const val GROUP_STATUS="group_상태와 도움"
     /** Everything the lights are judged from; all of it is read from settings, permissions and the store already on the phone. */
     data class Input(
         val now:Long,
@@ -41,7 +47,7 @@ internal object StatusLights {
     fun waitWords(ms:Long):String { val m=(ms/60_000).coerceAtLeast(0);return if(m<60) "${m}분" else "${m/60}시간"+(if(m%60>0) " ${m%60}분" else "") }
 
     fun lights(i:Input):List<Light> {
-        fun light(tag:String,label:String,problem:String?)=Light(tag,label,problem==null,problem ?: OK)
+        fun light(tag:String,label:String,problem:String?,target:String?=null)=Light(tag,label,problem==null,problem ?: OK,if(problem==null) null else target)
         val import=when {
             !i.folderConnected -> "녹음 폴더를 아직 연결하지 않았어요. 위 연결 묶음에서 폴더를 골라 주세요."
             !i.folderReadable -> "녹음 폴더 연결이 풀렸어요. 위 연결 묶음에서 폴더를 다시 골라 주세요."
@@ -56,7 +62,7 @@ internal object StatusLights {
                 "녹음 ${i.transcribeBacklog}개가 밀려 있어요. 충전기에 꽂아 두면 밤에 끝나요."
             else -> null }
         val analyze=when {
-            !i.consent -> "정리 동의가 꺼져 있어요. 아래 정리에서 켜 주세요."
+            !i.consent -> "정리 동의가 꺼져 있어요. 위 정리 묶음에서 켜 주세요."
             i.failed>0 -> "정리하지 못한 통화가 ${i.failed}건 있어요. 아래 기다리는 통화 다시 정리하기를 눌러 주세요."
             i.waiting>0 -> (i.oldestWaitMs?.let { "통화 ${i.waiting}건이 ${waitWords(it)} 밀렸어요. " } ?: "정리가 늦어지고 있어요. ")+"순서대로 정리하고 있으니 기다려 주세요."
             else -> null }
@@ -67,8 +73,12 @@ internal object StatusLights {
             i.updateReady && i.updateReadySinceMs>0 && i.now-i.updateReadySinceMs>UPDATE_LATE_MS -> "새 버전이 하루 넘게 설치되지 않았어요. 아래 지금 설치를 눌러 주세요."
             i.updateReady -> "새 버전이 준비됐어요. 아래 지금 설치를 눌러 주세요."
             else -> null }
-        return listOf(light("status_import","녹음 가져오기",import),light("status_transcribe","글자로 바꾸기",transcribe),
-            light("status_analyze","통화 정리",analyze),light("status_notify","알림",notify),light("status_update","업데이트",update))
+        // Where each fix lives: the folder in 연결 (above), the consent in 정리 (above), the model, the retry and the update in
+        // 상태와 도움 (below the lights); the notification switch is in the phone's settings, so that line has no target.
+        val analyzeTarget=if(!i.consent) GROUP_SUMMARY else GROUP_STATUS
+        val transcribeTarget=if(i.modelState=="UNSUPPORTED") null else GROUP_STATUS
+        return listOf(light("status_import","녹음 가져오기",import,GROUP_CONNECT),light("status_transcribe","글자로 바꾸기",transcribe,transcribeTarget),
+            light("status_analyze","통화 정리",analyze,analyzeTarget),light("status_notify","알림",notify),light("status_update","업데이트",update,GROUP_STATUS))
     }
 
     // ---- what the lights, the heartbeat and the self-check read from the store (one place, so they agree) ----

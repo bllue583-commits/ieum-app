@@ -285,7 +285,7 @@ internal object CallUpdate {
 
     private fun notifyReady(c:Context,info:Info) {
         val m=channel(c) ?: return
-        val open=PendingIntent.getActivity(c,1,Intent(c,HomeActivity::class.java).putExtra("install_update",true).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+        val open=PendingIntent.getActivity(c,1,Intent(c,MainActivity::class.java).putExtra("install_update",true).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         m.notify(NOTIFY_TAG,NOTIFY_ID,Notification.Builder(c,CHANNEL).setSmallIcon(R.drawable.ic_stat_ieum)
             .setContentTitle("이음 새 버전이 준비됐어요").setContentText(info.notes.ifBlank { "눌러서 업데이트하세요" })

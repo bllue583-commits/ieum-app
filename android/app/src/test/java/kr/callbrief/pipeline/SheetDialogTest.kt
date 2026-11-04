@@ -61,7 +61,7 @@ class SheetDialogTest:ProtectedTextHostTestBase() {
 
     @Test fun ownCheckItemIsWrittenInASheet() {
         PreviewSeed.ensure(app)
-        val a=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get()
+        val a=launchMain(Screen.TASKS)
         settle { tag(a,"task_add")!=null }
         tag(a,"task_add").performClick()
         val d=sheet();assertSheet(d)
@@ -78,12 +78,14 @@ class SheetDialogTest:ProtectedTextHostTestBase() {
 
     @Test fun backAndCancelLeaveEverythingAsItWas() {
         PreviewSeed.ensure(app)
-        val a=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get()
+        val a=launchMain(Screen.TASKS)
         settle { tag(a,"task_add")!=null }
         tag(a,"task_add").performClick()
         var d=sheet();(d.find("add_title") as EditText).setText("적지 않을 일")
         d.onBackPressed();shadowOf(Looper.getMainLooper()).idle()
         assertFalse("back closes the sheet",d.isShowing)
+        // A press counts once within 600ms (CallUi.once); a person opens it again later.
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(700))
         tag(a,"task_add").performClick()
         d=sheet();(d.find("add_title") as EditText).setText("적지 않을 일")
         d.find("sheet_secondary").performClick();shadowOf(Looper.getMainLooper()).idle()
@@ -92,7 +94,7 @@ class SheetDialogTest:ProtectedTextHostTestBase() {
     }
 
     @Test fun myInfoIsSavedFromASheet() {
-        val a=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val a=launchMain(Screen.SETTINGS)
         settle { tag(a,"my_edit_"+PipelineSettingsKeys.MY_NAME)!=null }
         tag(a,"my_edit_"+PipelineSettingsKeys.MY_NAME).performClick()
         val d=sheet();assertSheet(d)
@@ -107,7 +109,7 @@ class SheetDialogTest:ProtectedTextHostTestBase() {
         CallRecordStore(app).use { it.personalNumbers() } // the tables exist
         AndroidSqlPort(app,GeneralLocalStore.DATABASE,app.assets.open("call_core_schema.sql")).use { p -> p.transaction {
             p.execute("INSERT OR IGNORE INTO personal_numbers VALUES(?,?)","01012345678",System.currentTimeMillis());null } }
-        val a=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val a=launchMain(Screen.SETTINGS)
         settle { tag(a,"personal_list")!=null }
         tag(a,"personal_list").performClick()
         val list=sheet();assertSheet(list)
@@ -125,7 +127,7 @@ class SheetDialogTest:ProtectedTextHostTestBase() {
     }
 
     @Test fun theSheetIsTitleMessageInputThenStackedButtons() {
-        val a=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get()
+        val a=launchMain(Screen.TASKS)
         // The sheet itself, on any screen: message, input and the two buttons, primary above secondary.
         var saved=false
         val input=CallUi.sheetInput(a,"김철주",tag="person_name_input")
@@ -140,9 +142,45 @@ class SheetDialogTest:ProtectedTextHostTestBase() {
         assertTrue(saved);assertFalse(d.isShowing)
     }
 
+    @Test fun aFailedCheckKeepsTheSheetOpenWithItsWordsAndTheKeyboardComesUp() {
+        val a=launchMain(Screen.TASKS)
+        var saved=0
+        val input=CallUi.sheetInput(a,"",tag="item_title_input")
+        val d=CallUi.sheetDialog(a,"체크할 일 적기",body=LinearLayout(a).apply { addView(input) },primary="저장",onPrimary={ saved++ },secondary="취소",
+            validate={ if(input.text.isNullOrBlank()) "무엇을 할지 적어 주세요" else null })
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue("the field inside the body gets the focus",input.isFocused)
+        val mode=d.window!!.attributes.softInputMode and android.view.WindowManager.LayoutParams.SOFT_INPUT_MASK_STATE
+        assertEquals(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE,mode)
+        val problem=d.find("sheet_problem") as TextView
+        assertEquals(View.GONE,problem.visibility)
+        d.find("sheet_primary").performClick()
+        assertTrue("stays open",d.isShowing);assertEquals(0,saved)
+        assertEquals(View.VISIBLE,problem.visibility);assertEquals("무엇을 할지 적어 주세요",problem.text.toString())
+        assertEquals(CallUi.AMBER_SOFT,(problem.background as android.graphics.drawable.GradientDrawable).color!!.defaultColor)
+        assertTrue(problem.textSize/problem.resources.displayMetrics.scaledDensity>=18f)
+        // Past the double-tap window, with a title: saved once and closed.
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(700))
+        input.setText("견적서 보내기")
+        d.find("sheet_primary").performClick()
+        assertFalse(d.isShowing);assertEquals(1,saved)
+    }
+
+    @Test fun aSheetWithoutAFieldDoesNotAskForTheKeyboard() {
+        val a=launchMain(Screen.TASKS)
+        val d=CallUi.sheetDialog(a,"속도 측정 결과",message="녹음 40초를 처리했어요.",secondary="확인")
+        val mode=d.window!!.attributes.softInputMode and android.view.WindowManager.LayoutParams.SOFT_INPUT_MASK_STATE
+        assertNotEquals(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE,mode)
+        // A quick double tap on a sheet button runs its action once.
+        var closed=0
+        val e=CallUi.sheetDialog(a,"확인",primary="네",onPrimary={ closed++ })
+        e.find("sheet_primary").performClick();e.find("sheet_primary").performClick()
+        assertEquals(1,closed);d.dismiss()
+    }
+
     @Config(qualifiers="night")
     @Test fun theSheetFollowsNightMode() {
-        val a=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get()
+        val a=launchMain(Screen.TASKS)
         val d=CallUi.sheetDialog(a,"속도 측정 결과",message="녹음 40초를 처리했어요.",secondary="확인")
         assertTrue(CallUi.night)
         val frame=d.find("sheet_root").parent.parent as View
