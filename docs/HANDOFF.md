@@ -1,7 +1,8 @@
-# 이음 앱 인수인계 (2026-11-05 기준, Fable 클라우드 세션)
+# 이음 앱 인수인계 (2026-11-05 08시 기준, Fable 클라우드 세션 → 다음은 Opus)
 
 > 다음 세션은 이 파일부터 읽고 "4-3. v2.0"과 "6. 다음 할 일"부터 진행하세요. 설계도(Claude Docs)가 기준이며, 모든 변경은 설계도를 먼저 고친 뒤 개발합니다(11/4 사용자: "모든 과정에서 설계도를 철저히 반영").
 > 앱의 목적·기능·UX 설계 상세는 [PRODUCT.md](PRODUCT.md)에 있습니다.
+> **11/5 08시 (Fable 오케스트레이션 세션 종료 → Opus가 이어받음):** v2.6은 lean-calls에 합쳐 배포 대기(ca9acf2), v2.7은 코드 완성(`feature/r8-v27` 964fd1b, 기기 시험 대기), v2.8은 묶음 셋이 브랜치에 올라와 통합 대기. **"4-6"·"4-7"과 "6. 다음 할 일"부터 읽으세요.** 작업자 지시문·보고서·통합 기록은 `docs/orchestration/`에 있습니다(사용자: "handoff 만들어주고 오케스트레이션 종료, 오푸스에게 이어가게").
 > **11/5 새벽 (v2.2~v2.5 마무리):** "4-4"에 v2.4 배포, v2.5 완성(배포는 GitHub Actions 결제 차단으로 대기), 예약 작업 세 개, 워치독 설치를 적었습니다. 6절 0번(v2.5 배포)부터 하세요.
 > **11/5 (Fable 세션, v2.6~v3.0 설계):** v2.5 이후의 개발 지시는 [DESIGN_V3.md](DESIGN_V3.md)입니다(버전마다 큰 변화 하나: v2.6 처음 정리 관문·무인 설치·정확도, v2.7 Activity 하나와 즉시 반응, v2.8 상대 카드와 사람 화면, v2.9 통화 직후 정리, v3.0 통화 중 이음 카드). 설계도(Claude Docs)의 다른 절과 다르면 이 파일이 우선합니다. 현재 앱 검증 원문은 `docs/reviews/20261105_ui.md`, `20261105_pipeline.md`, `20261105_data.md`입니다. 진행 방식은 DESIGN_V3.md 2절(기기 시험은 v2.7과 v3.0에서만 기다림, 나머지는 ci 통과 후 배포).
 > **11/4 낮 (채팅 세션, 설계도 개정):** 설계도에 "3회차 상세 설계 (11/4 낮, 종합 검토 반영)" 절이 추가됐습니다("남은 일" 바로 앞). 다른 절과 다르면 그 절이 우선하며, 사용자 결정 대기였던 항목(토큰 위치, 개인 문자, 낮 시간 자막, 새벽 Opus 빈도, 18sp 규칙, Activity 구조, promises 삭제)은 그 절의 "결정 사항" 표로 모두 확정됐습니다(사용자: "편리함 중점으로 정하라"). 묶음 r3-1~r3-9의 상세 지시와 묶음별 "확인 기준"이 거기 있으니, 3회차 통합 브랜치(`feature/r3-integrate`)를 합치기 전에 그 절과 대조하고, 사용자가 할 일 두 가지(비밀 `IEUM_SIGNING_SEED`에 현재 토큰 값 복사, "병합 후 브랜치 자동 삭제" 켜기)는 완료 보고에 적어 주세요. 종합 검토 원문은 [REVIEW_20261104_B.md](REVIEW_20261104_B.md)입니다.
@@ -168,7 +169,7 @@ $HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu 
 - 기기 시험 고침(`tools/run_device_test.sh`): 결과를 logcat에서 실시간으로 모으고(`results.live`), instrument 자체 시간 제한 70분(`IEUM_INSTRUMENT_MIN`), 골든 통화마다 `golden_start` 기록, `IEUM_TESTS`로 시험 골라 돌리기.
 
 ## 4-5. v2.6 (11/5 새벽, Fable 클라우드 세션, 기준 docs/DESIGN_V3.md 3절)
-- 상태: **코드 완성, 배포 대기.** 통합 브랜치 `feature/r7-v26`(v2.5 `feature/r6-v25` 81f9bd0과 lean-calls 문서를 모두 포함)에서 로컬 전체 단위 시험 423건 통과, lint 오류 0, 화면 규칙 0건. GitHub Actions가 결제 문제로 멈춰 ci·배포는 못 함. 결제가 풀리면: v2.5 배포(4-4 담당 세션) → `feature/r7-v26`의 ci 확인 → lean-calls에 합쳐 배포(v2.6) → 하트비트에서 `firstPass.blockedBy`, `newQueuedCount`, `callLogMatch`로 처음 정리가 흐르기 시작했는지 확인.
+- 상태(11/5 08시): **lean-calls에 합침(ca9acf2), 배포 대기.** 통합 브랜치 `feature/r7-v26`(v2.5 `feature/r6-v25` 81f9bd0 포함)에서 로컬 전체 단위 시험 423건 통과, lint 0, 화면 규칙 0건. v2.5는 따로 배포하지 않기로 함(v2.6이 포함). push로 시작된 네 run(ci 41929642402, update-smoke 41929642491, device-test 41929642529, release-apk 41929642417)은 Actions 결제 차단으로 단계 없이 실패 → **저장소가 공개로 바뀌면 다시 실행**(6절 0번). 배포 뒤 하트비트에서 `firstPass.blockedBy`, `newQueuedCount`, `callLogMatch`로 처음 정리가 흐르는지 확인. 아내 폰은 v2.4(1033)라 v2.6은 손으로 설치해야 하고, 그 뒤부터 r7-3 무인 설치가 v2.7을 받음.
 - 묶음(모두 Opus 작업자, 각자 worktree·브랜치 `feature/r7-v26-r1`~`r6`, 공통 지시 `/home/claude/worker-brief.md`):
   - r7-1 처음 정리 관문: 열 때 10/1 이전 QUEUED→SKIPPED 한 문장, `oldestOldJobMs`는 10/1 이후만, offer 루프 트랜잭션 1회+중지 신호, **live=기록 시각 7일 이내**(`FirstPass.LIVE_DAYS`, `liveFrom`, `isOld(now)`, `stale`; `beforeStart` 삭제), 덜 찬 묶음은 6시간(createdMs) 뒤 전송, `LAST_INBOX_ERROR`에 모든 코드+`LAST_INBOX_ERROR_MS`, 하트비트 `firstPass.bound/blockedBy`.
   - r7-2 발견 경량화: 이름 시각 우선 10/1 컷오프(`DiscoveryCutoff`), SAF 목록은 옛 녹음을 세지 않고 2000 한도는 남긴 것에만(넘치면 최신 유지+`inventoryTruncated`), 큐 UPSERT·audit 100개, 시도마다 `lastDiscoveryAttemptMs/lastDiscoveryOutcome`, 트리거 finally 재등록·지연 140초, 녹음 한도 60MB(옛 DB의 25MB CHECK는 `VaultSizeLimit.widen`으로 한 번 넓힘, 금고·스키마 숫자 포함).
@@ -178,7 +179,24 @@ $HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu 
   - r7-6 감시 정확화: 신호등 입력을 실제 상태로(폴더 권한+발견 24시간, 새 녹음 대기열 진입 시각, live 지연, 업데이트 24시간), 하트비트 새 필드(newQueuedCount 등, dbPercent는 sealed 파일·행 수, standbyBucket EXEMPTED/NEVER), 워치독 새 규칙(ieum-inbox에 복사함, 커밋 1e52b1b), 저장 공간 % 수리, 긴 통화 stall 완화(진척 있는 시간 한도 중지는 안 셈).
 - 통합 중 고친 것: 신호등 대기열 판정에 시계 인자(7일 live 기준과 맞춤), `RoutineDocTest`가 새벽 정리 실제 답 형식("정리할 것 없음: 이유")을 허용, 지시문 문서를 실제 루틴 문구에 맞춤.
 - 로컬 빌드 환경(이 세션의 클라우드 작업 환경): `/home/claude/toolchain/env.sh`(JDK 17, SDK 36, Robolectric jar), `flock /home/claude/gradle.lock python3 run_gradle.py ...`로 한 번에 하나만. 메이븐이 429를 자주 내므로 첫 의존성 받기는 재시도 필요.
-- v2.7은 `feature/r8-v27`(v2.6 통합 HEAD에서 시작)에서 1단계 r8-1(저장소 성능)·r8-2(Activity 하나)·r8-3(즉시 반응 부품) 진행 중.
+
+## 4-6. v2.7 (11/5 아침, Fable 세션, 기준 DESIGN_V3.md 4절) — 코드 완성, 기기 시험·배포 대기
+- 상태: `feature/r8-v27` **964fd1b**(푸시됨). 전체 단위 시험 **441건 통과**(int27-test-7), 화면 규칙 0, 비밀 스캔 0. `docs/VERSION` 2.7, `UPDATE_NOTE` 첫 줄 "v2.7: 화면이 바로 반응하고, 탭과 뒤로 가기가 한결같아졌어요. 아침 알림에서 바로 다 됐어요를 누를 수 있어요". 설계 4.2 "device-test 결과를 기다려 스크린샷 7장+1.3배 홈 1장 확인"이 남음(Actions가 살아나면 feature/r8-v27의 ci·device-test run을 다시 실행).
+- 1단계(병렬, 보고서 `docs/orchestration/reports/feature-r8-v27-r1.md` 등):
+  - r8-1 저장소 성능: `IeumApplication.store(context)`가 프로세스 수명 `CallRecordStore`(놓는 곳 `shutdown()`·`onTrimMemory`), Keystore 확인 한 번(`State.verified`), 변경 없는 트랜잭션 스냅샷 생략, 스키마 단계 상태마다 한 번(`needs/markDone`), 홈 read 1회 열기(`HomeScreen.readOnce`, 측정 `homeReadMs`·`dbOpenMs` 설정 키 → 하트비트 `dbOpenMs/homeReadMs`), `oldestUnansweredSentMs()` 한 쿼리, 통화 화면 `reconcileCallLog` 제거(발견·업로드 패스에서만). 시험 `StorePerformanceTest`. 시험에서 저장소 파일을 지우기 전 `IeumApplication.shutdown()` 필요.
+  - r8-2 화면 하나: `MainActivity`(유일 Activity, `enum Screen{HOME,CALLS,TASKS,COMPANIES,SETTINGS}`, `AppScreen(a)` 기반 `screens/*Screen.kt`, `switchTo/openCall(id,dayMs)/openCompany(name)`, `MainActivity.intent(c,screen,dayMs,callId)`, singleTop·portrait, `putBack(y)` 스크롤 복원). 옛 Activity 4개·`CallUi.go` 삭제. 시험은 `launchMain(screen,dayMs,callId)`(`MainLaunch.kt`).
+  - r8-3 즉시 반응 부품: `CallUi.once/onTap(600ms)`, `busy/idle(busyText)`, `loading`, `retryCard`, `sheetDialog(validate)`+키보드, `signalRow(onPress)`, `icon(filled)`, 밝은 MUTED `#6B7684`, `tabLook`(굵기·채운 아이콘), `TaskActions` 즉시 반응·`inFlight`·실패 복원, `StatusLights.Light.target`. 시험 주의: 600ms 안 두 번 누름 무시 → `idleFor(700)`.
+- 2단계(병렬): r8-4 홈·통화(라벨 "오늘 통화/오늘 생긴 체크/남은 체크할 일", 먼저 볼 체크할 일 5개+"외 n개 보기", 통화 직후 3단계 문구 `CallsScreen.stateWords`, `EMPTY_TRANSCRIPT`는 버튼 없음, 날짜 넘기기 즉시 교체+loading, 검색 250ms 디바운스·유지, `NotifyAsk`(두 번 거절 → 알림 설정 열기), `ModelWish`, UI prefs `ieum_ui`) · r8-5 체크·업체·설정(`CheckRows.row` G3 행, 통화 항목만 눌림, 30개 나눠 그리기, 업체 이름 고치기 `renameCompany`+`company_aliases`, 설정 스크롤·입력 유지, 스위치·슬라이더 제자리 갱신(700ms 디바운스), 동작별 busy, 신호등 줄 → 묶음 스크롤, `OpenItem.recordId/callMs/fromCall`) · r8-6 알림(`NotificationActions.kt`·`NotificationActionReceiver`, 액션 `kr.callbrief.action.TASK_DONE`, 아침 알림 첫 항목 [다 됐어요] → 다음 항목으로 갱신 → "체크할 일을 다 끝냈어요", 모든 알림이 `MainActivity` extra로, 저녁 알림 dayMs, `CallDigestNotifier.post(...,dayMs,callId,refresh)`, id 700·tag `ieum.calls.<kind>`).
+- 통합 때 고친 것: r8-1 변경을 r8-2가 옮긴 `screens/*.kt`에 적용, `TaskActions`·`MainActivity.pickFolder`(폴더 저장 IO) 프로세스 저장소, 홈 체크 행도 `CheckRows.row`, 날짜 넘기기 시험 `CallsScreen.readHook` 게이트(경쟁 제거), `UiV2Test.aFailedInstall…`을 r7-3 동작(성공 시 오류 지움)에 맞춤.
+- 안 한 것(선택): "AI 메모" → "이음 메모" 표기, 업체 이름 고치기의 ledger_edits 전송(`renameCompany` edit 제안), 설계의 "상위 2개 [다 됐어요]"는 1개로(버튼 둘이면 구분 불가).
+
+## 4-7. v2.8 (11/5 08시, 묶음 셋 브랜치에 올라옴 — 통합은 다음 세션)
+- 통합 브랜치 `feature/r9-v28` = v2.7 964fd1b + `core/PhoneKey.kt`(f7d091b, `PhoneKey.of(raw)`·`isKey`, `PhoneKeyTest` 5건). 묶음 지시문 `docs/orchestration/briefs/r9-*.md`, 보고서 `docs/orchestration/reports/feature-r9-v28-r*.md`.
+  - r9-1 `feature/r9-v28-r1` **65e105d(+빈 WIP 커밋 e5beb1e)**: PhoneKey 호출처 전부 교체(`PrivacyRules.normalizePhone` 삭제, PhoneKey가 +없는 82+8자리도 허용), `MIGRATION_VERSION=4`(키 재계산·같은 번호 사람 합치기, `STORE_V4_SCHEMA` 파일 끝), 인덱스 7개·`issue_companies`, `MAIN_THREAD_CHECK`(실제 앱에서 메인 스레드 접근 시 예외 — 화면은 IO에서만), `inTransaction{}`, 보호 파일 복구(`takeRecovery()` → `dbRecoveryLast`), WorkManager `use{}` 교체(담당 밖 `IeumApplication`·`CallSinkImpl`·`PhoneStatus`·`CallRecordAnalysisRunner` 소폭). 시험 `StoreFoundationTest`, P04~P06 수정. **전체 단위 시험 미실행**(종료 지시로 중단).
+  - r9-2 `feature/r9-v28-r2` **78ffef6(완성)**: `pipeline/ContactCards.kt`, 파일 `contact-cards-v1.sealed`, 표 `contact_cards(phone_key PK,json,updated_ms)`. 공개 함수 `get(phoneKey)`, `get(context,phoneKey)`, `preload(context)`, `warm(context)`, `touch(store,keys)`, `touchAll(store)`, `flushPending(store)`, `refresh(store,phoneKeys)`, `rebuildAll(store)`, `shutdown()`. 카드 JSON v1 필드는 보고서 참고. 훅: applyAnalysis·completeItem·undoDone·addUserItem·renamePerson·reconcileCallLog·forgetPersonal·insertMessage(applyLedger·applyTidy는 touchAll). **남은 것: r9-1 마이그레이션 직후 `ContactCards.touchAll(this)` 한 줄.** 300장 읽기 68ms(목표 60), 캐시 85µs.
+  - r9-3 `feature/r9-v28-r3` **7404a5e(WIP, 기능은 전부)**: `screens/PersonScreen.kt`, `Screen.PERSON`, `MainActivity.openPerson(personId)`, 진입점 전부(통화 목록·상세, 업체 사람 행, 체크 META, 홈 메모·체크), `CheckRows.row(personId)`, `NameSheet` object, `CallRecordStore.personCard/personIdsOf`. `PersonScreenTest` 6건 등 86건 통과. 남은 것: `ContactCards` 연결(개인으로 두기 뒤 카드 삭제), 검색 결과(사람)·업체 상세 최근 통화 이름 링크, 회귀 11개 클래스 재확인.
+- 통합 순서 제안: r9-2 → r9-1(충돌: `CallRecordStore` 훅·클래스 끝 함수, `IeumApplication`) → r9-3(충돌: `CallRecordStore` 끝, `screens/*`) → 마이그레이션 뒤 `touchAll` 한 줄 → `:app:compileDebugKotlin :app:testDebugUnitTest` 전체 → `check_ui_rules`·`scan_export` → VERSION 2.8, UPDATE_NOTE "v2.8: 사람을 누르면 그 사람과의 통화, 문자, 체크할 일이 한 화면에 보이고 바로 전화와 문자를 보낼 수 있어요" → ci → lean-calls 배포(기기 시험은 기다리지 않음).
+- 오케스트레이션 방법(이 세션에서 쓴 것): 작업자는 Agent 도구 `subagent_type=general-purpose, model=opus, isolation=worktree`로 메인 체크아웃이 기준 브랜치에 있을 때 호출. worktree가 main(67fac72)에서 시작되는 일이 있어 지시문에 "HEAD가 기준 브랜치와 다르면 `git fetch origin && git reset --hard origin/<기준>`"을 넣음. 작업자는 worktree 밖에 못 쓰므로 보고서는 마지막 답으로 받아 `docs/orchestration/reports/`에 저장. 로컬 툴체인은 `tools/local_toolchain.sh`(JDK 17 apt, SDK 36, Robolectric jar; `/home/claude/toolchain/env.sh`를 만듦)로 새 환경에서 다시 준비(메이븐 429는 재시도). Gradle은 `flock /home/claude/gradle.lock python3 run_gradle.py --log <라벨>.log …`로 한 번에 하나. 전체 단위 시험 약 4분.
 
 ## 5. 현재 UI 상태와 문제점 (S26 스크린샷 기준, 다음 작업의 출발점)
 사용자 평가(10/30): "미관상 너무 엉망", "**깔끔하긴 한데 세련되지 않았다**". 목표는 깔끔함을 넘어 세련됨. 개편 방향은 [PRODUCT.md 4.5](PRODUCT.md). Claude가 본 구체적 문제:
@@ -220,17 +238,21 @@ $HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu 
 - **이 PC 빠른 확인**: `IEUM_LOCAL_PREVIEW=1 IEUM_SKIP_ANDROID_NATIVE=1`로 `assembleDebug` → 에뮬레이터 설치 → `powershell -File tools/preview_shots.ps1 <이름>` (시험 데이터 `PreviewSeed`가 첫 실행 때 채워짐, 아무것도 밖으로 안 나감). 캡처는 `evidence/shots/`.
 - 아직: 설정 화면은 제목 띠만 바뀜(카드 묶음 정리 필요), 아침·저녁 알림 문구의 "할 일" → "체크할 일" 통일, 설계도(Claude Docs) "화면 디자인" 절 개정, 앱 아이콘 다듬기, 모모콜에서 본 "전화 올 때 지난 통화 요약 띄우기" 검토.
 
-## 6. 다음 할 일 (순서대로, 11/5 v2.5 이후 — 상세는 [DESIGN_V3.md](DESIGN_V3.md))
-0. **먼저 v2.5 배포**(코드는 `feature/r6-v25`에 완성): 사용자가 GitHub Actions 결제·한도를 풀면 ci 확인 → lean-calls에 합침 → 배포 → 아내 폰 설치. 이어서 골든 비교 수동 실행 한 번(4-4). v2.6은 v2.5를 합친 lean-calls에서 시작.
-1. **v2.6 제대로 정리되는 이음** (`feature/r7-v26`, 묶음 r7-1~r7-6): 처음 정리 관문(b- 묶음) 풀기와 10/1 이전 대기열 정리, 발견 경량화(2000 한도·이름 시각), 무인 설치, 통화기록 대조와 이름 정규화, 지시문 v6(루틴 교체 포함), 감시 정확화. ci 통과 후 배포.
-2. **v2.7 매끄러운 화면** (`feature/r8-v27`, r8-1~r8-6): 저장소 프로세스 수명 단일 열기, Activity 하나(G1), 즉시 반응 부품, 화면 31건 수정, 아침 알림 [다 됐어요]. **device-test 스크린샷을 보고** 배포.
-3. **v2.8 상대 카드와 사람 화면** (`feature/r9-v28`, r9-1~r9-3): PhoneKey 한 곳, 상대 카드 저장소, 인덱스·복구·용량, 사람 화면. ci 통과 후 배포.
-4. **v2.9 통화 직후 정리** (`feature/r10-v29`, r10-1~r10-3): 전화 상태 감지, 통화별 알림과 메모 남기기, 결과 10분 체인과 루틴 30분 주기. ci 통과 후 배포.
-5. **v3.0 통화 중 이음 카드** (`feature/r11-v30`, r11-1~r11-3): 오버레이 카드, 발신 번호(통화 연결 역할), 통화 중 서비스, 잠금 화면 폴백. **device-test(통화 시뮬레이션)와 실기기 확인** 뒤 배포.
-6. 남은 사용자 할 일: 비밀 `IEUM_SIGNING_SEED`에 현재 토큰 값 복사, 저장소 "병합 후 브랜치 자동 삭제" 켜기, 옛 시험 브랜치 삭제. v2.9·v3.0 배포 뒤 아내 폰에서 권한 각 한 번 허용(DESIGN_V3.md 9절).
+## 6. 다음 할 일 (순서대로, 11/5 08시 기준 — 상세는 [DESIGN_V3.md](DESIGN_V3.md), 묶음 지시문은 `docs/orchestration/briefs/`)
+0. **저장소 공개와 배포 재개.** 사용자 결정(11/5 08시): Actions 무료 분량(비공개 2,000분/월) 소진 → **ieum-app을 v3.0까지 공개(public)로 전환**(사용자가 직접 Settings → Danger Zone; 이 세션의 gh는 저장소 설정 변경이 막힘). 공개 전 점검은 끝남(작업 트리·전체 이력에서 토큰·키·실제 번호·주소 없음, HANDOFF 개인 경로는 환경 변수로 바꿈). `ieum-inbox`는 계속 비공개. **v3.0 배포 뒤 다시 비공개로 되돌릴 것**(사용자: "v3.0까지만"). 공개로 바뀌면 lean-calls ca9acf2의 실패한 네 run을 REST로 다시 실행(`gh api -X POST repos/bllue583-commits/ieum-app/actions/runs/<id>/rerun`, id는 4-5 참고; 또는 release-apk `workflow_dispatch` ref=feature/lean-calls) → v2.6 release 확인(ieum-inbox `app/version.json`, 태그) → 아내 폰에 v2.6 손 설치 안내(그 뒤는 무인 설치).
+1. **v2.7 배포**: feature/r8-v27 964fd1b의 ci·device-test를 다시 실행 → `evidence/shots/` 스크린샷 7장+1.3배 홈을 설계 4.3과 대조(글자 잘림, 겹침) → 문제 없으면 lean-calls에 합쳐 배포(r8-1이 `IeumApplication`·매니페스트를 바꿔 update-smoke가 돎) → 아내 폰에서 무인 설치(v2.6→v2.7)가 실제로 되는지 하트비트 `updateReadySinceMs`·`version`으로 확인 → HANDOFF 4-6 갱신.
+2. **v2.8 통합·배포**(4-7의 순서대로). 통합 뒤 설정 화면 "상태와 도움" 묶음에 [카드 다시 만들기](`ContactCards.rebuildAll`) 버튼 한 줄 추가 권장.
+3. **v2.9** (`feature/r10-v29` = v2.8 완성본, 지시문 r10-1~r10-3 — 셋 병렬, `CallSession.CallEnd` 약속은 r10-1 지시문에): 전화 상태 감지, 통화별 알림+[메모 남기기], 결과 10분 체인·ETag. 루틴 cron 30분(사용자가 직접 교체, 문구 보고). ci 통과 후 배포.
+4. **v3.0** (`feature/r11-v30` = v2.9 완성본, 지시문 r11-1~r11-3 — r11-1·r11-2 병렬 뒤 r11-3): 통화 연결 역할·`CallCardService`·오버레이 카드·헤드업 폴백·안전장치·하트비트 `callCard`. device-test에 `tools/device/call_card_test.sh` 단계를 **오케스트레이터가** 워크플로에 넣고(작업자는 워크플로 금지) **결과를 기다린 뒤** 배포. 배포 뒤 아내 폰 권한(오버레이, 통화 연결 역할, READ_PHONE_STATE) 한 번씩 허용 안내(DESIGN_V3.md 9절). 그다음 저장소 비공개 복귀.
+5. 워크플로 절약(사용자 동의 전, 제안): 작업자 묶음 브랜치 push마다 ci·device-test가 다 돌아 분량을 많이 씀. 로컬 툴체인으로 판정하니 ci는 `feature/r*-v*`(통합)·lean-calls에서만, device-test는 `workflow_dispatch`만으로 바꾸면 5분의 1 아래. 공개 저장소에서는 무료라 급하지 않음.
+6. 남은 사용자 할 일: 루틴 지시문 교체 확인(v2.6 r7-5, `docs/routines/hourly.md`·`tidy.md` "---" 아래 전문을 예약 작업에 붙여 넣기 — 11/5 03시에 파일로 보냄), 비밀 `IEUM_SIGNING_SEED` 복사, "병합 후 브랜치 자동 삭제" 켜기, 옛 시험 브랜치 삭제(`feature/r7-v26-r*`, `feature/r8-v27-r*`는 합쳐졌으니 지워도 됨).
 7. 그대로 남는 것: 문자·메일 실제 확인(MMS, RCS), inbox-e2e 정기 점검(main 합칠 때), 우편함 이력 압축(J3), 골든 셋 실험(F3, F4).
 
 ## 7. 알아 둘 함정
+- Actions "The job was not started because recent account payments have failed or your spending limit needs to be increased"는 비공개 저장소의 무료 2,000분/월 소진 + 지출 한도 $0일 때 나온다(11/5 02시~, 실행 323회·device-test 최근 100회 약 400분). 공개 저장소는 무제한.
+- 이 클라우드 세션의 gh는 저장소 설정 변경(`gh repo edit`)과 계정 billing API가 막힘(저장소 범위 REST만). 저장소 공개/비공개는 사용자가.
+- Agent worktree는 때때로 main(67fac72)에서 시작된다 → 작업자 지시문의 reset 문장. 작업자는 worktree 밖(`/home/claude/reports`)에 못 쓴다. 작업자 커밋 꼬리말이 "Claude Opus 5.5"로 붙는 경우가 있음(무해).
+- Robolectric 화면 시험의 경쟁: IO 코루틴이 메인 루퍼 idle 전에 끝나 "불러오는 중" 검사가 흔들린다 → `CallsScreen.readHook` 같은 게이트를 쓴다. `UpdateStatusReceiver.later{}`는 별도 스레드라 결과는 `settle`로 기다린다.
 - GitHub Actions 사용량: 에뮬레이터 시험이 한 번에 약 90분을 쓴다. 한도나 결제에 걸리면 모든 워크플로가 몇 초 만에 단계 없이 실패하고 주석에 결제 안내가 뜬다(11/5 03시 발생). 기기 시험은 꼭 필요할 때만, 골든 비교는 `only=tg_goldenSet`으로 따로.
 - 이 클라우드 세션에서는 gh의 GraphQL이 막혀 `gh workflow run`/`gh run list`가 안 됨. REST로: `gh api repos/<owner>/<repo>/actions/workflows/<file>/dispatches -f ref=<branch>`, `.../actions/runs/<id>/jobs`, `.../actions/jobs/<id>/logs`.
 - 루틴 실행 기록: `RemoteTrigger list_runs` → `get_run_log`. 실행 로그에 통화 내용이 남지 않게 프롬프트에 명시돼 있음.
