@@ -47,7 +47,7 @@ class ReviewRoundOneTest:ProtectedTextHostTestBase() {
         override fun delete(path:String,sha:String){ files.remove(path) }
     }
     private fun runner(inbox:Inbox,s:JSONObject,at:Long=now,log:List<FirstPass.LogEntry> =emptyList())=CallRecordAnalysisRunner(context,
-        ClaudeCallAnalyzer({ _,_ -> error("no API") }) {},{ s },{ at },inbox,save={ e -> e(s) },callLog={ log },smsAllowed={ false })
+        ClaudeCallAnalyzer(),{ s },{ at },inbox,save={ e -> e(s) },callLog={ log },smsAllowed={ false })
 
     @Test fun callsFoundByDiscoveryGetTheirTimeFromTheRecordingName() {
         store().use { it.insert(call(at=null)) }

@@ -8,13 +8,13 @@ import kotlinx.coroutines.withContext
 import kr.callbrief.SecureSettings
 import org.json.JSONObject
 
-/** Analyzes every stored transcript that is waiting. Key/consent are checked per record, right before sending. */
+/** Sends every stored transcript that is waiting to the scheduled task and applies what comes back. Consent is checked per record, right before sending. */
 internal class CallRecordAnalysisRunner(
     private val context:Context,
     private val analyzer:ClaudeCallAnalyzer=ClaudeCallAnalyzer(),
     private val settings:()->JSONObject={ SecureSettings(context).snapshot() },
     private val clock:()->Long=System::currentTimeMillis,
-    /** Subscription mode (a scheduled Claude task) when set; otherwise the Claude API key path. */
+    /** The inbox of the scheduled Claude task; without it (a build with no token) nothing is sent. */
     private val inbox:CallInboxStore?=CallInboxConfig.store(),
     private val save:((JSONObject)->Unit)->Unit={ edit -> runCatching { SecureSettings(context).update { edit(it) } } },
     private val callLog:()->List<FirstPass.LogEntry> ={ val rules=kr.callbrief.LocalPrivacy.rules(settings())
@@ -25,7 +25,7 @@ internal class CallRecordAnalysisRunner(
     fun runPending():Boolean = when {
         kr.callbrief.BuildConfig.LOCAL_PREVIEW -> true // preview calls stay as seeded
         inbox!=null -> runInbox(inbox)
-        else -> runApi()
+        else -> true
     }
 
     /** One hourly pass (design: 장부의 원본, 처음 정리): the user's corrections go up, results are applied, the repository
@@ -176,34 +176,6 @@ internal class CallRecordAnalysisRunner(
         val mail=s.optString(PipelineSettingsKeys.MAIL_HOST).isNotBlank() && s.optString(PipelineSettingsKeys.MAIL_ERROR).isBlank()
         return listOfNotNull(bound(smsAllowed(),PipelineSettingsKeys.SMS_BACKFILL_CURSOR,PipelineSettingsKeys.SMS_BACKFILL_UNTIL),
             bound(mail,PipelineSettingsKeys.MAIL_BACKFILL_CURSOR,PipelineSettingsKeys.MAIL_BACKFILL_UNTIL)).minOrNull()
-    }
-
-    private fun runApi():Boolean {
-        var allDone=true
-        val pending=CallRecordStore(context,clock).use { it.pending() }
-        for(record in pending) {
-            val s=settings()
-            val key=s.optString(PipelineSettingsKeys.CLAUDE_API_KEY).trim()
-            val state=when {
-                !s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false) -> CallRecordStore.WAITING_CONSENT
-                key.isEmpty() -> CallRecordStore.WAITING_KEY
-                else -> null
-            }
-            if(state!=null) { CallRecordStore(context,clock).use { it.setState(record.recordId,state) };continue }
-            if(record.transcript.isBlank()) { CallRecordStore(context,clock).use { it.setState(record.recordId,CallRecordStore.FAILED,"EMPTY_TRANSCRIPT") };continue }
-            val request=CallRecordStore(context,clock).use { it.request(record) }
-            try {
-                val analysis=analyzer.analyze(key,request)
-                CallRecordStore(context,clock).use { it.applyAnalysis(record.recordId,analysis) }
-                runCatching { SecureSettings(context).update { it.put(PipelineSettingsKeys.LAST_ANALYZED_MS,clock()) } }
-            } catch(e:ClaudeCallException) {
-                if(e.code=="NETWORK") { allDone=false;continue }
-                CallRecordStore(context,clock).use { it.setState(record.recordId,CallRecordStore.FAILED,e.code) }
-            } catch(e:Exception) {
-                CallRecordStore(context,clock).use { it.setState(record.recordId,CallRecordStore.FAILED,e.javaClass.simpleName) }
-            }
-        }
-        return allDone
     }
 }
 

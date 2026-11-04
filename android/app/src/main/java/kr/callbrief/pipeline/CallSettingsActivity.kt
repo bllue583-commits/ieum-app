@@ -86,9 +86,6 @@ class CallSettingsActivity:ComponentActivity() {
         group(CallUi.heading(this,"메일"))
         mailGroup(s)
 
-        // With the inbox (subscription) there is nothing to set, so the section is not shown at all.
-        if(!CallInboxConfig.enabled) apiKeyGroup(s)
-
         group(CallUi.heading(this,"정리 동의"))
         body.addView(CallUi.text(this,"통화 녹음 파일은 휴대폰 밖으로 나가지 않아요. 휴대폰에서 글자로 바꾼 통화 내용과 업무 문자, 메일의 글만 Claude로 보내 요약하고, 결과는 이 휴대폰에만 저장해요. 언제든 끌 수 있어요."))
         val consent=s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false)
@@ -125,7 +122,7 @@ class CallSettingsActivity:ComponentActivity() {
         body.addView(CallUi.text(this,"녹음 1분을 글자로 바꾸는 데: "+if(speed>0) "약 %.0f초".format(speed/1000.0) else "아직 기록 없음"))
         body.addView(CallUi.text(this,"마지막으로 글자로 바꾼 때: ${CallUi.dateTime(s.optLong(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,0))}"))
         body.addView(CallUi.text(this,"마지막으로 정리한 때: ${CallUi.dateTime(s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0))}"))
-        val waiting=(counts[CallRecordStore.TRANSCRIBED] ?: 0)+(counts[CallRecordStore.WAITING_KEY] ?: 0)+(counts[CallRecordStore.WAITING_CONSENT] ?: 0)
+        val waiting=(counts[CallRecordStore.TRANSCRIBED] ?: 0)+(counts[CallRecordStore.WAITING_CONSENT] ?: 0)
         val failed=counts[CallRecordStore.FAILED] ?: 0
         body.addView(CallUi.text(this,"정리된 통화 ${counts[CallRecordStore.ANALYZED] ?: 0}건, 기다리는 통화 ${waiting}건, 정리 못 한 통화 ${failed}건",CallUi.BODY,true))
         if(waiting+failed>0) body.addView(button("기다리는 통화 다시 정리하기") {
@@ -166,27 +163,6 @@ class CallSettingsActivity:ComponentActivity() {
 
     /** Work mailbox: which service, address, app password, then one [연결하기] that checks before saving. */
     private var mailService="네이버"
-    /** API-key analysis, only for a build without the inbox token. */
-    private fun apiKeyGroup(s:JSONObject) {
-        group(CallUi.heading(this,"통화 정리 방식"))
-        if(s.optString(PipelineSettingsKeys.CLAUDE_API_KEY).isNotBlank()) {
-            body.addView(CallUi.text(this,"저장됨 ✓  (보안을 위해 다시 보여주지 않아요)",CallUi.BODY,true,CallUi.OK).apply { tag="api_key_state" })
-            body.addView(button("키 지우기") { save { it.remove(PipelineSettingsKeys.CLAUDE_API_KEY) } }.apply { tag="api_key_delete" })
-        } else {
-            body.addView(CallUi.text(this,"통화를 요약하는 데 쓰는 키예요. Claude 콘솔(platform.claude.com)에서 만든 키를 아래 칸에 붙여 넣고 [키 저장]을 누르세요. 이 휴대폰에만 암호화해 저장해요.").apply { tag="api_key_state" })
-            val input=EditText(this).apply {
-                inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD;textSize=CallUi.BODY;hint="여기에 키 붙여넣기";tag="api_key_input"
-                isSingleLine=true;minHeight=CallUi.dp(this@CallSettingsActivity,60);importantForAutofill=android.view.View.IMPORTANT_FOR_AUTOFILL_NO
-            }
-            body.addView(input)
-            body.addView(CallUi.bigButton(this,"","키 저장") {
-                if(busy)return@bigButton
-                val key=input.text.toString().trim();if(key.isEmpty())return@bigButton
-                input.text.clear();save { it.put(PipelineSettingsKeys.CLAUDE_API_KEY,key) }
-            }.apply { tag="api_key_save" })
-        }
-    }
-
     /** Ask; once asked and still refused, explain the restricted setting and open App info instead. */
     private fun readingButton(permission:String,what:String,ask:androidx.activity.result.ActivityResultLauncher<String>,tag:String) {
         if(ReadingPermission.blocked(this,permission)) {

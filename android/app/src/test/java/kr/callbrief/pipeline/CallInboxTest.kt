@@ -40,7 +40,7 @@ class CallInboxTest:ProtectedTextHostTestBase() {
             null
         } }
     }
-    private fun runner(inbox:FakeInbox,consent:Boolean=true)=CallRecordAnalysisRunner(context,ClaudeCallAnalyzer({ _,_ -> error("API must not be used") }) {},
+    private fun runner(inbox:FakeInbox,consent:Boolean=true)=CallRecordAnalysisRunner(context,ClaudeCallAnalyzer(),
         { JSONObject().put(PipelineSettingsKeys.CONSENT_GRANTED,consent) },{ now },inbox)
 
     @Test fun sendsOnceThenAppliesResultAndCleansUp() {
