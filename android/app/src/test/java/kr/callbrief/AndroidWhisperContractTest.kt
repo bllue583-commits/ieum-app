@@ -33,4 +33,14 @@ class AndroidWhisperContractTest {
         assertEquals(2048,AndroidWhisperEngine.decodeOutput(raw(2048)).segments.length())
         var held=false;try{AndroidWhisperEngine.decodeOutput(raw(2049))}catch(_:IllegalStateException){held=true};assertTrue(held)
     }
+    /** The arm64 runtime (armv8.2-a+dotprod+fp16) is refused, not loaded, on a CPU where any core lacks dotprod or fp16. */
+    @Test fun W3407ArmRuntimeNeedsDotprodAndFp16OnEveryCore(){
+        val s25="processor\t: 0\nFeatures\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp\nprocessor\t: 1\nFeatures\t: fp asimd asimdhp asimddp i8mm\n"
+        assertEquals(emptyList<String>(),AndroidWhisperEngine.missingArmFeatures(s25))
+        val a53="processor\t: 0\nFeatures\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 cpuid\n"
+        assertEquals(listOf("asimddp","asimdhp"),AndroidWhisperEngine.missingArmFeatures(a53))
+        val mixed="Features\t: fp asimd asimdhp asimddp\nFeatures\t: fp asimd asimdhp\n"
+        assertEquals(listOf("asimddp"),AndroidWhisperEngine.missingArmFeatures(mixed))
+        assertEquals(listOf("asimddp","asimdhp"),AndroidWhisperEngine.missingArmFeatures(""))
+    }
 }
