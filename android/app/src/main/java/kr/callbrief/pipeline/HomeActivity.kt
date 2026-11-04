@@ -47,7 +47,7 @@ class HomeActivity:ComponentActivity() {
         super.onCreate(savedInstanceState)
         body=CallUi.page(this,CallUi.Tab.HOME)
         // The pipeline is registered by IeumApplication (app start), the boot and update receivers, and the hourly tick.
-        if(LaunchIntro.claim(intent?.action==Intent.ACTION_MAIN,savedInstanceState!=null)) LaunchIntro.show(this)
+        if(LaunchIntro.claim(this,intent?.action==Intent.ACTION_MAIN,savedInstanceState!=null)) LaunchIntro.show(this)
     }
     // Text and call-log access are asked from the setup card, after it says why (round 2), not as the app opens.
     override fun onResume() { super.onResume();load()

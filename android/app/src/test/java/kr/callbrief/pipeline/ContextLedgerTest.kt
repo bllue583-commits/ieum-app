@@ -300,7 +300,7 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         val door=home.window.decorView.findViewWithTag<View>("home_companies_button")
         assertNotNull(door);assertTrue(views(door).filterIsInstance<TextView>().joinToString { it.text }.contains("업체"))
         val settings=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
-        settle { texts(settings).any { it.text.toString()=="현장 상황 메모" } }
+        settle { texts(settings).any { it.text.toString()=="현장 메모 보기 ›" } }
         settle { settings.window.decorView.findViewWithTag<TextView>("site_memo")?.text?.toString()=="현장 메모 본문" }
     }
 }

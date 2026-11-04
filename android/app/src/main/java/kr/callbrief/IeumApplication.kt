@@ -8,5 +8,6 @@ class IeumApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         CallPipelineStartup.init(this)
+        kr.callbrief.pipeline.CallUpdate.checkSoon(this)
     }
 }

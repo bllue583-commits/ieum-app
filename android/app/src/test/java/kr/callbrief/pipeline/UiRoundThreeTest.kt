@@ -127,15 +127,17 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
         settle { a.window.decorView.findViewWithTag<View>("snack_undo")==null }
     }
 
-    @Test fun settingsShowsThreeStatusLightsOnTop() {
+    @Test fun settingsShowsFiveStatusLightsInTheLastGroup() {
         seeded()
         val a=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
         settle { a.window.decorView.findViewWithTag<View>("settings_status")!=null }
         val root=a.window.decorView
-        listOf("status_waiting","status_oldest","status_last_result").forEach { assertNotNull(it,root.findViewWithTag<View>(it)) }
+        listOf("status_import","status_transcribe","status_analyze","status_notify","status_update").forEach { assertNotNull(it,root.findViewWithTag<View>(it)) }
         val all=texts(a).joinToString("\n") { it.text }
-        assertTrue(all,all.contains("지금 상태") && all.contains("마지막으로 결과를 받은 때"))
-        assertTrue(views(root).indexOfFirst { it.tag=="settings_status" } < views(root).indexOfFirst { it.tag=="folder_state" })
+        assertTrue(all,all.contains("지금 상태") && all.contains("녹음 가져오기") && all.contains("글자로 바꾸기") && all.contains("통화 정리"))
+        assertFalse(all,all.contains("녹음 1분을 글자로 바꾸는 데"))
+        assertEquals(listOf("연결","정리","상태와 도움"),views(root).mapNotNull { (it.tag as? String)?.takeIf { t -> t.startsWith("group_") }?.removePrefix("group_") })
+        assertTrue(views(root).indexOfFirst { it.tag=="settings_status" } > views(root).indexOfFirst { it.tag=="folder_state" })
     }
 
     @Test fun callDetailLinksToItsCompanyAndCompanyOpensFromTheLink() {

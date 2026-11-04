@@ -76,6 +76,10 @@ object PipelineSettingsKeys {
     const val SMS_BACKFILL_UNTIL="firstPassSmsUntil"
     const val MAIL_BACKFILL_CURSOR="firstPassMailCursor"
     const val MAIL_BACKFILL_UNTIL="firstPassMailUntil"
+    /** The last failed self-update install: "code: message" (cleared when an install succeeds). Shown on the settings update light. */
+    const val LAST_UPDATE_ERROR="lastUpdateError"
+    /** When the evening or morning report was last actually posted (ms). */
+    const val LAST_DIGEST_MS="lastDigestMs"
 }
 
 /** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets

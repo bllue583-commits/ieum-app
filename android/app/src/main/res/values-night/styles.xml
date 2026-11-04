@@ -4,6 +4,7 @@
         <item name="android:fontFamily">sans</item>
         <item name="android:colorAccent">#6B93FF</item>
         <item name="android:windowLightStatusBar">false</item>
+        <item name="android:forceDarkAllowed">false</item>
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:windowBackground">#111418</item>
         <item name="android:windowAnimationStyle">@style/Animation.Ieum</item>
