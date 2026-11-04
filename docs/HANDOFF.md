@@ -1,7 +1,8 @@
-# 이음 앱 인수인계 (2026-11-05 08시 기준, Fable 클라우드 세션 → 다음은 Opus)
+# 이음 앱 인수인계 (2026-11-05 09시 기준, Opus 오케스트레이션 세션)
 
 > 다음 세션은 이 파일부터 읽고 "4-3. v2.0"과 "6. 다음 할 일"부터 진행하세요. 설계도(Claude Docs)가 기준이며, 모든 변경은 설계도를 먼저 고친 뒤 개발합니다(11/4 사용자: "모든 과정에서 설계도를 철저히 반영").
 > 앱의 목적·기능·UX 설계 상세는 [PRODUCT.md](PRODUCT.md)에 있습니다.
+> **11/5 09시 (Opus 오케스트레이션 세션):** 저장소를 공개로 바꾼 뒤 **v2.6(빌드 1034)·v2.7(1035) 배포, v2.8은 lean-calls에 합쳐 배포 중.** v2.8 통합 기록은 "4-7", 다르게 정한 것은 설계 [DESIGN_V3.md](DESIGN_V3.md) 5.5절. v2.9 묶음 셋(r10-1~3)은 `feature/r10-v29` 위에서 작업자가 개발 중. 로컬 빌드는 메이븐 429 때문에 `$GRADLE_USER_HOME/init.d/mirror.gradle`(구글 미러, 저장소 밖)을 둠 — "7. 알아 둘 함정" 참고. 설계도는 개발하면서 같이 검증하고 다르게 정한 것을 설계 쪽에 적는다(사용자 11/5).
 > **11/5 08시 (Fable 오케스트레이션 세션 종료 → Opus가 이어받음):** v2.6은 lean-calls에 합쳐 배포 대기(ca9acf2), v2.7은 코드 완성(`feature/r8-v27` 964fd1b, 기기 시험 대기), v2.8은 묶음 셋이 브랜치에 올라와 통합 대기. **"4-6"·"4-7"과 "6. 다음 할 일"부터 읽으세요.** 작업자 지시문·보고서·통합 기록은 `docs/orchestration/`에 있습니다(사용자: "handoff 만들어주고 오케스트레이션 종료, 오푸스에게 이어가게").
 > **11/5 새벽 (v2.2~v2.5 마무리):** "4-4"에 v2.4 배포, v2.5 완성(배포는 GitHub Actions 결제 차단으로 대기), 예약 작업 세 개, 워치독 설치를 적었습니다. 6절 0번(v2.5 배포)부터 하세요.
 > **11/5 (Fable 세션, v2.6~v3.0 설계):** v2.5 이후의 개발 지시는 [DESIGN_V3.md](DESIGN_V3.md)입니다(버전마다 큰 변화 하나: v2.6 처음 정리 관문·무인 설치·정확도, v2.7 Activity 하나와 즉시 반응, v2.8 상대 카드와 사람 화면, v2.9 통화 직후 정리, v3.0 통화 중 이음 카드). 설계도(Claude Docs)의 다른 절과 다르면 이 파일이 우선합니다. 현재 앱 검증 원문은 `docs/reviews/20261105_ui.md`, `20261105_pipeline.md`, `20261105_data.md`입니다. 진행 방식은 DESIGN_V3.md 2절(기기 시험은 v2.7과 v3.0에서만 기다림, 나머지는 ci 통과 후 배포).
@@ -180,7 +181,8 @@ $HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu 
 - 통합 중 고친 것: 신호등 대기열 판정에 시계 인자(7일 live 기준과 맞춤), `RoutineDocTest`가 새벽 정리 실제 답 형식("정리할 것 없음: 이유")을 허용, 지시문 문서를 실제 루틴 문구에 맞춤.
 - 로컬 빌드 환경(이 세션의 클라우드 작업 환경): `/home/claude/toolchain/env.sh`(JDK 17, SDK 36, Robolectric jar), `flock /home/claude/gradle.lock python3 run_gradle.py ...`로 한 번에 하나만. 메이븐이 429를 자주 내므로 첫 의존성 받기는 재시도 필요.
 
-## 4-6. v2.7 (11/5 아침, Fable 세션, 기준 DESIGN_V3.md 4절) — 코드 완성, 기기 시험·배포 대기
+## 4-6. v2.7 (11/5 아침, Fable 세션, 기준 DESIGN_V3.md 4절) — **배포 완료(11/5 08:49, 빌드 1035)**
+- 배포(11/5, Opus): device-test 다시 실행 성공, 스크린샷 6장(홈, 오늘 통화, 체크, 설정, 업체, 업체 상세) 확인 — 잘림·겹침 없음. 하네스는 통화 상세와 1.3배 홈을 찍지 않음(설계 4.2의 7+1장 중 2장 없음, v3.0 call-card 단계 넣을 때 같이 추가). lean-calls 9da92aa로 합쳐 ci·update-smoke·release 성공.
 - 상태: `feature/r8-v27` **964fd1b**(푸시됨). 전체 단위 시험 **441건 통과**(int27-test-7), 화면 규칙 0, 비밀 스캔 0. `docs/VERSION` 2.7, `UPDATE_NOTE` 첫 줄 "v2.7: 화면이 바로 반응하고, 탭과 뒤로 가기가 한결같아졌어요. 아침 알림에서 바로 다 됐어요를 누를 수 있어요". 설계 4.2 "device-test 결과를 기다려 스크린샷 7장+1.3배 홈 1장 확인"이 남음(Actions가 살아나면 feature/r8-v27의 ci·device-test run을 다시 실행).
 - 1단계(병렬, 보고서 `docs/orchestration/reports/feature-r8-v27-r1.md` 등):
   - r8-1 저장소 성능: `IeumApplication.store(context)`가 프로세스 수명 `CallRecordStore`(놓는 곳 `shutdown()`·`onTrimMemory`), Keystore 확인 한 번(`State.verified`), 변경 없는 트랜잭션 스냅샷 생략, 스키마 단계 상태마다 한 번(`needs/markDone`), 홈 read 1회 열기(`HomeScreen.readOnce`, 측정 `homeReadMs`·`dbOpenMs` 설정 키 → 하트비트 `dbOpenMs/homeReadMs`), `oldestUnansweredSentMs()` 한 쿼리, 통화 화면 `reconcileCallLog` 제거(발견·업로드 패스에서만). 시험 `StorePerformanceTest`. 시험에서 저장소 파일을 지우기 전 `IeumApplication.shutdown()` 필요.
@@ -190,7 +192,11 @@ $HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu 
 - 통합 때 고친 것: r8-1 변경을 r8-2가 옮긴 `screens/*.kt`에 적용, `TaskActions`·`MainActivity.pickFolder`(폴더 저장 IO) 프로세스 저장소, 홈 체크 행도 `CheckRows.row`, 날짜 넘기기 시험 `CallsScreen.readHook` 게이트(경쟁 제거), `UiV2Test.aFailedInstall…`을 r7-3 동작(성공 시 오류 지움)에 맞춤.
 - 안 한 것(선택): "AI 메모" → "이음 메모" 표기, 업체 이름 고치기의 ledger_edits 전송(`renameCompany` edit 제안), 설계의 "상위 2개 [다 됐어요]"는 1개로(버튼 둘이면 구분 불가).
 
-## 4-7. v2.8 (11/5 08시, 묶음 셋 브랜치에 올라옴 — 통합은 다음 세션)
+## 4-7. v2.8 (11/5 09시, Opus 통합 — lean-calls에 합쳐 배포)
+- 통합(`feature/r9-v28` e368728 → lean-calls): r9-2 → r9-1(충돌: `CallRecordStore` issues 반영 끝과 클래스 끝 함수 — 둘 다 살림) → r9-3(클래스 끝 — 둘 다 살림). 마이그레이션이 돈 열기에서는 `migratedThisOpen`으로 생성자 끝에 `ContactCards.touchAll` 한 번(카드 파일 쓰기로 홈이 늦지 않게, 설계 5.5).
+- 마저 한 것: `rememberPersonal` 뒤 카드 삭제(`ContactCards.touch`), 업체 상세 최근 통화 이름 → 사람 화면(`CompanyCall.personId`), 통화 검색에 "사람" 절(`peopleForSearch`, 최대 5명, `PersonLinks.row` 공용 행), 설정 [상대 카드 다시 만들기](`rebuild_cards`), 체크할 일 META 이름에 `noNumber`(r10-v29 f0b4b96, v2.9에 들어감).
+- 시험: 전체 단위 시험 **466건 통과**(`v28-testn-1`), 화면 규칙 0, 비밀 스캔 0. `PersonScreenTest`에 2건 추가. device-test는 v2.8에서 기다리지 않음.
+- 아래는 통합 전 기록.
 - 통합 브랜치 `feature/r9-v28` = v2.7 964fd1b + `core/PhoneKey.kt`(f7d091b, `PhoneKey.of(raw)`·`isKey`, `PhoneKeyTest` 5건). 묶음 지시문 `docs/orchestration/briefs/r9-*.md`, 보고서 `docs/orchestration/reports/feature-r9-v28-r*.md`.
   - r9-1 `feature/r9-v28-r1` **65e105d(+빈 WIP 커밋 e5beb1e)**: PhoneKey 호출처 전부 교체(`PrivacyRules.normalizePhone` 삭제, PhoneKey가 +없는 82+8자리도 허용), `MIGRATION_VERSION=4`(키 재계산·같은 번호 사람 합치기, `STORE_V4_SCHEMA` 파일 끝), 인덱스 7개·`issue_companies`, `MAIN_THREAD_CHECK`(실제 앱에서 메인 스레드 접근 시 예외 — 화면은 IO에서만), `inTransaction{}`, 보호 파일 복구(`takeRecovery()` → `dbRecoveryLast`), WorkManager `use{}` 교체(담당 밖 `IeumApplication`·`CallSinkImpl`·`PhoneStatus`·`CallRecordAnalysisRunner` 소폭). 시험 `StoreFoundationTest`, P04~P06 수정. **전체 단위 시험 미실행**(종료 지시로 중단).
   - r9-2 `feature/r9-v28-r2` **78ffef6(완성)**: `pipeline/ContactCards.kt`, 파일 `contact-cards-v1.sealed`, 표 `contact_cards(phone_key PK,json,updated_ms)`. 공개 함수 `get(phoneKey)`, `get(context,phoneKey)`, `preload(context)`, `warm(context)`, `touch(store,keys)`, `touchAll(store)`, `flushPending(store)`, `refresh(store,phoneKeys)`, `rebuildAll(store)`, `shutdown()`. 카드 JSON v1 필드는 보고서 참고. 훅: applyAnalysis·completeItem·undoDone·addUserItem·renamePerson·reconcileCallLog·forgetPersonal·insertMessage(applyLedger·applyTidy는 touchAll). **남은 것: r9-1 마이그레이션 직후 `ContactCards.touchAll(this)` 한 줄.** 300장 읽기 68ms(목표 60), 캐시 85µs.
@@ -238,17 +244,17 @@ $HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu 
 - **이 PC 빠른 확인**: `IEUM_LOCAL_PREVIEW=1 IEUM_SKIP_ANDROID_NATIVE=1`로 `assembleDebug` → 에뮬레이터 설치 → `powershell -File tools/preview_shots.ps1 <이름>` (시험 데이터 `PreviewSeed`가 첫 실행 때 채워짐, 아무것도 밖으로 안 나감). 캡처는 `evidence/shots/`.
 - 아직: 설정 화면은 제목 띠만 바뀜(카드 묶음 정리 필요), 아침·저녁 알림 문구의 "할 일" → "체크할 일" 통일, 설계도(Claude Docs) "화면 디자인" 절 개정, 앱 아이콘 다듬기, 모모콜에서 본 "전화 올 때 지난 통화 요약 띄우기" 검토.
 
-## 6. 다음 할 일 (순서대로, 11/5 08시 기준 — 상세는 [DESIGN_V3.md](DESIGN_V3.md), 묶음 지시문은 `docs/orchestration/briefs/`)
-0. **저장소 공개와 배포 재개.** 사용자 결정(11/5 08시): Actions 무료 분량(비공개 2,000분/월) 소진 → **ieum-app을 v3.0까지 공개(public)로 전환**(사용자가 직접 Settings → Danger Zone; 이 세션의 gh는 저장소 설정 변경이 막힘). 공개 전 점검은 끝남(작업 트리·전체 이력에서 토큰·키·실제 번호·주소 없음, HANDOFF 개인 경로는 환경 변수로 바꿈). `ieum-inbox`는 계속 비공개. **v3.0 배포 뒤 다시 비공개로 되돌릴 것**(사용자: "v3.0까지만"). 공개로 바뀌면 lean-calls ca9acf2의 실패한 네 run을 REST로 다시 실행(`gh api -X POST repos/bllue583-commits/ieum-app/actions/runs/<id>/rerun`, id는 4-5 참고; 또는 release-apk `workflow_dispatch` ref=feature/lean-calls) → v2.6 release 확인(ieum-inbox `app/version.json`, 태그) → 아내 폰에 v2.6 손 설치 안내(그 뒤는 무인 설치).
-1. **v2.7 배포**: feature/r8-v27 964fd1b의 ci·device-test를 다시 실행 → `evidence/shots/` 스크린샷 7장+1.3배 홈을 설계 4.3과 대조(글자 잘림, 겹침) → 문제 없으면 lean-calls에 합쳐 배포(r8-1이 `IeumApplication`·매니페스트를 바꿔 update-smoke가 돎) → 아내 폰에서 무인 설치(v2.6→v2.7)가 실제로 되는지 하트비트 `updateReadySinceMs`·`version`으로 확인 → HANDOFF 4-6 갱신.
-2. **v2.8 통합·배포**(4-7의 순서대로). 통합 뒤 설정 화면 "상태와 도움" 묶음에 [카드 다시 만들기](`ContactCards.rebuildAll`) 버튼 한 줄 추가 권장.
-3. **v2.9** (`feature/r10-v29` = v2.8 완성본, 지시문 r10-1~r10-3 — 셋 병렬, `CallSession.CallEnd` 약속은 r10-1 지시문에): 전화 상태 감지, 통화별 알림+[메모 남기기], 결과 10분 체인·ETag. 루틴 cron 30분(사용자가 직접 교체, 문구 보고). ci 통과 후 배포.
-4. **v3.0** (`feature/r11-v30` = v2.9 완성본, 지시문 r11-1~r11-3 — r11-1·r11-2 병렬 뒤 r11-3): 통화 연결 역할·`CallCardService`·오버레이 카드·헤드업 폴백·안전장치·하트비트 `callCard`. device-test에 `tools/device/call_card_test.sh` 단계를 **오케스트레이터가** 워크플로에 넣고(작업자는 워크플로 금지) **결과를 기다린 뒤** 배포. 배포 뒤 아내 폰 권한(오버레이, 통화 연결 역할, READ_PHONE_STATE) 한 번씩 허용 안내(DESIGN_V3.md 9절). 그다음 저장소 비공개 복귀.
-5. 워크플로 절약(사용자 동의 전, 제안): 작업자 묶음 브랜치 push마다 ci·device-test가 다 돌아 분량을 많이 씀. 로컬 툴체인으로 판정하니 ci는 `feature/r*-v*`(통합)·lean-calls에서만, device-test는 `workflow_dispatch`만으로 바꾸면 5분의 1 아래. 공개 저장소에서는 무료라 급하지 않음.
-6. 남은 사용자 할 일: 루틴 지시문 교체 확인(v2.6 r7-5, `docs/routines/hourly.md`·`tidy.md` "---" 아래 전문을 예약 작업에 붙여 넣기 — 11/5 03시에 파일로 보냄), 비밀 `IEUM_SIGNING_SEED` 복사, "병합 후 브랜치 자동 삭제" 켜기, 옛 시험 브랜치 삭제(`feature/r7-v26-r*`, `feature/r8-v27-r*`는 합쳐졌으니 지워도 됨).
-7. 그대로 남는 것: 문자·메일 실제 확인(MMS, RCS), inbox-e2e 정기 점검(main 합칠 때), 우편함 이력 압축(J3), 골든 셋 실험(F3, F4).
+## 6. 다음 할 일 (순서대로, 11/5 09시 기준 — 상세는 [DESIGN_V3.md](DESIGN_V3.md), 묶음 지시문은 `docs/orchestration/briefs/`)
+0. ~~저장소 공개와 배포 재개~~ 끝(11/5 08:07 사용자가 공개 전환). **v3.0 배포 뒤 다시 비공개로**(사용자가 직접). 아내 폰은 v2.4에서 v2.6을 한 번 손으로 설치해야 하고(사용자에게 안내함), 그 뒤는 무인 설치. 하트비트 `version`·`updateReadySinceMs`로 무인 설치가 되는지 확인할 것.
+1. ~~v2.7 배포~~ 끝(1035). ~~v2.8 통합~~ 끝 — 배포 결과 확인.
+2. **v2.9** (`feature/r10-v29`, 묶음 브랜치 `feature/r10-v29-r1`~`r3`): 작업자 보고서를 `docs/orchestration/reports/`에 저장 → r10-1 → r10-2(r10-2의 `CallSessionStub.kt` 삭제, `CallFollowupNotice.onCallEnded` 주석 풀기) → r10-3 → 전체 시험 → VERSION 2.9 → lean-calls 배포. 루틴 cron 30분 변경은 사용자가.
+3. **v3.0** (`feature/r11-v30` = v2.9 완성본, 지시문 r11-1~r11-3 — r11-1·r11-2 병렬 뒤 r11-3): device-test에 `tools/device/call_card_test.sh` 단계를 **오케스트레이터가** 넣고(통화 상세·1.3배 홈 스크린샷도 같이) **결과를 기다린 뒤** 배포. 배포 뒤 아내 폰 권한 안내(DESIGN_V3.md 9절). 그다음 저장소 비공개 복귀.
+4. 워크플로 절약(제안): 묶음 브랜치 push마다 ci·device-test가 다 돈다. 공개 저장소에서는 무료라 급하지 않음.
+5. 남은 사용자 할 일: 루틴 지시문 교체 확인(v2.6 r7-5), 비밀 `IEUM_SIGNING_SEED` 복사, "병합 후 브랜치 자동 삭제" 켜기, 옛 시험 브랜치 삭제.
+6. 그대로 남는 것: 문자·메일 실제 확인(MMS, RCS), inbox-e2e 정기 점검, 우편함 이력 압축(J3), 골든 셋 실험(F3, F4).
 
 ## 7. 알아 둘 함정
+- 이 클라우드 환경에서 repo.maven.apache.org가 429를 자주 낸다(특히 robolectric `nativeruntime-dist-compat`). `$GRADLE_USER_HOME/init.d/mirror.gradle`에 `maven-central.storage-download.googleapis.com/maven2/`를 맨 앞 저장소로 넣으면 풀린다(저장소 설정은 안 바꿈). JDK 17은 `apt-get update` 뒤에 설치된다(`tools/local_toolchain.sh`가 update를 안 하므로 처음 한 번 수동).
 - Actions "The job was not started because recent account payments have failed or your spending limit needs to be increased"는 비공개 저장소의 무료 2,000분/월 소진 + 지출 한도 $0일 때 나온다(11/5 02시~, 실행 323회·device-test 최근 100회 약 400분). 공개 저장소는 무제한.
 - 이 클라우드 세션의 gh는 저장소 설정 변경(`gh repo edit`)과 계정 billing API가 막힘(저장소 범위 REST만). 저장소 공개/비공개는 사용자가.
 - Agent worktree는 때때로 main(67fac72)에서 시작된다 → 작업자 지시문의 reset 문장. 작업자는 worktree 밖(`/home/claude/reports`)에 못 쓴다. 작업자 커밋 꼬리말이 "Claude Opus 5.5"로 붙는 경우가 있음(무해).
