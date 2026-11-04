@@ -123,6 +123,33 @@ class SelectedRecordingSourceTest : ProtectedTextHostTestBase() {
         assertThrows(IllegalStateException::class.java) { s.open(d) }
         assertEquals(0,provider.opens)
     }
+    /** Design 3.2 #2: 2500 recordings, 2000 of them before 10/1 (2025 filename time). The old ones are dropped while
+     * listing and never counted, so the three calls that just ended are all listed and nothing is truncated. */
+    @Test fun R72OldRecordingsAreDroppedBeforeTheLimitSoNewCallsAreAlwaysListed() {
+        provider.documents.clear()
+        fun put(id:String,name:String,modified:Long){provider.documents[id]=SourceDocument(id,DocumentsContract.buildDocumentUriUsingTree(tree,id).toString(),name,52,"audio/wav",modified)}
+        val recent=GeneralLocalStoreTest.NOW
+        // Old files first in provider order, with a recent modified time (moved/restored): the filename time decides.
+        for(i in 0 until 2000)put("old$i","통화 녹음_합성_250806_1503${"%02d".format(i%60)}_$i.wav",recent-60_000)
+        for(i in 0 until 497)put("mid$i","통화 녹음_합성_261015_10${"%02d".format(i/60%60)}${"%02d".format(i%60)}.wav",recent-86_400_000)
+        listOf("new1","new2","new3").forEachIndexed{i,id->put(id,"통화 녹음_합성_261104_23${"%02d".format(10+i)}00.wav",recent)}
+        val s=SafSelectedRecordingSource(context,settings,tree.toString(),kr.callbrief.pipeline.FirstPass.FROM_MS)
+        val inv=s.inventory()
+        assertEquals(500,inv.documents.size);assertFalse(inv.truncated);assertTrue(inv.complete)
+        assertTrue(inv.documents.map{it.documentId}.containsAll(listOf("new1","new2","new3")))
+        assertTrue(inv.documents.none{it.documentId.startsWith("old")})
+        // Without a filename time the modified time decides.
+        put("plain","SYNTHETIC_PLAIN.wav",kr.callbrief.pipeline.FirstPass.FROM_MS-1)
+        assertTrue(s.inventory().documents.none{it.documentId=="plain"})
+    }
+    /** More recordings from 10/1 on than the limit: the newest are kept and the listing says it was truncated. */
+    @Test fun R72OverTheLimitKeepsTheNewestAndMarksTruncated() {
+        provider.documents.clear()
+        for(i in 0 until 30){val id="d$i";provider.documents[id]=SourceDocument(id,DocumentsContract.buildDocumentUriUsingTree(tree,id).toString(),"통화 녹음_합성_2610${"%02d".format(i/24+10)}_${"%02d".format(i%24)}0000.wav",52,"audio/wav",GeneralLocalStoreTest.NOW)}
+        val inv=SafSelectedRecordingSource(context,settings,tree.toString(),kr.callbrief.pipeline.FirstPass.FROM_MS,keepLimit=10).inventory()
+        assertTrue(inv.truncated);assertFalse(inv.complete)
+        assertEquals((20 until 30).map{"d$it"}.toSet(),inv.documents.map{it.documentId}.toSet())
+    }
     @Test fun C05OlderApiHoldsBeforeUnsupportedMembershipRpc() {
         val s=source();val d=s.inventory().documents.single();val original=android.os.Build.VERSION.SDK_INT
         try {

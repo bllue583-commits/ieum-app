@@ -6,6 +6,7 @@ import android.provider.Settings
 import androidx.work.*
 import kr.co.ieum.discovery.DiscoveryPump
 import kr.co.ieum.discovery.DiscoveryTypes.*
+import kr.co.ieum.discovery.DiscoveryTypes.Failure
 import org.json.JSONObject
 import java.security.MessageDigest
 import java.util.concurrent.*
@@ -55,8 +56,34 @@ internal object AutomaticRecordingDiscovery {
             return outcome("HELD_SOURCE","SELECTED_FOLDER_READ_GRANT_REQUIRED")
         return null
     }
-    /** One bounded pass per frozen binding. */
+    /** Fixed code for settings and work output: the state, plus the reason when there is one. */
+    fun code(result:JSONObject):String=result.optString("state").let { st -> result.optString("reason").let { if(it.isBlank())st else st+":"+it } }
+    /** Only a fixed failure code or the exception's class name, never its message (which may name a file). */
+    fun errorCode(error:Throwable):String="ERROR:"+when(error) {
+        is Failure->error.code
+        is kr.co.callsummary.core.CoreException->error.message?.takeIf { it.matches(Regex("[A-Z0-9_]{1,80}")) } ?: "CORE"
+        is IllegalStateException->error.message?.takeIf { it.matches(Regex("[A-Z0-9_]{1,80}")) } ?: "IllegalStateException"
+        else->error.javaClass.simpleName.ifBlank { "Exception" }
+    }
+    /** Design 3.2 #4 (review pipeline #8): every attempt leaves its time and a code, also when it stops early or fails. */
+    internal fun recordAttempt(context:Context,startedMs:Long,code:String,truncated:Boolean?=null,heldTooLarge:Int?=null) {
+        runCatching { SecureSettings(context).update {
+            it.put(SecureSettings.LAST_DISCOVERY_ATTEMPT_MS,startedMs).put(SecureSettings.LAST_DISCOVERY_OUTCOME,code)
+            if(truncated!=null)it.put(SecureSettings.INVENTORY_TRUNCATED,truncated)
+            if(heldTooLarge!=null)it.put(SecureSettings.HELD_UNSUPPORTED_COUNT,heldTooLarge)
+        } }
+    }
+    /** One bounded pass per frozen binding. Its outcome code is always written to settings, even when it throws. */
     fun cycle(context:Context,binding:Binding?,stopped:()->Boolean,active:(NativeDiscoverySession?)->Unit={},observed:(DiscoveryPump.Cycle)->Unit={},fromFollowup:Boolean=false):JSONObject {
+        val started=System.currentTimeMillis();val facts=PassFacts()
+        try {
+            return attempt(context,binding,stopped,active,observed,fromFollowup,facts).also { facts.code=code(it) }
+        } catch(error:Throwable) {
+            facts.code=if(stopped())"LOCAL_WORK_STOPPED:"+errorCode(error).removePrefix("ERROR:") else errorCode(error);throw error
+        } finally { recordAttempt(context,started,facts.code ?: "ERROR:UNKNOWN",facts.truncated,facts.heldTooLarge) }
+    }
+    private class PassFacts { var code:String?=null;var truncated:Boolean?=null;var heldTooLarge:Int?=null }
+    private fun attempt(context:Context,binding:Binding?,stopped:()->Boolean,active:(NativeDiscoverySession?)->Unit,observed:(DiscoveryPump.Cycle)->Unit,fromFollowup:Boolean,facts:PassFacts):JSONObject {
         if(binding==null)return outcome("WAITING_DISCOVERY_BINDING","DISCOVERY_WORK_REARM_REQUIRED")
         blocked(context,binding,stopped)?.let{return it}
         if(!running.add(binding.selectionFence))return outcome("DISCOVERY_ALREADY_RUNNING")
@@ -71,14 +98,22 @@ internal object AutomaticRecordingDiscovery {
                     val before=runCatching{session.knownFiles()}.getOrDefault(-1)
                     scan=session.cycle(32,4,CYCLE_BUDGET_MS)
                     sawNew=before>=0 && runCatching{session.knownFiles()}.getOrDefault(-1)>before
+                    facts.truncated=session.lastListingTruncated
+                    runCatching{session.heldTooLarge()}.getOrNull()?.let{facts.heldTooLarge=it}
                 }finally{active(null)}
             }
             if(sawNew&&!cancelled())runCatching{scheduleFollowup(context,binding,fromFollowup)} // A4: look again soon instead of waiting for the next 15 minutes
             if(!cancelled())runCatching{kr.callbrief.pipeline.CallTranscriptionWork.enqueue(context)} // new recordings -> transcribe soon
             blocked(context,binding,stopped)?.let{return it}
             scan?.let(observed)
-            runCatching{SecureSettings(context).update{it.put(LAST_DISCOVERY_MS,System.currentTimeMillis())}}
-            return outcome("DISCOVERY_CHECKED")
+            // A pass that could not store anything says why (consent, vault key, folder grant) next to its code,
+            // and only a pass without such a hold counts as the last successful one (lastDiscoveryMs).
+            val hold=scan?.let { c -> when {
+                c.folderPaused->"FOLDER_READ_GRANT_MISSING"
+                else->c.localOutcomes.firstOrNull { it=="PERSONAL_DATA_COLLECTION_NOT_ACCEPTED" || it=="AUDIO_STORE_INITIALIZATION_REQUIRED" }
+            } }
+            if(hold==null)runCatching{SecureSettings(context).update{it.put(LAST_DISCOVERY_MS,System.currentTimeMillis())}}
+            return outcome("DISCOVERY_CHECKED",hold.orEmpty())
         } finally {active(null);running.remove(binding.selectionFence)}
     }
     fun selection(state:JSONObject):Selection? {
@@ -87,12 +122,19 @@ internal object AutomaticRecordingDiscovery {
     }
     /** The run fence ([current]: settings, folder grant) is checked on every listing, stat and open; reads of an opened file only look at [stopped]. */
     internal fun guarded(delegate:SelectedRecordingSource,current:()->Boolean,stopped:()->Boolean={false})=object:SelectedRecordingSource by delegate {
-        private fun permit(){check(current()) { "DISCOVERY_RUN_FENCE_CHANGED" }}
+        // Inside one page of decisions the fence (settings decrypt + grant check) is evaluated once (design 3.2 #3).
+        private var batch=0;private var passed=false
+        private fun permit(){
+            if(batch>0&&passed)return
+            check(current()) { "DISCOVERY_RUN_FENCE_CHANGED" };if(batch>0)passed=true
+        }
         override fun checkSelected(){permit();delegate.checkSelected()}
         override fun inventory():SourceInventory {permit();return delegate.inventory().also{permit()}}
         override fun stat(document:SourceDocument):SourceDocument {permit();return delegate.stat(document).also{permit()}}
         override fun excluded(document:SourceDocument):Boolean {permit();return delegate.excluded(document)}
         override fun checkReadable(document:SourceDocument){permit();delegate.checkReadable(document)}
+        override fun beginBatch(){if(batch++==0)passed=false;delegate.beginBatch()}
+        override fun endBatch(){if(batch>0&&--batch==0)passed=false;delegate.endBatch()}
         override fun open(document:SourceDocument):java.io.InputStream {
             permit()
             return object:java.io.FilterInputStream(delegate.open(document)) {
@@ -105,7 +147,7 @@ internal object AutomaticRecordingDiscovery {
     }
     fun open(context:Context,current:()->Boolean={true},stopped:()->Boolean={false}):NativeDiscoverySession? {
         val settings=SecureSettings(context);val selected=selection(settings.snapshot()) ?: return null
-        val source=guarded(SafSelectedRecordingSource(context,settings,selected.treeUri),current,stopped)
+        val source=guarded(SafSelectedRecordingSource(context,settings,selected.treeUri,kr.callbrief.pipeline.FirstPass.FROM_MS),current,stopped)
         val store=hostStore?.invoke(context) ?: GeneralLocalStore(context) // Received protected SQL implementation is mandatory.
         return try {
             NativeDiscoverySession(store,source,selected,settings::snapshot,
@@ -123,10 +165,13 @@ internal object AutomaticRecordingDiscovery {
         WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(FOLLOWUP_NAME,
             if(fromFollowup)ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.REPLACE,followupRequest(binding))
     }
+    /** After the last call log change. A recording modified in the last 2 minutes is "partial" (NativeDiscoverySession),
+     * so a pass 45 s after the call could never store it; 140 s lets the file settle first (design 3.2 #4, review #18). */
+    const val CALLLOG_DELAY_SECONDS=140L
     /** A5: one-time work that waits for a change of the call log (a call ended), runs one cycle and registers itself again. */
     internal fun callLogRequest(binding:Binding?=null)=OneTimeWorkRequestBuilder<CallLogDiscoveryWorker>()
         .setConstraints(Constraints.Builder().addContentUriTrigger(android.provider.CallLog.Calls.CONTENT_URI,true)
-            .setTriggerContentUpdateDelay(45,TimeUnit.SECONDS).build())
+            .setTriggerContentUpdateDelay(CALLLOG_DELAY_SECONDS,TimeUnit.SECONDS).build())
         .also { if(binding!=null)it.setInputData(binding.data()) }.addTag(TAG).addTag(CALLLOG_NAME).build()
     fun canWatchCallLog(context:Context)=context.checkSelfPermission(android.Manifest.permission.READ_CALL_LOG)==android.content.pm.PackageManager.PERMISSION_GRANTED
     /** [policy] KEEP at app start; APPEND_OR_REPLACE from the running work itself (a content trigger fires once, so it is registered again every time). */
@@ -134,6 +179,15 @@ internal object AutomaticRecordingDiscovery {
         if(!canWatchCallLog(context)||capture(context)==null)return false
         WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(CALLLOG_NAME,policy,callLogRequest())
         return true
+    }
+    /** Body of [CallLogDiscoveryWorker]: one cycle, its code kept (not swallowed), and the trigger registered again in
+     * finally, also when the cycle threw or the work was stopped (design 3.2 #4, review #21). [rearm] is replaceable in tests. */
+    internal fun runCallLogTrigger(context:Context,stopped:()->Boolean,active:(NativeDiscoverySession?)->Unit={},
+                                   run:()->JSONObject={ cycle(context,capture(context),stopped,active) },
+                                   rearm:()->Unit={ ensureCallLogTrigger(context,ExistingWorkPolicy.APPEND_OR_REPLACE) }):String {
+        try { return code(run()) }
+        catch(error:Exception) { return if(stopped())"LOCAL_WORK_STOPPED" else errorCode(error) } // the cycle already wrote it to settings
+        finally { runCatching(rearm) }
     }
     fun ensure(context:Context) {
         runCatching{ensureCallLogTrigger(context)}
@@ -164,16 +218,14 @@ class AutomaticRecordingDiscoveryWorker(context:Context,parameters:WorkerParamet
     override fun onStopped(){active?.cancel();super.onStopped()}
 }
 
-/** A5: runs when the call log changes (45 s after the last change), looks for new recordings once, and registers itself again. */
+/** A5: runs when the call log changes (140 s after the last change), looks for new recordings once, and registers itself again. */
 class CallLogDiscoveryWorker(context:Context,parameters:WorkerParameters):Worker(context,parameters) {
     @Volatile private var active:NativeDiscoverySession?=null
     override fun doWork():Result {
-        try {
-            // The folder may have changed since this work was registered: the binding is taken fresh, not from the input.
-            AutomaticRecordingDiscovery.cycle(applicationContext,AutomaticRecordingDiscovery.capture(applicationContext),{isStopped},{active=it})
-        } catch(_:Exception) { /* the 15 minute work is the safety net */ }
-        if(!isStopped)runCatching{AutomaticRecordingDiscovery.ensureCallLogTrigger(applicationContext,ExistingWorkPolicy.APPEND_OR_REPLACE)}
-        return Result.success()
+        // The folder may have changed since this work was registered: the binding is taken fresh, not from the input.
+        val code=AutomaticRecordingDiscovery.runCallLogTrigger(applicationContext,{isStopped},{active=it})
+        // Success even on a failed pass: the next trigger is appended to this work and would fail with it. The code stays.
+        return Result.success(workDataOf("automation_state" to code))
     }
     override fun onStopped(){active?.cancel();super.onStopped()}
 }

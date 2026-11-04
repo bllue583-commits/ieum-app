@@ -54,13 +54,18 @@ CREATE TABLE IF NOT EXISTS local_intakes(event_id TEXT PRIMARY KEY,root_uri TEXT
         val privateContext=object:ContextWrapper(context) { override fun getNoBackupFilesDir()=File(super.getNoBackupFilesDir(),"local-recordings-v2").apply { mkdirs() } }
         try {
             val v=factory(privateContext)
+            val ledger=context.assets.open("vault2_ledger.sql").bufferedReader().use { it.readText() }
             encrypted=EncryptedRecordingStore(port,repository,OWNER,v.vault,v.root,ALIAS,v.provision,token,
-                context.assets.open("vault2_ledger.sql").bufferedReader().use { it.readText() },now,fault) { recording ->
+                ledger,now,fault) { recording ->
                 val row=port.query("SELECT * FROM local_visibility WHERE recording_id=?",recording).singleOrNull()
                 if((row?.get("archived") as? Number)?.toInt()==1) null else (row?.get("revision") as? Number)?.toLong() ?: 0L
             }
+            // v2.6: 25 MB -> 60 MB in a store made before (only the CHECK number). A failure keeps 25 MB (audioByteLimit).
+            runCatching { VaultSizeLimit.widen(port,ledger) }
         } catch(error: Exception) { port.close();throw error }
     }
+    /** Largest recording this store's database accepts (discovery holds bigger ones as HELD_UNSUPPORTED). */
+    internal fun audioByteLimit():Long = runCatching { VaultSizeLimit.current(port) }.getOrDefault(VaultSizeLimit.OLD_BYTES)
     fun setupState(): String=when {
         encrypted.initializedKeyReady()->"READY"
         encrypted.mayInitialize()->"EMPTY"

@@ -37,21 +37,27 @@ public final class RecordingDiscovery {
             try{return store.transact(s->{
                 requireScanEpoch(epoch);requireSelection(s);
                 if(s.scanRound!=before.scanRound||!java.util.Objects.equals(s.scanCursor,cursor))throw new Failure("SCAN_CHECKPOINT_CHANGED");
-                List<Decision> decisions=new ArrayList<>();for(Metadata m:page.documents){requireScanEpoch(epoch);decisions.add(decide(m));}
-                requireScanEpoch(epoch);docs.acceptPage(selection,page);requireScanEpoch(epoch);
+                List<Decision> decisions=new ArrayList<>();docs.beginDecisions(selection);
+                try{for(Metadata m:page.documents){requireScanEpoch(epoch);decisions.add(decide(m));}
+                    requireScanEpoch(epoch);docs.acceptPage(selection,page);}finally{docs.endDecisions(selection);}
+                requireScanEpoch(epoch);
                 Moment now=clock.now();s.grantPaused=false;s.scanRound=round;
                 s.scanRoundComplete=(cursor==null?true:s.scanRoundComplete)&&page.inventoryComplete;
                 for(int i=0;i<page.documents.size();i++){requireScanEpoch(epoch);observe(s,page.documents.get(i),decisions.get(i),round,now);}
                 s.scanCursor=page.nextCursor;
                 if(page.nextCursor==null&&s.scanRoundComplete)for(Row r:s.rows.values())if(r.seenRound!=round){
                     if(r.status!=Status.MISSING_ALIAS){r.headRevision++;r.leaseEpoch++;r.error="SOURCE_ALIAS_MISSING";r.status=Status.MISSING_ALIAS;
-                        if(r.pending!=null)s.audit.add("PENDING_ALIAS_MISSING:"+r.pending.operationId);}}
+                        if(r.pending!=null)audit(s,"PENDING_ALIAS_MISSING:"+r.pending.operationId);}}
                 fault.reached("BEFORE_SCAN_COMMIT");requireScanEpoch(epoch);
                 if(!docs.hasReadGrant(selection))throw new Failure("SCAN_GRANT_CHANGED");
                 return page.documents.size();
             });}catch(Failure e){if(e.code.equals("SCAN_CANCELLED"))return 0;if(e.code.equals("SCAN_GRANT_CHANGED")){pauseGrantUnlessCancelled(epoch);return 0;}throw e;}
         }
     }
+    /** The queue header keeps only the latest audit notes; it grew without end before (review pipeline #7). */
+    public static final int AUDIT_KEEP=100;
+    public static void trimAudit(DiscoveryStore.State s){int extra=s.audit.size()-AUDIT_KEEP;if(extra>0)s.audit.subList(0,extra).clear();}
+    private static void audit(DiscoveryStore.State s,String note){s.audit.add(note);trimAudit(s);}
     private boolean scanActive(long epoch){synchronized(scanAdmission){return !stopped.get()&&cancellationEpoch==epoch;}}
     private void requireScanEpoch(long epoch){if(!scanActive(epoch))throw new Failure("SCAN_CANCELLED");}
     private void pauseGrantUnlessCancelled(long epoch){synchronized(scanAdmission){if(scanActive(epoch))pauseGrant();}}
@@ -69,7 +75,7 @@ public final class RecordingDiscovery {
             &&r.metadata.mimeType.equals(m.mimeType)&&java.util.Objects.equals(r.metadata.bytes,m.bytes)
             &&java.util.Objects.equals(r.metadata.modifiedMs,m.modifiedMs)&&r.metadata.partial==m.partial&&r.metadata.virtualDocument==m.virtualDocument;
         if(changed||policyChanged||returning){if(changed||returning)r.headRevision++;r.leaseEpoch++;
-            if(r.pending!=null&&!onlyNameChanged){s.audit.add("SUPERSEDED_PENDING:"+r.pending.operationId);r.pending=null;}r.error=null;}
+            if(r.pending!=null&&!onlyNameChanged){audit(s,"SUPERSEDED_PENDING:"+r.pending.operationId);r.pending=null;}r.error=null;}
         boolean fresh=isNew||changed||policyChanged||returning;
         boolean newBoot=!now.bootId.equals(r.stableBoot)||now.elapsedMs<r.stableSince;
         // Same name, size and modified time as the stored version: a reboot alone is no reason to read and hash it again.

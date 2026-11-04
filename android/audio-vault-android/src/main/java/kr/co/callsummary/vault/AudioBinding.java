@@ -4,7 +4,9 @@ import java.util.Objects;
 
 /** Frozen app source fence. sourceVersion is a plaintext version, never a ciphertext hash. */
 public final class AudioBinding {
-    public static final long MAX_BYTES=25000000;
+    /** Same line as discovery (DiscoveryTypes.Config.MAX_AUDIO_BYTES, was 25,000,000): about 62 to 125 minutes of
+     * Samsung AAC call audio at 128 to 64 kbps (an estimate, to be checked with real files). Encryption is unchanged. */
+    public static final long MAX_BYTES=60_000_000L;
     public final String localProfileId,recordingId,plaintextSha256;
     public final long sourceVersion,plaintextBytes;
     public AudioBinding(String profile,String recording,long version,String audioSha256,long bytes){

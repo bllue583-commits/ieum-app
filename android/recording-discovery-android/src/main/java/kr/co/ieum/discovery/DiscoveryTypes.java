@@ -37,14 +37,24 @@ public final class DiscoveryTypes {
     }
     public interface Clock { Moment now(); }
     public static final class Config {
+        /** Largest recording read into the vault (design 3.2 #5, review pipeline #13; was 25,000,000).
+         * Basis, not measured on the phone yet: Samsung call recordings are AAC in .m4a. At 64 kbps that is about
+         * 0.48 MB a minute, at 128 kbps about 0.96 MB a minute, so 25 MB stopped calls at roughly 26 to 52 minutes and
+         * 60 MB allows roughly 62 to 125 minutes. The real bytes per minute must be checked on the device (file size
+         * divided by call length); heartbeat heldUnsupported shows how many files are still over this line.
+         * One file is read into one array of this size (RecordingDiscovery.read), which the app heap holds easily.
+         * The vault binding (AudioBinding.MAX_BYTES) and the database checks use the same number. */
+        public static final long MAX_AUDIO_BYTES=60_000_000L;
         public final long quietMs, leaseMs, recheckMs, maxBytes; public final int pageSize;
         public Config(long quietMs,long leaseMs,long recheckMs,long maxBytes,int pageSize){
-            if(quietMs<1||leaseMs<1||recheckMs<quietMs||maxBytes<44||maxBytes>25000000||pageSize<1||pageSize>1000)
+            if(quietMs<1||leaseMs<1||recheckMs<quietMs||maxBytes<44||maxBytes>MAX_AUDIO_BYTES||pageSize<1||pageSize>1000)
                 throw new Failure("INVALID_DISCOVERY_CONFIG");
             this.quietMs=quietMs;this.leaseMs=leaseMs;this.recheckMs=recheckMs;this.maxBytes=maxBytes;this.pageSize=pageSize;
         }
+        /** Same settings with a lower size line (the local store may still carry the old 25 MB database check). */
+        public Config withMaxBytes(long limit){return limit>=maxBytes?this:new Config(quietMs,leaseMs,recheckMs,limit,pageSize);}
         /** Files already stored are looked at again at most once a day; the page is large so one inventory covers a big folder. */
-        public static Config conservative(){return new Config(20000,120000,86_400_000L,25000000,512);}
+        public static Config conservative(){return new Config(20000,120000,86_400_000L,MAX_AUDIO_BYTES,512);}
     }
     public static final class Metadata {
         public final String documentId, displayName, mimeType;
@@ -71,6 +81,9 @@ public final class DiscoveryTypes {
         Page listPage(Selection selected,String cursor,int limit) throws Exception;
         /** Accepted page cache writes run only inside the admitted queue transaction. */
         default void acceptPage(Selection selected,Page page) throws Exception {}
+        /** Around the policy decisions of one page (and its acceptPage): settings can be read once for the whole page. */
+        default void beginDecisions(Selection selected) {}
+        default void endDecisions(Selection selected) {}
         Metadata stat(Selection selected,String documentId) throws Exception;
         InputStream open(Selection selected,String documentId) throws Exception;
     }

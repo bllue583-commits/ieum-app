@@ -14,7 +14,19 @@ import javax.crypto.spec.GCMParameterSpec
 /** Encrypts settings in this class. Other stores need their own verified storage policy. No audio is copied here. */
 class SecureSettings(context: Context, private val keyAccess: KeyAccess = AndroidKeys(ALIAS)) {
     private val prefs = context.getSharedPreferences("private_settings", Context.MODE_PRIVATE)
-    companion object { private val lock = Any(); private const val ALIAS = "callbrief.client.v1" }
+    companion object {
+        private val lock = Any(); private const val ALIAS = "callbrief.client.v1"
+        /** Folder discovery (design 3.2 #4, #2, #5). Times, counts and fixed codes only; never a name, path or number. */
+        /** When a discovery pass last started, whatever its end (heartbeat lastDiscoveryAttemptMs). */
+        const val LAST_DISCOVERY_ATTEMPT_MS = "lastDiscoveryAttemptMs"
+        /** How that pass ended: a fixed code such as DISCOVERY_CHECKED, HELD_SOURCE:SELECTED_FOLDER_READ_GRANT_REQUIRED
+         * or ERROR:METADATA_SCAN_FAILED (heartbeat lastDiscoveryOutcome). */
+        const val LAST_DISCOVERY_OUTCOME = "lastDiscoveryOutcome"
+        /** True when the last listing kept only the newest recordings from 10/1 on (heartbeat inventoryTruncated). */
+        const val INVENTORY_TRUNCATED = "inventoryTruncated"
+        /** Recordings held because they are larger than the vault line, 60 MB (heartbeat heldUnsupported). */
+        const val HELD_UNSUPPORTED_COUNT = "heldUnsupportedCount"
+    }
     interface KeyAccess { fun existing(): SecretKey?; fun createForFirstEmptyStore(): SecretKey }
     private class AndroidKeys(private val alias: String) : KeyAccess {
         override fun existing(): SecretKey? = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.getKey(alias, null) as? SecretKey
