@@ -85,7 +85,7 @@ class TodayCallsActivity:ComponentActivity() {
             s.addView(CallUi.text(this,CallUi.state(c),CallUi.SUMMARY,true,if(c.state==CallRecordStore.FAILED) CallUi.WARN else CallUi.INK))
             when(c.state) {
                 CallRecordStore.FAILED -> s.addView(CallUi.bigButton(this,"","다시 정리하기") { retry(c.recordId) })
-                CallRecordStore.WAITING_KEY,CallRecordStore.WAITING_CONSENT -> s.addView(CallUi.bigButton(this,"","설정 열기") { CallUi.go(this,CallUi.Tab.SETTINGS) })
+                CallRecordStore.WAITING_CONSENT -> s.addView(CallUi.bigButton(this,"","설정 열기") { CallUi.go(this,CallUi.Tab.SETTINGS) })
             }
             body.addView(s)
         }

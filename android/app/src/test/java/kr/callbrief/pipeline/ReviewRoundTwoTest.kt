@@ -97,7 +97,7 @@ class ReviewRoundTwoTest:ProtectedTextHostTestBase() {
         override fun get(path:String)=files[path] ?: throw ClaudeCallException("INBOX_HTTP_404")
         override fun delete(path:String,sha:String){ files.remove(path) }
     }
-    private fun runner(inbox:Inbox,s:JSONObject,at:Long=now)=CallRecordAnalysisRunner(context,ClaudeCallAnalyzer({ _,_ -> error("no API") }) {},{ s },{ at },inbox,
+    private fun runner(inbox:Inbox,s:JSONObject,at:Long=now)=CallRecordAnalysisRunner(context,ClaudeCallAnalyzer(),{ s },{ at },inbox,
         save={ e -> e(s) },callLog={ emptyList() },smsAllowed={ false })
 
     @Test fun aRefusedInboxIsToldOnceADay() {

@@ -389,7 +389,6 @@ internal object CallUi {
     /** Record state in plain words; no English codes ever reach the screen. */
     fun state(state:String)=when(state) {
         CallRecordStore.TRANSCRIBED -> if(CallInboxConfig.enabled) "정리하고 있어요, 1시간 안에 끝나요" else "정리하고 있어요"
-        CallRecordStore.WAITING_KEY -> "설정에서 Claude 키를 넣어주세요"
         CallRecordStore.WAITING_CONSENT -> "설정에서 정리 동의를 켜주세요"
         CallRecordStore.FAILED -> "정리하지 못했어요"
         else -> ""

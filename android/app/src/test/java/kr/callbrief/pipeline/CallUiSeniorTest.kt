@@ -61,7 +61,7 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
     }
 
     @Test fun stateAndDueWordsArePlainKorean() {
-        listOf(CallRecordStore.TRANSCRIBED,CallRecordStore.WAITING_KEY,CallRecordStore.WAITING_CONSENT,CallRecordStore.FAILED).forEach {
+        listOf(CallRecordStore.TRANSCRIBED,CallRecordStore.WAITING_CONSENT,CallRecordStore.FAILED).forEach {
             val w=CallUi.state(it);assertTrue(w.isNotBlank());assertFalse(w,english.containsMatchIn(w))
         }
         val today=CallUi.today()
