@@ -3,6 +3,8 @@ name: release-apk
 # Every push builds the phone APK (Whisper native code, inbox token, stable signing key derived from the
 # same secret) and publishes it to the private inbox repo, where the installed app finds it and offers
 # a one-tap update. Needs the repository secret IEUM_INBOX_TOKEN.
+# It waits for ci on the same commit, and, when the commit changes start-up code or build settings since the last
+# release (tools/needs_update_smoke.sh), also for the update smoke test (update-smoke.yml) on the same commit.
 on:
   push:
     branches: ['feature/lean-calls', 'main']
@@ -20,7 +22,7 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 110
     env:
       INBOX: bllue583-commits/ieum-inbox
     steps:
@@ -39,6 +41,32 @@ jobs:
           done
           echo "ci did not finish in 40 minutes: not releasing"; exit 1
       - uses: actions/checkout@v4
+      # Only for a commit that changes the manifest, IeumApplication, StartupReceiver, CallSinkImpl or the build settings
+      # since the last release: the emulator must have installed it over the previous release and started it (design H1).
+      - name: Wait for update-smoke on this commit (start-up or build changes only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          out=$(bash tools/needs_update_smoke.sh "$GITHUB_REPOSITORY" "$GITHUB_SHA"); echo "$out"
+          [ "$(echo "$out" | tail -n 1)" = "true" ] || { echo "no update smoke test needed"; exit 0; }
+          for i in $(seq 1 100); do
+            run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow update-smoke.yml --commit "$GITHUB_SHA" --json databaseId,status,conclusion --jq '.[0] | "\(.databaseId) \(.status) \(.conclusion)"' 2>/dev/null)
+            if [ -z "$run" ] || [ "$run" = "null null null" ]; then
+              # A manual release has no push run to wait for: the person who started it decided.
+              if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$i" -ge 4 ]; then echo "::warning title=release::manual release without an update smoke test run"; exit 0; fi
+              sleep 30; continue
+            fi
+            set -- $run
+            case "$2 $3" in
+              "completed success")
+                step=$(gh run view "$1" --repo "$GITHUB_REPOSITORY" --json jobs --jq '[.jobs[].steps[] | select(.name=="Install, update, start") | .conclusion] | first // empty')
+                if [ "$step" = "success" ]; then echo "update smoke test passed (run $1)"; exit 0; fi
+                echo "::error title=release::update-smoke run $1 did not run the emulator test (step: ${step:-missing}): not releasing. Re-run update-smoke for this commit."; exit 1;;
+              completed*) echo "::error title=release::update smoke test did not pass ($3, run $1): not releasing"; exit 1;;
+            esac
+            sleep 30
+          done
+          echo "::error title=release::update smoke test did not finish in 50 minutes: not releasing"; exit 1
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '17'}
       - uses: android-actions/setup-android@v3
@@ -59,7 +87,8 @@ jobs:
         run: |
           [ -n "$IEUM_INBOX_TOKEN" ] || { echo "::error title=release::IEUM_INBOX_TOKEN secret is not set"; exit 1; }
           [ -z "$IEUM_SIGNING_SEED" ] || echo "::add-mask::$IEUM_SIGNING_SEED"
-          pip install --quiet 'cryptography>=44'
+          # Pinned: the certificate must come out byte-identical every build (checked with 50.0.1 and 50.0.2: same fingerprint).
+          pip install --quiet 'cryptography==50.0.2'
           python3 tools/derive_signing_key.py "$RUNNER_TEMP/ieum.p12"
           export ANDROID_SDK_ROOT="$ANDROID_HOME" \
             IEUM_ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/28.2.13676358" IEUM_CMAKE_BINARY="$ANDROID_HOME/cmake/3.22.1/bin/cmake" \
@@ -111,6 +140,9 @@ jobs:
           EOF
           old=$(gh api "repos/$INBOX/contents/app/version.json" --jq .sha 2>/dev/null || true)
           gh api -X PUT "repos/$INBOX/contents/app/version.json" -f message="app $tag" -f content="$(base64 -w0 version.json)" ${old:+-f sha="$old"} > /dev/null
-          # Keep the three newest releases.
-          gh release list --repo "$INBOX" --limit 50 --json tagName --jq '.[3:][].tagName' | while read -r t; do gh release delete "$t" --repo "$INBOX" --yes --cleanup-tag; done
+          # Keep the three newest releases. The new release is already out: a failed clean-up only warns (the API sometimes answers 500).
+          old_tags=$(gh release list --repo "$INBOX" --limit 50 --json tagName --jq '.[3:][].tagName' 2>/dev/null) || { echo "::warning title=release::old releases could not be listed: not cleaned up"; old_tags=""; }
+          for t in $old_tags; do
+            gh release delete "$t" --repo "$INBOX" --yes --cleanup-tag > /dev/null 2>&1 || echo "::warning title=release::old release $t could not be deleted (left for the next run)"
+          done
           echo "::notice title=release::$tag published ($sha)"

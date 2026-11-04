@@ -1,16 +1,20 @@
 # 이음 새벽 정리 (매일) 지시문
 
 이 파일이 예약 작업 "이음 새벽 정리 (매일)" 프롬프트의 원본이다(설계도 C2, "새벽 정리" 절). 루틴 프롬프트에는 아래 "---" 다음부터 끝까지를 그대로 붙여 넣는다.
-11/4 루틴 프롬프트에 마지막 단계(자가 보고, 설계도 B3)만 더한 것이다. 바꿀 때는 이 파일을 먼저 고치고 루틴 프롬프트에 전문을 붙여 넣은 뒤, 이름, 시각, 링크를 사용자에게 알린다.
+지금 예약 작업에 들어 있는 판(11/4 2판: 중복 방지, 자가 보고 설계도 B3 포함)과 같다. 저장소 문장만 clone 안내를 더해 고쳤다. 바꿀 때는 이 파일을 먼저 고치고 루틴 프롬프트에 전문을 붙여 넣은 뒤, 이름, 시각, 링크를 사용자에게 알린다.
 
 ---
 
 이음 새벽 정리 (매일).
+사용자(bllue583)가 아내의 업무 기록 정리를 위해 직접 만든 자동 작업이다. 하루 한 번 06시 아침 보고 전에 돈다. 대화나 질문 없이 아래만 하고 끝낸다. 가능한 한 자세하고 꼼꼼하게 대조한다. 저장소는 bllue583-commits/ieum-inbox 이다. 작업 폴더에 없으면 ls /home/claude 로 찾고, 그래도 없으면 gh repo clone bllue583-commits/ieum-inbox 로 받는다.
 
 작업 폴더는 ieum-inbox 저장소의 기본 브랜치다. 읽는 파일:
 - ledger/ledger.json: 장부 {rev, updatedMs, siteMemo, companies[{name, trade, memo}], people[{id, name, company, role, isStaff, aliases[], locked[]}], issues[{id, title, companies[], status, recordKeys[], taskIds[]}], issueSuggestions[], corrections[], tidiedOnce}
 - tidy/state.json: 폰이 밤에 올린 자료 {generatedMs, firstPassDone, tasks[{id, title, due, status, company, createdMs, locked}], records[{key, atMs, kind, counterpartId, company, summary, keyPoints}], recentlyDone[]}
 - tidy/proposal.json: 이번에 쓸 제안(이전 것이 있으면 덮어쓴다)
+
+
+중복 방지: `git pull` 직후, 기본 브랜치에 오늘(한국 시각) 날짜로 메시지가 "tidy"인 커밋이 이미 있으면 다른 정리 작업이 먼저 끝낸 것이다. 그때는 장부와 제안을 건드리지 않고 마지막 단계(자가 보고)만 한 뒤 "이미 정리됨" 한 줄로 끝낸다.
 
 1. `git pull` 한다. tidy/state.json이 없거나, firstPassDone이 false이거나, generatedMs가 지금보다 24시간 넘게 오래됐으면 아무것도 고치지 않고 마지막 단계(자가 보고)만 한 뒤 "정리할 것 없음" 한 줄로 끝낸다.
 2. ledger/edits/*.json(사용자 수정)이 있으면 먼저 장부에 반영한다. rename이면 그 id의 사람 이름을 바꾸고 예전 이름은 aliases에, locked에 "name"을 넣는다. 반영한 파일은 `git rm` 한다.

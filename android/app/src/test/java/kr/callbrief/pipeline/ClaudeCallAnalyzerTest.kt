@@ -28,7 +28,7 @@ class ClaudeCallAnalyzerTest {
 
     @Test fun schemaHasTasksWithOwnerAndNoSeparatePromises() {
         val schema=ClaudeCallAnalyzer.SCHEMA;assertFalse(schema.getBoolean("additionalProperties"))
-        assertEquals(setOf("summary","keyPoints","counterpartName","counterpartCompany","counterpart","siteMemo","companyMemo","companyTrade","business","speakerNotes","tasks"),
+        assertEquals(setOf("summary","keyPoints","counterpartName","counterpartCompany","counterpart","business","speakerNotes","tasks"),
             (0 until schema.getJSONArray("required").length()).map { schema.getJSONArray("required").getString(it) }.toSet())
         val item=schema.getJSONObject("properties").getJSONObject("tasks").getJSONObject("items").getJSONObject("properties")
         assertEquals(setOf("op","taskId","title","due","quote","company","owner","certainty"),item.keys().asSequence().toSet())
@@ -48,19 +48,20 @@ class ClaudeCallAnalyzerTest {
 
     @Test fun instructionsAreGroupedHaveTwoExamplesAndTellWhoSpoke() {
         val sys=ClaudeCallAnalyzer.SYSTEM
-        listOf("[데이터]","[출력 형식]","[근거와 인용]","[누가 말했나]","[날짜]","[숫자와 용어]","[체크할 일]","[이름]","[장부 메모]","[문자와 메일]","[개인 내용]","[처음 정리]","[예시 1","[예시 2").forEach { assertTrue(it,sys.contains(it)) }
+        listOf("[데이터]","[출력 형식]","[근거와 인용]","[누가 말했나]","[날짜]","[숫자와 용어]","[체크할 일]","[이름]","[문자와 메일]","[개인 내용]","[예시 1","[예시 2").forEach { assertTrue(it,sys.contains(it)) }
         assertTrue(sys.contains("화자")||sys.contains("누가 말했는지 표시가 없습니다"));assertTrue(sys.contains("owner는 \"unknown\""));assertTrue(sys.contains("데이터"))
         assertFalse("promises section is gone",sys.contains("promises"))
     }
 
     @Test fun rulesV4CarryTheNewWordingWithTheKeptExceptions() {
         val sys=ClaudeCallAnalyzer.SYSTEM
-        assertEquals(4,ClaudeCallAnalyzer.PROMPT_VERSION)
+        assertEquals(5,ClaudeCallAnalyzer.PROMPT_VERSION)
         listOf("speakerNotes","줄바꿈은 말이 끊긴 자리일 뿐 화자가 바뀐 표시가 아닙니다","(숫자 확인 필요)","\"다음 주 초\"는 다음 주 월요일","\"내일모레\"는 이틀 뒤",
-            "호칭(과장, 소장, 님)은 이름에 붙이지 말고 role","[이 번호를 쓰는 사람들]","[통화 방향]","\"첨부: 견적서.pdf\"","siteMemo는","600자","companyMemo","400자",
+            "호칭(과장, 소장, 님)은 이름에 붙이지 말고 role","[이 번호를 쓰는 사람들]","[통화 방향]","\"첨부: 견적서.pdf\"",
             "certainty \"sure\"","<transcript>","<texts>").forEach { assertTrue(it,sys.contains(it)) }
         // Exceptions decided at the v2.0 check: certainty stays sure/tentative, memos stay whole strings.
-        listOf("firm","siteMemoLines","companyMemoLines","]]>").forEach { assertFalse(it,sys.contains(it)) }
+        // v5: the memos and the trade left the result; the task writes them into the ledger itself (hourly.md).
+        listOf("firm","siteMemo","companyMemo","companyTrade","]]>").forEach { assertFalse(it,sys.contains(it)) }
         assertEquals(2,Regex("\"certainty\":\"sure\"").findAll(sys).count())
     }
 
