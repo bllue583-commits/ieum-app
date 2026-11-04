@@ -5,7 +5,8 @@ name: ci
 on:
   push:
     branches: ['feature/**', 'main']
-    paths: ['android/**', 'worker/**', 'tools/**', '.github/workflows/android-ci.yml']
+    # release-apk waits for this run on the same commit, so every path that releases also runs the tests.
+    paths: ['android/**', 'worker/**', 'tools/**', '.github/workflows/android-ci.yml', '.github/workflows/release-apk.yml']
   pull_request:
   workflow_dispatch:
 

@@ -15,6 +15,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   release:
@@ -23,6 +24,20 @@ jobs:
     env:
       INBOX: bllue583-commits/ieum-inbox
     steps:
+      # Nothing reaches the phone unless the unit tests and lint passed on this very commit (ci, android-ci.yml).
+      - name: Wait for ci on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 1 80); do
+            c=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow android-ci.yml --commit "$GITHUB_SHA" --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"' 2>/dev/null)
+            case "$c" in
+              "completed success") echo "ci passed"; exit 0;;
+              completed*) echo "ci did not pass ($c): not releasing"; exit 1;;
+            esac
+            sleep 30
+          done
+          echo "ci did not finish in 40 minutes: not releasing"; exit 1
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '17'}
@@ -55,7 +70,9 @@ jobs:
         run: |
           code=$((1000 + GITHUB_RUN_NUMBER)); tag="v$code"
           sha=$(sha256sum "$RUNNER_TEMP/ieum.apk" | cut -d' ' -f1)
-          notes=$(git log -1 --format=%s | cut -c1-120)
+          # The phone shows this to the user: plain Korean from docs/UPDATE_NOTE.txt, never the developer commit message.
+          notes=$(head -n 1 docs/UPDATE_NOTE.txt 2>/dev/null | cut -c1-120)
+          [ -n "$notes" ] || notes="더 안정적으로 고쳤어요"
           # An empty repository cannot hold releases: give it a first file.
           gh api "repos/$INBOX/contents/README.md" >/dev/null 2>&1 || gh api -X PUT "repos/$INBOX/contents/README.md" -f message="init" \
             -f content="$(printf '# ieum-inbox\n\n이음 앱의 통화 분석 우편함과 업데이트 파일 (자동 관리)\n' | base64 -w0)" >/dev/null

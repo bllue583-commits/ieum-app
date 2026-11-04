@@ -113,7 +113,7 @@ python run_gradle.py --log local-$(date +%H%M%S).log :app:compileDebugKotlin
   - 제한된 설정: 문자·통화기록 권한을 한 번 요청한 뒤에도 없으면 처음 설정 카드와 설정 화면이 "앱 정보 → ⋮ → 제한된 설정 허용" 안내와 [앱 정보 열기]를 보여 줌(`ReadingPermission`). **실기기 확인 전.**
   - 새벽 정리(설계도 "새벽 정리" 절): 처음 정리가 끝난 뒤 밤(21~05시)에 폰이 `tidy/state.json`(열린 체크할 일과 사용자 수정 잠금, 기록 요약을 해시 키로)을 하루 한 번 올리고, 05시 루틴이 장부 `issues`(진행 중인 일)와 업체·사람 합치기(`mergedInto`)를 장부에 쓰고 체크할 일은 `tidy/proposal.json`(rewrite, merge, done_suggested)으로 제안. 폰은 AI가 만든 그대로인 항목에만 적용(`applyTidy`), 합친 항목은 상태 `merged`로 모든 목록에서 빠짐. 진행 중인 일은 업체 상세와 아침 보고(최대 3줄)에 표시. 요청 파일에 `recordKey`(기록 id 해시) 추가, 매시간 루틴은 기존 이슈에 붙이고 새 이슈는 `issueSuggestions`로 제안만.
 - **문자 점검 결과(사용자 요청):** 10/30 구현은 SMS만 읽어 장문(LMS)·사진 문자(MMS)를 통째로 놓쳤음 → 추가. 설계도의 주기(15분)를 실제(30분)에 맞춤.
-- **업데이트 안내 문구:** 폰의 "새 버전" 알림 문구는 `release-apk.yml`이 커밋 메시지 첫 줄(영어)을 그대로 씀. v1024는 `ieum-inbox/app/version.json`의 notes를 한국어로 직접 고침. 근본 수정(한국어 안내 파일 `docs/UPDATE_NOTE.txt`에서 읽기)은 Mac의 gh 토큰에 `workflow` 권한이 없어 push 거절됨 → 사용자가 `gh auth refresh -s workflow` 하거나 Windows PC에서 반영할 것. 그 전까지는 배포마다 version.json notes를 한국어로 고칠 것.
+- **업데이트 안내 문구와 배포 안전장치(11/4 사용자가 workflow 권한 부여):** 폰의 "새 버전" 알림 문구는 `docs/UPDATE_NOTE.txt` 첫 줄(한국어)에서 읽음. 사용자에게 보이는 변경을 배포할 때마다 이 파일을 고칠 것. `release-apk`는 같은 커밋의 `ci`가 통과해야만 배포하고, 실패하거나 40분 안에 안 끝나면 배포하지 않음.
 - Mac에는 JDK·Android SDK가 아직 없음 → 판정은 GitHub ci/device-test로. 작업 브랜치에서 CI 확인 후 `feature/lean-calls`에 합쳐야 폰 자동 업데이트(release-apk는 lean-calls·main에서만).
 
 ## 4-2. 11/4 밤샘 검토 반복 (설계도 "검토 기록" 절이 원본)
