@@ -35,7 +35,7 @@ class ScreensHomeCallsTest:ProtectedTextHostTestBase() {
     private fun tagged(a:android.app.Activity,prefix:String)=views(a.window.decorView).filter { (it.tag as? String)?.startsWith(prefix)==true }
     private fun settle(check:()->Boolean) { repeat(400) { shadowOf(Looper.getMainLooper()).idle();if(check())return;Thread.sleep(10) };fail("UI did not settle") }
     private fun back(a:MainActivity) { a.onBackPressedDispatcher.onBackPressed();shadowOf(Looper.getMainLooper()).idle() }
-    @After fun reset() { CallUi.applyTheme(app);CallsScreen.clock={ System.currentTimeMillis() } }
+    @After fun reset() { CallUi.applyTheme(app);CallsScreen.clock={ System.currentTimeMillis() };CallsScreen.readHook={} }
     private fun at(h:Int,m:Int)=CallUi.today().atTime(h,m).atZone(CallRecordStore.KST).toInstant().toEpochMilli()
     private fun home(s:HomeScreen.Snapshot):MainActivity {
         val a=launchMain(Screen.HOME);settle { tag(a,"home_today")!=null || tag(a,"retry_card")!=null };a.home.render(s);return a
@@ -150,12 +150,16 @@ class ScreensHomeCallsTest:ProtectedTextHostTestBase() {
         PreviewSeed.ensure(app)
         val a=launchMain(Screen.CALLS)
         settle { tag(a,"calls_list")!=null }
-        tag(a,"calls_prev").performClick()
-        // No idling: the new date, the arrows and "불러오는 중이에요" are already there.
-        val yesterday=CallUi.today().minusDays(1)
-        assertEquals(CallUi.date(yesterday),(tag(a,"today_calls_date") as TextView).text.toString())
-        assertNotNull(tag(a,"loading"));assertNull(tag(a,"calls_list"))
-        assertTrue(tag(a,"calls_next").isEnabled)
+        // The read of the new day is held until the screen has been looked at (the hook runs on the IO thread).
+        val gate=java.util.concurrent.CountDownLatch(1);CallsScreen.readHook={ gate.await(5,java.util.concurrent.TimeUnit.SECONDS) }
+        try {
+            tag(a,"calls_prev").performClick()
+            // No idling: the new date, the arrows and "불러오는 중이에요" are already there.
+            val yesterday=CallUi.today().minusDays(1)
+            assertEquals(CallUi.date(yesterday),(tag(a,"today_calls_date") as TextView).text.toString())
+            assertNotNull(tag(a,"loading"));assertNull(tag(a,"calls_list"))
+            assertTrue(tag(a,"calls_next").isEnabled)
+        } finally { gate.countDown();CallsScreen.readHook={} }
         settle { tag(a,"loading")==null && tagged(a,"call_").isNotEmpty() }
         assertEquals("어제의 통화",(tag(a,"page_title") as? TextView)?.text?.toString())
     }

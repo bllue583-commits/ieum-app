@@ -32,6 +32,8 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
         const val NO_SPEECH="녹음에서 말소리를 찾지 못했어요"
         /** The time the call screens measure against; tests set it. */
         @Volatile internal var clock:()->Long={ System.currentTimeMillis() }
+        /** Test hook: runs on the IO thread right before a day is read (lets a test hold the read while it looks at the screen). */
+        @Volatile internal var readHook:()->Unit={}
 
         /** The line under the title: "통화 7건, 부재중 2건, 문자 1건". Personal calls and calls without a recording count as calls. */
         internal fun counts(calls:List<CallRecord>,logs:List<LoggedCall>):String {
@@ -135,6 +137,7 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
         a.lifecycleScope.launch {
             val result=runCatching { withContext(Dispatchers.IO) {
                 // Reads only (r8-1): the call log is matched in the discovery and upload passes, not at every screen open.
+                readHook()
                 val storage=CallPipelineStartup.storage(a)
                 val s=kr.callbrief.IeumApplication.store(storage)
                 val from=target.atStartOfDay(CallRecordStore.KST).toInstant().toEpochMilli()
