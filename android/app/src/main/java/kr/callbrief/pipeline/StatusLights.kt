@@ -81,16 +81,16 @@ internal object StatusLights {
     }
     /** One QUEUED row: the recording's call time (null: unknown) and when the row entered the queue. */
     data class QueuedRow(val callMs:Long?,val enteredMs:Long)
-    fun queue(rows:List<QueuedRow>,s:JSONObject):Queue {
+    fun queue(rows:List<QueuedRow>,s:JSONObject,now:Long=System.currentTimeMillis()):Queue {
         val kept=rows.filterNot { FirstPass.beforeRange(it.callMs) }
-        val (old,new)=kept.partition { r -> r.callMs?.takeIf { it>0 }?.let { FirstPass.isOld(it,s) } ?: false }
+        val (old,new)=kept.partition { r -> r.callMs?.takeIf { it>0 }?.let { FirstPass.isOld(it,s,now) } ?: false }
         return Queue(new.size,new.minOfOrNull { it.enteredMs },old.size,old.minOfOrNull { it.enteredMs })
     }
     /** One call record waiting for its result: when it was stored and the call's time. */
     data class WaitingRow(val createdMs:Long,val dayMs:Long)
     /** Live (not first-pass) records without a result for over [LIVE_LATE_MS], and how long the oldest of them waited. */
     fun lateLive(rows:List<WaitingRow>,s:JSONObject,now:Long):Pair<Int,Long?> {
-        val late=rows.filter { !FirstPass.isOld(it.dayMs,s) && now-it.createdMs>LIVE_LATE_MS }
+        val late=rows.filter { !FirstPass.isOld(it.dayMs,s,now) && now-it.createdMs>LIVE_LATE_MS }
         return late.size to late.minOfOrNull { it.createdMs }?.let { now-it }
     }
     /** The protected store's share in use (design B1, review data #4): the sealed file against its 16 MB limit and the rows

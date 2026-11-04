@@ -97,20 +97,20 @@ class UiV2Test:ProtectedTextHostTestBase() {
         assertTrue(StatusLights.lights(ok.copy(lastDiscoveryMs=ok.now-23*h)).all { it.ok })
         // The first pass is over and a new call has waited 7 hours in the queue: amber (it used to stay green).
         val s=org.json.JSONObject().put(PipelineSettingsKeys.FIRST_PASS_START_MS,FirstPass.FROM_MS+86_400_000L).put(PipelineSettingsKeys.FIRST_PASS_DONE,true)
-        val q=StatusLights.queue(listOf(StatusLights.QueuedRow(ok.now-8*h,ok.now-7*h)),s)
+        val q=StatusLights.queue(listOf(StatusLights.QueuedRow(ok.now-8*h,ok.now-7*h)),s,ok.now)
         assertEquals(1,q.newCount);assertEquals(ok.now-7*h,q.newOldestMs)
         assertTrue(bad(ok.copy(transcribeBacklog=q.count,oldestQueuedMs=q.oldestMs,lastTranscribedMs=ok.now-8*h),"status_transcribe").contains("1개"))
         // A recording that just entered the queue is no backlog, even if the call itself is old; a pre-10/1 one is not counted.
-        val fresh=StatusLights.queue(listOf(StatusLights.QueuedRow(ok.now-30*h,ok.now-h),StatusLights.QueuedRow(FirstPass.FROM_MS-86_400_000L,ok.now-90*h)),s)
+        val fresh=StatusLights.queue(listOf(StatusLights.QueuedRow(ok.now-30*h,ok.now-h),StatusLights.QueuedRow(FirstPass.FROM_MS-86_400_000L,ok.now-90*h)),s,ok.now)
         assertEquals(1,fresh.count);assertEquals(ok.now-h,fresh.oldestMs)
         assertTrue(StatusLights.lights(ok.copy(transcribeBacklog=fresh.count,oldestQueuedMs=fresh.oldestMs,lastTranscribedMs=ok.now-8*h)).all { it.ok })
-        // While the first pass runs, recordings before its start are old.
+        // While the first pass runs, recordings of calls more than 7 days ago are old (r7-1); recent ones are live.
         val running=org.json.JSONObject().put(PipelineSettingsKeys.FIRST_PASS_START_MS,ok.now-10*h)
-        val split=StatusLights.queue(listOf(StatusLights.QueuedRow(ok.now-20*h,ok.now-9*h),StatusLights.QueuedRow(ok.now-2*h,ok.now-2*h)),running)
+        val split=StatusLights.queue(listOf(StatusLights.QueuedRow(ok.now-10*24*h,ok.now-9*h),StatusLights.QueuedRow(ok.now-2*h,ok.now-2*h)),running,ok.now)
         assertEquals(StatusLights.Queue(1,ok.now-2*h,1,ok.now-9*h),split)
         // Analysis: only live calls without a result for over 6 hours; old first-pass records may wait.
         val (late,age)=StatusLights.lateLive(listOf(StatusLights.WaitingRow(ok.now-7*h,ok.now-7*h),StatusLights.WaitingRow(ok.now-2*h,ok.now-2*h),
-            StatusLights.WaitingRow(ok.now-30*h,ok.now-40*h)),running,ok.now)
+            StatusLights.WaitingRow(ok.now-30*h,ok.now-10*24*h)),running,ok.now)
         assertEquals(1,late);assertEquals(7*h,age)
         assertTrue(bad(ok.copy(waiting=late,oldestWaitMs=age),"status_analyze").contains("7시간"))
         // Update: ready for over a day is its own sentence.
