@@ -195,6 +195,68 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         assertEquals(3,count("people"));assertEquals("최영호",port().use { it.query("SELECT name FROM people WHERE phone_key='01077770007'").single()["name"] })
     }
 
+    /** Design 3.4: "김과장" and "김민수 과장" on one number, "정민수"/"전민수" in one company, "김민수 씨", and no "사무실" person. */
+    @Test fun aSurnameWithATitleAndAFullNameOnOneNumberAreOnePerson() {
+        val office="010-5555-0002"
+        apply(call(1,office),analysis(cp("김과장","△△철강")))
+        apply(call(2,office),analysis(cp("김민수 과장","△△철강")))
+        assertEquals(1,count("people"))
+        val p=port().use { it.query("SELECT * FROM people").single() }
+        assertEquals("김민수",p["name"]);assertEquals("과장",p["role"])
+        assertEquals("김과장",port().use { it.query("SELECT name_key FROM person_aliases WHERE person_id=?",p["id"]).single()["name_key"] })
+        // Heard short again: still the same person, the name stays the longer one.
+        apply(call(3,office),analysis(cp("김과장","△△철강")))
+        assertEquals(1,count("people"));assertEquals("김민수",port().use { it.query("SELECT name FROM people").single()["name"] })
+        // Another surname on the same number is someone else.
+        apply(call(4,office),analysis(cp("이과장","△△철강")))
+        assertEquals(2,count("people"))
+    }
+
+    @Test fun aFirstSyllableHeardWrongIsTheSamePersonInTheSameCompany() {
+        apply(call(1,"010-6666-0001"),analysis(cp("정민수","△△철강")))
+        apply(call(2,null),analysis(cp("전민수","△△철강"))) // no number to tell them apart: the company and one jamo do
+        assertEquals(1,count("people"))
+        apply(call(3,"010-6666-0003"),analysis(cp("김민수 씨","□□전기")))
+        apply(call(4,"010-6666-0003"),analysis(cp("김민수","□□전기")))
+        assertEquals(2,count("people"))
+        apply(call(5,"010-6666-0004"),analysis(cp("△△철강 사무실","△△철강")))
+        apply(call(6,"010-6666-0005"),analysis(cp("현장",null)))
+        assertEquals("an office is no person",2,count("people"))
+        assertEquals("the office call keeps its company; the site call has nothing to link",5,count("call_links"))
+    }
+
+    @Test fun theLedgerMovesAliasesKeepsTheOrderAndListsOnlyKnownTrades() {
+        apply(call(1),analysis(cp("김민수","△△철강")))
+        apply(call(2,"010-2222-0009"),analysis(cp("김민서",null)))
+        val (a,b)=store().use { s -> s.ledgerIdFor(call(3)) to s.ledgerIdFor(call(4,"010-2222-0009")) }
+        val second=port().use { it.query("SELECT id FROM people WHERE ledger_id=?",b).single()["id"] as String }
+        port().use { it.execute("INSERT INTO person_aliases VALUES('김민숙',?)",second) }
+        port().use { it.execute("UPDATE people SET phone_key=NULL WHERE id=?",second);it.execute("DELETE FROM people_phones WHERE person_id=?",second) }
+        port().use { it.execute("UPDATE companies SET updated_ms=12345") }
+        store().use { it.applyLedger(JSONObject().put("rev",2)
+            .put("companies",org.json.JSONArray().put(JSONObject().put("name","△△철강").put("trade","철골 공사")).put(JSONObject().put("name","□□전기").put("trade","전기")))
+            .put("people",org.json.JSONArray().put(JSONObject().put("id",b).put("mergedInto",a)))) }
+        val first=port().use { it.query("SELECT id FROM people WHERE ledger_id=?",a).single()["id"] as String }
+        assertEquals("the merged person's wrong spelling finds the one kept",first,port().use { it.query("SELECT person_id FROM person_aliases WHERE name_key='김민숙'").single()["person_id"] })
+        assertEquals("기타",port().use { it.query("SELECT trade FROM companies WHERE name='△△철강'").single()["trade"] })
+        assertEquals("전기",port().use { it.query("SELECT trade FROM companies WHERE name='□□전기'").single()["trade"] })
+        assertEquals(12345L,(port().use { it.query("SELECT updated_ms FROM companies WHERE name='△△철강'").single()["updated_ms"] } as Number).toLong())
+        assertEquals(0L,(port().use { it.query("SELECT updated_ms FROM companies WHERE name='□□전기'").single()["updated_ms"] } as Number).toLong())
+    }
+
+    @Test fun numbersInAPhoneBookNameOrAMailSenderNeverLeave() {
+        val r=ClaudeCallAnalyzerTest.request().copy(counterpart="홍길동 010-1234-5678",
+            callLog=ClaudeCallRequest.CallLogView("홍길동 031 123 4567","받은 전화","2026-10-29 10:00",60_000))
+        val m=ClaudeCallAnalyzer.userMessage(r)
+        assertFalse(m,m.contains("1234"));assertFalse(m,m.contains("123 4567"));assertTrue(m,m.contains("전화부 이름 홍길동"))
+        val mail=ClaudeCallAnalyzer.userMessage(ClaudeCallAnalyzerTest.request().copy(kind="메일",counterpart="someone@example.com"))
+        assertFalse(mail,mail.contains("example.com"));assertTrue(mail,mail.contains("보낸 사람: 미상"))
+        assertEquals("[번호]로 주세요",ClaudeCallAnalyzer.maskNumbers("0311234567로 주세요"))
+        assertEquals("전화 [번호] 주세요",ClaudeCallAnalyzer.maskNumbers("전화 031 123 4567 주세요"))
+        assertEquals("[번호]",ClaudeCallAnalyzer.maskNumbers("02-123-4567"))
+        assertEquals("2026-11-04 납품",ClaudeCallAnalyzer.maskNumbers("2026-11-04 납품"))
+    }
+
     @Test fun companySpellingsAreOneCompanyAndANearSpellingOnlyOnTheSameNumber() {
         apply(call(1),analysis(cp("김민수","(주)△△철강")))
         apply(call(2,"010-2222-0002"),analysis(cp("박지훈"," △△ 철강 ")))

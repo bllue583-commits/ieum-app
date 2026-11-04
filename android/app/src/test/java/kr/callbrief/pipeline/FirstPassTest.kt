@@ -154,10 +154,46 @@ class FirstPassTest:ProtectedTextHostTestBase() {
         // A number in the filename picks its entry even with another call nearby; a name picks the phone-book name.
         assertEquals(2L,FirstPass.match(listOf(r("a",t,"010-3333-4444","01033334444")),listOf(e(1,"01011112222",null,t),e(2,"01033334444",null,t+30_000)))["a"]?.id)
         assertEquals(1L,FirstPass.match(listOf(r("a",t,"홍 길동","홍 길동")),listOf(e(1,"01011112222","홍길동",t),e(2,"01033334444","김민수",t)))["a"]?.id)
-        assertNull("a name not in the log",FirstPass.match(listOf(r("a",t,"박철수","박철수")),listOf(e(1,"01011112222","홍길동",t)))["a"])
+        // A name not in the log (the phone book changed): the only call in time and length is it (design 3.4); two are not.
+        assertEquals(1L,FirstPass.match(listOf(r("a",t,"박철수","박철수")),listOf(e(1,"01011112222","홍길동",t)))["a"]?.id)
+        assertNull(FirstPass.match(listOf(r("a",t,"박철수","박철수")),listOf(e(1,"01011112222","홍길동",t),e(2,"01033334444","김민수",t+20_000)))["a"])
         // Missed and rejected calls are never candidates.
         assertNull(FirstPass.match(listOf(r("a",t,null,null)),listOf(e(1,null,null,t,dur=0,type=3),e(2,null,null,t,type=5)))["a"])
         assertEquals("받은 전화",e(1,null,null,t).direction);assertEquals("건 전화",e(1,null,null,t,type=2).direction)
+    }
+
+    /** Design 3.4: an empty CACHED_NAME or another spelling no longer keeps a named recording from its call; the reasons are counted. */
+    @Test fun aNamedRecordingPairsByTimeAndLengthWhenTheLogHasNoNameAndTheReasonsAreCounted() {
+        val t=now
+        fun e(id:Long,name:String?,at:Long,dur:Long=60_000,number:String="01011112222")=FirstPass.LogEntry(id,number,name,at,dur,1)
+        fun r(id:String,at:Long,cp:String?,dur:Long=60_000)=FirstPass.RecordForMatch(id,at,cp,CallRecordStore.counterpartKey(cp),dur)
+        var st:FirstPass.MatchStats?=null
+        val out=FirstPass.match(listOf(r("null",t,"홍길동"),r("spelt",t+3_600_000,"홍길동 과장님"),r("two",t+7_200_000,"박철수"),r("far",t+9_000_000,"최영호"),
+                r("long",t+10_800_000,"한소장",dur=300_000),r("both",t+14_400_000,"오세훈")),
+            listOf(e(1,null,t+15_000),e(2,"홍길동",t+3_600_000-5_000),e(3,"김민수",t+7_200_000),e(4,"이민호",t+7_200_000+20_000),e(5,"한소장",t+10_800_000),
+                e(6,null,t+14_400_000),e(7,null,t+14_400_000+30_000))) { st=it }
+        assertEquals(1L,out["null"]?.id);assertEquals(2L,out["spelt"]?.id)
+        assertNull(out["two"]);assertNull(out["far"]);assertNull(out["long"]);assertNull(out["both"])
+        val s=st!!
+        assertEquals(2,s.matched);assertEquals(1,s.nameDiffers);assertEquals(1,s.noCandidate);assertEquals(1,s.length);assertEquals(1,s.nameNull)
+        assertEquals(mapOf(-20 to 1,0 to 1),s.gapSec)
+        // Stored as one JSON string that grows run by run.
+        val once=s.copy(noTime=2).mergeInto(null,100);val twice=s.mergeInto(once,200)
+        val o=JSONObject(twice)
+        assertEquals(2,o.getInt("runs"));assertEquals(200L,o.getLong("lastMs"));assertEquals(4,o.getInt("matched"))
+        assertEquals(0,o.getJSONObject("last").getInt("noTime"));assertEquals(2,o.getJSONObject("gapSec").getInt("-20"))
+    }
+
+    @Test fun theStoreKeepsTheMatchCountersInSettings() {
+        val saved=JSONObject()
+        CallRecordStore(context,{ now },CallRecordStore.SettingsEdit { edit -> edit(saved) }).use { db ->
+            db.insert(transcript("unnamed",now,"홍길동"))
+            db.reconcileCallLog(listOf(FirstPass.LogEntry(9,"01012345678",null,now-20_000,60_000,2)))
+            assertEquals("01012345678",db.record(CallRecordStore.recordId(transcript("unnamed",now,"홍길동")))!!.counterpartKey)
+            db.reconcileCallLog(emptyList())
+        }
+        val o=JSONObject(saved.getString(PipelineSettingsKeys.CALLLOG_MATCH_STATS))
+        assertEquals(2,o.getInt("runs"));assertEquals(1,o.getInt("matched"));assertEquals(1,o.getJSONObject("gapSec").getInt("20"))
     }
 
     @Test fun callsPlacedAgainWithinTwoMinutesAreAssignedAcrossAllRecordingsAndEntries() {
