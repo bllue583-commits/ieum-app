@@ -1,6 +1,6 @@
 package kr.callbrief.pipeline
 
-import android.app.Activity
+import android.content.Context
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
@@ -20,7 +20,7 @@ internal object ScreenParts {
     }
 
     /** One search line under the title. [onChange] runs on every edit with the text as typed. */
-    fun searchBox(a:Activity,hint:String,start:String,tag:String,onChange:(String)->Unit):EditText=EditText(a).apply {
+    fun searchBox(a:Context,hint:String,start:String,tag:String,onChange:(String)->Unit):EditText=EditText(a).apply {
         this.tag=tag;this.hint=hint;setText(start);isSingleLine=true;inputType=InputType.TYPE_CLASS_TEXT;imeOptions=EditorInfo.IME_ACTION_SEARCH
         textSize=CallUi.BODY;typeface=CallUi.font(a,CallUi.Weight.REGULAR);setTextColor(CallUi.INK);setHintTextColor(CallUi.MUTED)
         minHeight=CallUi.dp(a,52);minimumHeight=minHeight;importantForAutofill=android.view.View.IMPORTANT_FOR_AUTOFILL_NO

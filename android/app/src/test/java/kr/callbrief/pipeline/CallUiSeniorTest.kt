@@ -81,6 +81,34 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
         assertEquals("오늘 요청",CallUi.requested(now))
     }
 
+    /** WCAG relative luminance and contrast of two colours. */
+    private fun luminance(c:Int):Double { fun ch(v:Int):Double { val x=v/255.0;return if(x<=0.03928) x/12.92 else Math.pow((x+0.055)/1.055,2.4) }
+        return 0.2126*ch(android.graphics.Color.red(c))+0.7152*ch(android.graphics.Color.green(c))+0.0722*ch(android.graphics.Color.blue(c)) }
+    private fun contrast(a:Int,b:Int):Double { val (lo,hi)=listOf(luminance(a),luminance(b)).sorted();return (hi+0.05)/(lo+0.05) }
+
+    @Test fun textColoursReachFourAndAHalfToOne() {
+        listOf("+notnight","+night").forEach { q ->
+            org.robolectric.RuntimeEnvironment.setQualifiers(q)
+            CallUi.applyTheme(org.robolectric.RuntimeEnvironment.getApplication())
+            // Grey text on a white sheet (rows, captions, the tab words), and captions straight on the grey page.
+            listOf("INK" to CallUi.INK,"SUBTLE" to CallUi.SUBTLE,"MUTED" to CallUi.MUTED).forEach { (n,c) ->
+                assertTrue("$q $n on the sheet ${contrast(c,CallUi.CARD)}",contrast(c,CallUi.CARD)>=4.5) }
+            listOf("INK" to CallUi.INK,"PAGE_CAPTION" to CallUi.PAGE_CAPTION).forEach { (n,c) ->
+                assertTrue("$q $n on the page ${contrast(c,CallUi.PAGE)}",contrast(c,CallUi.PAGE)>=4.5) }
+        }
+        org.robolectric.RuntimeEnvironment.setQualifiers("+notnight");CallUi.applyTheme(org.robolectric.RuntimeEnvironment.getApplication())
+        assertEquals(android.graphics.Color.parseColor("#6B7684"),CallUi.MUTED);assertEquals(android.graphics.Color.parseColor("#5F6B78"),CallUi.PAGE_CAPTION)
+        assertEquals("lines keep their light grey",android.graphics.Color.parseColor("#B0B8C1"),CallUi.FAINT)
+    }
+
+    @Test fun theCurrentTabIsShownByWeightAndAFilledIconNotByAPaleColour() {
+        val a=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get()
+        settle(a) { a.window.decorView.findViewWithTag<View>("home_tasks_button")!=null }
+        val on=a.window.decorView.findViewWithTag<Button>("home_tasks_button");val off=a.window.decorView.findViewWithTag<Button>("home_home_button")
+        assertEquals(CallUi.font(a,CallUi.Weight.SEMIBOLD),on.typeface);assertEquals(CallUi.font(a,CallUi.Weight.REGULAR),off.typeface)
+        assertTrue(contrast(off.currentTextColor,CallUi.CARD)>=4.5)
+    }
+
     @Test fun nextReportTimeIsPlainKorean() {
         val z=java.time.ZoneId.of("Asia/Seoul")
         assertEquals("오늘 저녁 7시 (통화 정리)",CallUi.nextReport(19,6,java.time.ZonedDateTime.of(2026,10,30,9,0,0,0,z)))
