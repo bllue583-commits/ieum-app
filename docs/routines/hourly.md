@@ -254,12 +254,14 @@ analysis 객체는 아래 JSON 스키마에 정확히 맞아야 한다. 모든 �
 마지막 단계(자가 보고). 모든 처리가 끝나면 (처리할 것이 없었어도, 일부가 실패했어도 항상) `status/last-run.json`을 새로 써서, 결과 파일과 같은 커밋에 넣어라(처리할 것이 없었으면 이 파일만 커밋 "status"로 push한다). 파일이 이미 있으면 통째로 덮어쓴다. 형식은 아래 한 줄 JSON이다.
 
 ```json
-{"routine":"hourly","startedMs":0,"endedMs":0,"processed":0,"skipped":0,"failed":0,"batches":0,"model":"","limitHit":false,"ledgerRev":0,"promptVersion":"5","promptMismatch":false,"loggedTranscript":false}
+{"routine":"hourly","startedMs":0,"endedMs":0,"processed":0,"skipped":0,"failed":0,"batches":0,"kinds":{"call":0,"sms":0,"mail":0,"selftest":0},"firstPassItems":0,"formats":{"v3":0,"old":0},"requestVersions":[],"model":"","limitHit":false,"ledgerRev":0,"promptVersion":"5","promptMismatch":false,"loggedTranscript":false}
 ```
 
 - `routine`: 이 작업은 `hourly`.
 - `startedMs`, `endedMs`: 이번 실행의 시작과 끝 시각(밀리초 에포크).
 - `processed`: 결과를 만든 요청 항목 수. `skipped`: 이미 처리돼 건너뛴 수. `failed`: 처리하려다 실패한 수. `batches`: 읽은 요청 파일 수.
+- `kinds`: 이번에 결과를 만든 항목을 종류별로 센 수(메시지 맨 위 "종류"가 통화면 call, 문자면 sms, 메일이면 mail, selftest- 요청은 selftest). `firstPassItems`: 그중 b- 묶음(처음 정리) 안의 항목 수.
+- `formats`: 읽은 요청 파일 중 "format": 3인 것(v3)과 옛 형식(old) 수. `requestVersions`: 읽은 새 형식 요청의 "promptVersion" 값을 중복 없이 모은 목록(폰 앱 버전을 짐작하는 데 쓴다).
 - `model`: 이번 실행에 쓴 모델 이름.
 - `limitHit`: 사용 한도 오류를 만났으면 `true`, 아니면 `false`.
 - `ledgerRev`: 이번에 쓴 장부의 rev. `promptVersion`: 이 지시문의 버전 "5". 요청의 `promptVersion`이 다르면(과도기 버전 4는 제외) 그래도 처리하되 `promptMismatch`를 `true`로 쓴다.
