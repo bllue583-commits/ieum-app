@@ -15,6 +15,8 @@ internal object AutomaticRecordingDiscovery {
     const val TAG="ieum.local.recording.discovery"
     /** One pass keeps working until the line is empty, but at most this long (inside WorkManager's 10 minute limit). */
     const val CYCLE_BUDGET_MS=75_000L
+    /** Settings key: when the last pass over the folder finished (heartbeat lastDiscoveryMs, design B1). A time only. */
+    const val LAST_DISCOVERY_MS="lastDiscoveryMs"
     private val running=ConcurrentHashMap.newKeySet<String>()
     @Volatile private var hostStore:((Context)->GeneralLocalStore)?=null
     @Volatile private var hostWork:((String,PeriodicWorkRequest)->Unit)?=null
@@ -75,6 +77,7 @@ internal object AutomaticRecordingDiscovery {
             if(!cancelled())runCatching{kr.callbrief.pipeline.CallTranscriptionWork.enqueue(context)} // new recordings -> transcribe soon
             blocked(context,binding,stopped)?.let{return it}
             scan?.let(observed)
+            runCatching{SecureSettings(context).update{it.put(LAST_DISCOVERY_MS,System.currentTimeMillis())}}
             return outcome("DISCOVERY_CHECKED")
         } finally {active(null);running.remove(binding.selectionFence)}
     }
