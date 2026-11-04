@@ -161,8 +161,9 @@ class CallPipelineDeviceTest {
 
     @Test fun t4_screensRenderAndCapture() {
         val shots=JSONObject()
-        fun <A:Activity> shot(name:String,cls:Class<A>,ready:(A)->Boolean) {
-            ActivityScenario.launch(cls).use { s ->
+        // One Activity (design G1): each picture opens MainActivity on its screen, the way a notification does.
+        fun shot(name:String,screen:Screen,ready:(MainActivity)->Boolean) {
+            ActivityScenario.launch<MainActivity>(MainActivity.intent(context,screen)).use { s ->
                 var ok=false
                 repeat(300){ if(!ok){ s.onActivity{a->ok=ready(a)};if(!ok)Thread.sleep(100) } }
                 inst.waitForIdleSync();Thread.sleep(2000);inst.waitForIdleSync()
@@ -178,15 +179,15 @@ class CallPipelineDeviceTest {
             fun walk(v:View):Boolean=(v is android.widget.TextView&&v.text.toString().contains(value))||(v is android.view.ViewGroup&&(0 until v.childCount).any{walk(v.getChildAt(it))})
             return walk(a.window.decorView)
         }
-        shot("1_home",HomeActivity::class.java){has(it,"home_calls_button")&&has(it,"home_today")}
-        shot("2_today",TodayCallsActivity::class.java){text(it,"김민수")}
-        shot("3_tasks",CallTasksActivity::class.java){text(it,"견적서 보내기")}
-        shot("4_settings",CallSettingsActivity::class.java){text(it,"정리 동의")}
-        shot("5_companies",CompaniesActivity::class.java){text(it,"△△철강")}
+        shot("1_home",Screen.HOME){has(it,"home_calls_button")&&has(it,"home_today")}
+        shot("2_today",Screen.CALLS){text(it,"김민수")}
+        shot("3_tasks",Screen.TASKS){text(it,"견적서 보내기")}
+        shot("4_settings",Screen.SETTINGS){text(it,"정리 동의")}
+        shot("5_companies",Screen.COMPANIES){text(it,"△△철강")}
         // Company detail with its people and the [이름 고치기] button.
         val companyTag="company_"+CallRecordStore(storage).use{it.companies().first().id}
         var opened=false // one tap: every tap restarts the (slow on emulators) detail load
-        shot("6_company_detail",CompaniesActivity::class.java){ a ->
+        shot("6_company_detail",Screen.COMPANIES){ a ->
             if(!opened) a.window.decorView.findViewWithTag<View>(companyTag)?.let { it.performClick();opened=true }
             text(a,"사람 (")&&text(a,"이름 고치기") }
         report("t4_screens",shots)

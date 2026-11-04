@@ -16,16 +16,15 @@
         android:dataExtractionRules="@xml/vault_data_extraction_rules"
         android:usesCleartextTraffic="false" android:networkSecurityConfig="@xml/network_security_config"
         android:label="이음" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher" android:theme="@style/Theme.CallBrief">
-        <activity android:name=".pipeline.HomeActivity" android:exported="true">
+        <!-- The only screen Activity (design G1): home, calls, check list, companies and settings are drawn inside it.
+             singleTop: a notification tapped while the app is open comes to onNewIntent instead of stacking a second copy. -->
+        <activity android:name=".pipeline.MainActivity" android:exported="true" android:launchMode="singleTop"
+            android:screenOrientation="portrait">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name=".pipeline.TodayCallsActivity" android:exported="false" />
-        <activity android:name=".pipeline.CallTasksActivity" android:exported="false" />
-        <activity android:name=".pipeline.CompaniesActivity" android:exported="false" />
-        <activity android:name=".pipeline.CallSettingsActivity" android:exported="false" />
         <receiver android:name=".pipeline.UpdateStatusReceiver" android:exported="false" />
         <receiver android:name=".pipeline.StartupReceiver" android:exported="false">
             <intent-filter>

@@ -45,7 +45,7 @@ class CallLogListTest:ProtectedTextHostTestBase() {
 
     @Test fun theFourKindsOfLinesShowInTimeOrder() {
         PreviewSeed.ensure(app)
-        val a=Robolectric.buildActivity(TodayCallsActivity::class.java).setup().get()
+        val a=launchMain(Screen.CALLS)
         settle { tag(a,"calls_list")!=null && tag(a,"log_missed_900001")!=null }
         val missed=tag(a,"log_missed_900001");val none=tag(a,"log_no_recording_900002");val personal=tag(a,"log_personal_900003");val dead=tag(a,"log_not_connected_900004")
         assertNotNull(none);assertNotNull(personal);assertNotNull(dead)
@@ -72,10 +72,10 @@ class CallLogListTest:ProtectedTextHostTestBase() {
         val day=CallUi.today()
         CallRecordStore(app).use { s -> s.reconcileCallLog((1..250).map { i ->
             FirstPass.LogEntry(800_000L+i,"010%08d".format(i),null,day.atStartOfDay(CallRecordStore.KST).toInstant().toEpochMilli()+i*60_000L,0,android.provider.CallLog.Calls.MISSED_TYPE) }) }
-        val a=Robolectric.buildActivity(TodayCallsActivity::class.java).setup().get()
+        val a=launchMain(Screen.CALLS)
         settle { tag(a,"calls_list")!=null }
         settle { rows(a).size==250 }
-        assertEquals("부재중 250건",TodayCallsActivity.counts(emptyList(),CallRecordStore(app).use { it.dayLog(day) }))
+        assertEquals("부재중 250건",CallsScreen.counts(emptyList(),CallRecordStore(app).use { it.dayLog(day) }))
     }
 
     private fun timeOf(h:Int,m:Int)=CallUi.today().atTime(h,m).atZone(CallRecordStore.KST).toInstant().toEpochMilli()
@@ -98,7 +98,7 @@ class CallLogListTest:ProtectedTextHostTestBase() {
     @Test fun pictures() {
         assumeTrue("set IEUM_SHOTS_DIR to take the pictures",!out.isNullOrBlank())
         PreviewSeed.ensure(app)
-        val a=Robolectric.buildActivity(TodayCallsActivity::class.java).setup().get()
+        val a=launchMain(Screen.CALLS)
         settle { tag(a,"log_missed_900001")!=null }
         shot(a,"calls_today")
     }
@@ -107,7 +107,7 @@ class CallLogListTest:ProtectedTextHostTestBase() {
     @Test fun picturesAtNight() {
         assumeTrue("set IEUM_SHOTS_DIR to take the pictures",!out.isNullOrBlank())
         PreviewSeed.ensure(app)
-        val a=Robolectric.buildActivity(TodayCallsActivity::class.java).setup().get()
+        val a=launchMain(Screen.CALLS)
         settle { tag(a,"log_missed_900001")!=null }
         shot(a,"calls_today_night")
     }

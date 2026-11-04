@@ -1,6 +1,5 @@
 package kr.callbrief.pipeline
 
-import android.content.Intent
 import android.view.View
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -42,7 +41,7 @@ internal object TaskActions {
                     listOf(day,day.minusDays(1)).firstNotNullOfOrNull { d -> s.day(d).firstOrNull { c -> c.applied.any { it.itemId==item.id } } } } }.getOrNull() }
             if(a.isFinishing||a.isDestroyed)return@launch
             if(found==null) { Toast.makeText(a,"이 체크할 일을 만든 통화를 찾지 못했어요.",Toast.LENGTH_SHORT).show();return@launch }
-            a.startActivity(Intent(a,TodayCallsActivity::class.java).putExtra(TodayCallsActivity.EXTRA_CALL,found.recordId).putExtra(TodayCallsActivity.EXTRA_DAY_MS,found.dayMs))
+            (a as? MainActivity)?.openCall(found.recordId,found.dayMs)
         }
     }
 

@@ -109,7 +109,8 @@ class SelfCheckNoticesTest:ProtectedTextHostTestBase() {
         // Its own slot: the stall notice from the same day stays.
         assertEquals(2,posted.size);assertTrue(posted.all { it.channelId==CallDigestWork.STATUS_CHANNEL })
         val self=posted.single { it.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)=="녹음 폴더 연결이 풀렸어요" }
-        assertEquals(CallSettingsActivity::class.java.name,shadowOf(self.contentIntent).savedIntent.component?.className)
+        val open=shadowOf(self.contentIntent).savedIntent
+        assertEquals(MainActivity::class.java.name,open.component?.className);assertEquals("SETTINGS",open.getStringExtra(MainActivity.EXTRA_SCREEN))
     }
 
     @Test fun notificationsOffMeansNothingWasPosted() {
@@ -162,7 +163,7 @@ class SelfCheckNoticesTest:ProtectedTextHostTestBase() {
         // The self-check gets the same numbers: the 80% notice can ring now.
         val full=SelfCheckNotices.check(fine.copy(dbBytes=null,dbRows=StatusLights.ROW_LIMIT*85/100))
         assertEquals(listOf(SelfCheckNotices.STORAGE_FULL),full.map { it.code })
-        val a=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val a=launchMain(Screen.SETTINGS)
         fun find(t:String)=a.window.decorView.findViewWithTag<View>(t)
         repeat(400) { shadowOf(Looper.getMainLooper()).idle();if(find("storage_use")!=null) return@repeat;Thread.sleep(10) }
         val line=(find("storage_use") as TextView).text.toString()
@@ -172,7 +173,7 @@ class SelfCheckNoticesTest:ProtectedTextHostTestBase() {
     @Test fun settingsShowNoAmberForAStoredCancel() {
         PreviewSeed.ensure(app)
         SecureSettings(app).update { it.put(PipelineSettingsKeys.LAST_UPDATE_ERROR,"STATUS_FAILURE_ABORTED (3): User rejected permissions") }
-        val a=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val a=launchMain(Screen.SETTINGS)
         fun find(t:String)=a.window.decorView.findViewWithTag<View>(t)
         repeat(400) { shadowOf(Looper.getMainLooper()).idle();if(find("status_update")!=null) return@repeat;Thread.sleep(10) }
         assertNotNull(find("status_update"));assertNull(find("update_error"))

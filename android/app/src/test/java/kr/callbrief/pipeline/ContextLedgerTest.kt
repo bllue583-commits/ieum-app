@@ -293,7 +293,7 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
 
     @Test fun companiesScreenListsDetailsAndUsesBigPlainText() {
         apply(call(1),analysis(cp("김민수","△△철강"),"철근 단가 협의",listOf(create("단가 재견적 받기")),"현장 메모",memo="단가 재견적 진행",trade="철근"))
-        val a=Robolectric.buildActivity(CompaniesActivity::class.java).setup().get()
+        val a=launchMain(Screen.COMPANIES)
         settle { texts(a).any { it.text.toString()=="△△철강" } }
         val english=Regex("[A-Z]{3,}_[A-Z_]+|\\b(WAITING|FAILED|TRANSCRIBED|ANALYZED|null)\\b")
         fun check() {
@@ -330,7 +330,7 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
     @Test fun companiesScreenRenamesAPerson() {
         apply(call(1),analysis(cp("김철주","△△철강","과장")))
         apply(call(2,counterpart="010-2222-0002"),analysis(cp("박영희",null,"공무",staff=true)))
-        val a=Robolectric.buildActivity(CompaniesActivity::class.java).setup().get()
+        val a=launchMain(Screen.COMPANIES)
         settle { texts(a).any { it.text.toString()=="업체 없는 사람 (우리 직원 등)" } }
         assertTrue(texts(a).any { it.text.toString()=="박영희" })
         views(a.window.decorView).first { (it.tag as? String)?.startsWith("company_")==true }.performClick()
@@ -374,12 +374,12 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         apply(call(1),analysis(cp("김민수","△△철강"),"요약",listOf(create("단가 재견적 받기")),"현장 메모 본문"))
         val m=store().use { CallDigestText.morning(it,java.time.LocalDate.of(2026,10,30)) }
         assertTrue(m.lines.toString(),m.lines.any { it.startsWith("[△△철강] 단가 재견적 받기, ") && it.endsWith(" 요청") })
-        val home=Robolectric.buildActivity(HomeActivity::class.java).setup().get()
+        val home=launchMain(Screen.HOME)
         settle { home.window.decorView.findViewWithTag<View>("home_calls_button")!=null }
-        home.render(HomeActivity.Snapshot(true,true,"READY",0,0,0,0,0,0,companies=3))
+        home.home.render(HomeScreen.Snapshot(true,true,"READY",0,0,0,0,0,0,companies=3))
         val door=home.window.decorView.findViewWithTag<View>("home_companies_button")
         assertNotNull(door);assertTrue(views(door).filterIsInstance<TextView>().joinToString { it.text }.contains("업체"))
-        val settings=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val settings=launchMain(Screen.SETTINGS)
         settle { texts(settings).any { it.text.toString()=="현장 메모 보기 ›" } }
         settle { settings.window.decorView.findViewWithTag<TextView>("site_memo")?.text?.toString()=="현장 메모 본문" }
     }

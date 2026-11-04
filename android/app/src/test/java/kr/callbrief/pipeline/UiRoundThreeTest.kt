@@ -35,13 +35,13 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
 
     @Test fun iconSetHasTheFourteenIconsAndEveryOneParses() {
         assertEquals(14,CallIcons.NAMED.size)
-        val a=Robolectric.buildActivity(HomeActivity::class.java).get()
+        val a=Robolectric.buildActivity(MainActivity::class.java).get()
         CallIcons.NAMED.forEach { k -> assertTrue(k,CallIcons.paths(k).isNotEmpty());assertEquals(CallUi.dp(a,24),CallUi.icon(a,k,CallUi.INK).intrinsicWidth) }
         assertTrue(CallIcons.kinds.containsAll(listOf("tick","chevron","plus")))
     }
 
     @Test fun captionsAreMarkedAndSmallerThanBody() {
-        val a=Robolectric.buildActivity(HomeActivity::class.java).get()
+        val a=Robolectric.buildActivity(MainActivity::class.java).get()
         val c=CallUi.caption(a,"오늘 요청");val b=CallUi.text(a,"본문")
         assertEquals(16f,c.getTag(kr.callbrief.R.id.ui_min_sp));assertNull(b.getTag(kr.callbrief.R.id.ui_min_sp))
         assertEquals(CallUi.CAPTION,c.textSize/c.resources.displayMetrics.scaledDensity,0.01f);assertEquals(CallUi.BODY,b.textSize/b.resources.displayMetrics.scaledDensity,0.01f)
@@ -49,10 +49,10 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
     }
 
     @Test fun nightModeSwitchesEveryColourSet() {
-        val light=Robolectric.buildActivity(HomeActivity::class.java).get();CallUi.page(light)
+        val light=Robolectric.buildActivity(MainActivity::class.java).get();CallUi.page(light)
         assertFalse(CallUi.night);assertEquals(android.graphics.Color.parseColor("#F2F4F6"),CallUi.PAGE);assertEquals(android.graphics.Color.parseColor("#3268F0"),CallUi.ACCENT)
         RuntimeEnvironment.setQualifiers("+night")
-        val dark=Robolectric.buildActivity(HomeActivity::class.java).get();CallUi.page(dark)
+        val dark=Robolectric.buildActivity(MainActivity::class.java).get();CallUi.page(dark)
         assertTrue(CallUi.night)
         fun c(h:String)=android.graphics.Color.parseColor(h)
         assertEquals(c("#111418"),CallUi.PAGE);assertEquals(c("#1A1F26"),CallUi.CARD);assertEquals(c("#2A3038"),CallUi.LINE);assertEquals(c("#F2F4F6"),CallUi.INK)
@@ -64,14 +64,14 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
         fun red(c:Int)=android.graphics.Color.red(c)>180 && android.graphics.Color.green(c)<110 && android.graphics.Color.blue(c)<110
         listOf(false,true).forEach { n ->
             if(n) RuntimeEnvironment.setQualifiers("+night") else RuntimeEnvironment.setQualifiers("+notnight")
-            val a=Robolectric.buildActivity(HomeActivity::class.java).get();CallUi.page(a)
+            val a=Robolectric.buildActivity(MainActivity::class.java).get();CallUi.page(a)
             listOf(CallUi.INK,CallUi.SUBTLE,CallUi.MUTED,CallUi.ACCENT,CallUi.ACCENT_SOFT,CallUi.AMBER,CallUi.AMBER_SOFT,CallUi.AMBER_RAIL,CallUi.OK,CallUi.CHIP,CallUi.MUTED_BAR).forEach { assertFalse(java.lang.Integer.toHexString(it),red(it)) }
         }
         RuntimeEnvironment.setQualifiers("+notnight")
     }
 
     @Test fun dialButtonIsHiddenWithoutANumberAndOpensTheDialerWithOne() {
-        val a=Robolectric.buildActivity(HomeActivity::class.java).get()
+        val a=Robolectric.buildActivity(MainActivity::class.java).get()
         assertNull(CallUi.dialButton(a,null,"김민수"));assertNull(CallUi.dialButton(a,"",  "김민수"));assertNull(CallUi.dialButton(a,"lee@electric.co.kr","이영호"))
         val b=CallUi.dialButton(a,"01011112222","김민수")!!
         assertEquals(CallUi.dp(a,44),b.layoutParams.width);assertTrue(b.contentDescription.toString().contains("김민수"))
@@ -95,7 +95,7 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
 
     @Test fun homeShowsThreeTasksAboveTheCallMemosAndDoneFadesWithUndo() {
         seeded()
-        val a=Robolectric.buildActivity(HomeActivity::class.java).setup().get()
+        val a=launchMain(Screen.HOME)
         fun homeTasks()=tagged(a,"home_task_").filter { it.tag!="home_task_mix" }
         settle { homeTasks().isNotEmpty() }
         val root=a.window.decorView
@@ -115,7 +115,7 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
 
     @Test fun tasksScreenCompletesThenTimeoutRemovesTheRow() {
         seeded()
-        val a=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get()
+        val a=launchMain(Screen.TASKS)
         settle { tagged(a,"task_").any { it.tag.toString().startsWith("task_") && it.tag!="task_done" } }
         val before=CallRecordStore(RuntimeEnvironment.getApplication()).use { it.openItems().size }
         val row=tagged(a,"task_").first { it.tag!="task_done" }
@@ -129,7 +129,7 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
 
     @Test fun settingsShowsFiveStatusLightsInTheLastGroup() {
         seeded()
-        val a=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val a=launchMain(Screen.SETTINGS)
         settle { a.window.decorView.findViewWithTag<View>("settings_status")!=null }
         val root=a.window.decorView
         listOf("status_import","status_transcribe","status_analyze","status_notify","status_update").forEach { assertNotNull(it,root.findViewWithTag<View>(it)) }
@@ -144,13 +144,12 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
         seeded()
         val ctx=RuntimeEnvironment.getApplication()
         val call=CallRecordStore(ctx).use { s -> s.day(CallUi.today()).first { it.analysis?.counterpartCompany=="△△철강" } }
-        val a=Robolectric.buildActivity(TodayCallsActivity::class.java,Intent(ctx,TodayCallsActivity::class.java)
-            .putExtra(TodayCallsActivity.EXTRA_CALL,call.recordId).putExtra(TodayCallsActivity.EXTRA_DAY_MS,call.dayMs)).setup().get()
+        val a=launchMain(Screen.CALLS,call.dayMs,call.recordId)
         settle { a.window.decorView.findViewWithTag<View>("call_company_link")!=null }
         a.window.decorView.findViewWithTag<View>("call_company_link").performClick()
-        val next=shadowOf(a).nextStartedActivity
-        assertEquals("△△철강",next.getStringExtra(CompaniesActivity.EXTRA_COMPANY_NAME))
-        val c=Robolectric.buildActivity(CompaniesActivity::class.java,next).setup().get()
+        // One Activity (design G1): the company page opens in the same window, no new Activity.
+        assertNull(shadowOf(a).nextStartedActivity)
+        val c=a;assertEquals(Screen.COMPANIES,a.screen)
         settle { texts(c).any { it.text.toString().startsWith("사람 (") } }
         assertTrue(texts(c).any { it.text.toString()=="△△철강" })
     }

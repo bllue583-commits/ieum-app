@@ -61,7 +61,7 @@ class SheetDialogTest:ProtectedTextHostTestBase() {
 
     @Test fun ownCheckItemIsWrittenInASheet() {
         PreviewSeed.ensure(app)
-        val a=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get()
+        val a=launchMain(Screen.TASKS)
         settle { tag(a,"task_add")!=null }
         tag(a,"task_add").performClick()
         val d=sheet();assertSheet(d)
@@ -78,7 +78,7 @@ class SheetDialogTest:ProtectedTextHostTestBase() {
 
     @Test fun backAndCancelLeaveEverythingAsItWas() {
         PreviewSeed.ensure(app)
-        val a=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get()
+        val a=launchMain(Screen.TASKS)
         settle { tag(a,"task_add")!=null }
         tag(a,"task_add").performClick()
         var d=sheet();(d.find("add_title") as EditText).setText("적지 않을 일")
@@ -92,7 +92,7 @@ class SheetDialogTest:ProtectedTextHostTestBase() {
     }
 
     @Test fun myInfoIsSavedFromASheet() {
-        val a=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val a=launchMain(Screen.SETTINGS)
         settle { tag(a,"my_edit_"+PipelineSettingsKeys.MY_NAME)!=null }
         tag(a,"my_edit_"+PipelineSettingsKeys.MY_NAME).performClick()
         val d=sheet();assertSheet(d)
@@ -107,7 +107,7 @@ class SheetDialogTest:ProtectedTextHostTestBase() {
         CallRecordStore(app).use { it.personalNumbers() } // the tables exist
         AndroidSqlPort(app,GeneralLocalStore.DATABASE,app.assets.open("call_core_schema.sql")).use { p -> p.transaction {
             p.execute("INSERT OR IGNORE INTO personal_numbers VALUES(?,?)","01012345678",System.currentTimeMillis());null } }
-        val a=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val a=launchMain(Screen.SETTINGS)
         settle { tag(a,"personal_list")!=null }
         tag(a,"personal_list").performClick()
         val list=sheet();assertSheet(list)
@@ -125,7 +125,7 @@ class SheetDialogTest:ProtectedTextHostTestBase() {
     }
 
     @Test fun theSheetIsTitleMessageInputThenStackedButtons() {
-        val a=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get()
+        val a=launchMain(Screen.TASKS)
         // The sheet itself, on any screen: message, input and the two buttons, primary above secondary.
         var saved=false
         val input=CallUi.sheetInput(a,"김철주",tag="person_name_input")
@@ -142,7 +142,7 @@ class SheetDialogTest:ProtectedTextHostTestBase() {
 
     @Config(qualifiers="night")
     @Test fun theSheetFollowsNightMode() {
-        val a=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get()
+        val a=launchMain(Screen.TASKS)
         val d=CallUi.sheetDialog(a,"속도 측정 결과",message="녹음 40초를 처리했어요.",secondary="확인")
         assertTrue(CallUi.night)
         val frame=d.find("sheet_root").parent.parent as View

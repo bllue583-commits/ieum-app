@@ -38,22 +38,123 @@ class UiV2Test:ProtectedTextHostTestBase() {
     @After fun reset() { CallUi.applyTheme(app) }
     private fun seeded() { PreviewSeed.ensure(app) }
 
-    // ---- 1. back goes home ----
-    @Test fun backFromEveryMainScreenGoesHomeAndTabsReorder() {
+    // ---- 1. one Activity (design G1): back, tabs, notifications ----
+    private fun back(a:MainActivity) { a.onBackPressedDispatcher.onBackPressed();shadowOf(Looper.getMainLooper()).idle() }
+    private fun title(a:MainActivity)=(tag(a,"page_title") as? TextView)?.text?.toString()
+
+    /** 체크 → 업체 → 상세 → 뒤로 → 업체 → 뒤로 → 홈 → 뒤로 → 종료. No other Activity is ever started. */
+    @Test fun backClosesTheDetailThenGoesHomeThenLeaves() {
         seeded()
-        listOf(CallTasksActivity::class.java,CallSettingsActivity::class.java,CompaniesActivity::class.java,TodayCallsActivity::class.java).forEach { cls ->
-            val a=Robolectric.buildActivity(cls).setup().get()
-            shadowOf(Looper.getMainLooper()).idle()
-            a.onBackPressedDispatcher.onBackPressed()
-            val next=shadowOf(a).nextStartedActivity
-            assertEquals(cls.simpleName,HomeActivity::class.java.name,next.component!!.className)
-            assertEquals(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP,next.flags and (Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
-        }
-        val a=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get()
-        CallUi.Tab.entries.forEach { t ->
-            CallUi.go(a,t);val f=shadowOf(a).nextStartedActivity.flags
-            if(t==CallUi.Tab.HOME) assertTrue(f and Intent.FLAG_ACTIVITY_CLEAR_TOP!=0) else assertTrue(t.name,f and Intent.FLAG_ACTIVITY_REORDER_TO_FRONT!=0)
-        }
+        val a=launchMain(Screen.HOME)
+        settle { tag(a,"home_today")!=null }
+        tag(a,CallUi.Tab.TASKS.tag).performClick();assertEquals(Screen.TASKS,a.screen)
+        settle { tag(a,"task_add")!=null }
+        tag(a,CallUi.Tab.COMPANIES.tag).performClick();assertEquals(Screen.COMPANIES,a.screen)
+        settle { tagged(a,"company_").any { it is ViewGroup } }
+        tagged(a,"company_").first { it is ViewGroup }.performClick()
+        settle { texts(a).any { it.text.toString().startsWith("사람 (") } }
+        assertNotNull(a.detail);assertNotNull("detail has its back icon",tag(a,"page_back"))
+        back(a)
+        assertEquals(Screen.COMPANIES,a.screen);assertNull(a.detail)
+        settle { title(a)=="업체와 사람" }
+        back(a)
+        assertEquals(Screen.HOME,a.screen);settle { tag(a,"home_today")!=null }
+        assertFalse(a.isFinishing)
+        back(a)
+        assertTrue("back from home leaves the app",a.isFinishing)
+        assertNull(shadowOf(a).nextStartedActivity)
+    }
+
+    /** Opened from a notification (the app was closed): back goes home, then out; the evening report carries its day. */
+    @Test fun aNotificationOpensItsScreenAndBackGoesHomeThenLeaves() {
+        seeded()
+        shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        val yesterday=CallUi.today().minusDays(1).atTime(12,0).atZone(CallRecordStore.KST).toInstant().toEpochMilli()
+        CallDigestNotifier.post(app,CallDigestSchedule.EVENING,CallDigestText.Message("어제 통화","본문"),yesterday)
+        CallDigestNotifier.post(app,CallDigestSchedule.MORNING,CallDigestText.Message("체크할 일","본문"))
+        val posted=shadowOf(app.getSystemService(NotificationManager::class.java)).allNotifications
+        fun opens(kind:String)=shadowOf(posted.single { it.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)==(if(kind=="e") "어제 통화" else "체크할 일") }.contentIntent).savedIntent
+        val evening=opens("e");val morning=opens("m")
+        assertEquals(MainActivity::class.java.name,evening.component!!.className);assertEquals("CALLS",evening.getStringExtra(MainActivity.EXTRA_SCREEN))
+        assertEquals(yesterday,evening.getLongExtra(MainActivity.EXTRA_DAY_MS,0));assertEquals("TASKS",morning.getStringExtra(MainActivity.EXTRA_SCREEN))
+        assertEquals(0,morning.flags and Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+        // The evening one, the next morning: yesterday's calls.
+        val a=Robolectric.buildActivity(MainActivity::class.java,evening).setup().get()
+        assertEquals(Screen.CALLS,a.screen)
+        settle { title(a)=="어제의 통화" }
+        back(a);assertEquals(Screen.HOME,a.screen);settle { tag(a,"home_today")!=null }
+        back(a);assertTrue(a.isFinishing)
+        // The morning one while the app is open on home: the check list comes to the same window (onNewIntent).
+        val bc=Robolectric.buildActivity(MainActivity::class.java,MainActivity.intent(app,Screen.HOME)).setup();val b=bc.get()
+        settle { tag(b,"home_today")!=null }
+        bc.newIntent(morning);shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(Screen.TASKS,b.screen);settle { tag(b,"task_add")!=null }
+        back(b);assertEquals(Screen.HOME,b.screen);back(b);assertTrue(b.isFinishing)
+        // A notification with a call: that call's page; back to the list, home, out.
+        val call=CallRecordStore(app).use { s -> s.day(CallUi.today()).first { it.analysis!=null } }
+        val c=launchMain(Screen.CALLS,call.dayMs,call.recordId)
+        settle { texts(c).any { it.text.toString()=="요약" } };assertEquals(call.recordId,c.detail)
+        back(c);assertNull(c.detail);assertEquals(Screen.CALLS,c.screen)
+        back(c);assertEquals(Screen.HOME,c.screen);back(c);assertTrue(c.isFinishing)
+    }
+
+    /** The tab of the screen in front, tapped again: the detail closes, the search and the day are cleared, the list is at the top. */
+    @Test fun theCurrentTabTappedAgainGoesBackToTheList() {
+        seeded()
+        val call=CallRecordStore(app).use { s -> s.day(CallUi.today()).first { it.analysis!=null } }
+        val a=launchMain(Screen.CALLS,call.dayMs,call.recordId)
+        settle { texts(a).any { it.text.toString()=="요약" } }
+        tag(a,CallUi.Tab.CALLS.tag).performClick()
+        settle { tag(a,"calls_search")!=null && tag(a,"calls_list")!=null }
+        assertNull(a.detail);assertEquals("오늘의 통화",title(a))
+        // An earlier day with something typed: the tab brings today back, with an empty search line.
+        (tag(a,"calls_search") as EditText).setText("철강")
+        tag(a,CallUi.Tab.CALLS.tag).performClick()
+        settle { tag(a,"calls_list")!=null };assertEquals("",(tag(a,"calls_search") as EditText).text.toString())
+        // Companies: the detail closes on its tab too.
+        tag(a,CallUi.Tab.COMPANIES.tag).performClick()
+        settle { tagged(a,"company_").any { it is ViewGroup } }
+        tagged(a,"company_").first { it is ViewGroup }.performClick()
+        settle { a.detail!=null && texts(a).any { it.text.toString().startsWith("사람 (") } }
+        tag(a,CallUi.Tab.COMPANIES.tag).performClick()
+        settle { title(a)=="업체와 사람" };assertNull(a.detail)
+        // A quick double tap on a row opens once (one entry for back).
+        tagged(a,"company_").first { it is ViewGroup }.let { it.performClick();it.performClick() }
+        settle { a.detail!=null && texts(a).any { it.text.toString().startsWith("사람 (") } }
+        back(a);settle { title(a)=="업체와 사람" };assertEquals(Screen.COMPANIES,a.screen)
+    }
+
+    /** Closing a detail page puts the list back where it was, also for a long list drawn in parts. */
+    @Test fun closingADetailPutsTheListBackWhereItWas() {
+        seeded()
+        val day=CallUi.today()
+        CallRecordStore(app).use { s -> s.reconcileCallLog((1..120).map { i ->
+            FirstPass.LogEntry(700_000L+i,"010%08d".format(i),null,day.atStartOfDay(CallRecordStore.KST).toInstant().toEpochMilli()+i*60_000L,0,android.provider.CallLog.Calls.MISSED_TYPE) }) }
+        val a=launchMain(Screen.CALLS)
+        settle { tagged(a,"call_").any { it is ViewGroup } && (tag(a,"calls_list") as? ViewGroup)?.childCount ?: 0 > 200 }
+        val scroll=tag(a,"page_scroll") as android.widget.ScrollView
+        fun lay() { val d=a.window.decorView;d.measure(View.MeasureSpec.makeMeasureSpec(1080,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(1920,View.MeasureSpec.EXACTLY));d.layout(0,0,1080,1920) }
+        lay();scroll.scrollTo(0,900);lay();val y=scroll.scrollY;assertTrue("page scrolls",y>0)
+        tagged(a,"call_").first { it is ViewGroup }.performClick()
+        settle { a.detail!=null };lay()
+        back(a);lay();shadowOf(Looper.getMainLooper()).idle()
+        settle { lay();scroll.scrollY==y }
+        assertNull(a.detail)
+    }
+
+    @Test fun mainActivityIsTheOnlyScreenAndKeepsItsStateAcrossARestart() {
+        val pm=app.packageManager
+        val info=pm.getPackageInfo(app.packageName,android.content.pm.PackageManager.GET_ACTIVITIES)
+        assertEquals(listOf(MainActivity::class.java.name),info.activities!!.map { it.name })
+        assertEquals(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,info.activities!!.single().screenOrientation)
+        seeded()
+        val c=Robolectric.buildActivity(MainActivity::class.java,MainActivity.intent(app,Screen.COMPANIES)).setup()
+        val a=c.get();settle { tagged(a,"company_").any { it is ViewGroup } }
+        (tag(a,"companies_search") as EditText).setText("철강")
+        val saved=android.os.Bundle();c.saveInstanceState(saved)
+        val b=Robolectric.buildActivity(MainActivity::class.java).setup(saved).get()
+        assertEquals(Screen.COMPANIES,b.screen)
+        settle { (tag(b,"companies_search") as? EditText)?.text?.toString()=="철강" }
     }
 
     // ---- 2. settings ----
@@ -125,7 +226,7 @@ class UiV2Test:ProtectedTextHostTestBase() {
     @Test fun settingsKeepThreeGroupsMailGuideAndMarkers() {
         seeded()
         SecureSettings(app).update { it.put(PipelineSettingsKeys.LAST_UPDATE_ERROR,"STATUS_FAILURE_STORAGE (6): 공간 부족") }
-        val a=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val a=launchMain(Screen.SETTINGS)
         settle { tag(a,"status_update")!=null }
         assertEquals(listOf("group_연결","group_정리","group_상태와 도움"),views(a.window.decorView).mapNotNull { it.tag as? String }.filter { it.startsWith("group_") })
         val update=views(tag(a,"status_update")).filterIsInstance<TextView>().joinToString { it.text }
@@ -134,12 +235,12 @@ class UiV2Test:ProtectedTextHostTestBase() {
         assertTrue(texts(a).none { it.text.contains("STATUS_FAILURE") })
         assertTrue(texts(a).none { it.text.contains("녹음 1분을") || it.text.contains("·") })
         assertEquals(5,listOf("status_import","status_transcribe","status_analyze","status_notify","status_update").count { tag(a,it)!=null })
-        val a2=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val a2=launchMain(Screen.SETTINGS)
         settle { tag(a2,"status_update")!=null }
         // The preview seed has no mail connected: the guide for the chosen service stands under the buttons.
         val guide=tag(a2,"mail_guide") as TextView
         assertTrue(guide.text.toString(),guide.text.toString().startsWith("네이버 메일 → 환경설정 → POP3/IMAP"))
-        assertTrue(a2.mailGuide("Gmail").startsWith("Gmail 설정 → 전달 및 POP/IMAP"))
+        assertTrue(a2.settings.mailGuide("Gmail").startsWith("Gmail 설정 → 전달 및 POP/IMAP"))
         // Site memo sits behind its link.
         assertNotNull(tag(a2,"site_memo_toggle"));assertEquals(View.GONE,tag(a2,"site_memo").visibility)
         tag(a2,"site_memo_toggle").performClick();assertEquals(View.VISIBLE,tag(a2,"site_memo").visibility)
@@ -166,7 +267,7 @@ class UiV2Test:ProtectedTextHostTestBase() {
         val old=System.currentTimeMillis()-30*86_400_000L
         val oldId=CallRecordStore(app) { old }.use { it.addUserItem("한 달 전에 적은 일") }!!
         val doneId=CallRecordStore(app).use { s -> s.addUserItem("끝낸 일 하나")!!.also { s.completeItem(it,1) } }
-        val a=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get()
+        val a=launchMain(Screen.TASKS)
         settle { tag(a,"tasks_done")!=null }
         assertNull("old row stays folded away",tag(a,"task_$oldId")?.takeIf { it.isShown })
         val fold=tag(a,"tasks_old") as TextView
@@ -178,7 +279,7 @@ class UiV2Test:ProtectedTextHostTestBase() {
         tag(a,"tasks_done").performClick();assertNotNull(tag(a,"done_$doneId"))
         assertTrue(CallRecordStore(app).use { s -> s.doneItems(0).any { it.id==doneId } })
         // Add one of the user's own.
-        a.save("새로 적은 일","○○레미콘")
+        a.tasks.save("새로 적은 일","○○레미콘")
         settle { CallRecordStore(app).use { s -> s.openItems().any { it.title=="새로 적은 일" && it.company=="○○레미콘" } } }
     }
 
@@ -186,8 +287,7 @@ class UiV2Test:ProtectedTextHostTestBase() {
     @Test fun callDetailHasNoPromisesSectionAndNamesTheChecksItMade() {
         seeded()
         val call=CallRecordStore(app).use { s -> s.day(CallUi.today()).first { it.analysis?.counterpartCompany=="△△철강" } }
-        val a=Robolectric.buildActivity(TodayCallsActivity::class.java,Intent(app,TodayCallsActivity::class.java)
-            .putExtra(TodayCallsActivity.EXTRA_CALL,call.recordId).putExtra(TodayCallsActivity.EXTRA_DAY_MS,call.dayMs)).setup().get()
+        val a=launchMain(Screen.CALLS,call.dayMs,call.recordId)
         settle { texts(a).any { it.text.toString()=="요약" } }
         assertTrue(texts(a).none { it.text.toString()=="약속" })
         assertTrue(texts(a).any { it.text.toString()=="이 통화에서 생긴 체크할 일" })
@@ -205,7 +305,7 @@ class UiV2Test:ProtectedTextHostTestBase() {
 
     @Test fun callsSearchFindsAcrossDaysAndSaysWhenNothingMatches() {
         seeded()
-        val a=Robolectric.buildActivity(TodayCallsActivity::class.java).setup().get()
+        val a=launchMain(Screen.CALLS)
         settle { tag(a,"calls_search")!=null && tagged(a,"call_").isNotEmpty() }
         val box=tag(a,"calls_search") as EditText
         box.setText("철강")
@@ -218,7 +318,7 @@ class UiV2Test:ProtectedTextHostTestBase() {
 
     @Test fun companiesSearchFiltersTheList() {
         seeded()
-        val a=Robolectric.buildActivity(CompaniesActivity::class.java).setup().get()
+        val a=launchMain(Screen.COMPANIES)
         settle { tag(a,"companies_search")!=null && tagged(a,"company_").isNotEmpty() }
         val all=tagged(a,"company_").size;assertTrue(all>=2)
         (tag(a,"companies_search") as EditText).setText("철강")
@@ -229,7 +329,7 @@ class UiV2Test:ProtectedTextHostTestBase() {
 
     // ---- 6. theme, icon, intro ----
     @Test fun themeBlocksForcedDarkAndNotificationsUseTheMonochromeMark() {
-        val a=Robolectric.buildActivity(HomeActivity::class.java).get()
+        val a=Robolectric.buildActivity(MainActivity::class.java).get()
         assertFalse(a.theme.obtainStyledAttributes(intArrayOf(android.R.attr.forceDarkAllowed)).getBoolean(0,true))
         assertNotNull(app.getDrawable(kr.callbrief.R.drawable.ic_stat_ieum))
         shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
@@ -280,24 +380,24 @@ class UiV2Test:ProtectedTextHostTestBase() {
 
     // ---- v2.5 #20: 처음 정리 rests (battery under half and not charging, or no result for six hours) and says so ----
     @Test fun firstPassRestSaysWhyAndWhatIsLeft() {
-        val home=Robolectric.buildActivity(HomeActivity::class.java).setup().get()
+        val home=launchMain(Screen.HOME)
         settle { tag(home,"home_calls_button")!=null }
-        fun show(f:HomeActivity.FirstPassView):String { home.render(HomeActivity.Snapshot(true,true,"READY",2,0,1,0,0,1_793_300_000_000,firstPass=f))
+        fun show(f:HomeScreen.FirstPassView):String { home.home.render(HomeScreen.Snapshot(true,true,"READY",2,0,1,0,0,1_793_300_000_000,firstPass=f))
             return views(tag(home,"home_first_pass")).filterIsInstance<TextView>().joinToString("\n") { it.text.toString() } }
-        val low=show(HomeActivity.FirstPassView(37,9.0,4,2,audioMinutesLeft=190,lowBattery=true))
+        val low=show(HomeScreen.FirstPassView(37,9.0,4,2,audioMinutesLeft=190,lowBattery=true))
         assertTrue(low,low.contains("잠시 쉬고 있어요") && low.contains("충전기에 꽂으면 이어서 정리해요"))
         assertTrue(low,low.contains("남은 녹음") && low.contains("37개") && low.contains("남은 녹음 시간") && low.contains("3시간"))
         assertTrue(low,low.contains("요약을 기다리는 기록 4건"))
         assertFalse("no processing estimate while resting",low.contains("글자로 바꿀 녹음"))
-        val stalled=show(HomeActivity.FirstPassView(0,null,6,0,stalled=true))
+        val stalled=show(HomeScreen.FirstPassView(0,null,6,0,stalled=true))
         assertTrue(stalled,stalled.contains("잠시 쉬고 있어요") && stalled.contains("결과가 오면 이어서 정리해요") && !stalled.contains("충전기"))
-        val running=show(HomeActivity.FirstPassView(37,9.0,4,2,audioMinutesLeft=190))
+        val running=show(HomeScreen.FirstPassView(37,9.0,4,2,audioMinutesLeft=190))
         assertNull(tag(home,"home_first_pass_rest"));assertTrue(running,running.contains("글자로 바꿀 녹음 37개"))
         for(t in listOf(low,stalled)) { assertFalse(t,t.contains("·"));assertFalse(t,Regex("[A-Za-z]").containsMatchIn(t)) }
         // 50대 기준: the rest line is a heading, the reason reading size, the numbers big.
-        show(HomeActivity.FirstPassView(37,9.0,4,2,audioMinutesLeft=190,lowBattery=true))
+        show(HomeScreen.FirstPassView(37,9.0,4,2,audioMinutesLeft=190,lowBattery=true))
         assertTrue((tag(home,"home_first_pass_rest") as TextView).textSize/home.resources.displayMetrics.scaledDensity>=CallUi.HEADING)
         assertTrue(views(tag(home,"home_first_pass")).filterIsInstance<TextView>().all { it.textSize/it.resources.displayMetrics.scaledDensity>=16f })
-        assertEquals("40" to "분",HomeActivity.roughLength(40));assertEquals("3" to "시간",HomeActivity.roughLength(190));assertEquals("1" to "분",HomeActivity.roughLength(0))
+        assertEquals("40" to "분",HomeScreen.roughLength(40));assertEquals("3" to "시간",HomeScreen.roughLength(190));assertEquals("1" to "분",HomeScreen.roughLength(0))
     }
 }

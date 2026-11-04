@@ -31,14 +31,14 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
     private fun settle(a:android.app.Activity,check:()->Boolean) { repeat(300) { shadowOf(Looper.getMainLooper()).idle();if(check())return;Thread.sleep(10) };fail("UI did not settle") }
     private val english=Regex("[A-Z]{3,}_[A-Z_]+|\\b(WAITING|FAILED|TRANSCRIBED|ANALYZED|null)\\b")
 
-    private fun home(snapshot:HomeActivity.Snapshot):HomeActivity {
-        val a=Robolectric.buildActivity(HomeActivity::class.java).setup().get()
+    private fun home(snapshot:HomeScreen.Snapshot):MainActivity {
+        val a=launchMain(Screen.HOME)
         settle(a) { a.window.decorView.findViewWithTag<View>("home_calls_button")!=null }
-        a.render(snapshot);return a
+        a.home.render(snapshot);return a
     }
 
     @Test fun homeShowsTodayCardThreeDoorsAndSetupUntilDone() {
-        val a=home(HomeActivity.Snapshot(folder=true,consent=false,model="DOWNLOADING",calls=3,working=1,newTasks=2,due=4,overdue=1,lastAnalyzedMs=0))
+        val a=home(HomeScreen.Snapshot(folder=true,consent=false,model="DOWNLOADING",calls=3,working=1,newTasks=2,due=4,overdue=1,lastAnalyzedMs=0))
         val root=a.window.decorView
         for(tag in listOf("home_today","home_calls_button","home_tasks_button","home_settings_button","home_setup"))assertNotNull(tag,root.findViewWithTag<View>(tag))
         val all=texts(a).joinToString("\n"){it.text.toString()}
@@ -46,17 +46,17 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
         assertFalse(all,english.containsMatchIn(all))
         val buttons=views(root).filterIsInstance<Button>().filter{(it.tag as? String)?.startsWith("home_")==true}
         assertTrue(buttons.all{ it.minHeight>=(56*it.resources.displayMetrics.density).toInt() })
-        val done=home(HomeActivity.Snapshot(true,true,"READY",0,0,0,0,0,0))
+        val done=home(HomeScreen.Snapshot(true,true,"READY",0,0,0,0,0,0))
         assertNull(done.window.decorView.findViewWithTag<View>("home_setup"))
     }
 
     @Test fun mainScreensUseLargeTextAndPlainWords() {
-        val a=home(HomeActivity.Snapshot(true,true,"READY",1,0,1,1,0,1_793_300_000_000))
+        val a=home(HomeScreen.Snapshot(true,true,"READY",1,0,1,1,0,1_793_300_000_000))
         assertTrue(texts(a).filter{it !is Button}.filterNot(::sizeOk).joinToString { "${it.text} ${sp(it)}" },texts(a).filter{it !is Button}.all(::sizeOk))
-        val today=Robolectric.buildActivity(TodayCallsActivity::class.java).setup().get()
+        val today=launchMain(Screen.CALLS)
         settle(today) { texts(today).any { it.text.toString().endsWith("의 통화") } }
         assertTrue(texts(today).filter{it !is Button}.all(::sizeOk))
-        val settings=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val settings=launchMain(Screen.SETTINGS)
         settle(settings) { texts(settings).any { it.text.toString()=="설정" } }
         val all=texts(settings).joinToString("\n"){it.text.toString()}
         assertFalse(all,english.containsMatchIn(all));assertTrue(texts(settings).filter{it !is Button && it !is android.widget.EditText}.all(::sizeOk))
@@ -75,8 +75,8 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
     @Test fun tasksAreGroupedByRequestDay() {
         val now=System.currentTimeMillis();val day=86_400_000L
         fun item(id:String,at:Long,status:String="open")=OpenItem(id,id,"",status,1,"",null,createdMs=at)
-        val a=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get()
-        val groups=a.groups(listOf(item("old",now-5*day),item("today",now),item("yesterday",now-day),item("check",now,"needs_confirmation")))
+        val a=launchMain(Screen.TASKS)
+        val groups=a.tasks.groups(listOf(item("old",now-5*day),item("today",now),item("yesterday",now-day),item("check",now,"needs_confirmation")))
         assertEquals(listOf("끝났는지 확인해 주세요","오늘 요청한 일","어제 요청한 일","그전에 요청한 일"),groups.map{it.first})
         assertEquals("오늘 요청",CallUi.requested(now))
     }

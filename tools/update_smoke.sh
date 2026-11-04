@@ -9,7 +9,7 @@ adb wait-for-device
 adb install -r -g "$prev" || { echo "previous APK did not install"; exit 1; }
 adb install -r -g "$new" || { echo "NEW APK DID NOT INSTALL OVER THE PREVIOUS ONE"; exit 1; }
 adb logcat -c
-adb shell am start -n "$pkg/.pipeline.HomeActivity" || adb shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1
+adb shell am start -n "$pkg/.pipeline.MainActivity" || adb shell monkey -p "$pkg" -c android.intent.category.LAUNCHER 1
 sleep 10
 adb logcat -d > "$out/logcat.txt"
 if grep -E "FATAL EXCEPTION|ANR in $pkg" "$out/logcat.txt" > "$out/crash.txt"; then echo "crash or ANR after the update:"; head -5 "$out/crash.txt"; fail=1; fi

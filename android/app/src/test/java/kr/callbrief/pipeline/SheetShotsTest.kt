@@ -49,16 +49,16 @@ class SheetShotsTest:ProtectedTextHostTestBase() {
     @Test fun sheets() {
         assumeTrue("set IEUM_SHOTS_DIR to take the pictures",!out.isNullOrBlank())
         PreviewSeed.ensure(app)
-        val tasks=Robolectric.buildActivity(CallTasksActivity::class.java).setup().get();idle()
+        val tasks=launchMain(Screen.TASKS);idle()
         tasks.window.decorView.findViewWithTag<View>("task_add").performClick()
         shot(tasks,ShadowDialog.getLatestDialog(),"1_task_add")
         ShadowDialog.getLatestDialog().dismiss()
 
-        val companies=Robolectric.buildActivity(CompaniesActivity::class.java).setup().get();idle()
+        val companies=launchMain(Screen.COMPANIES);idle()
         val input=CallUi.sheetInput(companies,"김철주",tag="person_name_input")
         shot(companies,CallUi.sheetDialog(companies,"이름 고치기",message="바른 이름을 적고 [저장]을 누르세요.",body=input,primary="저장",onPrimary={},secondary="취소"),"2_rename")
 
-        val settings=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get();idle()
+        val settings=launchMain(Screen.SETTINGS);idle()
         shot(settings,CallUi.sheetDialog(settings,"눌러서 업무 번호로 되돌려요",options=listOf("010-1234-5678  11월 2일","010-9876-5432  10월 30일"),onOption={},secondary="닫기"),"3_personal_list")
         shot(settings,CallUi.sheetDialog(settings,"업무 번호로 되돌리기",message="010-1234-5678 번호를 업무 번호로 되돌릴까요? 앞으로 이 번호의 통화와 문자를 다시 정리해요.",
             primary="되돌리기",onPrimary={},secondary="닫기"),"4_personal_confirm")
@@ -68,7 +68,7 @@ class SheetShotsTest:ProtectedTextHostTestBase() {
     @Test fun sheetAtNight() {
         assumeTrue("set IEUM_SHOTS_DIR to take the pictures",!out.isNullOrBlank())
         PreviewSeed.ensure(app)
-        val settings=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get();idle()
+        val settings=launchMain(Screen.SETTINGS);idle()
         val field=CallUi.sheetInput(settings,"",hint="예: 김민지",tag="my_input")
         shot(settings,CallUi.sheetDialog(settings,"이름",body=field,primary="저장",onPrimary={},secondary="닫기"),"5_my_name_night")
     }

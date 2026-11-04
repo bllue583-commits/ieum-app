@@ -47,7 +47,7 @@ class UpdateFetchTest:ProtectedTextHostTestBase() {
     private fun tag(a:android.app.Activity,t:String)=a.window.decorView.findViewWithTag<View>(t)
     private fun idle() { repeat(30) { shadowOf(Looper.getMainLooper()).idle();Thread.sleep(5) } }
     private fun settle(check:()->Boolean) { repeat(400) { shadowOf(Looper.getMainLooper()).idle();if(check())return;Thread.sleep(10) };fail("UI did not settle") }
-    private fun tickOnce() { shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(CallSettingsActivity.TICK_MS)) }
+    private fun tickOnce() { shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(SettingsScreen.TICK_MS)) }
     private fun state(a:android.app.Activity)=(tag(a,"update_state") as TextView).text.toString()
     private var starts=0
     @After fun reset() { CallUpdate.startHook=null }
@@ -80,7 +80,7 @@ class UpdateFetchTest:ProtectedTextHostTestBase() {
         val hold=CountDownLatch(1);val reached=CountDownLatch(1)
         val work=Thread { runCatching { CallUpdate.check(app,Store(hold,reached)) } }.apply { start() }
         assertTrue(reached.await(10,TimeUnit.SECONDS))
-        val a=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val a=launchMain(Screen.SETTINGS)
         settle { tag(a,"update_state")!=null }
         assertEquals("새 버전 v2.5 받는 중 42%",state(a))
         assertEquals(42,(tag(a,"update_progress") as ProgressBar).progress)
@@ -98,16 +98,16 @@ class UpdateFetchTest:ProtectedTextHostTestBase() {
         // A finished download whose file was cleared away (the cache): the home card is still there and its button still works.
         assertTrue(CallUpdate.check(app,Store()));CallUpdate.file(app).delete()
         assertNull(CallUpdate.ready(app));assertNotNull(CallUpdate.available(app))
-        val home=Robolectric.buildActivity(HomeActivity::class.java).setup().get()
+        val home=launchMain(Screen.HOME)
         settle { tag(home,"home_update_button")!=null }
         assertEquals("새 버전 v2.5 받을 수 있어요",(tag(home,"home_update_state") as TextView).text.toString())
         tag(home,"home_update_button").performClick()
         assertEquals(1,starts)
         assertEquals(CallUpdate.Stage.WAITING,CallUpdate.fetchState(app).stage)
         assertTrue("installs when done",CallUpdate.wantsInstall(app))
-        assertEquals(CallSettingsActivity::class.java.name,shadowOf(home).nextStartedActivity.component!!.className)
+        assertEquals("settings comes to the front, in the same Activity",Screen.SETTINGS,home.screen);assertNull(shadowOf(home).nextStartedActivity)
         // The download finishes while settings is open: it goes straight on to the install (first the allow-installs page here).
-        val a=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val a=launchMain(Screen.SETTINGS)
         settle { tag(a,"update_state")!=null }
         assertTrue(state(a),state(a).startsWith("새 버전 v2.5 받을 준비 중"))
         assertTrue(CallUpdate.check(app,Store()))
@@ -120,7 +120,7 @@ class UpdateFetchTest:ProtectedTextHostTestBase() {
         CallUpdate.startHook={ starts++ }
         assertTrue(runCatching { CallUpdate.check(app,Store(failDownload=true)) }.isFailure)
         assertEquals(CallUpdate.NET_WORDS,CallUpdate.fetchState(app).reason)
-        val a=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val a=launchMain(Screen.SETTINGS)
         settle { tag(a,"update_state")!=null }
         assertEquals(CallUpdate.NET_WORDS,state(a))
         assertEquals("다시 받기",(tag(a,"update_fetch") as Button).text.toString())
@@ -136,7 +136,7 @@ class UpdateFetchTest:ProtectedTextHostTestBase() {
         assertFalse(File(CallUpdate.file(app).parentFile,"download.tmp").exists())
         assertTrue(CallUpdate.check(app,Store()));assertTrue(CallUpdate.verified(app))
         CallUpdate.file(app).writeBytes(apk.copyOf().also { it[7]=99 }) // same size, other bytes
-        val a=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get();idle()
+        val a=launchMain(Screen.SETTINGS);idle()
         assertFalse(CallUpdate.install(a))
         assertFalse(CallUpdate.file(app).exists());assertNull(CallUpdate.ready(app));assertEquals(1,starts)
         assertTrue(CallUpdate.wantsInstall(app))
@@ -162,16 +162,16 @@ class UpdateFetchTest:ProtectedTextHostTestBase() {
         val hold=CountDownLatch(1);val reached=CountDownLatch(1)
         val work=Thread { runCatching { CallUpdate.check(app,Store(hold,reached)) } }.apply { start() }
         assertTrue(reached.await(10,TimeUnit.SECONDS))
-        val a=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val a=launchMain(Screen.SETTINGS)
         settle { tag(a,"update_state")!=null }
         shot(a,"1_settings_downloading_42")
         hold.countDown();work.join(10_000);tickOnce()
         shot(a,"2_settings_ready")
         CallUpdate.file(app).delete()
-        val b=Robolectric.buildActivity(CallSettingsActivity::class.java).setup().get()
+        val b=launchMain(Screen.SETTINGS)
         settle { tag(b,"update_state")!=null }
         shot(b,"3_settings_get_now")
-        val home=Robolectric.buildActivity(HomeActivity::class.java).setup().get()
+        val home=launchMain(Screen.HOME)
         settle { tag(home,"home_update_button")!=null }
         shot(home,"4_home_card","home_update")
     }

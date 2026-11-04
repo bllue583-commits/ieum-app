@@ -134,7 +134,8 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
             val message=CallRecordStore(CallPipelineStartup.storage(applicationContext)).use {
                 if(kind==CallDigestSchedule.MORNING) CallDigestText.morning(it,plan.day) else CallDigestText.evening(it,plan.day)
             }
-            post(kind,message)
+            // The evening report carries its day, so a tap the next morning still opens that day's calls.
+            post(kind,message,plan.day.atTime(12,0).atZone(CallRecordStore.KST).toInstant().toEpochMilli())
         } catch(e:Exception) { Log.w(TAG,"$kind report not posted: ${e.javaClass.simpleName}") } // class only, never a message with names
         CallDigestSchedule.next(applicationContext,kind)
         if(kind==CallDigestSchedule.EVENING) {
@@ -143,7 +144,7 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
         }
         Result.success()
     }
-    private fun post(kind:String,m:CallDigestText.Message)=CallDigestNotifier.post(applicationContext,kind,m)
+    private fun post(kind:String,m:CallDigestText.Message,dayMs:Long?=null)=CallDigestNotifier.post(applicationContext,kind,m,dayMs)
 
     /** One analysis pass. When the hourly one is running right now, waits for it instead of starting a second pass beside it. */
     private fun fetchResults():CallDigestPrefetch.Outcome {
@@ -186,14 +187,19 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
 /** Posts the morning/evening report. Also used by the device test. */
 internal object CallDigestNotifier {
     /** False when notifications are not allowed (nothing was posted). */
-    fun post(context:Context,kind:String,m:CallDigestText.Message):Boolean {
+    /** The screen a notification of [kind] opens: the morning report the check list, the self-check settings, the others the calls. */
+    fun screenFor(kind:String)=when(kind) { CallDigestSchedule.MORNING -> Screen.TASKS;CallDigestWork.SELF_CHECK -> Screen.SETTINGS;else -> Screen.CALLS }
+    /** [dayMs]: a moment of the day the evening report tells about (now when not given). */
+    fun post(context:Context,kind:String,m:CallDigestText.Message,dayMs:Long?=null):Boolean {
         if(Build.VERSION.SDK_INT>=33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) return false
         val manager=context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(CallDigestWork.CHANNEL,"이음 통화 정리",NotificationManager.IMPORTANCE_DEFAULT))
         manager.createNotificationChannel(NotificationChannel(CallDigestWork.STATUS_CHANNEL,"이음 상태",NotificationManager.IMPORTANCE_DEFAULT))
         val channel=if(kind==CallDigestWork.STATUS||kind==CallDigestWork.SELF_CHECK) CallDigestWork.STATUS_CHANNEL else CallDigestWork.CHANNEL
-        val screen=when(kind) { CallDigestSchedule.MORNING -> CallTasksActivity::class.java;CallDigestWork.SELF_CHECK -> CallSettingsActivity::class.java;else -> TodayCallsActivity::class.java }
-        val intent=Intent(context,screen).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        // One Activity (design G1): the notification names the screen, and the evening report its day, so a tap the next morning
+        // still opens that day's calls. Back from there goes home, then out of the app, however the app was opened.
+        val intent=MainActivity.intent(context,screenFor(kind),dayMs=if(kind==CallDigestSchedule.EVENING) dayMs ?: System.currentTimeMillis() else null)
+            .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         val pending=PendingIntent.getActivity(context,kind.hashCode(),intent,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val notification=Notification.Builder(context,channel).setSmallIcon(R.drawable.ic_stat_ieum)
             .setContentTitle(m.title).setContentText(m.text).setContentIntent(pending).setAutoCancel(true).setLocalOnly(true)

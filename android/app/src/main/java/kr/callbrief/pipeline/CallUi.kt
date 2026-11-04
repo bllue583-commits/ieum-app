@@ -23,7 +23,6 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
-import androidx.activity.OnBackPressedCallback
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import java.time.Instant
@@ -99,13 +98,13 @@ internal object CallUi {
     /** The five places of the app. The bottom bar shows all of them on every main screen. */
     enum class Tab(val label:String,val icon:String,val tag:String) {
         HOME("홈","home","home_home_button"),CALLS("통화","call","home_calls_button"),TASKS("체크","task","home_tasks_button"),
-        COMPANIES("업체","company","home_companies_button"),SETTINGS("설정","gear","home_settings_button");
-        val target:Class<out Activity> get()=when(this) { HOME -> HomeActivity::class.java;CALLS -> TodayCallsActivity::class.java
-            TASKS -> CallTasksActivity::class.java;COMPANIES -> CompaniesActivity::class.java;SETTINGS -> CallSettingsActivity::class.java }
+        COMPANIES("업체","company","home_companies_button"),SETTINGS("설정","gear","home_settings_button")
     }
 
-    /** Builds the frame and returns the content column. Call [band] at the top of every render. */
-    fun page(a:Activity,tab:Tab?=null):LinearLayout {
+    /** Builds the frame and returns the content column. Call [band] at the top of every render. With a [tab], the bottom bar
+     * is shown with that tab marked; a tap on any tab (the marked one too, to go back to its list) goes to [onTab] (design G1:
+     * one Activity, [MainActivity], switches its screens itself; the tab bar never starts an Activity). */
+    fun page(a:Activity,tab:Tab?=null,onTab:(Tab)->Unit={}):LinearLayout {
         applyTheme(a)
         a.window.decorView.setBackgroundColor(PAGE)
         (a as? ComponentActivity)?.enableEdgeToEdge(if(night) SystemBarStyle.dark(PAGE) else SystemBarStyle.light(PAGE,PAGE),
@@ -121,7 +120,7 @@ internal object CallUi {
         root.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
         // The "되돌리기" bar lives here, just above the bottom bar, so it never covers what was just touched.
         root.addView(LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;tag="snack_holder";visibility=View.GONE;setPadding(dp(a,20),dp(a,8),dp(a,20),dp(a,8)) },LinearLayout.LayoutParams(-1,-2))
-        val bar=tab?.let { tabBar(a,it) }
+        val bar=tab?.let { tabBar(a,it,onTab) }
         if(bar!=null) root.addView(bar,LinearLayout.LayoutParams(-1,-2))
         // Insets: the strip takes the status bar, the bottom bar (or the scroll view) the navigation bar. Nothing is drawn under either bar.
         root.setOnApplyWindowInsetsListener { _,insets ->
@@ -130,9 +129,6 @@ internal object CallUi {
             if(bar!=null) bar.setPadding(0,dp(a,6),0,dp(a,6)+insets.systemWindowInsetBottom) else scroll.setPadding(0,0,0,insets.systemWindowInsetBottom)
             insets
         }
-        // Back from a main screen goes home; the screens with a detail view of their own add a callback that wins over this.
-        if(tab!=null && tab!=Tab.HOME && a is ComponentActivity)
-            a.onBackPressedDispatcher.addCallback(a,object:OnBackPressedCallback(true) { override fun handleOnBackPressed() { go(a,Tab.HOME) } })
         a.setContentView(root);return column
     }
 
@@ -153,34 +149,39 @@ internal object CallUi {
         holder.removeViewAt(0);holder.addView(band,0)
     }
 
-    private fun tabBar(a:Activity,current:Tab)=LinearLayout(a).apply {
+    private fun tabBar(a:Activity,current:Tab,onTab:(Tab)->Unit)=LinearLayout(a).apply {
         orientation=LinearLayout.HORIZONTAL;tag="bottom_bar"
         val wrap=this
         Tab.entries.forEach { t ->
-            val on=t==current;val color=if(on) INK else MUTED
             wrap.addView(Button(a).apply {
-                text=t.label;textSize=TAB;isAllCaps=false;stateListAnimator=null;setTextColor(color);tag=t.tag
+                text=t.label;textSize=TAB;isAllCaps=false;stateListAnimator=null;tag=t.tag
                 background=RippleDrawable(ColorStateList.valueOf(RIPPLE),null,ColorDrawable(Color.BLACK))
-                typeface=font(a,if(on) Weight.SEMIBOLD else Weight.MEDIUM)
-                setCompoundDrawablesWithIntrinsicBounds(null,icon(a,t.icon,color,26),null,null);compoundDrawablePadding=dp(a,2)
+                compoundDrawablePadding=dp(a,2)
                 minHeight=dp(a,60);minimumHeight=dp(a,60);minWidth=0;minimumWidth=0;setPadding(0,dp(a,4),0,dp(a,2))
-                contentDescription=if(on) "${t.label}, 지금 보는 화면" else t.label
-                setOnClickListener { if(!on) go(a,t) }
+                setOnClickListener { onTab(t) }
             },LinearLayout.LayoutParams(0,-2,1f))
         }
+        markTab(a,this,current)
         // The bar is a sheet with a hairline on top.
         background=android.graphics.drawable.LayerDrawable(arrayOf(GradientDrawable().apply { setColor(LINE) },GradientDrawable().apply { setColor(CARD) })).apply { setLayerInset(1,0,dp(a,1),0,0) }
     }
-    /** Switches main screens, reusing a screen that is already open (REORDER_TO_FRONT). Home is the bottom of the stack: going there closes
-     * everything above it, so back from home leaves the app. The only motion is the 120 ms fade from the theme. */
-    fun go(a:Activity,t:Tab) { a.startActivity(Intent(a,t.target).addFlags(flagsFor(t))) }
-    internal fun flagsFor(t:Tab)=if(t==Tab.HOME) Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP else Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-    /** Back out of a main screen: home. */
-    fun leave(a:Activity) { go(a,Tab.HOME) }
+    /** Marks [current] in the bottom bar (ink and semibold; the others muted), without building the bar again. */
+    fun markTab(a:Activity,bar:View?,current:Tab) {
+        val row=bar as? LinearLayout ?: return
+        Tab.entries.forEach { t ->
+            val b=row.findViewWithTag<Button>(t.tag) ?: return@forEach
+            val on=t==current;val color=if(on) INK else MUTED
+            b.setTextColor(color);b.typeface=font(a,if(on) Weight.SEMIBOLD else Weight.MEDIUM)
+            b.setCompoundDrawablesWithIntrinsicBounds(null,icon(a,t.icon,color,26),null,null)
+            b.contentDescription=if(on) "${t.label}, 지금 보는 화면" else t.label
+        }
+    }
 
     /** Scroll position of the page now, to put back after a screen is built again (so a list does not jump to the top). */
     fun scrollY(content:View):Int=scrollOf(content)?.scrollY ?: 0
     fun restoreScroll(content:View,y:Int) { val s=scrollOf(content) ?: return;if(y>0) s.post { s.scrollTo(0,y) } }
+    /** Puts the page at [y] now (0: the top, when another screen comes to the front). */
+    fun scrollTo(content:View,y:Int) { scrollOf(content)?.scrollTo(0,y) }
     private fun scrollOf(content:View):ScrollView? { var v:View?=content;while(v!=null) { if(v is ScrollView) return v;v=v.parent as? View };return null }
 
     // ---- text ---------------------------------------------------------------------------------------------------------

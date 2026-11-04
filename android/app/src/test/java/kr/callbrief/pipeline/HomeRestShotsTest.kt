@@ -26,13 +26,13 @@ import org.robolectric.annotation.SQLiteMode
 class HomeRestShotsTest:ProtectedTextHostTestBase() {
     private val out=System.getenv("IEUM_SHOTS_DIR")
     private fun idle() { repeat(30) { shadowOf(Looper.getMainLooper()).idle();Thread.sleep(10) } }
-    private fun shoot(name:String,f:HomeActivity.FirstPassView) {
-        val a=Robolectric.buildActivity(HomeActivity::class.java).setup().get()
+    private fun shoot(name:String,f:HomeScreen.FirstPassView) {
+        val a=launchMain(Screen.HOME)
         // Let the screen's own first read land (it shows the setup card here) before drawing the state to look at.
         var tries=0
         while(tries++<100 && a.window.decorView.findViewWithTag<View>("home_setup")==null) idle()
         idle()
-        a.render(HomeActivity.Snapshot(true,true,"READY",2,0,1,0,0,1_793_300_000_000,firstPass=f));idle()
+        a.home.render(HomeScreen.Snapshot(true,true,"READY",2,0,1,0,0,1_793_300_000_000,firstPass=f));idle()
         val dm=a.resources.displayMetrics;val w=dm.widthPixels;val h=dm.heightPixels
         val bmp=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888)
         val page=a.window.decorView
@@ -41,14 +41,14 @@ class HomeRestShotsTest:ProtectedTextHostTestBase() {
     }
     @Test fun restingOnBattery() {
         assumeTrue("set IEUM_SHOTS_DIR to take the pictures",!out.isNullOrBlank())
-        shoot("1_rest_battery",HomeActivity.FirstPassView(37,9.0,4,2,audioMinutesLeft=190,lowBattery=true))
-        shoot("2_rest_results",HomeActivity.FirstPassView(0,null,6,0,stalled=true))
-        shoot("3_running",HomeActivity.FirstPassView(37,9.0,4,2,audioMinutesLeft=190))
-        shoot("4_rest_battery_short",HomeActivity.FirstPassView(3,0.5,0,0,audioMinutesLeft=25,lowBattery=true,mailConnected=false))
+        shoot("1_rest_battery",HomeScreen.FirstPassView(37,9.0,4,2,audioMinutesLeft=190,lowBattery=true))
+        shoot("2_rest_results",HomeScreen.FirstPassView(0,null,6,0,stalled=true))
+        shoot("3_running",HomeScreen.FirstPassView(37,9.0,4,2,audioMinutesLeft=190))
+        shoot("4_rest_battery_short",HomeScreen.FirstPassView(3,0.5,0,0,audioMinutesLeft=25,lowBattery=true,mailConnected=false))
     }
     @Config(qualifiers="w393dp-h852dp-night-xxhdpi")
     @Test fun restingAtNight() {
         assumeTrue("set IEUM_SHOTS_DIR to take the pictures",!out.isNullOrBlank())
-        shoot("5_rest_battery_night",HomeActivity.FirstPassView(37,9.0,4,2,audioMinutesLeft=190,lowBattery=true))
+        shoot("5_rest_battery_night",HomeScreen.FirstPassView(37,9.0,4,2,audioMinutesLeft=190,lowBattery=true))
     }
 }
