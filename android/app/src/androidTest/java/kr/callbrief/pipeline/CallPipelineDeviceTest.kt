@@ -299,7 +299,7 @@ class CallPipelineDeviceTest {
             // New path: the bytes held as the app holds the vault copy, the real runner, a stand-in model.
             val key=CallTranscriptionStore.Key("device-test-long-$started",1,"a".repeat(64))
             val transcribed=ArrayList<Int>();var stopAt=7
-            val transcriber=CallTranscriber { _,pcm,_ -> transcribed+=pcm.size;Thread.sleep(150);listOf(CallTranscript.Segment(0,pcm.size*1000L/16000,"조각")) }
+            val transcriber=CallTranscriber { _,pcm,_ -> transcribed+=pcm.size;HeapPeak.held();Thread.sleep(150);listOf(CallTranscript.Segment(0,pcm.size*1000L/16000,"조각")) }
             val fake=object:PipelineSttModel { override val modelSha256="a".repeat(64);override val runtimeSha256="b".repeat(64);override val modelName="stand-in";override fun verifiedModelFile()=file }
             var info:PipelineAudioInfo?=null;var segments=0;var stopped=false;var resumedPieces=0
             val newPeak=HeapPeak.measure {
@@ -315,7 +315,7 @@ class CallPipelineDeviceTest {
             }
             val pieces=checkNotNull(info).chunks
             result.put("pieces",pieces).put("segments",segments).put("vadApplied",info!!.vadApplied).put("durationMs",info!!.durationMs)
-                .put("stoppedOnce",stopped).put("piecesAfterResume",resumedPieces).put("newPeakMb",newPeak/1048576.0)
+                .put("stoppedOnce",stopped).put("piecesAfterResume",resumedPieces).put("newPeakMb",newPeak/1048576.0).put("newSampledMb",HeapPeak.lastSampled/1048576.0)
             Log.i("IEUM_HEAP","long call new path peak ${newPeak/1048576} MB for $minutes min, $pieces pieces")
             // The v2.3 way, for comparison (it may run out of memory: that counts as the whole heap).
             var oldOom=false
@@ -336,17 +336,26 @@ class CallPipelineDeviceTest {
         } finally { file.delete() }
     }
 
-    /** Peak live Java heap above the start while [block] runs: every 100 ms the sampler collects garbage first, so the number
-     * is what the code holds, not what it has let go of and the collector has not reached yet (raw "used" counted that, and
-     * the two-pass decoder lets go of a lot: 101 MB raw for 30 minutes, nearly all garbage). */
+    /** Peak live Java heap above the start while [block] runs. The number compared is taken where the app needs memory
+     * most, while a piece is being transcribed: the stand-in transcriber calls [held], which collects garbage on the decoding
+     * thread itself, so nothing is being allocated meanwhile and the number is exactly what the code holds (the vault copy,
+     * the chunker's buffer, the piece). A sampler thread also collects every 100 ms and its peak is kept as [lastSampled]
+     * for the log only: with the decoder allocating meanwhile it counts garbage made during each collection (98 MB
+     * sampled on the emulator for 30 minutes). For a block that never calls [held] (the old way) the sampled peak is used. */
     private object HeapPeak {
         private fun used()=Runtime.getRuntime().let{it.totalMemory()-it.freeMemory()}
+        private val heldPeak=java.util.concurrent.atomic.AtomicLong(-1)
+        @Volatile var lastSampled=0L;private set
+        fun held(){ if(heldPeak.get()<0)return;System.gc();System.runFinalization();System.gc();heldPeak.accumulateAndGet(used(),::maxOf) }
         fun measure(block:()->Any?):Long {
             repeat(3){System.gc();System.runFinalization()};Thread.sleep(200)
             val base=used();val peak=java.util.concurrent.atomic.AtomicLong(base);val running=java.util.concurrent.atomic.AtomicBoolean(true)
+            heldPeak.set(0)
             val sampler=Thread{ while(running.get()){ System.gc();peak.accumulateAndGet(used(),::maxOf);Thread.sleep(100) } }.apply{isDaemon=true;start()}
             try { block() } finally { running.set(false);sampler.join() }
-            System.gc();return maxOf(0L,maxOf(peak.get(),used())-base)
+            System.gc();lastSampled=maxOf(0L,maxOf(peak.get(),used())-base)
+            val h=heldPeak.getAndSet(-1)
+            return if(h>0) maxOf(0L,h-base) else lastSampled
         }
     }
 
