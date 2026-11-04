@@ -1,5 +1,7 @@
 package kr.callbrief.pipeline
 
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
@@ -67,8 +69,15 @@ class MainActivity:ComponentActivity() {
 
     // Results come back to the Activity; the screen in front reads again (the folder, a permission).
     internal val pickFolder=registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
-        if(r.resultCode==RESULT_OK) CallFolder.save(this,r.data)?.let { Toast.makeText(this,it,Toast.LENGTH_LONG).show() }
-        current.enter()
+        if(r.resultCode!=RESULT_OK) { current.enter();return@registerForActivityResult }
+        // The folder check reads the tree: off the main thread (review #21); the screen draws again when it is done.
+        val data=r.data
+        lifecycleScope.launch {
+            val words=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { CallFolder.save(this@MainActivity,data) }.getOrNull() }
+            if(isFinishing||isDestroyed) return@launch
+            words?.let { Toast.makeText(this@MainActivity,it,Toast.LENGTH_LONG).show() }
+            current.enter()
+        }
     }
     internal val askNotify=registerForActivityResult(ActivityResultContracts.RequestPermission()) { current.enter() }
     internal val askSms=registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
