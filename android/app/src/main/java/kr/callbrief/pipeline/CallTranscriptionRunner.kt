@@ -87,12 +87,18 @@ internal class CallTranscriptionRunner(
     private val holdOld:(CallTranscriptionStore.Candidate)->Boolean={false},
     /** The first-pass start while it runs: older recordings are done after newer ones, oldest first. */
     private val oldBefore:()->Long?={null},
+    /** True when the stop is the system's work time limit (about 10 minutes), not a cancel or a constraint (review #12). */
+    private val timeLimited:()->Boolean={false},
 ) {
     data class Pass(val state:String,val done:Int,val failed:Int,val pieces:Int=0)
     /** The worker was told to stop; finished pieces are kept for the next run. */
     internal class Stopped:RuntimeException("ANDROID_STT_STOPPED")
     /** Pieces finished in this run (also when it ends stopped). */
     private var pieces=0
+    /** Pieces of the current recording finished in this run: a time-limit stop after progress is no stall (review #12). */
+    private var recordingPieces=0
+    /** The last stop of [transcribeRecording] came after progress at the time limit (an hour-long call needs ~10 runs). */
+    internal var lastStopHarmless=false;private set
 
     /** One recording through the model. F6: pieces come one at a time from the decoder and each is transcribed before the
      * next is decoded, so a long call never sits in memory whole. Pieces finished earlier ([CallTranscriptionStore.parts])
@@ -101,15 +107,22 @@ internal class CallTranscriptionRunner(
         val segments=mutableListOf<CallTranscript.Segment>()
         val finished=store.parts(key) // pieces finished before the worker was stopped last time
         var session:CallTranscriber.Session?=null // the model is loaded on the first piece that needs it and closed below, whatever happens
+        recordingPieces=0;lastStopHarmless=false
+        // A stop is counted against the piece only when it is no time-limit stop after progress (review #12).
+        fun stop(stallId:Int):Nothing {
+            lastStopHarmless=harmlessStop(timeLimited(),recordingPieces)
+            if(!lastStopHarmless)store.noteStall(key,stallId)
+            throw Stopped()
+        }
         // One piece: skipped when finished earlier; a stop while it runs is counted against [stallId] (the whole chunk).
         fun piece(partId:Int,stallId:Int,offset:Long,pcm:FloatArray):List<CallTranscript.Segment> {
             finished[partId]?.let { return it }
-            if(stopped())throw Stopped()
+            if(stopped()){lastStopHarmless=harmlessStop(timeLimited(),recordingPieces);throw Stopped()} // not started: no stall
             val raw=try { (session ?: transcriber.open(file,stopped).also{session=it}).transcribe(pcm,stopped) }
-                catch(e:Exception) { if(stopped()){store.noteStall(key,stallId);throw Stopped()};throw e } // cancel() ends the native run with an error
-            if(stopped()){store.noteStall(key,stallId);throw Stopped()} // a piece cut short is not kept
+                catch(e:Exception) { if(stopped())stop(stallId);throw e } // cancel() ends the native run with an error
+            if(stopped())stop(stallId) // a piece cut short is not kept
             val shifted=raw.map { CallTranscript.Segment(it.startMs+offset,it.endMs+offset,it.text) }
-            store.savePart(key,partId,shifted);pieces++;return shifted
+            store.savePart(key,partId,shifted);pieces++;recordingPieces++;return shifted
         }
         try {
             val info=audio.decode(input,mime) { index,offset,pcm ->
@@ -127,8 +140,9 @@ internal class CallTranscriptionRunner(
     }
 
     /** A stopped run gives its attempt back, unless the recording keeps stalling: then the attempt counts and, at the limit, it fails. */
-    private fun endStopped(k:CallTranscriptionStore.Key) {
-        val refund=refundStop(store.totalStalls(k))
+    internal fun endStopped(k:CallTranscriptionStore.Key) {
+        // A time-limit stop after progress always gives the attempt back: a long call is not "stalled" (review #12).
+        val refund=lastStopHarmless || refundStop(store.totalStalls(k))
         if(!refund&&store.attempts(k)>=MAX_ATTEMPTS)store.finish(k,"FAILED","STALLED") else store.finish(k,"QUEUED","STOPPED",refundAttempt=refund)
     }
 
@@ -144,6 +158,7 @@ internal class CallTranscriptionRunner(
             val c=job.candidate
             if(holdOld(c))return Pass("WAIT_POWER",done,failed) // new ones come first: everything after this is old too
             if(!store.claim(c.key))return@repeat
+            lastStopHarmless=false
             try {
                 val started=now()
                 val (decoded,segments)=read(c).use { input -> transcribeRecording(c.key,input,c.mime,file) }
@@ -175,6 +190,10 @@ internal class CallTranscriptionRunner(
         /** From this many stops on one recording the stopped attempt is no longer refunded, so it ends in FAILED instead of looping. */
         const val MAX_REFUNDED_STALLS=6
         fun refundStop(totalStalls:Int)=totalStalls<MAX_REFUNDED_STALLS
+        /** A stop at the work time limit after at least one piece of the recording was finished in this run. */
+        fun harmlessStop(timeLimited:Boolean,piecesThisRun:Int)=timeLimited && piecesThisRun>0
+        /** Without a stop reason (before Android 12): a stop this long after the start is taken as the 10 minute limit. */
+        const val TIME_LIMIT_NEAR_MS=9*60_000L
         /** Queue the next pass at once only when this one made progress; otherwise the hourly job takes over. */
         fun requeueNow(state:String,pieces:Int)=state=="MORE"||(state=="STOPPED"&&pieces>0)
         /** The same piece stopped this many times in a row is halved; not worth halving under ten seconds. */
@@ -217,6 +236,7 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
         val model=PipelineModelManager(storage)
         if(model.verifiedModelFile()==null){PipelineModelDownloadWork.enqueue(applicationContext);return Result.success()}
         val settings=SecureSettings(storage)
+        val began=android.os.SystemClock.elapsedRealtime()
         return try {
             GeneralLocalStore(storage).use { local -> CallTranscriptionStore(storage).use { store ->
                 val pass=CallTranscriptionRunner(store,model,PipelineAudioDecoder(channels={ r -> settings.update{ PipelineAudioDecoder.accumulate(it,r) } }),WhisperCallTranscriber(AndroidWhisperEngine(storage).also { engine=it },model,threadSource={ TranscriptionThreads.current(storage) }),
@@ -228,13 +248,20 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                     cleanedCount={ n -> settings.update{ it.put(PipelineSettingsKeys.TRANSCRIPT_CLEANED,it.optLong(PipelineSettingsKeys.TRANSCRIPT_CLEANED,0)+n) } },
                     speed={ ms -> settings.update{ it.put(PipelineSettingsKeys.LAST_MS_PER_AUDIO_MINUTE,ms).put(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,System.currentTimeMillis()) } },
                     holdOld={ c -> FirstPass.isOld(c.startedAtMs ?: c.modifiedMs,settings.snapshot()) && !FirstPass.powerOk(applicationContext) },
-                    oldBefore={ settings.snapshot().let { s -> FirstPass.start(s).takeUnless { FirstPass.done(s) } } }
+                    oldBefore={ settings.snapshot().let { s -> FirstPass.start(s).takeUnless { FirstPass.done(s) } } },
+                    timeLimited={ timeLimitStop(began) }
                 ).run()
                 // Stopped part way: queue the next pass at once (the finished pieces are kept) instead of waiting for the hourly one.
                 if(CallTranscriptionRunner.requeueNow(pass.state,pass.pieces))enqueue(applicationContext)
                 Result.success()
             } }
         } catch(_:Exception) { if(runAttemptCount<3)Result.retry() else Result.failure() }
+    }
+
+    /** The system's time limit stopped the work: its own reason on Android 12 and later, else a run near the 10 minute limit. */
+    private fun timeLimitStop(beganElapsed:Long):Boolean {
+        if(android.os.Build.VERSION.SDK_INT>=31) runCatching { if(stopReason==androidx.work.WorkInfo.STOP_REASON_TIMEOUT) return true }
+        return android.os.SystemClock.elapsedRealtime()-beganElapsed>=CallTranscriptionRunner.TIME_LIMIT_NEAR_MS
     }
 
     /** The vault's verified stream read once into one array of the recording's size (no growing buffer, no second copy),
