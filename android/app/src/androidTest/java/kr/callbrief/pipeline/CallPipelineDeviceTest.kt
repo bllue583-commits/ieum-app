@@ -11,6 +11,8 @@ import kr.callbrief.AndroidWhisperEngine
 import kr.callbrief.SecureSettings
 import org.json.JSONObject
 import org.junit.Assert.*
+import org.junit.Assume.assumeTrue
+import org.junit.After
 import org.junit.FixMethodOrder
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -19,12 +21,28 @@ import java.io.File
 
 /** Real-device check of the lean pipeline with public audio only:
  * model download -> Korean Whisper speed -> transcript stored -> screens render (screenshots).
- * Results go to logcat (tag IEUM_RESULT) and to <external files>/device-test/. */
+ * Results go to logcat (tag IEUM_RESULT) and to <external files>/device-test/.
+ *
+ * Instrumentation argument `model`: `large` (default, the app's pinned model; Firebase real devices) or `small`
+ * (the quick emulator run: a pinned 60 MB multilingual model that only shows Korean text comes out; the speed test is skipped).
+ * Either model goes through the app's own [PipelineModelManager] size + SHA-256 check. The CI runner may write its cached
+ * copy in place as the finished partial download (tools/run_device_test.sh, run-as); the same check runs on it. */
 @RunWith(AndroidJUnit4::class)
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
 class CallPipelineDeviceTest {
     /** The emulator runs the large model about 60x slower than a phone; one-piece device tests need the old 30-minute limit. */
     private val TEST_DEADLINE=1800
+
+    private val args get()=InstrumentationRegistry.getArguments()
+    private val large get()=args.getString("model") != "small"
+    private val spec get()=if(large) PipelineModelManager.Spec.DEFAULT else SMALL_MODEL
+    private fun model()=PipelineModelManager(storage,spec=spec)
+
+    /** Quick run: the app schedules its own (large) model download when it finds none; stop it so 574 MB does not
+     * download in the background while the screens are captured. */
+    @After fun stopLargeDownloadInQuickRun() {
+        if(!large)runCatching{androidx.work.WorkManager.getInstance(context).cancelUniqueWork(PipelineModelDownloadWork.UNIQUE_NAME)}
+    }
 
     private val inst get()=InstrumentationRegistry.getInstrumentation()
     private val context get()=inst.targetContext
@@ -35,15 +53,22 @@ class CallPipelineDeviceTest {
     private fun publicKorean():FloatArray=PipelineAudioMath.decodeWav(context.assets.open("local-stt/public-ko.wav").use{it.readBytes()}).chunks.flatMap{it.second.asList()}.toFloatArray()
 
     @Test fun t1_modelDownloadsAndVerifies() {
-        val model=PipelineModelManager(storage)
+        val model=model()
         val started=System.currentTimeMillis()
-        var result=PipelineModelManager.Result.RETRY
-        repeat(6){ i -> if(result==PipelineModelManager.Result.RETRY){ if(i>0)Thread.sleep(15_000L*i);result=model.download() } }
+        val seeded=seedFromRunnerCache(model)
+        fun download():PipelineModelManager.Result {
+            var result=PipelineModelManager.Result.RETRY
+            repeat(6){ i -> if(result==PipelineModelManager.Result.RETRY){ if(i>0)Thread.sleep(15_000L*i);result=model.download() } }
+            return result
+        }
+        var result=download()
+        // A bad cached copy fails the hash check and is deleted; fetch it from the network then.
+        if(seeded=="runner copy"&&result==PipelineModelManager.Result.FAILED)result=download()
         // Why a download did not finish (HTTP code or network error), for the report.
         val probe=if(result==PipelineModelManager.Result.READY) "" else runCatching {
-            okhttp3.OkHttpClient().newCall(okhttp3.Request.Builder().url(PipelineModelManager.Spec.DEFAULT.url).head().build()).execute().use { "HTTP ${it.code}" }
+            okhttp3.OkHttpClient().newCall(okhttp3.Request.Builder().url(spec.url).head().build()).execute().use { "HTTP ${it.code}" }
         }.getOrElse { it.javaClass.simpleName+": "+it.message }
-        report("t1_model",JSONObject().put("result",result.name).put("probe",probe).put("seconds",(System.currentTimeMillis()-started)/1000).put("state",model.state())
+        report("t1_model",JSONObject().put("model",spec.name).put("cache",seeded).put("result",result.name).put("probe",probe).put("seconds",(System.currentTimeMillis()-started)/1000).put("state",model.state())
             .put("abi",android.os.Build.SUPPORTED_ABIS.first()).put("device",android.os.Build.MODEL).put("sdk",android.os.Build.VERSION.SDK_INT))
         assertEquals(PipelineModelManager.Result.READY,result)
         assertNotNull(model.verifiedModelFile())
@@ -52,13 +77,14 @@ class CallPipelineDeviceTest {
     /** Speed on speech only (6 threads, then 8), then on a call-like recording with 4 s pauses between sentences,
      * which the silence skipping should shorten. */
     @Test fun t2_koreanSpeedWithLargeModel() {
-        val model=PipelineModelManager(storage);val file=checkNotNull(model.verifiedModelFile())
-        val repeat=InstrumentationRegistry.getArguments().getString("repeat")?.toIntOrNull() ?: 3
+        if(!large)report("t2_speed",JSONObject().put("skipped","model=small (quick run)"))
+        assumeTrue("speed is measured with the large model only",large)
+        val model=model();val file=checkNotNull(model.verifiedModelFile())
+        val repeat=args.getString("repeat")?.toIntOrNull() ?: 3
         val one=publicKorean();val pcm=FloatArray(one.size*repeat){one[it%one.size]}
         val audioMs=pcm.size*1000L/16000
         val result=JSONObject().put("audioSeconds",audioMs/1000.0).put("cores",Runtime.getRuntime().availableProcessors()).put("device",android.os.Build.MODEL)
         var text=""
-        val args=InstrumentationRegistry.getArguments()
         val variants=(args.getString("threads") ?: "6,8").split(',').mapNotNull{it.trim().toIntOrNull()}
         for(threads in variants) {
             val started=System.currentTimeMillis()
@@ -85,7 +111,7 @@ class CallPipelineDeviceTest {
 
     /** The transcription side hands a real transcript to the app's sink; without a key the call waits, plainly worded. */
     @Test fun t3_transcriptReachesTodayScreen() {
-        val model=PipelineModelManager(storage);val file=checkNotNull(model.verifiedModelFile())
+        val model=model();val file=checkNotNull(model.verifiedModelFile())
         val decoded=PipelineAudioDecoder().decode(context.assets.open("local-stt/public-ko.wav").use{it.readBytes()},"audio/wav")
         val segments=decoded.chunks.flatMap{(offset,pcm)->WhisperCallTranscriber(AndroidWhisperEngine(storage),model,deadlineSeconds=TEST_DEADLINE).transcribe(file,pcm){false}
             .map{CallTranscript.Segment(it.startMs+offset,it.endMs+offset,it.text)}}
@@ -118,7 +144,7 @@ class CallPipelineDeviceTest {
 
     /** Samsung recordings are m4a/AAC at 44.1 kHz: MediaCodec decode, resample, transcribe. */
     @Test fun t3b_m4aRecordingDecodesAndTranscribes() {
-        val model=PipelineModelManager(storage);val file=checkNotNull(model.verifiedModelFile())
+        val model=model();val file=checkNotNull(model.verifiedModelFile())
         val decoded=PipelineAudioDecoder().decode(inst.context.assets.open("public-ko.m4a").use{it.readBytes()},"audio/mp4")
         val text=decoded.chunks.flatMap{(_,pcm)->WhisperCallTranscriber(AndroidWhisperEngine(storage),model,deadlineSeconds=TEST_DEADLINE).transcribe(file,pcm){false}}.joinToString(""){it.text}.trim()
         report("t3b_m4a",JSONObject().put("durationMs",decoded.durationMs).put("chunks",decoded.chunks.size).put("text",text.take(200)))
@@ -166,5 +192,21 @@ class CallPipelineDeviceTest {
         val lines=posted?.notification?.extras?.getCharSequence(android.app.Notification.EXTRA_BIG_TEXT)?.toString()?.lines().orEmpty()
         report("t5_notification",JSONObject().put("posted",posted!=null).put("title",message.title).put("lines",org.json.JSONArray(lines)))
         assertNotNull("morning notification not shown",posted);assertTrue(lines.any{it.contains("견적서")})
+    }
+
+    /** For the report: where the model came from. A full-size partial file is the runner's cached copy;
+     * [PipelineModelManager.download] checks its size and SHA-256 before publishing it, exactly as for a network download. */
+    private fun seedFromRunnerCache(model:PipelineModelManager):String = when {
+        model.verifiedModelFile()!=null -> "present"
+        model.partFile.isFile&&model.partFile.length()==spec.bytes -> "runner copy"
+        else -> "network"
+    }
+
+    private companion object {
+        /** Quick-run model: whisper.cpp multilingual base, q5_1. Pinned from huggingface.co/ggerganov/whisper.cpp
+         * (file size and LFS SHA-256), the same source as the app's own model. Tests only; the app never uses it. */
+        val SMALL_MODEL=PipelineModelManager.Spec("ggml-base-q5_1",59707625L,
+            "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin")
     }
 }
