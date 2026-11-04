@@ -78,7 +78,7 @@ class ClaudeCallAnalyzerTest {
 
     @Test fun rulesV4CarryTheNewWordingWithTheKeptExceptions() {
         val sys=ClaudeCallAnalyzer.SYSTEM
-        assertEquals(5,ClaudeCallAnalyzer.PROMPT_VERSION)
+        assertEquals(6,ClaudeCallAnalyzer.PROMPT_VERSION)
         listOf("speakerNotes","줄바꿈은 말이 끊긴 자리일 뿐 화자가 바뀐 표시가 아닙니다","(숫자 확인 필요)","\"다음 주 초\"는 다음 주 월요일","\"내일모레\"는 이틀 뒤",
             "호칭(과장, 소장, 님)은 이름에 붙이지 말고 role","[이 번호를 쓰는 사람들]","[통화 방향]","\"첨부: 견적서.pdf\"",
             "certainty \"sure\"","<transcript>","<texts>").forEach { assertTrue(it,sys.contains(it)) }
