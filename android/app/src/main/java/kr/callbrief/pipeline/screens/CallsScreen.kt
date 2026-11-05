@@ -24,8 +24,6 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
         const val SEARCH_WAIT_MS=250L
         /** A call-log line within this of a recording's time is that recording. */
         const val NEAR_MS=2*60_000L
-        /** An answered call this recent, with the recording folder connected, is still being turned into text. */
-        const val FRESH_MS=12*3_600_000L
         /** A call waiting this long for its result says it is late. */
         const val LATE_MS=6*3_600_000L
         const val TRANSCRIBING="녹음을 글자로 바꾸는 중이에요"
@@ -57,13 +55,6 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
             val starts=calls.filter { it.kind=="통화" }.mapNotNull { it.startedMs }
             if(starts.isEmpty()) return logs
             return logs.filterNot { e -> !e.personal && e.kind==FirstPass.LogKind.NO_RECORDING && starts.any { Math.abs(it-e.startMs)<=NEAR_MS } }
-        }
-        /** An answered or made call with no record yet that is being turned into text: a transcription job of that time
-         * (within [NEAR_MS]), or, without one, a call of the last [FRESH_MS] while the recording folder is connected. */
-        internal fun transcribing(e:LoggedCall,now:Long,folder:Boolean,jobStarts:List<Long>):Boolean {
-            if(e.personal || e.kind!=FirstPass.LogKind.NO_RECORDING) return false
-            if(jobStarts.any { Math.abs(it-e.startMs)<=NEAR_MS }) return true
-            return folder && now-e.startMs in 0 until FRESH_MS
         }
         /** A record's state in plain words (design r8-4): being sorted out, late after [LATE_MS], or a recording with no
          * speech in it, which trying again cannot change. */

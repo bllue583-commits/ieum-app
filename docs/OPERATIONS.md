@@ -6,7 +6,7 @@
 
 ```
 폰: 통화 녹음 발견 → 폰 안에서 자막 → 우편함 inbox/ 에 요청 (녹음은 폰 밖으로 안 나감)
-예약 작업(매시간): 요청 분석 → results/ 에 결과, ledger/ledger.json 장부 고침, status/last-run.json 자가 보고
+예약 작업(매시간): 요청 분석 → results/ 에 결과, ledger/ledger.json 장부 고침, status/last-run-hourly.json 자가 보고 → 워치독(루틴 안)
 폰(매시간 틱): 장부 받기 → 결과 적용 후 결과 파일 지움 → 새 요청 올림 → status/phone.json 하트비트
 폰(밤 21~05시, 하루 한 번): tidy/state.json 올림
 예약 작업(새벽): 장부 정리 + tidy/proposal.json 제안 → 폰이 받아 체크할 일에 반영
@@ -18,13 +18,13 @@
 
 | 이름 | 시각(한국) | 모델 | 지시문 원본 | 기억 파일 | 하는 일 |
 |---|---|---|---|---|---|
-| 이음 통화 분석 (매시간) | 매시 30분 | Sonnet 5.5 | `docs/routines/hourly.md`(v5)의 "---" 아래 | `status/last-run.json` | inbox 요청 분석, 결과 쓰기, 장부 고치기, 세 줄 보고 |
-| 이음 새벽 정리 (매일) | 05:16 | Opus 5.5 | `docs/routines/tidy.md`의 "---" 아래 | `tidy/project.md`, `tidy/history/YYYY-MM.md`, `tidy/briefing.md` | 진행 중인 일 묶기, 팔로업 제안, 중복 합치기, 현황 파일과 다섯 줄 알림. 폰이 처음 정리를 끝낸 뒤 밤에 올리는 `tidy/state.json`이 있어야 일을 한다(그 전에는 "정리할 것 없음"이 정상) |
+| 이음 통화 분석 (매시간) | 07:34~22:34 매시 34분(하루 16번) | Sonnet 5.5 | `docs/routines/hourly.md`(v8)의 "---" 아래 | `status/last-run-hourly.json` | inbox 요청 분석(한 실행 20건까지), 결과 쓰기, 장부 고치기, 자가 보고, 워치독, 세 줄 보고 |
+| 이음 새벽 정리 (매일) | 05:16 | Opus 5.5 | `docs/routines/tidy.md`(v6)의 "---" 아래 | `tidy/project.md`, `tidy/history/YYYY-MM.md`, `tidy/briefing.md`, 자가 보고 `status/last-run-tidy.json` | 진행 중인 일 묶기, 팔로업 제안, 중복 합치기, 현황 파일과 다섯 줄 알림. 폰이 처음 정리를 끝낸 뒤 밤에 올리는 `tidy/state.json`이 있어야 일을 한다(그 전에는 "정리할 것 없음"이 정상) |
 | 이음 통화 목록 검증 (매일) | 09:00 | Opus 5.5 | 예약 작업 프롬프트가 원본 | `status/verify-log.md`(숫자만) | 폰 통화기록(`status/calllog.txt`)과 저장·분석 결과 대조, 검증 파일과 다섯 줄 알림 |
 
 - 지시문을 바꿀 때: 이 저장소의 원본 파일을 먼저 고친다 → 예약 작업 프롬프트에 "---" 아래 전문을 붙여 넣는다 → 이름, 시각, 링크를 사용자에게 알린다. 매시간 지시문의 [분석 규칙]과 [결과 형식]은 앱 코드(`ClaudeCallAnalyzer.SYSTEM`, `SCHEMA`)와 같아야 하며 `RoutineDocTest`가 검사한다. 규칙을 바꾸면 `ClaudeCallAnalyzer.PROMPT_VERSION`과 지시문 버전을 함께 올린다.
 - 실행 확인: claude.ai의 예약 작업 화면에서 실행 기록을 본다. 실행 로그에는 통화 내용이 남지 않게 지시돼 있다. 빈 실행은 "새 기록 없음" 한 줄로 끝나는 것이 정상이다.
-- 우편함에서 확인: 매시간 작업이 처리하면 커밋 "analyze N calls", 새벽 정리는 "tidy", 할 일이 없었으면 "status"가 생긴다. 어느 경우든 `status/last-run.json`이 새로 써진다.
+- 우편함에서 확인: 매시간 작업이 처리하면 커밋 "analyze N calls", 새벽 정리는 "tidy"가 생기고, 어느 경우든(할 일이 없었어도) 그 뒤에 자가 보고만 담은 "status" 커밋이 따로 생긴다(매시간 `status/last-run-hourly.json`, 새벽 `status/last-run-tidy.json`). 루틴이 저장소에 닿지 못하면 처리하지 않고 "확인 필요: 저장소 접근"으로 답하고 끝난다. 예약 작업 알림은 "확인 필요" 답일 때만 의미가 있다.
 - 종단 시험: 앱 저장소의 `inbox-e2e`를 수동 실행(또는 그 파일 push)하면 `inbox/selftest-<번호>.json`을 넣고, 매시 40분(07:40~23:40)에 결과를 폰과 같은 파서로 검증한 뒤 지운다. 예약 작업은 이 요청으로 장부를 고치지 않고, 폰은 `selftest-` 결과를 무시한다.
 - 두 작업과 개발 세션은 같은 Claude 구독 한도를 쓴다. 한도에 걸리면 실행이 몇 초 만에 실패하고, 한도가 풀린 뒤 다음 실행이 밀린 요청을 이어서 처리한다.
 
@@ -42,7 +42,7 @@
 | `tidy/state.json`, `tidy/proposal.json` | 폰 / 새벽 정리 | 새벽 정리의 입력과 제안 |
 | `status/phone.json` | 폰 | 하트비트 |
 | `status/calllog.txt` | 폰 | 통화 목록 대조표(이름·번호 포함, 4절) |
-| `status/last-run.json` | 예약 작업 | 마지막 실행의 자가 보고 |
+| `status/last-run-hourly.json`, `status/last-run-tidy.json` | 예약 작업 | 루틴별 마지막 실행의 자가 보고(v3.4부터). 옛 `status/last-run.json`은 v3.3까지의 것으로 더 쓰지 않는다 |
 | `app/version.json`, 릴리스 | release-apk | 최신 APK 정보와 파일(최근 3개만 남김) |
 
 우편함 파일을 직접 볼 때도 자막, 문자 원문, 장부 내용을 터미널이나 대화에 옮기지 않는다. 상태 확인은 아래 두 상태 파일과 파일 개수, 시각만으로 한다.
@@ -97,8 +97,8 @@
 - 한 줄: `MM-DD HH:MM | 종류(받은/건/부재중/거절/기타) | 통화 m분 s초 | 전화부 이름(없으면 -) | 번호 전체 | 앱 저장 O/X | 녹음 O/X | 분석 완료/대기/개인/없음 | 기록 id`. 기록 id는 그 기록의 우편함 파일 이름(inbox/, results/의 해시) 앞 8자라 요청·결과 파일과 바로 맞춰 볼 수 있다(기록 id 원문에는 번호가 들 수 있어 쓰지 않음).
 - 이 파일 내용은 대화나 터미널 출력에 옮기지 않는다. 확인은 GitHub 화면이나 예약 작업이 하고, 보고에는 건수만 쓴다.
 
-### status/last-run.json (예약 작업 자가 보고)
-한 줄 JSON이며 마지막으로 끝난 작업(매시간 또는 새벽)의 것이다.
+### status/last-run-hourly.json, status/last-run-tidy.json (예약 작업 자가 보고)
+v3.4부터 루틴마다 파일이 하나다(새벽 정리가 매시간 분석의 상태를 덮어쓰지 않게). 한 줄 JSON이고 결과 커밋과 따로 "status" 커밋으로 올라온다. 옛 `status/last-run.json`은 v3.3까지 두 루틴이 함께 쓰던 것으로, 워치독과 폰은 새 파일이 없을 때만 읽는다. 자세한 형식은 `docs/routines/self-report.md`와 각 지시문의 "마지막 단계".
 
 | 키 | 뜻 |
 |---|---|
@@ -107,15 +107,18 @@
 | `processed`, `skipped`, `failed`, `batches` | 매시간: 결과를 만든 항목 수, 건너뛴 수, 실패 수, 읽은 요청 파일 수. 새벽: 읽은 기록 수, 건너뛴 수, 실패 수, 제안 항목 수 |
 | `model`, `limitHit` | 쓴 모델, 사용 한도 오류를 만났는지 |
 | `ledgerRev` | 이번에 쓴 장부 rev |
-| `promptVersion`, `promptMismatch` | 매시간 지시문 버전, 요청의 버전이 달랐는지(폰 업데이트 전 과도기 버전은 제외) |
+| `promptVersion`, `promptMismatch` | 지시문 버전, 요청의 버전이 달랐는지(폰 업데이트 전 과도기 버전은 제외) |
 | `loggedTranscript` | 항상 false여야 한다 |
+| `repoOk`, `pushed` | 시작할 때 저장소를 받았는지(pull), 결과 커밋을 push했는지(결과가 없었으면 true) |
+| `leftover` (매시간) | 한 실행 처리 상한 20건 때문에 다음 실행으로 남긴 요청 파일 수 |
+| `cron` 또는 `crons` (매시간) | 예약 작업의 실제 cron. 폰이 결과를 가져갈 시각(다음 예정 실행 +3, +8, +15분)을 정하고 워치독이 빠진 실행을 센다 |
 
-읽는 순서: `endedMs`가 최근인가 → `limitHit`가 true면 한도 → inbox에 파일이 있는데 `processed`가 0이면 작업이 일을 안 함 → `promptMismatch`가 true면 폰과 지시문 버전이 어긋남.
+읽는 순서: `status/last-run-hourly.json`의 `endedMs`가 직전 예정 슬롯 뒤인가 → `pushed`가 false면 저장소 쓰기 문제 → `limitHit`가 true면 한도 → inbox에 파일이 있는데 `processed`가 0이면 작업이 일을 안 함(`leftover`가 있으면 다음 실행이 이어서 함) → `promptMismatch`가 true면 폰과 지시문 버전이 어긋남. 폰도 `endedMs`를 설정 키 `routineEndedMs`로 받아 신호등 "분석" 줄에 쓴다(예정 실행을 2회 놓치면 주황).
 
-### 워치독 (ieum-inbox의 감시)
-11/5 설치 완료(ieum-inbox 커밋 2d121ae, 첫 수동 실행 41853205350 이상 0건). 아래 설치 절차는 다시 설치할 때만 쓴다.
+### 워치독 (루틴 안에서 도는 감시)
+v3.4(11/6)부터 워치독은 Actions가 아니라 두 예약 작업 안에서 돈다. 매시간 분석과 새벽 정리가 자가 보고를 push한 뒤 마지막 단계로 `python3 tools/watchdog.py --root . --apply bllue583-commits/ieum-inbox --out /tmp/ieum-watchdog-plan.json`을 실행한다. 예전 ieum-inbox의 Actions 워치독(`.github/workflows/watchdog.yml`, 3시간마다)은 비공개 저장소 Actions 결제 실패로 11/5 03:40부터 8회 연속 시작하지 못해 지웠고, 앱 저장소의 사본 `tools/inbox/watchdog.yml`도 지웠다.
 
-원본은 이 저장소의 `tools/inbox/watchdog.yml`, `watchdog.py`, 시험은 `test_watchdog.py`(ci가 돌림)다. ieum-inbox에 설치하면 3시간마다(그리고 수동 실행 때) 아래 규칙으로 검사해 문제마다 라벨 `ieum-watch` 이슈를 하나 만들고, 같은 제목의 열린 이슈가 있으면 댓글도 달지 않으며, 정상으로 돌아오면 "정상으로 돌아왔어요." 댓글과 함께 닫는다.
+원본은 이 저장소의 `tools/inbox/watchdog.py`, 시험은 `test_watchdog.py`(ci가 돌림)다. 배포 때 ieum-inbox의 `tools/watchdog.py`로 복사한다. 아래 규칙으로 검사해 문제마다 라벨 `ieum-watch` 이슈를 `gh api`(REST)로 하나 만들고, 같은 제목의 열린 이슈가 있으면 댓글도 달지 않으며, 정상으로 돌아오면 "정상으로 돌아왔어요." 댓글과 함께 닫는다. 새 이슈가 있으면 루틴 답 첫 줄이 "확인 필요: 감시 이슈 n건"이 된다. gh 인증이 없는 등 명령이 실패하면 루틴은 그 단계만 건너뛴다. 루틴 자체가 멈추면 워치독도 멈추므로 폰 신호등 "분석" 줄이 둘째 눈이다.
 
 | 이슈 제목 | 조건 |
 |---|---|
@@ -125,17 +128,21 @@
 | 자막이 밀려요 | `oldestQueuedMs`가 6시간 넘음. 단 처음 정리 중(`firstPass.done=false`)에는 옛 녹음이 대기열에 오래 있는 것이 정상이라, 남은 자막이 있는데 마지막 자막(`lastTranscribedMs`)이 24시간 넘었을 때만 |
 | 업데이트 실패 | `lastUpdateError`가 있음 |
 | 분석이 멈췄어요 | inbox/의 가장 오래된 요청이 3시간 넘음(파일이 처음 커밋된 시각 기준) |
-| 루틴이 일을 안 해요 / 루틴이 한도에 걸렸어요 / 루틴 지시문 버전이 달라요 | `status/last-run.json`의 `processed`, `limitHit`, `promptMismatch` |
-| 우편함 토큰이 곧 만료돼요 | 폰이 올린 `tokenExpiresMs`가 14일 안(없으면 건너뜀). 워크플로 자체 토큰에는 만료 헤더가 없어서 폰 값을 쓴다 |
+| 루틴이 일을 안 해요 / 루틴이 한도에 걸렸어요 / 루틴 지시문 버전이 달라요 | 루틴별 자가 보고의 `processed`, `limitHit`, `promptMismatch` |
+| 매시간 분석이 예정 시각에 돌지 않았어요 | `status/last-run-hourly.json`의 "status" 커밋이 cron상 2슬롯 연속 없음(analyze 커밋 기준이 아니다. 조용한 날엔 원래 없다) |
+| 루틴이 결과를 저장소에 올리지 못했어요 | 자가 보고의 `pushed`가 false |
+| 우편함 토큰이 곧 만료돼요 | 폰이 올린 `tokenExpiresMs`가 14일 안(없으면 건너뜀) |
+| 통화 카드 권한이 꺼져 있어요 | 하트비트 `callCard.today.noPermission`(잠금이라 알림만 띄운 `locked`는 세지 않음) |
+
+이 밖에 버전 정체, 우편함 오류, 저장 공간, 녹음 공백, 긴 통화 자막 규칙이 있다. 전체 목록은 `tools/inbox/watchdog.py`의 규칙 표다.
 
 토큰 이슈가 열리면: 새 토큰을 만들어 앱 저장소 비밀 `IEUM_INBOX_TOKEN`을 바꾸고 배포한다. 만료 뒤에는 폰이 업데이트도 못 받으므로 만료 전에 해야 한다. `IEUM_SIGNING_SEED` 비밀이 없으면 서명 키가 토큰에서 나오므로 토큰을 바꾸면 서명이 바뀌어 업데이트가 막힌다. 먼저 확인한다. 폰이 새 버전을 받고 다음 하트비트를 올리면 이슈는 저절로 닫힌다.
 
-설치(개발 세션에서 한 번, ieum-inbox 기본 브랜치):
-1. 이 저장소의 `tools/inbox/watchdog.yml`을 ieum-inbox의 `.github/workflows/watchdog.yml`로, `tools/inbox/watchdog.py`를 ieum-inbox의 `tools/watchdog.py`로 복사해 커밋하고 push한다. 워크플로 파일을 올릴 권한이 없다고 나오면 `gh auth refresh -s workflow` 뒤 다시 push한다.
-2. ieum-inbox 설정 Actions → General에서 Actions가 켜져 있는지 본다(워크플로 권한은 파일의 `permissions: issues: write`로 충분).
-3. 수동 실행: `gh workflow run watchdog.yml -R <owner>/ieum-inbox` → `gh run list -R <owner>/ieum-inbox -w watchdog -L 1`로 실행 번호 확인 → `gh run watch <번호> -R <owner>/ieum-inbox --exit-status`.
-4. 확인: `gh issue list -R <owner>/ieum-inbox -l ieum-watch`에 지금 상태에 맞는 이슈(폰이 조용하면 "폰이 조용해요" 1건)가 있고, 실행 요약에 "watchdog: N opened, M closed"가 남는다. 한 번 더 수동 실행해 새 이슈가 생기지 않는지(같은 문제는 opened 0) 본다.
-5. 이슈 본문은 고정 문장과 시각, 개수, 참거짓뿐이다. 우편함 파일 내용은 읽지 않는다.
+설치와 확인(배포 때, 개발 세션):
+1. 이 저장소의 `tools/inbox/watchdog.py`를 ieum-inbox의 `tools/watchdog.py`로, `docs/routines/hourly.md`와 `tidy.md`를 ieum-inbox `routines/`로 복사해 커밋하고 push한다.
+2. 예약 작업 환경에 ieum-inbox 이슈 쓰기 권한(gh 인증)이 있는지 본다. 없으면 워치독 단계만 건너뛰고 루틴은 계속 돈다.
+3. 수동 확인: ieum-inbox를 받은 폴더에서 `--apply` 없이 `python3 tools/watchdog.py --root . --out /tmp/ieum-watchdog-plan.json`을 돌리면 이슈를 열지 않고 지금 보이는 문제 목록만 쓴다. 실제 반영은 예약 작업 실행 기록의 마지막 줄 "watchdog: n opened, m closed"와 `gh issue list -R <owner>/ieum-inbox -l ieum-watch`로 본다.
+4. 이슈 본문은 고정 문장과 시각, 개수, 참거짓뿐이다. 우편함 파일 내용은 읽지 않는다.
 
 ## 5. 배포와 업데이트 흐름
 
@@ -151,14 +158,14 @@
 
 | 증상 | 먼저 볼 곳 | 흔한 원인 |
 |---|---|---|
-| 통화가 정리되지 않음 | `status/last-run.json`, 예약 작업 실행 기록, inbox 파일 개수와 가장 오래된 시각 | 구독 한도, 예약 작업 소스에서 ieum-inbox 빠짐, 지시문 교체 누락 |
+| 통화가 정리되지 않음 | `status/last-run-hourly.json`(`endedMs`, `repoOk`, `pushed`, `leftover`), 예약 작업 실행 기록("확인 필요" 답), inbox 파일 개수와 가장 오래된 시각 | 구독 한도, 예약 작업 소스에서 ieum-inbox 빠짐, 저장소 접근 실패, 지시문 교체 누락 |
 | 결과는 있는데 폰에 안 보임 | `status/phone.json`의 `atMs`, `lastResultMs`, `lastInboxError`; `results/`와 `bad/` | 폰 절전이나 네트워크, 토큰 만료, 결과 형식 오류 |
 | 자막이 밀림 | `status/phone.json`의 `queuedCount`, `oldestQueuedMs`, `modelState` | 충전 안 함, 모델 문제, 처음 정리 중 |
 | 업데이트가 안 됨 | GitHub Actions의 release-apk와 update-smoke 실행, `app/version.json`, 하트비트의 `lastUpdateError` | ci 또는 smoke 실패, 서명 지문 불일치, 설치 권한 |
 | 장부 이름이나 업체가 이상함 | `ledger/ledger.json`의 rev와 updatedMs(내용은 옮기지 않고 앱에서 확인), `ledger/edits/` | 수정 반영 대기, 새벽 정리 전 |
 | CI 실패 | 실행의 "Summarize results" 요약과 `android-test-results` 산출물 | 단위 테스트, lint, 내보내기 검사 |
-| 모든 워크플로가 몇 초 만에 실패(단계 없음) | 실행 주석: "recent account payments have failed or your spending limit needs to be increased" | GitHub Actions 사용량·결제 한도. 사용자가 GitHub 설정 Billing에서 해결해야 하며 그동안 ci, 배포, 워치독이 모두 멈춘다. 에뮬레이터 시험(약 90분)이 사용량 대부분을 쓴다 |
+| 모든 워크플로가 몇 초 만에 실패(단계 없음) | 실행 주석: "recent account payments have failed or your spending limit needs to be increased" | GitHub Actions 사용량·결제 한도. 사용자가 GitHub 설정 Billing에서 해결해야 하며 그동안 ci와 배포가 멈춘다(워치독은 v3.4부터 루틴 안에서 돌아 영향 없음). 에뮬레이터 시험(약 90분)이 사용량 대부분을 쓴다 |
 
 정기 점검: 달에 한 번 예약 작업 실행 기록 1건을 열어 통화 원문이 남지 않았는지 확인한다.
 
-관련 파일: `docs/routines/`(지시문), `tools/inbox/`(워치독), `tools/needs_update_smoke.sh`, `tools/update_smoke.sh`, `.github/workflows/`, `docs/DEVELOPMENT.md`(개발 환경).
+관련 파일: `docs/routines/`(지시문, 자가 보고 요약 `self-report.md`), `tools/inbox/`(워치독), `tools/needs_update_smoke.sh`, `tools/update_smoke.sh`, `.github/workflows/`, `docs/DEVELOPMENT.md`(개발 환경).

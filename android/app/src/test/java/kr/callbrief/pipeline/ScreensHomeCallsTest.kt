@@ -114,13 +114,6 @@ class ScreensHomeCallsTest:ProtectedTextHostTestBase() {
     @Test fun rightAfterACallTheLineSaysItIsBeingTurnedIntoText() {
         val now=at(15,0)
         val answered=LoggedCall(1,"01000000000","박정우",now-3_600_000L,134_000,CallLog.Calls.INCOMING_TYPE,false)
-        assertTrue(CallsScreen.transcribing(answered,now,folder=true,jobStarts=emptyList()))
-        assertFalse("no folder, no job: nothing is coming",CallsScreen.transcribing(answered,now,folder=false,jobStarts=emptyList()))
-        assertTrue("a waiting job of that time",CallsScreen.transcribing(answered,now,folder=false,jobStarts=listOf(answered.startMs+60_000L)))
-        assertFalse("a job further away",CallsScreen.transcribing(answered,now,folder=false,jobStarts=listOf(answered.startMs+5*60_000L)))
-        assertFalse("after 12 hours",CallsScreen.transcribing(answered,answered.startMs+CallsScreen.FRESH_MS+1,folder=true,jobStarts=emptyList()))
-        assertFalse("a missed call",CallsScreen.transcribing(answered.copy(durationMs=0,type=CallLog.Calls.MISSED_TYPE),now,true,emptyList()))
-        assertFalse("a personal call",CallsScreen.transcribing(answered.copy(personal=true),now,true,emptyList()))
         // Then the record: being sorted out, and after six hours late.
         assertEquals("정리하고 있어요",CallsScreen.stateWords(record(CallRecordStore.TRANSCRIBED,createdMs=now-3_600_000L),now))
         assertEquals("정리가 늦어지고 있어요",CallsScreen.stateWords(record(CallRecordStore.TRANSCRIBED,createdMs=now-7*3_600_000L),now))

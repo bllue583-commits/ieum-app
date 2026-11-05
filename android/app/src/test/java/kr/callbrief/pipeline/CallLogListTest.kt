@@ -46,7 +46,7 @@ class CallLogListTest:ProtectedTextHostTestBase() {
     @Test fun theFourKindsOfLinesShowInTimeOrder() {
         PreviewSeed.ensure(app)
         // Long after the calls: the answered one with no recording is no longer "being turned into text" (r8-4).
-        CallsScreen.clock={ timeOf(13,45)+CallsScreen.FRESH_MS+60_000L }
+        CallsScreen.clock={ timeOf(13,45)+12*3_600_000L+60_000L }
         val a=launchMain(Screen.CALLS)
         settle { tag(a,"calls_list")!=null && tag(a,"log_missed_900001")!=null }
         val missed=tag(a,"log_missed_900001");val none=tag(a,"log_no_recording_900002");val personal=tag(a,"log_personal_900003");val dead=tag(a,"log_not_connected_900004")
