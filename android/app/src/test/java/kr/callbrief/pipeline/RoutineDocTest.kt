@@ -47,7 +47,8 @@ class RoutineDocTest {
         assertTrue(text.contains(REPO))
         // v2.9 (r10-3): the routine runs every 30 minutes; the line sits above "---", so it is not part of the prompt.
         val head=text.substringBefore("\n---\n")
-        assertTrue("routine time",head.contains("루틴 시간: 30분마다") && head.contains("`*/30 7-22 * * *`"))
+        // 11/5: the task was made again at minute 34, 07:34 to 22:34 (a schedule cannot run more often than hourly).
+        assertTrue("routine time",head.contains("루틴 시간: 매시간 34분") && head.contains("`CRON_TZ=Asia/Seoul 34 7-22 * * *`"))
         // Same v5 round: the open items' request fields (design C5) are named next to rule 12, the rules unchanged.
         listOf("askedOn(요청한 날)","owner(그때 정한 맡는 쪽)","person(요청한 통화 상대 이름)","quote(그때 근거 원문의 앞 40자)").forEach { assertTrue(it,block(text,"SYSTEM","text").contains(it)) }
         // v6: the ledger gets a people entry for every counterpartId (the repository ledger had rev 3 with no people and no companies).
@@ -89,6 +90,12 @@ class RoutineDocTest {
             "각 제안 항목에는 state의 rev를 그대로 적는다","create에는 rev가 없다","state에 mergeCandidates가 있으면",
             "없어지는 쪽 업체와 사람 항목은 지우지 말고 mergedInto만 적어 둔다").forEach { assertTrue(it,text.contains(it)) }
         assertTrue(text.contains(REPO))
+        // v3.1 (r12-3, DESIGN_V4 2.3-1): the first pass no longer stops the tidy; until it ends only the last 14 days, no tidiedOnce.
+        assertFalse("firstPassDone no longer stops step 1",text.contains("firstPassDone이 false이거나"))
+        listOf("firstPassDone이 false여도 멈추지 않는다","state의 records(최근 14일)를 날짜순으로 전부 읽고","이때는 7번의 tidiedOnce를 쓰지 않는다",
+            "firstPassDone이 true이고 장부의 tidiedOnce가 true가 아니면 10월 1일부터","firstPassDone이 false인 날(3번)에는 tidiedOnce를 쓰지 않고").forEach { assertTrue(it,text.contains(it)) }
+        // 2.3-3: the hourly self-report carries the cron and the real start and end.
+        assertTrue(doc().readText().contains("\"cron\":\"CRON_TZ=Asia/Seoul 34 7-22 * * *\""))
     }
 
     private companion object {
