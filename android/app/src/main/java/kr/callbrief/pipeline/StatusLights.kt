@@ -39,7 +39,15 @@ internal object StatusLights {
          * phone has none ([cardRole]), and either card switch is on ([cardOn]). */
         val cardOverlay:Boolean=true,val phoneState:Boolean=true,val cardRole:Boolean=true,val cardOn:Boolean=true,
         /** v3.1 (DESIGN_V4 2.1-2): the recording-gap verdict confirmed for the wife ([RecordingGap.confirmed]); null: nothing to say. */
-        val gap:RecordingGap.Verdict?=null)
+        val gap:RecordingGap.Verdict?=null,
+        /** v3.4 (DESIGN_V4 4.2-5, r14-2), filled by [withPhone]: the call log may be read (READ_CALL_LOG); the app's standby bucket
+         * ([PhoneStatus.bucketCode]; null: not known); the card counts so far ([kr.callbrief.pipeline.call.CardStats]: calls, no
+         * number, no card); scheduled analysis runs missed since the routine last reported ([routineMissed]) and that report's
+         * end; the sealed store's share in use; the recording light's green words while texts are still being made. */
+        val callLog:Boolean=true,val standbyBucket:String?=null,
+        val cardCalls:Int=0,val cardNoNumber:Int=0,val cardNoCard:Int=0,
+        val routineMissed:Int=0,val routineEndedMs:Long=0,
+        val dbPercent:Int?=null,val pendingText:String?=null)
 
     const val TRANSCRIBE_LATE_MS=6*3_600_000L
     const val ANALYZE_LATE_MS=3*3_600_000L
@@ -73,6 +81,11 @@ internal object StatusLights {
             else -> null }
         val analyze=when {
             !i.consent -> "정리 동의가 꺼져 있어요. 위 정리 묶음에서 켜 주세요."
+            // v3.4 (4.2-5): the analysis routine missed its scheduled runs (the phone's second eye beside the watchdog).
+            i.routineMissed>=ROUTINE_AMBER && i.routineEndedMs>0 ->
+                "분석이 ${hoursSince(i.routineEndedMs,i.now)}시간 안 돌았어요. 관리하는 분께 알려 주세요."
+            i.dbPercent!=null && i.dbPercent>=SelfCheckNotices.STORAGE_SHARE_PERCENT ->
+                "저장 공간을 ${i.dbPercent}% 쓰고 있어요. 관리하는 분께 알려 주세요."
             i.failed>0 -> "정리하지 못한 통화가 ${i.failed}건 있어요. 아래 기다리는 통화 다시 정리하기를 눌러 주세요."
             i.waiting>0 -> (i.oldestWaitMs?.let { "통화 ${i.waiting}건이 ${waitWords(it)} 밀렸어요. " } ?: "정리가 늦어지고 있어요. ")+"순서대로 정리하고 있으니 기다려 주세요."
             else -> null }
@@ -85,9 +98,11 @@ internal object StatusLights {
             else -> null }
         // Where each fix lives: the folder in 연결 (above), the consent in 정리 (above), the model, the retry and the update in
         // 상태와 도움 (below the lights); the notification switch is in the phone's settings, so that line has no target.
-        val analyzeTarget=if(!i.consent) GROUP_SUMMARY else GROUP_STATUS
+        val analyzeTarget=if(!i.consent) GROUP_SUMMARY else if(i.routineMissed>=ROUTINE_AMBER || (i.dbPercent ?: 0)>=SelfCheckNotices.STORAGE_SHARE_PERCENT) null else GROUP_STATUS
         val transcribeTarget=if(i.modelState=="UNSUPPORTED") null else GROUP_STATUS
-        return listOf(light("status_import","녹음 가져오기",import,importTarget),light("status_transcribe","글자로 바꾸기",transcribe,transcribeTarget),
+        // v3.4: recordings that are there but still waiting for their text are said in green on the recording line.
+        val importLight=if(import==null && i.pendingText!=null) Light("status_import","녹음 가져오기",true,i.pendingText) else light("status_import","녹음 가져오기",import,importTarget)
+        return listOf(importLight,light("status_transcribe","글자로 바꾸기",transcribe,transcribeTarget),
             light("status_analyze","통화 정리",analyze,analyzeTarget),light("status_notify","알림",notify),light("status_update","업데이트",update,GROUP_STATUS),
             card(i))
     }
@@ -100,9 +115,64 @@ internal object StatusLights {
             !i.cardOn -> Light(tag,label,true,"전화 올 때와 걸 때 모두 꺼 두었어요.")
             !i.cardOverlay -> Light(tag,label,false,"통화 화면 위에 카드를 띄울 수 없어요. 위 통화 카드 묶음에서 카드 보기를 허용해 주세요.",GROUP_CARD)
             !i.phoneState -> Light(tag,label,false,"전화가 오는 걸 알 수 없어 카드가 뜨지 않아요. 위 연결 묶음에서 전화 상태를 허용해 주세요.",GROUP_CONNECT)
+            // v3.4 (4.2-5): the call log tells who called before (thin cards) and whether a call was connected.
+            !i.callLog -> Light(tag,label,false,"통화기록을 읽을 수 없어 카드가 덜 채워져요. 위 연결 묶음에서 통화기록 읽기를 허용해 주세요.",GROUP_CONNECT)
+            // A phone that may put the app to sleep starts the card late (EXEMPTED: battery use not limited).
+            i.standbyBucket!=null && i.standbyBucket !in BUCKETS_FINE -> Light(tag,label,false,
+                "휴대폰이 이음을 쉬게 해서 카드가 늦게 뜰 수 있어요. 휴대폰 설정의 애플리케이션, 이음, 배터리에서 제한 없음을 골라 주세요.")
+            i.cardCalls>=CARD_MIN_CALLS && i.cardNoNumber*100>=i.cardCalls*NO_NUMBER_PERCENT -> Light(tag,label,false,
+                "통화 ${i.cardCalls}건 중 ${i.cardNoNumber}건은 번호를 몰라 카드가 뜨지 않았어요."+
+                    if(!i.cardRole) " 위 통화 카드 묶음에서 거는 전화에 번호를 더 빨리 알기를 허용해 주세요." else "",if(!i.cardRole) GROUP_CARD else null)
+            i.cardCalls>=CARD_MIN_CALLS && i.cardNoCard*100>=i.cardCalls*NO_CARD_PERCENT -> Light(tag,label,false,
+                "통화 ${i.cardCalls}건 중 ${i.cardNoCard}건은 정리된 상대가 아니라 카드가 뜨지 않았어요. 정리된 통화가 없는 번호에도 보려면 위 통화 카드 묶음에서 켜 주세요.",GROUP_CARD)
             !i.cardRole -> Light(tag,label,true,"전화가 오면 카드가 떠요. 거는 전화에도 보려면 위 통화 카드 묶음에서 허용해 주세요.",GROUP_CARD)
             else -> Light(tag,label,true,OK)
         }
+    }
+
+    // ---- v3.4 (DESIGN_V4 4.2-5, r14-2) ------------------------------------------------------------------------------
+    /** Standby buckets that do not hold the card back (unknown and older phones count as fine). */
+    val BUCKETS_FINE=setOf("EXEMPTED","NONE","UNKNOWN")
+    /** The card line wants this many calls before it judges shares, then amber at these shares (%). */
+    const val CARD_MIN_CALLS=5
+    const val NO_NUMBER_PERCENT=20
+    const val NO_CARD_PERCENT=60
+    /** Scheduled runs missed: amber on the 통화 정리 line from [ROUTINE_AMBER], the evening self-check notice from [ROUTINE_NOTICE]. */
+    const val ROUTINE_AMBER=2
+    const val ROUTINE_NOTICE=4
+    /** A run is missed once this long has passed after its slot without a later report (the run takes a few minutes). */
+    const val ROUTINE_GRACE_MS=40*60_000L
+    fun hoursSince(ms:Long,now:Long):Long=((now-ms)/3_600_000L).coerceAtLeast(1)
+    /** The routine's scheduled runs ([crons], KST) after its last report ended at [endedMs] whose slot passed more than
+     * [ROUTINE_GRACE_MS] before [now]. 0 when the routine never reported. The night counts nothing: before the first morning run
+     * the last one was the evening's, which ended. */
+    fun routineMissed(endedMs:Long,crons:List<ResultChain.Cron>,now:Long):Int {
+        if(endedMs<=0 || now-ROUTINE_GRACE_MS<=endedMs) return 0
+        return ResultChain.runs(crons,endedMs+1,now-ROUTINE_GRACE_MS).size
+    }
+    /** [routineMissed] from the settings [s]: not counted while the phone itself cannot reach the inbox (its own error is newer
+     * than the routine's report: the "연결이 끊겼어요" notice speaks then). */
+    fun routineMissed(s:JSONObject,now:Long):Int {
+        val ended=s.optLong(PipelineSettingsKeys.ROUTINE_ENDED_MS,0)
+        if(s.optLong(PipelineSettingsKeys.LAST_INBOX_ERROR_MS,0)>ended) return 0
+        return routineMissed(ended,ResultChain.crons(s),now)
+    }
+    /** [i] with what v3.4 reads from the phone and the settings [s]: the call log permission, the standby bucket, the card
+     * counts, the routine's missed runs, the store's share ([dbPercent], from the store read the page already did) and the
+     * recording light's green words. */
+    fun withPhone(i:Input,app:Context,s:JSONObject,dbPercent:Int?):Input {
+        val stats=runCatching { kr.callbrief.pipeline.call.CardStats.read(s) }.getOrNull()
+        // While this page is open the app is ACTIVE whatever its standing: battery use not limited is what makes it EXEMPTED.
+        val free=runCatching { app.getSystemService(android.os.PowerManager::class.java)?.isIgnoringBatteryOptimizations(app.packageName)==true }.getOrDefault(false)
+        val bucket=if(free) "EXEMPTED" else if(android.os.Build.VERSION.SDK_INT<28) null else runCatching {
+            PhoneStatus.bucketCode(app.getSystemService(android.app.usage.UsageStatsManager::class.java).appStandbyBucket) }.getOrNull()
+        return i.copy(callLog=app.checkSelfPermission(android.Manifest.permission.READ_CALL_LOG)==android.content.pm.PackageManager.PERMISSION_GRANTED,
+            standbyBucket=bucket,
+            cardCalls=stats?.optInt(kr.callbrief.pipeline.call.CardStats.CALLS,0) ?: 0,
+            cardNoNumber=stats?.optInt(kr.callbrief.pipeline.call.CardStats.NO_NUMBER,0) ?: 0,
+            cardNoCard=stats?.optInt(kr.callbrief.pipeline.call.CardStats.NO_CARD,0) ?: 0,
+            routineMissed=runCatching { routineMissed(s,i.now) }.getOrDefault(0),routineEndedMs=s.optLong(PipelineSettingsKeys.ROUTINE_ENDED_MS,0),
+            dbPercent=dbPercent,pendingText=RecordingGap.pendingText(s,i.now))
     }
 
     // ---- what the lights, the heartbeat and the self-check read from the store (one place, so they agree) ----

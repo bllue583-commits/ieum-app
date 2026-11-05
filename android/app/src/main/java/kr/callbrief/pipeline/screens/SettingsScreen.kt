@@ -667,6 +667,10 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
     private fun anyAmber(s:JSONObject,counts:Map<String,Int>)=runCatching { StatusLights.lights(lightsInput(s,counts)).any { !it.ok } }.getOrDefault(false)
     private fun lightsInput(s:JSONObject,counts:Map<String,Int>):StatusLights.Input {
         val now=System.currentTimeMillis();val w=watch
+        // v3.4 (r14-2, 4.2-5): the call log, standby bucket, card counts, missed routine runs, store share and pending texts.
+        return StatusLights.withPhone(lightsInputV33(s,counts,now,w),a,s,w?.dbPercent)
+    }
+    private fun lightsInputV33(s:JSONObject,counts:Map<String,Int>,now:Long,w:StatusLights.Store?):StatusLights.Input {
         return StatusLights.Input(now,s.optString("treeUri").isNotBlank(),s.optString(PipelineSettingsKeys.MODEL_STATE),
             w?.queue?.count ?: 0,s.optLong(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,0),s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false),
             w?.lateLive ?: 0,w?.failed ?: (counts[CallRecordStore.FAILED] ?: 0),w?.oldestLateMs,s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),NotifyAsk.allowed(a),

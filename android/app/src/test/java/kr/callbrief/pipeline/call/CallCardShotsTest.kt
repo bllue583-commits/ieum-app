@@ -30,10 +30,18 @@ class CallCardShotsTest:ProtectedTextHostTestBase() {
     private val app get()=RuntimeEnvironment.getApplication()
     @After fun back() { RuntimeEnvironment.setFontScale(1.0f);RuntimeEnvironment.setQualifiers("+notnight");CallUi.applyTheme(app) }
 
-    private fun content()=CallCardView.Content("김민수","탄탄이엔씨, 철근","지난 통화 어제 오후 3:00, 받은 전화","지난 통화",
-        "견적서는 금요일까지 메일로 보내 드리기로 했어요.",
-        listOf(CallCardView.Content.Task("견적서 보내기","어제 요청"),CallCardView.Content.Task("30층 타설 날짜 다시 확인하기","10월 30일 요청",unsure=true)),
-        "철근 단가 재견적: 업체 회신 대기",summaryUnsure=false)
+    /** A full v3.4 card (DESIGN_V4 4.2-3): a due item first, who, one more item with "외 1개", one piece of work under way. */
+    private fun content():CallCardView.Content {
+        val now=System.currentTimeMillis();val day=86_400_000L
+        val card=kr.callbrief.pipeline.ContactCard("01022223333",listOf(kr.callbrief.pipeline.ContactCard.Person("pe_1","김민수","대표",false)),
+            kr.callbrief.pipeline.ContactCard.Company("co_1","탄탄이엔씨","철근"),now-3*day,"in",
+            listOf(kr.callbrief.pipeline.ContactCard.Recent(now-3*day,"통화","견적서는 금요일까지 메일로 보내 드리기로 했어요.")),
+            listOf(kr.callbrief.pipeline.ContactCard.Task("wf_1","견적서 보내기",now-3*day,"open",null,dueMs=now+2*day),
+                kr.callbrief.pipeline.ContactCard.Task("wf_2","30층 타설 날짜 다시 확인하기",now-day,"open",null,tentative=true,checkReason="confusable"),
+                kr.callbrief.pipeline.ContactCard.Task("wf_3","도면 받기",now-day,"open",null)),
+            listOf(kr.callbrief.pipeline.ContactCard.IssueLine("철근 단가 재견적","업체 회신 대기")),emptyList(),now)
+        return CallCardView.Content.of(card,now)
+    }
 
     private fun shoot(name:String,night:Boolean,scale:Float):Int {
         RuntimeEnvironment.setQualifiers(if(night) "+night" else "+notnight");RuntimeEnvironment.setFontScale(scale);CallUi.applyTheme(app)

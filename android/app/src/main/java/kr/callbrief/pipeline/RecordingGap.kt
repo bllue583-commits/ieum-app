@@ -14,10 +14,16 @@ import org.json.JSONObject
 internal object RecordingGap {
     /** One judgement: n target calls, how many had a file in their window, how many of those paired with a record. [sinceMs]:
      * since when this same code holds; [atMs]: when it was judged. */
-    data class Verdict(val code:String,val calls:Int=0,val withFile:Int=0,val matched:Int=0,val newestFileMs:Long?=null,val sinceMs:Long=0,val atMs:Long=0) {
+    data class Verdict(val code:String,val calls:Int=0,val withFile:Int=0,val matched:Int=0,val newestFileMs:Long?=null,val sinceMs:Long=0,val atMs:Long=0,
+                       /** v3.4: calls with a file whose text is still being made (its job queued or running). */ val pending:Int=0) {
         fun json():JSONObject=JSONObject().put("calls",calls).put("withFile",withFile).put("matched",matched)
             .put("newestFileMs",newestFileMs ?: JSONObject.NULL).put("sinceMs",sinceMs).put("verdict",code).put("atMs",atMs)
+            .apply { if(pending>0) put("pending",pending) }
     }
+    /** v3.4 (DESIGN_V4 4.2-5, r14-2): a verdict code beside the key commit's: the calls have their files, but the files are
+     * still waiting to become text (not a failure: [GAP_NO_MATCH][PipelineSettingsKeys.GAP_NO_MATCH] is kept for files whose
+     * text failed or whose kind is not supported). Not told as a problem; the recording light says it in green ([pendingText]). */
+    const val PENDING_TEXT="pendingText"
     /** The one line under the home numbers (null: nothing to say); tapping it opens settings at the recording row
      * ([StatusLights] tag "status_import"). */
     data class Banner(val text:String)
@@ -51,14 +57,16 @@ internal object RecordingGap {
     data class GapCall(val startMs:Long,val durationMs:Long,val type:Int,val personal:Boolean,val matched:Boolean)
     /** What one judgement looks at. [fileTimes]: the folder's recordings by the time in their name, else their modified time.
      * [lastDiscoveryMs]: when the last good pass ended (0: never). */
-    data class Facts(val calls:List<GapCall>,val fileTimes:List<Long>,val folderError:Boolean=false,val truncated:Boolean=false,val lastDiscoveryMs:Long)
+    data class Facts(val calls:List<GapCall>,val fileTimes:List<Long>,val folderError:Boolean=false,val truncated:Boolean=false,val lastDiscoveryMs:Long,
+                     /** v3.4: the times of the files whose text is still being made (transcription job queued or running). */
+                     val pendingTimes:List<Long> =emptyList())
 
     /** 2.1-1, pure: the targets are the last day's answered and made calls of 30 seconds or more, not personal (excluded
      * numbers are never stored), that ended at least [SETTLE_MS] before the last good pass. The order: folder error, a cut
      * listing, too few calls, then the shares. [previous] keeps [Verdict.sinceMs] while the code stays the same. */
     fun judge(f:Facts,now:Long,previous:Verdict?=null):Verdict {
-        fun verdict(code:String,n:Int=0,with:Int=0,matched:Int=0)=Verdict(code,n,with,matched,f.fileTimes.maxOrNull(),
-            previous?.takeIf { it.code==code && it.sinceMs>0 }?.sinceMs ?: now,now)
+        fun verdict(code:String,n:Int=0,with:Int=0,matched:Int=0,pending:Int=0)=Verdict(code,n,with,matched,f.fileTimes.maxOrNull(),
+            previous?.takeIf { it.code==code && it.sinceMs>0 }?.sinceMs ?: now,now,pending)
         if(f.folderError) return verdict(PipelineSettingsKeys.GAP_FOLDER)
         if(f.truncated) return verdict(PipelineSettingsKeys.GAP_TOO_MANY)
         val targets=f.calls.filter { c -> (c.type==1 || c.type==2) && c.durationMs>=MIN_CALL_MS && !c.personal &&
@@ -66,13 +74,17 @@ internal object RecordingGap {
         val sorted=f.fileTimes.sorted()
         val withFile=targets.filter { c -> window(c.startMs,c.durationMs).let { w -> anyIn(sorted,w.first,w.last) } }
         val n=targets.size;val w=withFile.size;val m=withFile.count { it.matched }
+        // v3.4: a call with its file whose text is still being made is not "no match" (yet).
+        val waiting=f.pendingTimes.sorted()
+        val p=withFile.count { c -> !c.matched && window(c.startMs,c.durationMs).let { win -> anyIn(waiting,win.first,win.last) } }
         val code=when {
             n<MIN_CALLS -> PipelineSettingsKeys.GAP_OK
             w<0.3*n -> PipelineSettingsKeys.GAP_NO_RECORDING
             w<0.7*n -> PipelineSettingsKeys.GAP_PARTIAL
+            m<0.5*w && m+p>=0.5*w -> PENDING_TEXT
             m<0.5*w -> PipelineSettingsKeys.GAP_NO_MATCH
             else -> PipelineSettingsKeys.GAP_OK }
-        return verdict(code,n,w,m)
+        return verdict(code,n,w,m,p)
     }
     /** Is there a value of the sorted [times] within [from]..[to]? */
     internal fun anyIn(times:List<Long>,from:Long,to:Long):Boolean {
@@ -86,7 +98,13 @@ internal object RecordingGap {
         val o=when(val v=s.opt(PipelineSettingsKeys.RECORDING_GAP)) { is JSONObject -> v;is String -> runCatching { JSONObject(v) }.getOrNull();else -> null } ?: return null
         val code=o.optString("verdict").takeIf { it.isNotBlank() } ?: return null
         return Verdict(code,o.optInt("calls"),o.optInt("withFile"),o.optInt("matched"),
-            o.optLong("newestFileMs",0).takeIf { !o.isNull("newestFileMs") && it>0 },o.optLong("sinceMs"),o.optLong("atMs"))
+            o.optLong("newestFileMs",0).takeIf { !o.isNull("newestFileMs") && it>0 },o.optLong("sinceMs"),o.optLong("atMs"),o.optInt("pending",0))
+    }
+    /** v3.4: "녹음은 있는데 아직 글자로 바꾸는 중 2건이에요" while the last verdict ([PENDING_TEXT], not older than [STALE_MS]) says
+     * so; null otherwise. Said in green on the recording light: nothing is wrong, the text just is not made yet. */
+    fun pendingText(s:JSONObject,now:Long=System.currentTimeMillis()):String? {
+        val v=last(s)?.takeIf { it.code==PENDING_TEXT && now-it.atMs<=STALE_MS && it.pending>0 } ?: return null
+        return "녹음은 있는데 아직 글자로 바꾸는 중 ${v.pending}건이에요"
     }
     /** Writes [v] into the settings snapshot [s]: the verdict, the spoken run's start, and the notice days reset once it ends. */
     fun keep(s:JSONObject,v:Verdict):JSONObject {
@@ -198,7 +216,15 @@ internal object RecordingGap {
                 val join=if("local_files" in tables) "LEFT JOIN local_files l ON l.recording_id=r.recording_id" else ""
                 p.query("SELECT $at AS t FROM recordings r $join WHERE $at>=CAST(? AS INTEGER)",from).forEach { r -> n(r["t"])?.let { times+=it } }
             }
-            Facts(calls,times,lastDiscoveryMs=0)
+            // v3.4: files whose text is still being made (their transcription job is queued or running).
+            val pending=ArrayList<Long>()
+            if("recordings" in tables && "call_transcription_jobs" in tables) runCatching {
+                val at=if("local_files" in tables) "COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms)" else "COALESCE(r.original_started_at_ms,r.modified_at_ms)"
+                val join=if("local_files" in tables) "LEFT JOIN local_files l ON l.recording_id=r.recording_id" else ""
+                p.query("SELECT DISTINCT $at AS t FROM recordings r $join JOIN call_transcription_jobs j ON j.recording_id=r.recording_id WHERE j.state IN('QUEUED','RUNNING') AND $at>=CAST(? AS INTEGER)",from)
+                    .forEach { r -> n(r["t"])?.let { pending+=it } }
+            }
+            Facts(calls,times,lastDiscoveryMs=0,pendingTimes=pending)
         }
     }.onFailure { Log.w(LOG,"store not read: ${it.javaClass.simpleName}") }.getOrNull()
 }

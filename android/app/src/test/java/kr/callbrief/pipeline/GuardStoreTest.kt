@@ -103,7 +103,8 @@ class GuardStoreTest:ProtectedTextHostTestBase() {
         assertFalse(card.toJson().toString().contains("7777"))
         val c=kr.callbrief.pipeline.call.CallCardView.Content.of(card,now)
         assertEquals("현장",c.name);assertTrue(c.thin)
-        assertEquals("지난 통화 2일 전, 30일간 2번, 정리된 통화 없음",c.lastCall)
+        // v3.4 (DESIGN_V4 4.2-3 ⑤): the thin card's first line.
+        assertEquals("2일 전 통화, 30일간 2번",c.first)
         // A personal number has no card at all.
         s.rememberPersonal("01077778888");ContactCards.flushPending(s)
         assertNull(ContactCards.get(context,"01077778888"))

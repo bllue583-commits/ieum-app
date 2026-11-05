@@ -44,6 +44,11 @@ internal object CallFollowupNotice {
     const val MAX_ENTRIES=40
     const val MAX_AGE_MS=36*3_600_000L
     const val WORKING="working";const val DONE="done";const val LATE="late"
+    /** v3.4 (DESIGN_V4 4.2-4 가): a call that went out, kept without a notice until the call log says it was connected (its
+     * length > 0); a call the log says was 0 seconds goes without a word. */
+    const val HOLD="hold"
+    /** How long a call going out may stay [HOLD] without the call log saying anything about it. */
+    const val HOLD_MAX_MS=10*60_000L
     /** v3.1 (DESIGN_V4 2.1-3): a good discovery pass that started after the call found no file in the call's window. */
     const val NO_RECORDING="norec"
     /** A pass this long after the call ended can see its recording (the recorder closed its file). */
@@ -59,19 +64,29 @@ internal object CallFollowupNotice {
     internal var phoneBookName:(Context,String)->String? = ::callLogName
     /** The call store. Replaceable in tests. */
     internal var store:(Context)->CallRecordStore ={ kr.callbrief.IeumApplication.store(it) }
-    internal fun resetForTest() { phoneBookName=::callLogName;store={ kr.callbrief.IeumApplication.store(it) } }
+    /** v3.4: the call log's length of the call of [Entry] (ms; 0: not connected), null when the log does not say (yet),
+     * [UNREADABLE] when the app may not read the call log (then a call going out is told as before). Replaceable in tests. */
+    internal var logDuration:(Context,Entry)->Long? = ::callLogDuration
+    /** How long [onCallEnded] waits for the call log of a call going out (the phone writes it a moment after the call), in steps. */
+    internal var logWaitMs:Long=1_000L
+    const val LOG_TRIES=3
+    const val UNREADABLE=-1L
+    internal fun resetForTest() { phoneBookName=::callLogName;store={ kr.callbrief.IeumApplication.store(it) };logDuration=::callLogDuration;logWaitMs=1_000L }
 
-    /** What one notice is about. [who]: "김민수 대표"; [hash]: SHA-256 of the phone key; [record]: the call record once known. */
+    /** What one notice is about. [who]: "김민수 대표"; [hash]: SHA-256 of the phone key; [record]: the call record once known.
+     * [dir]: "in" or "out" (v3.4; null in older entries). */
     internal data class Entry(val id:Int,val who:String,val company:String?,val hash:String,val startedMs:Long,val endedMs:Long,
                               val record:String?=null,val state:String=WORKING,
-                              /** Check items written with [메모 남기기] on this notice (bound to [record] once it is known). */ val items:List<String> =emptyList()) {
+                              /** Check items written with [메모 남기기] on this notice (bound to [record] once it is known). */ val items:List<String> =emptyList(),
+                              val dir:String?=null) {
         val memos:Int get()=items.size
         fun json():JSONObject=JSONObject().put("id",id).put("who",who).put("co",company ?: JSONObject.NULL).put("h",hash).put("s",startedMs).put("e",endedMs)
-            .put("r",record ?: JSONObject.NULL).put("st",state).put("i",JSONArray(items))
+            .put("r",record ?: JSONObject.NULL).put("st",state).put("i",JSONArray(items)).apply { dir?.let { put("d",it) } }
         companion object {
             fun parse(o:JSONObject)=Entry(o.getInt("id"),o.getString("who"),o.optString("co").takeIf { !o.isNull("co") && it.isNotEmpty() },o.optString("h"),
                 o.optLong("s"),o.optLong("e"),o.optString("r").takeIf { !o.isNull("r") && it.isNotEmpty() },o.optString("st",WORKING),
-                o.optJSONArray("i")?.let { a -> (0 until a.length()).map { a.optString(it) }.filter { it.isNotEmpty() } }.orEmpty())
+                o.optJSONArray("i")?.let { a -> (0 until a.length()).map { a.optString(it) }.filter { it.isNotEmpty() } }.orEmpty(),
+                o.optString("d").takeIf { it.isNotEmpty() })
         }
     }
 
@@ -94,9 +109,18 @@ internal object CallFollowupNotice {
             val named=person?.let { listOfNotNull(it.name,it.role?.takeIf { r -> r.isNotBlank() }).joinToString(" ") }
                 ?: card?.company?.name ?: phoneBookName(context,key)?.trim()?.takeIf { it.isNotEmpty() } ?: return
             if(rules.excluded(named,key)) return
-            val e=Entry(tempId(key,end.endedMs),named,card?.company?.name,PrivacyRules.hash(key),end.startedMs,end.endedMs)
+            val out=end.direction==CallSession.Direction.OUT
+            var e=Entry(tempId(key,end.endedMs),named,card?.company?.name,PrivacyRules.hash(key),end.startedMs,end.endedMs,dir=if(out) "out" else "in")
+            // v3.4 (4.2-4 가): "answered" of a call going out only says it was placed. Only a call the log says was connected
+            // gets a notice; one it does not know yet waits ([HOLD]) for the next discovery pass.
+            if(out) {
+                var length:Long?=null
+                for(i in 0 until LOG_TRIES) { length=runCatching { logDuration(context,e) }.getOrNull();if(length!=null) break;if(logWaitMs>0 && i<LOG_TRIES-1) Thread.sleep(logWaitMs) }
+                if(length==0L) return
+                if(length==null) e=e.copy(state=HOLD)
+            }
             save(context) { list -> list.filter { it.id!=e.id }+e }
-            post(context,e,null)
+            if(e.state!=HOLD) post(context,e,null)
         } catch(t:Throwable) { Log.w(LOG,"not posted: ${t.javaClass.simpleName}") }
     }
 
@@ -146,11 +170,23 @@ internal object CallFollowupNotice {
      * [PipelineSettingsKeys.FOLLOWUP_NO_RECORDING]. No timer of its own. Returns how many notices changed. */
     fun checkNoRecording(context:Context,passStartedMs:Long,now:Long=System.currentTimeMillis(),hasFile:(Long,Long)->Boolean):Int {
         return try {
-            val entries=entries(context)
-            if(entries.isEmpty() || !enabled(settings(context))) return 0
+            val all=entries(context)
+            if(all.isEmpty() || !enabled(settings(context))) return 0
+            // v3.4 (4.2-4 가): first the call log. A call it says was 0 seconds (not connected) goes without a word; a call going
+            // out it confirms gets its notice now; one it still does not know after [HOLD_MAX_MS] goes too.
+            val waiting=all.filter { e -> (e.state==WORKING || e.state==HOLD) && e.record==null && passStartedMs>=e.endedMs+NO_RECORDING_AFTER_MS }
+            val length=waiting.associate { e -> e.id to runCatching { logDuration(context,e) }.getOrNull() }
+            val drop=waiting.filter { e -> length[e.id]==0L || (e.state==HOLD && length[e.id]==null && now-e.endedMs>=HOLD_MAX_MS) }.map { it.id }.toSet()
+            val confirmed=waiting.filter { e -> e.state==HOLD && length[e.id].let { it!=null && it!=0L } }.map { it.id }.toSet()
+            if(drop.isNotEmpty() || confirmed.isNotEmpty()) {
+                drop.forEach { cancel(context,it) }
+                save(context) { list -> list.filter { it.id !in drop }.map { if(it.id in confirmed && it.state==HOLD) it.copy(state=WORKING) else it } }
+            }
+            val entries=all.filter { it.id !in drop }.map { if(it.id in confirmed) it.copy(state=WORKING) else it }
             val none=entries.filter { e -> e.state==WORKING && e.record==null && passStartedMs>=e.endedMs+NO_RECORDING_AFTER_MS && now-e.endedMs<MAX_AGE_MS &&
                 RecordingGap.window(e.startedMs,e.endedMs-e.startedMs).let { w -> !hasFile(w.first,w.last) } }
-            if(none.isEmpty()) return 0
+            entries.filter { it.id in confirmed && none.none { n -> n.id==it.id } }.forEach { post(context,it,null) }
+            if(none.isEmpty()) return confirmed.size
             val ids=none.map { it.id }.toSet()
             save(context) { list -> list.map { if(it.id in ids && it.state==WORKING) it.copy(state=NO_RECORDING) else it } }
             runCatching { SecureSettings(CallPipelineStartup.storage(context)).update {
@@ -274,13 +310,33 @@ internal object CallFollowupNotice {
             .setStyle(Notification.BigTextStyle().setBigContentTitle(w.title).bigText(w.big))
             .setWhen(e.endedMs).setShowWhen(true).setCategory(Notification.CATEGORY_STATUS)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
-            // Lock screen: no name, no summary.
-            .setPublicVersion(Notification.Builder(context,CHANNEL).setSmallIcon(R.drawable.ic_stat_ieum).setContentTitle("통화 정리 중").build())
+            // Lock screen: no name, no summary; only what state the call is in (v3.4, 4.2-4 다).
+            .setPublicVersion(Notification.Builder(context,CHANNEL).setSmallIcon(R.drawable.ic_stat_ieum).setContentTitle(publicTitle(e.state)).build())
             .addAction(action).build()
         manager.notify(TAG,e.id,n)
         return true
     }
     private fun cancel(context:Context,id:Int) { runCatching { context.getSystemService(NotificationManager::class.java)?.cancel(TAG,id) } }
+    /** The locked screen's words of a notice in [state]: "통화 정리됨", "확인할 통화" (late, no recording) or "통화 정리 중". */
+    internal fun publicTitle(state:String)=when(state) { DONE -> "통화 정리됨";LATE,NO_RECORDING -> "확인할 통화";else -> "통화 정리 중" }
+
+    /** The call log's length (ms) of the call [e] is about: a log line on the same number (by hash) that began within
+     * [MATCH_MS] of the call; null when the log has none (yet) or may not be read. */
+    private fun callLogDuration(context:Context,e:Entry):Long? {
+        if(context.checkSelfPermission(Manifest.permission.READ_CALL_LOG)!=PackageManager.PERMISSION_GRANTED) return UNREADABLE
+        return runCatching {
+            context.contentResolver.query(CallLog.Calls.CONTENT_URI,arrayOf(CallLog.Calls.NUMBER,CallLog.Calls.DATE,CallLog.Calls.DURATION),
+                "${CallLog.Calls.DATE}>=? AND ${CallLog.Calls.DATE}<=?",arrayOf((e.startedMs-MATCH_MS).toString(),(e.endedMs+MATCH_MS).toString()),
+                "${CallLog.Calls.DATE} DESC")?.use { c ->
+                var found:Long?=null
+                while(c.moveToNext()) {
+                    val k=PhoneKey.of(c.getString(0)) ?: continue
+                    if(PrivacyRules.hash(k)==e.hash) { found=c.getLong(2)*1_000L;break }
+                }
+                found
+            }
+        }.getOrNull()
+    }
 
     // ---- state ----------------------------------------------------------------------------------------------------
     private fun settings(context:Context):JSONObject=runCatching { SecureSettings(CallPipelineStartup.storage(context)).snapshot() }.getOrDefault(JSONObject())

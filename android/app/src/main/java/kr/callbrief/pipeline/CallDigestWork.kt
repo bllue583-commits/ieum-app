@@ -80,6 +80,33 @@ internal object CallDigestText {
         return evening(calls,store.newTaskCount(day),CallsScreen.callCount(calls,logs))
     }
     fun morning(store:CallRecordStore,day:LocalDate)=morning(store.openTodos(),day,store.issues())
+
+    // ---- v3.4 (DESIGN_V4 4.2-4 나): calls the evening report could not sum up, told the next morning ----
+    /** Settings key: what the last evening report left waiting, a JSON text {"at": when it went out, "day": its day
+     * (yyyy-MM-dd), "ids": the records of that day without their result}. Record ids only, never a name or a number. */
+    const val EVENING_WAITING_KEY="digestEveningWaiting"
+    /** "늦게 정리된 통화 2건": the morning report's last line when calls were summed up after the evening report. */
+    fun lateLine(n:Int):String?=if(n>0) "늦게 정리된 통화 ${n}건" else null
+    /** What the evening report of [calls] (its [day], sent [at]) leaves waiting, for [EVENING_WAITING_KEY]. */
+    fun eveningWaiting(calls:List<CallRecord>,day:LocalDate,at:Long):String =org.json.JSONObject().put("at",at).put("day",day.toString())
+        .put("ids",org.json.JSONArray().apply { calls.filter { it.summary==null && it.state!=CallRecordStore.FAILED }.forEach { put(it.recordId) } }).toString()
+    /** Calls summed up after the evening report: the ones it left waiting that have their result now, and the calls of its day
+     * that began after it went out and have one. 0 without a stored evening. */
+    fun lateDone(store:CallRecordStore,saved:String?):Int {
+        val o=saved?.takeIf { it.isNotBlank() }?.let { runCatching { org.json.JSONObject(it) }.getOrNull() } ?: return 0
+        val at=o.optLong("at",0);val ids=o.optJSONArray("ids")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty().toSet()
+        fun done(r:CallRecord?)=r!=null && r.state==CallRecordStore.ANALYZED && !r.summary.isNullOrBlank()
+        val waited=ids.count { id -> done(runCatching { store.record(id) }.getOrNull()) }
+        val after=runCatching { LocalDate.parse(o.optString("day")) }.getOrNull()?.let { d ->
+            runCatching { store.day(d) }.getOrDefault(emptyList()).count { r -> r.recordId !in ids && (r.startedMs ?: r.createdMs)>=at && r.kind=="통화" && done(r) } } ?: 0
+        return waited+after
+    }
+    /** [m] with the late line at its end (the lines stay within [MAX_LINES]). */
+    fun withLate(m:Message,n:Int):Message {
+        val line=lateLine(n) ?: return m
+        val lines=if(m.lines.size>=MAX_LINES) m.lines.take(MAX_LINES-1) else m.lines
+        return m.copy(lines=lines+line)
+    }
 }
 
 /** Next KST run time for a given hour. */
@@ -165,12 +192,18 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
             val fetched=fetchResults()
             if(fetched!=CallDigestPrefetch.Outcome.DONE) Log.w(TAG,"$kind report without fresh results: $fetched")
             // The process store (r8-1): not opened again, not closed here.
-            val message=kr.callbrief.IeumApplication.store(applicationContext).let {
-                if(kind==CallDigestSchedule.MORNING) CallDigestText.morning(it,plan.day) else CallDigestText.evening(it,plan.day)
-            }
+            val store=kr.callbrief.IeumApplication.store(applicationContext)
+            val settings=SecureSettings(CallPipelineStartup.storage(applicationContext))
+            // v3.4 (4.2-4 나): the morning report says how many calls were summed up after the evening report.
+            val late=if(kind==CallDigestSchedule.MORNING) runCatching { CallDigestText.lateDone(store,settings.snapshot().optString(CallDigestText.EVENING_WAITING_KEY)) }.getOrDefault(0) else 0
+            val message=if(kind==CallDigestSchedule.MORNING) CallDigestText.withLate(CallDigestText.morning(store,plan.day),late) else CallDigestText.evening(store,plan.day)
             // The evening report carries its day, so a tap the next morning still opens that day's calls.
-            post(kind,message,plan.day.atTime(12,0).atZone(CallRecordStore.KST).toInstant().toEpochMilli())
-            if(kind==CallDigestSchedule.EVENING) CallFollowupNotice.afterEvening(applicationContext) // r10-2: the day's call notices are in the report now
+            val posted=post(kind,message,plan.day.atTime(12,0).atZone(CallRecordStore.KST).toInstant().toEpochMilli())
+            if(kind==CallDigestSchedule.EVENING) {
+                if(posted) runCatching { val waiting=CallDigestText.eveningWaiting(store.day(plan.day),plan.day,System.currentTimeMillis())
+                    settings.update { it.put(CallDigestText.EVENING_WAITING_KEY,waiting) } }
+                CallFollowupNotice.afterEvening(applicationContext) // r10-2: the day's call notices are in the report now
+            } else if(posted) runCatching { settings.update { it.remove(CallDigestText.EVENING_WAITING_KEY) } }
         } catch(e:Exception) { Log.w(TAG,"$kind report not posted: ${e.javaClass.simpleName}") } // class only, never a message with names
         CallDigestSchedule.next(applicationContext,kind)
         if(kind==CallDigestSchedule.EVENING) {
@@ -221,7 +254,8 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
             s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false) && CallInboxConfig.enabled && !kr.callbrief.BuildConfig.LOCAL_PREVIEW,
             oldestWaiting,s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),dbBytes,
             s.optString(PipelineSettingsKeys.STALL_WARNED_DAY),s.optString(PipelineSettingsKeys.DISCONNECT_WARNED_DAY),store.dbRows,
-            RecordingGap.noticeDue(s,now),runCatching { CallUpdate.notInstalledForADay(app,now) }.getOrDefault(false))
+            RecordingGap.noticeDue(s,now),runCatching { CallUpdate.notInstalledForADay(app,now) }.getOrDefault(false),
+            runCatching { StatusLights.routineMissed(s,now) }.getOrDefault(0),s.optLong(PipelineSettingsKeys.ROUTINE_ENDED_MS,0))
     }
 }
 

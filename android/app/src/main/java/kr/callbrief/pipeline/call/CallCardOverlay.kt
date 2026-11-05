@@ -14,6 +14,8 @@ import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import android.provider.CallLog
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
@@ -27,23 +29,27 @@ import kr.callbrief.pipeline.ContactCards
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
-/** The 이음 call card over the phone's call screen (design v3.0 7.1 and 7.2, r11-2). [CallCardService] (r11-1) calls
- * [show] at every call state, [hide] when the call is over; every function may be called from any thread (the work is
- * handed to the main thread, the card's data is read on the card's own thread).
+/** The 이음 call card over the phone's call screen (design v3.0 7.1 and 7.2, r11-2; v3.4 DESIGN_V4 4.2-1 and 4.2-2, r14-2).
+ * [CallCardService] (r11-1) calls [show] at every call state, [hide] when the call is over; every function may be called from
+ * any thread (the work is handed to the main thread, the card's data is read on the card's own thread).
  *
  * - A window of `TYPE_APPLICATION_OVERLAY`, not focusable, not touch modal, laid out in the screen, `FLAG_SECURE`, as big
- *   as the card only: touches beside it reach the call screen. Its top sits at [KEY_POS_Y] of the screen height
- *   (default [DEFAULT_POS_Y]), dragging the handle moves it and the new place is kept.
- * - Drawn in two steps: the name line at once, everything else within [REST_DELAY_MS] (well under 50 ms).
- * - Off hook it folds into a strip after [COLLAPSE_AFTER_MS] (a call that goes out after [COLLAPSE_OUT_MS], so the card is
- *   still open while it rings at the other end).
- * - Without the "draw over other apps" permission, or while the screen is locked (an overlay cannot show above the lock
- *   screen), a silent heads-up notice in channel [CHANNEL] says the same in three lines; once the phone is unlocked
- *   (`ACTION_USER_PRESENT`) during the call the notice becomes the card.
- * - A number without a contact card only when the user turned on [KEY_UNKNOWN] ("아직 정리된 통화가 없는 번호예요" and the latest text);
- *   a number the call log knows has a thin card (v3.3, [kr.callbrief.pipeline.ContactCard.thin]).
+ *   as the card only: touches beside it reach the call screen.
+ * - Where it sits (4.2-2): while it rings, at most [MAX_HEIGHT] of the screen tall with its lower edge at most at
+ *   [BOTTOM_LIMIT] (the answer buttons stay free); its top at [KEY_POS_Y] (default [DEFAULT_POS_Y]), the place the user
+ *   dragged it to pulled into that range. A call going out opens at the top ([OUT_TOP] to [OUT_BOTTOM]). Off hook it folds
+ *   after [COLLAPSE_AFTER_MS] into a strip whose top is within [STRIP_TOP_MIN] .. [STRIP_TOP_MAX]; a card with nothing to keep
+ *   in view during the call (no summary, no work: [CallCardView.Content.hasBody]) goes instead of folding.
+ * - Drawn in two steps: the first two lines at once, everything else within [REST_DELAY_MS] (well under 50 ms).
+ * - Without the "draw over other apps" permission a silent heads-up notice in channel [CHANNEL] says the same in lines.
+ *   While the screen is locked (4.2-1) the window is added anyway and the notice goes up beside it (a policy may hide the window
+ *   without the view hearing of it); `ACTION_USER_PRESENT` takes the notice away. While [CallCardService] runs, the notice takes
+ *   the service's own slot ([CallCardService.NOTIFICATION_ID]): one notice, not two.
+ * - A number without a contact card only when the user turned on [KEY_UNKNOWN] ("아직 정리된 통화가 없는 번호예요" and what the
+ *   phone's call log says of it). The ringing path reads the card file and the call log only, never the call store.
  * - On the locked screen the notice shows the name, company and one check item unless "잠금 화면에서도 이름과 한 줄 보기" is off.
- *   A personal or excluded number ([CallSession.Snapshot.ignored]): nothing at all. */
+ *   A personal or excluded number ([CallSession.Snapshot.ignored]): nothing at all.
+ * - [CardStats.expanded] when the person opens the strip again, [CardStats.closed] when they close the card. */
 internal object CallCardOverlay {
     const val CHANNEL="ieum.calls.card"
     const val CHANNEL_NAME="이음 통화 카드"
@@ -52,24 +58,40 @@ internal object CallCardOverlay {
     /** Settings keys, the same strings as r11-1's `PipelineSettingsKeys.CARD_UNKNOWN` / `CARD_POS_Y` (one of them at merge). */
     const val KEY_UNKNOWN=kr.callbrief.pipeline.PipelineSettingsKeys.CARD_UNKNOWN
     const val KEY_POS_Y=kr.callbrief.pipeline.PipelineSettingsKeys.CARD_POS_Y
+    /** While it rings: the top's default place, the tallest the card may be and the lowest its lower edge may go (shares of the
+     * screen height, the 1.3 times letters included). */
     const val DEFAULT_POS_Y=0.38f
-    /** The card is never taller than this share of the screen. */
-    const val MAX_HEIGHT=0.40f
+    const val MAX_HEIGHT=0.34f
+    const val BOTTOM_LIMIT=0.72f
+    /** Off hook: the strip's top stays within these. */
+    const val STRIP_TOP_MIN=0.08f
+    const val STRIP_TOP=0.10f
+    const val STRIP_TOP_MAX=0.20f
+    /** A call going out (OFFHOOK is the moment of dialling): open at the top, its lower edge within [OUT_BOTTOM]. */
+    const val OUT_TOP=0.04f
+    const val OUT_BOTTOM=0.25f
     const val REST_DELAY_MS=16L
+    /** Off hook (in or out) the card folds this much later. */
     const val COLLAPSE_AFTER_MS=3_000L
-    const val COLLAPSE_OUT_MS=15_000L
     private const val LOG="CallCardOverlay"
 
     /** Why a card did or did not show, for r11-3's `CARD_STATS` (callCard:{shown,noPermission,noNumber,noCard}). */
     const val SHOWN="shown";const val NO_PERMISSION="noPermission";const val NO_NUMBER="noNumber";const val NO_CARD="noCard"
-    /** Told once per call: [SHOWN], [NO_PERMISSION] (shown as a notice instead), [NO_NUMBER] or [NO_CARD]. r11-3: counted in
-     * [CardStats] (settings CARD_STATS, the heartbeat's callCard). */
+    /** Told once per call: [SHOWN] (the window is up; locked too, [CardStats] tells that apart), [NO_PERMISSION] (shown as a
+     * notice instead), [NO_NUMBER] or [NO_CARD]. Counted in [CardStats] (settings CARD_STATS, the heartbeat's callCard). */
     @Volatile var outcome:(Context,String)->Unit={ c,w -> CardStats.record(c,w) }
+    /** v3.4: the person opened the strip again / closed the card this long after it showed. Replaceable in host tests. */
+    @Volatile internal var onExpanded:(Context)->Unit={ CardStats.expanded(it) }
+    @Volatile internal var onClosed:(Context,Long)->Unit={ c,ms -> CardStats.closed(c,ms) }
 
     // Replaceable in host tests.
     @Volatile internal var canDraw:(Context)->Boolean={ Settings.canDrawOverlays(it) }
     @Volatile internal var locked:(Context)->Boolean={ c -> c.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked==true }
-    @Volatile internal var latestText:(Context,String)->String?=::storeText
+    /** What the call log says of a number without a card ("3일 전 통화, 30일간 2번"), or null. Off the main thread. */
+    @Volatile internal var logLine:(Context,String)->String?=::callLogLine
+    /** The card's service is up in this process (its notice slot is then the card's). */
+    @Volatile internal var serviceUp:()->Boolean={ CallCardService.running!=null }
+    @Volatile internal var clock:()->Long={ SystemClock.elapsedRealtime() }
 
     private val main=Handler(Looper.getMainLooper())
     private val worker=Executors.newSingleThreadExecutor { r -> Thread(r,"ieum-call-card").apply { isDaemon=true } }
@@ -79,15 +101,17 @@ internal object CallCardOverlay {
     // ---- main thread only ----------------------------------------------------------------------------------------
     private var app:Context?=null
     internal var view:CallCardView?=null;private set
-    private var params:WindowManager.LayoutParams?=null
+    internal var params:WindowManager.LayoutParams?=null;private set
     /** The number the card is for (its key), the call's state, and its content. */
     private var key:String?=null
     private var state:CallSession.State=CallSession.State.IDLE
     internal var content:CallCardView.Content?=null;private set
-    /** The heads-up notice is up instead of the card. */
+    /** The heads-up notice is up (instead of the card, or beside it while the screen is locked). */
     internal var noticeUp=false;private set
+    /** The notice is in the service's slot ([CallCardService.NOTIFICATION_ID]). */
+    internal var noticeMerged=false;private set
     private var presentReceiver:BroadcastReceiver?=null
-    /** The user closed the card: nothing more for this call. */
+    /** The user closed the card, or it went at OFFHOOK with nothing to keep in view: nothing more for this call. */
     private var closed=false
     /** The user opened the strip by hand: it is not folded again by itself. */
     private var openedByHand=false
@@ -97,6 +121,10 @@ internal object CallCardOverlay {
     /** Bumped by [hide]: data read for an earlier call is dropped. */
     private var generation=0
     private var collapseQueued=false
+    /** When the card (or its notice) first showed in this call ([clock]), for [onClosed]. */
+    private var shownAt=0L
+    /** Where the strip was left in this call (px), so it folds back there. */
+    private var stripY:Int?=null
     private val autoCollapse=Runnable { collapseQueued=false;collapse() }
 
     private fun onMain(block:()->Unit) { if(Looper.myLooper()==Looper.getMainLooper()) runCatching(block).onFailure(::warn) else main.post { runCatching(block).onFailure(::warn) } }
@@ -107,10 +135,14 @@ internal object CallCardOverlay {
         val c=context.applicationContext ?: context
         onMain { showNow(c,PhoneKey.of(phoneKey),state) }
     }
-    /** Folds the card into its strip. */
+    /** Folds the card into its strip at the top (4.2-2); a card with nothing to keep in view goes instead. */
     fun collapse():Unit = onMain {
         main.removeCallbacks(autoCollapse);collapseQueued=false
-        view?.let { it.setCollapsed(true);Log.i(LOG,"card collapsed") };relayout()
+        val v=view ?: return@onMain
+        if(content?.hasBody==false) { removeAll();closed=true;Log.i(LOG,"card gone: nothing to keep in view");return@onMain }
+        if(!v.collapsed) { v.setCollapsed(true);Log.i(LOG,"card collapsed") }
+        params?.let { p -> app?.let { c -> p.y=stripY ?: (STRIP_TOP*height(c)).toInt() } }
+        relayout(force=true)
     }
     /** Opens the strip into the whole card again. */
     fun expand():Unit = onMain {
@@ -120,7 +152,7 @@ internal object CallCardOverlay {
     }
     /** Takes the card (and the notice instead of it) away; the next call starts afresh. */
     fun hide():Unit = onMain { removeAll();forgetCall();state=CallSession.State.IDLE }
-    private fun forgetCall() { closed=false;openedByHand=false;told=false;toldNoNumber=false;loading=false;key=null;content=null;generation++ }
+    private fun forgetCall() { closed=false;openedByHand=false;told=false;toldNoNumber=false;loading=false;key=null;content=null;stripY=null;shownAt=0L;generation++ }
 
     private fun showNow(c:Context,phoneKey:String?,to:CallSession.State) {
         app=c
@@ -133,7 +165,7 @@ internal object CallCardOverlay {
         if(phoneKey!=null) key=phoneKey
         state=to
         if(closed) return
-        if(content!=null) { place(c);afterState();return }
+        if(content!=null) { place(c);relayout();afterState();return }
         val k=key
         if(k==null) { tell(c,NO_NUMBER,last=false);return }
         if(!newCall && loading) return
@@ -142,25 +174,27 @@ internal object CallCardOverlay {
         worker.execute { runCatching { load(c,k,gen) }.onFailure(::warn) }
     }
 
-    /** The card's data, read off the main thread: the contact card, or for an unknown number (when wanted) the latest text. */
+    /** The card's data, read off the main thread: the contact card (the card file only), or for an unknown number (when wanted)
+     * what the call log says of it. Never the call store: the ringing path stays quick (4.1-2). */
     private fun load(c:Context,phoneKey:String,gen:Int) {
         val card=ContactCards.get(c,phoneKey)
         if(card!=null) { deliver(c,gen,CallCardView.Content.of(card));return }
-        val settings=runCatching { SecureSettings(c).snapshot() }.getOrNull()
-        if(settings?.optBoolean(KEY_UNKNOWN,false)!=true || runCatching { CallSession.isPrivate(c,phoneKey) }.getOrDefault(true)) {
+        val settings=runCatching { CallSession.callSettings(c) }.getOrNull()
+        if(settings?.optBoolean(KEY_UNKNOWN,false)!=true) {
             main.post { if(gen==generation) { loading=false;tell(c,NO_CARD) } };return
         }
-        // The name line first ("아직 정리된 통화가 없는 번호예요"), the latest text once read (the call store may take a moment to open).
+        // The first line at once, the call log's line once read.
         deliver(c,gen,CallCardView.Content.unknown(null),rest=false)
-        val text=runCatching { latestText(c,phoneKey) }.getOrNull()
-        deliver(c,gen,CallCardView.Content.unknown(text))
+        val line=runCatching { logLine(c,phoneKey) }.getOrNull()
+        deliver(c,gen,CallCardView.Content.unknown(line))
     }
     private fun deliver(c:Context,gen:Int,data:CallCardView.Content,rest:Boolean=true) { main.post {
         runCatching {
             if(gen!=generation || closed || state==CallSession.State.IDLE) return@post
             val first=content==null
             content=data;loading=false
-            if(first) { place(c,nameOnly=true);tell(c,if(noticeUp) NO_PERMISSION else SHOWN) }
+            if(first) { place(c,nameOnly=true);shownAt=clock();tell(c,if(view==null && noticeUp) NO_PERMISSION else SHOWN) }
+            else view?.let { if(it.complete) it.showAll(data) }
             if(rest) main.postDelayed({ runCatching { if(gen==generation && content===data) { view?.showAll(data);relayout();if(noticeUp) notice(c,data) } }.onFailure(::warn) },
                 if(first) REST_DELAY_MS else 0L)
             afterState()
@@ -175,30 +209,30 @@ internal object CallCardOverlay {
         told=true;runCatching { outcome(c,what) }
     }
 
-    /** The card in its window, or the notice when the card cannot show. */
+    /** The card in its window; with the screen locked the notice beside it too (4.2-1); without the permission the notice only. */
     private fun place(c:Context,nameOnly:Boolean=false) {
         val data=content ?: return
         if(!runCatching { canDraw(c) }.getOrDefault(false)) { notice(c,data);return }
-        if(runCatching { locked(c) }.getOrDefault(false)) { notice(c,data);waitForUnlock(c);return }
-        if(noticeUp) cancelNotice(c)
         if(view==null) addCard(c,data,nameOnly)
+        if(runCatching { locked(c) }.getOrDefault(false)) { notice(c,data);waitForUnlock(c) }
+        else if(noticeUp) cancelNotice(c)
     }
     private fun afterState() {
         val v=view ?: return
         if(state==CallSession.State.OFFHOOK && !v.collapsed && !openedByHand && !collapseQueued) {
             collapseQueued=true
-            val out=runCatching { CallSession.current().direction==CallSession.Direction.OUT }.getOrDefault(false)
-            main.postDelayed(autoCollapse,if(out) COLLAPSE_OUT_MS else COLLAPSE_AFTER_MS)
+            main.postDelayed(autoCollapse,COLLAPSE_AFTER_MS)
         }
     }
+    private fun outgoing()=runCatching { CallSession.current().direction==CallSession.Direction.OUT }.getOrDefault(false)
 
     private fun addCard(c:Context,data:CallCardView.Content,nameOnly:Boolean) {
         CallUi.applyTheme(c)
         val wm=c.getSystemService(WindowManager::class.java) ?: return
         val dm=c.resources.displayMetrics
         val v=CallCardView(c).apply {
-            maxHeightPx=(dm.heightPixels*MAX_HEIGHT).toInt()
-            onCollapse={ collapse() };onExpand={ expand() };onClose={ close() }
+            maxHeightPx=maxHeight(c,this)
+            onCollapse={ collapse() };onExpand={ expand();runCatching { onExpanded(c) } };onClose={ close() }
             onMoveBy={ dy -> moveBy(dy) };onMoveEnd={ savePosition() }
             if(nameOnly) showName(data) else showAll(data)
         }
@@ -209,32 +243,54 @@ internal object CallCardOverlay {
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_SECURE,PixelFormat.TRANSLUCENT).apply {
             gravity=Gravity.TOP or Gravity.CENTER_HORIZONTAL
             title="이음 통화 카드"
-            y=clampY(c,(positionFraction(c)*dm.heightPixels).toInt(),v)
+            y=clampY(c,if(topOpen(v)) (OUT_TOP*height(c)).toInt() else (positionFraction(c)*height(c)).toInt(),v)
         }
+        // A new height (the second drawing step, folding, larger letters) is checked against the limits again.
+        v.addOnLayoutChangeListener { _,_,top,_,bottom,_,oldTop,_,oldBottom -> if(bottom-top!=oldBottom-oldTop) main.post { if(view===v) relayout() } }
         wm.addView(v,p)
         view=v;params=p
         // r11-3: the emulator check reads these lines (tools/device/call_card_test.sh); no number, no name.
         Log.i(LOG,"card shown unknown=${data.unknown}")
     }
-    private fun relayout() { val v=view ?: return;val p=params ?: return;val c=app ?: return
-        p.y=clampY(c,p.y,v);runCatching { c.getSystemService(WindowManager::class.java)?.updateViewLayout(v,p) } }
-    /** Keeps the card wholly on the screen. */
-    private fun clampY(c:Context,y:Int,v:View):Int {
-        val h=c.resources.displayMetrics.heightPixels
-        val tall=if(v.height>0) v.height else (h*(if((v as? CallCardView)?.collapsed==true) 0.1f else MAX_HEIGHT)).toInt()
-        return y.coerceIn(0,maxOf(0,h-tall))
+    private fun height(c:Context)=c.resources.displayMetrics.heightPixels
+    /** The open card of a call going out, not opened again by hand: at the top (4.2-2). */
+    private fun topOpen(v:CallCardView)=!v.collapsed && !openedByHand && outgoing()
+    private fun maxHeight(c:Context,v:CallCardView):Int =(height(c)*if(topOpen(v)) OUT_BOTTOM-OUT_TOP else MAX_HEIGHT).toInt()
+    /** The card's height limit and place checked again; the window is updated only when its place changed (a needless update
+     * costs a frame). [force]: update anyway (the place was changed by the caller). */
+    internal fun relayout(force:Boolean=false) { val v=view ?: return;val p=params ?: return;val c=app ?: return
+        val max=maxHeight(c,v);if(v.maxHeightPx!=max) { v.maxHeightPx=max;v.requestLayout() }
+        val y=clampY(c,p.y,v)
+        if(y==p.y && !force) return
+        p.y=y;runCatching { c.getSystemService(WindowManager::class.java)?.updateViewLayout(v,p) } }
+    /** Keeps the card in its range (4.2-2): the strip's top within [STRIP_TOP_MIN] .. [STRIP_TOP_MAX]; a call going out at the
+     * top; while it rings (or opened by hand) the lower edge at most at [BOTTOM_LIMIT] (off hook not above the strip's range). */
+    internal fun clampY(c:Context,y:Int,v:CallCardView):Int {
+        val h=height(c)
+        if(v.collapsed) return y.coerceIn((STRIP_TOP_MIN*h).toInt(),(STRIP_TOP_MAX*h).toInt())
+        if(topOpen(v)) return (OUT_TOP*h).toInt()
+        val tall=if(v.height>0) minOf(v.height,v.maxHeightPx) else v.maxHeightPx.takeIf { it in 1 until Int.MAX_VALUE } ?: (h*MAX_HEIGHT).toInt()
+        val min=if(state==CallSession.State.OFFHOOK) (STRIP_TOP_MIN*h).toInt() else 0
+        return y.coerceIn(min,maxOf(min,(BOTTOM_LIMIT*h).toInt()-tall))
     }
-    private fun moveBy(dy:Float) { val p=params ?: return;p.y+=dy.toInt();relayout() }
+    private fun moveBy(dy:Float) { val p=params ?: return;p.y+=dy.toInt();relayout(force=true) }
+    /** The place is kept for the next ringing card; the strip's only for this call. */
     private fun savePosition() {
-        val c=app ?: return;val p=params ?: return
-        val f=(p.y.toFloat()/c.resources.displayMetrics.heightPixels).coerceIn(0f,1f)
+        val c=app ?: return;val p=params ?: return;val v=view ?: return
+        if(v.collapsed) { stripY=p.y;return }
+        if(topOpen(v) || state!=CallSession.State.RINGING) return
+        val f=(p.y.toFloat()/height(c)).coerceIn(0f,1f)
         worker.execute { runCatching { SecureSettings(c).update { it.put(KEY_POS_Y,f.toDouble()) } }.onFailure(::warn) }
     }
-    /** The card's place (share of the screen height): the one the user dragged it to, else [DEFAULT_POS_Y]. */
-    internal fun positionFraction(c:Context):Float =runCatching { SecureSettings(c).snapshot().optDouble(KEY_POS_Y,DEFAULT_POS_Y.toDouble()).toFloat() }
+    /** The card's place while it rings (share of the screen height): the one the user dragged it to, else [DEFAULT_POS_Y]. */
+    internal fun positionFraction(c:Context):Float =runCatching { (CallSession.callSettings(c) ?: SecureSettings(c).snapshot()).optDouble(KEY_POS_Y,DEFAULT_POS_Y.toDouble()).toFloat() }
         .getOrDefault(DEFAULT_POS_Y).takeIf { !it.isNaN() }?.coerceIn(0f,1f) ?: DEFAULT_POS_Y
     /** [닫기]: the card goes for the rest of this call. */
-    private fun close() { removeAll();closed=true }
+    private fun close() {
+        val c=app
+        if(c!=null && shownAt>0) runCatching { onClosed(c,(clock()-shownAt).coerceAtLeast(0)) }
+        removeAll();closed=true
+    }
     private fun removeAll() {
         main.removeCallbacks(autoCollapse);collapseQueued=false
         val c=app
@@ -243,7 +299,7 @@ internal object CallCardOverlay {
         if(c!=null) { if(noticeUp) cancelNotice(c);stopWaiting(c) }
     }
 
-    // ---- the notice instead of the card ----------------------------------------------------------------------------
+    // ---- the notice ------------------------------------------------------------------------------------------------
     private fun waitForUnlock(c:Context) {
         if(presentReceiver!=null) return
         val r=object:BroadcastReceiver() { override fun onReceive(x:Context,i:Intent) { if(i.action==Intent.ACTION_USER_PRESENT) onMain { onUnlocked(c) } } }
@@ -254,10 +310,12 @@ internal object CallCardOverlay {
         }.onFailure(::warn)
     }
     private fun stopWaiting(c:Context) { presentReceiver?.let { r -> runCatching { c.unregisterReceiver(r) } };presentReceiver=null }
+    /** Unlocked during the call: the notice goes, the card stays (or comes, when the window could not be added before). */
     private fun onUnlocked(c:Context) {
         stopWaiting(c)
+        if(noticeUp && runCatching { canDraw(c) }.getOrDefault(false)) cancelNotice(c)
         if(state==CallSession.State.IDLE || closed || content==null) return
-        place(c);view?.let { v -> content?.let { if(!v.complete) v.showAll(it) } };afterState()
+        place(c);view?.let { v -> content?.let { if(!v.complete) v.showAll(it) } };relayout();afterState()
     }
     /** The heads-up notice of [data] (also what r11-1's service may show as its own notice). */
     fun buildNotice(c:Context,data:CallCardView.Content):Notification {
@@ -275,7 +333,7 @@ internal object CallCardOverlay {
     }
     /** "잠금 화면에서도 이름과 한 줄 보기" ([KEY_LOCK_DETAIL], on unless the user turned it off). */
     const val KEY_LOCK_DETAIL=kr.callbrief.pipeline.PipelineSettingsKeys.LOCK_SCREEN_DETAIL
-    internal fun lockDetail(c:Context):Boolean =runCatching { SecureSettings(c).snapshot().optBoolean(KEY_LOCK_DETAIL,true) }.getOrDefault(true)
+    internal fun lockDetail(c:Context):Boolean =runCatching { (CallSession.callSettings(c) ?: SecureSettings(c).snapshot()).optBoolean(KEY_LOCK_DETAIL,true) }.getOrDefault(true)
     /** What the locked screen shows of the notice (DESIGN_V4 3.1-5, 1.3 #9). With [detail]: the name, the company and one check
      * item ([CallCardView.Content.publicText]: no number, no amount, nothing of the call's words). Without: no name, no summary. */
     internal fun publicNotice(c:Context,data:CallCardView.Content,detail:Boolean):Notification {
@@ -285,27 +343,49 @@ internal object CallCardOverlay {
     }
     private fun notice(c:Context,data:CallCardView.Content) {
         if(Build.VERSION.SDK_INT>=33 && c.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) return
-        runCatching { c.getSystemService(NotificationManager::class.java)?.notify(NOTICE_TAG,NOTICE_ID,buildNotice(c,data));noticeUp=true }.onFailure(::warn)
+        runCatching {
+            val m=c.getSystemService(NotificationManager::class.java) ?: return
+            val n=buildNotice(c,data)
+            // One notice while the service runs: the card's takes the service's slot (4.2-1).
+            if(runCatching { serviceUp() }.getOrDefault(false)) { m.notify(CallCardService.NOTIFICATION_ID,n);noticeMerged=true }
+            else { m.notify(NOTICE_TAG,NOTICE_ID,n);noticeMerged=false }
+            noticeUp=true
+        }.onFailure(::warn)
     }
-    private fun cancelNotice(c:Context) { runCatching { c.getSystemService(NotificationManager::class.java)?.cancel(NOTICE_TAG,NOTICE_ID) };noticeUp=false }
+    private fun cancelNotice(c:Context) {
+        runCatching {
+            val m=c.getSystemService(NotificationManager::class.java) ?: return@runCatching
+            if(noticeMerged) {
+                // The service's slot gets its own quiet words back (a foreground notice cannot be taken away while it runs).
+                if(runCatching { serviceUp() }.getOrDefault(false)) m.notify(CallCardService.NOTIFICATION_ID,serviceNotice(c)) else m.cancel(CallCardService.NOTIFICATION_ID)
+            } else m.cancel(NOTICE_TAG,NOTICE_ID)
+        }
+        noticeUp=false;noticeMerged=false
+    }
+    /** The service's own notice, as [CallCardService] posts it. */
+    private fun serviceNotice(c:Context):Notification =Notification.Builder(c,CallCardService.CHANNEL).setSmallIcon(R.drawable.ic_stat_ieum)
+        .setContentTitle("통화 중에 이음 카드를 보여 드려요").setOngoing(true).setOnlyAlertOnce(true).setCategory(Notification.CATEGORY_CALL).setShowWhen(false).build()
 
-    /** The latest text with [phoneKey] (an unknown number), first sentence only. Opens the call store: off the main thread. */
-    private fun storeText(c:Context,phoneKey:String):String? {
-        val r=kr.callbrief.IeumApplication.store(c).cardRows("""SELECT summary,transcript FROM call_records WHERE counterpart_key=? AND recording_id LIKE 'sms:%'
-            ORDER BY COALESCE(started_ms,created_ms) DESC LIMIT 1""",phoneKey).firstOrNull() ?: return null
-        val summary=ContactCards.firstSentence(r["summary"] as? String)
-        if(summary.isNotEmpty()) return summary
-        val last=(r["transcript"] as? String).orEmpty().lines().lastOrNull { it.isNotBlank() }.orEmpty()
-        return ContactCards.firstSentence(last.substringAfter("] ",last)).takeIf { it.isNotEmpty() }
+    /** "3일 전 통화, 30일간 2번" for [phoneKey] from the phone's call log (the last 30 days), or null (no permission, not there). */
+    private fun callLogLine(c:Context,phoneKey:String):String? {
+        if(c.checkSelfPermission(Manifest.permission.READ_CALL_LOG)!=PackageManager.PERMISSION_GRANTED) return null
+        val now=System.currentTimeMillis();var last:Long?=null;var n=0
+        c.contentResolver.query(CallLog.Calls.CONTENT_URI,arrayOf(CallLog.Calls.NUMBER,CallLog.Calls.DATE),"${CallLog.Calls.DATE}>=?",
+            arrayOf((now-30*CallCardView.Content.DAY_MS).toString()),"${CallLog.Calls.DATE} DESC")?.use { cur ->
+            var i=0
+            while(cur.moveToNext() && i++<2_000) if(PhoneKey.of(cur.getString(0))==phoneKey) { if(last==null) last=cur.getLong(1);n++ }
+        }
+        return last?.let { CallCardView.Content.thinLine(it,n,now) }
     }
 
     /** Host tests: back to the start. */
     internal fun resetForHost() {
         main.removeCallbacks(autoCollapse);collapseQueued=false
         app?.let { c -> view?.let { runCatching { c.getSystemService(WindowManager::class.java)?.removeViewImmediate(it) } };stopWaiting(c) }
-        view=null;params=null;noticeUp=false;forgetCall()
+        view=null;params=null;noticeUp=false;noticeMerged=false;forgetCall()
         state=CallSession.State.IDLE;app=null
         canDraw={ Settings.canDrawOverlays(it) };locked={ c -> c.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked==true }
-        latestText=::storeText;outcome={ c,w -> CardStats.record(c,w) }
+        logLine=::callLogLine;outcome={ c,w -> CardStats.record(c,w) };serviceUp={ CallCardService.running!=null }
+        onExpanded={ CardStats.expanded(it) };onClosed={ c,ms -> CardStats.closed(c,ms) };clock={ SystemClock.elapsedRealtime() }
     }
 }
