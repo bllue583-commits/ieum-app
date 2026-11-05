@@ -7,6 +7,8 @@
     <uses-permission android:name="android.permission.READ_SMS" />
     <!-- The call log is matched with the recordings on the phone (number, direction, calls without a recording). -->
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
+    <!-- v2.9: knows at once that a call ended, so its recording is looked for right away (design 6.1). -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
@@ -27,6 +29,12 @@
         </activity>
         <receiver android:name=".pipeline.UpdateStatusReceiver" android:exported="false" />
         <receiver android:name=".pipeline.NotificationActionReceiver" android:exported="false" />
+        <!-- Exported: PHONE_STATE is sent by the system (design 6.1, r10-1). -->
+        <receiver android:name=".pipeline.call.CallStateReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.PHONE_STATE" />
+            </intent-filter>
+        </receiver>
         <receiver android:name=".pipeline.StartupReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
