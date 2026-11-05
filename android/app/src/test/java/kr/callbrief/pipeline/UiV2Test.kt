@@ -145,8 +145,11 @@ class UiV2Test:ProtectedTextHostTestBase() {
     @Test fun mainActivityIsTheOnlyScreenAndKeepsItsStateAcrossARestart() {
         val pm=app.packageManager
         val info=pm.getPackageInfo(app.packageName,android.content.pm.PackageManager.GET_ACTIVITIES)
-        assertEquals(listOf(MainActivity::class.java.name),info.activities!!.map { it.name })
-        assertEquals(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,info.activities!!.single().screenOrientation)
+        // v3.3 (DESIGN_V4 3.2-4): besides the one screen Activity only the hidden golden measurement tool, not exported.
+        val activities=info.activities!!
+        assertEquals(listOf(MainActivity::class.java.name),activities.filter { it.name!=GoldenMeasureActivity::class.java.name }.map { it.name })
+        activities.firstOrNull { it.name==GoldenMeasureActivity::class.java.name }?.let { assertFalse(it.exported) }
+        activities.forEach { assertEquals(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,it.screenOrientation) }
         seeded()
         val c=Robolectric.buildActivity(MainActivity::class.java,MainActivity.intent(app,Screen.COMPANIES)).setup()
         val a=c.get();settle { tagged(a,"company_").any { it is ViewGroup } }

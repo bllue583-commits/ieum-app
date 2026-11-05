@@ -38,6 +38,8 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- v3.3 (DESIGN_V4 3.2-4): the hidden golden measurement, opened from 설정 "상태와 도움" only. -->
+        <activity android:name=".pipeline.GoldenMeasureActivity" android:exported="false" android:screenOrientation="portrait" />
         <receiver android:name=".pipeline.UpdateStatusReceiver" android:exported="false" />
         <receiver android:name=".pipeline.NotificationActionReceiver" android:exported="false" />
         <!-- Exported: PHONE_STATE is sent by the system (design 6.1, r10-1). -->

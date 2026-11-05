@@ -31,6 +31,9 @@ internal object PhoneStatus {
     internal const val DB_RECOVERY_LAST="dbRecoveryLast"
     /** The lastInboxError code as last sent and since when it has been the same (the watchdog keeps no state of its own). */
     internal const val INBOX_ERROR_SEEN="inboxErrorSeen";internal const val INBOX_ERROR_SINCE_MS="inboxErrorSinceMs"
+    /** v3.3 r13-2 (DESIGN_V4 3.2-1): running numbers of the recognizer's pieces ([SttPieceStats.add]); the heartbeat's
+     * transcription.decode. */
+    internal const val STT_DECODE="sttDecode"
 
     /** Everything the file says; [oldestQueuedMs] is the age start of the oldest recording still waiting for its text. */
     data class Input(val nowMs:Long,val appVersion:String,val versionCode:Long,val queuedCount:Int,val oldestQueuedMs:Long?,
@@ -45,7 +48,12 @@ internal object PhoneStatus {
         /** Design 3.6 (r7-6): the queue split new/old by entry time, discovery tries, store fill and the update wait. */
         val watch:Watch=Watch(),
         /** DESIGN_V4 2절 (v3.1): permissions, the recording gap, follow-ups, store open, results, counts and latency. */
-        val v31:V31=V31())
+        val v31:V31=V31(),
+        /** DESIGN_V4 3절 (v3.3): the golden measurement and the number guard, numbers only. */
+        val v33:V33=V33())
+    /** v3.3: [golden] = [PipelineSettingsKeys.GOLDEN] (r13-2, [kr.callbrief.pipeline.GoldenMeasure]), [guard] =
+     * [PipelineSettingsKeys.GUARD_STATS] (r13-1). Both go through [counts]: no text, no names, only numbers and yes/no. */
+    data class V33(val golden:JSONObject?=null,val guard:JSONObject?=null)
     /** Granted permissions and roles (r12-2); null: not read. */
     data class Permissions(val phoneState:Boolean,val overlay:Boolean,val redirectRole:Boolean,val installAllowed:Boolean)
     /** The v3.1 keys (DESIGN_V4 2절 머리). Values come from settings keys the bundles write; null/absent where nothing is known yet.
@@ -121,6 +129,9 @@ internal object PhoneStatus {
         // Since when the same inbox error code is reported (watchdog: 2 hours); only next to an error.
         if(o.has("lastInboxError")) w.lastInboxErrorSinceMs?.let { o.put("lastInboxErrorSinceMs",it) }
         putV31(o,i.v31)
+        // v3.3: absent (null) until measured or counted; numbers only.
+        o.put("golden",i.v33.golden?.let(::counts) ?: JSONObject.NULL)
+        o.put("guard",i.v33.guard?.let(::counts) ?: JSONObject.NULL)
         return o
     }
     private fun putV31(o:JSONObject,v:V31) {
@@ -235,7 +246,8 @@ internal object PhoneStatus {
                 (s.opt(kr.callbrief.IeumApplication.DB_OPEN_MS) as? Number)?.toLong(),(s.opt(kr.callbrief.IeumApplication.HOME_READ_MS) as? Number)?.toLong(),
                 (s.opt(ResultChain.ROUND_KEY) as? Number)?.toInt(),(s.opt(ResultChain.NEXT_MS_KEY) as? Number)?.toLong()?.takeIf { it>0 },
                 runCatching { kr.callbrief.pipeline.call.CardStats.heartbeat(s,now) }.getOrNull()),
-            v31 = v31(app,s))
+            v31 = v31(app,s),
+            v33 = V33(jsonOf(s,PipelineSettingsKeys.GOLDEN),jsonOf(s,PipelineSettingsKeys.GUARD_STATS)))
     }
     private fun jsonOf(s:JSONObject,key:String):JSONObject? = when(val v=s.opt(key)) {
         is JSONObject -> v
@@ -254,8 +266,9 @@ internal object PhoneStatus {
     private fun transcription(app:Context,s:JSONObject):JSONObject? {
         val o=runCatching { CallTranscriptionStore(app).use { it.heartbeat() } }.onFailure { Log.w(TAG,"transcription not read: ${it.javaClass.simpleName}") }.getOrNull()
         val runs=jsonOf(s,PipelineSettingsKeys.TRANSCRIPTION_RUNS)
-        if(o==null && runs==null) return null
-        return (o ?: JSONObject()).apply { runs?.let { put("runs",it) } }
+        val decode=jsonOf(s,STT_DECODE)
+        if(o==null && runs==null && decode==null) return null
+        return (o ?: JSONObject()).apply { runs?.let { put("runs",it) };decode?.let { put("decode",it) } }
     }
     /** What is actually granted now (r12-2, design 2.2-1): phone state, drawing over apps, the call redirection role, installs. */
     internal fun permissions(app:Context):Permissions? = runCatching {

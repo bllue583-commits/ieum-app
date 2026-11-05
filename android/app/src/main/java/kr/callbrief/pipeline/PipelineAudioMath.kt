@@ -96,6 +96,10 @@ internal object PipelineAudioMath {
      * (v2.4-2) can compare it with [SPEECH_FLOOR_LOW]; the lower value is adopted only if CER and names improve. */
     const val SPEECH_FLOOR=0.006f
     const val SPEECH_FLOOR_LOW=0.0025f
+    /** The share of a piece's loud (90th percentile) level above which a window is speech. Unchanged in v3.3; the golden
+     * variant "vadLow" (B7) tries [LOUD_SHARE_LOW] with [SPEECH_FLOOR_LOW] for a quiet other side. */
+    const val LOUD_SHARE=0.3f
+    const val LOUD_SHARE_LOW=0.15f
     /** Two minutes: a stopped piece costs little (it is redone from its start) and fits well inside WorkManager's time limit. */
     const val MAX_CHUNK_MS=120_000L
     const val CUT_SEARCH_MS=2_000L
@@ -392,7 +396,9 @@ internal class PipelineAudioStream(val sampleRate:Int,val channels:Int,maxChunkM
  * pass ([PipelineSpeechAssembler]) copies them out of the same chunks decoded again. Each output piece's offset is the
  * original position of its first sample; times inside it are on the shortened audio (hence vadApplied=true). */
 internal class PipelineSpeechPlan(private val rate:Int=PipelineAudioMath.TARGET_RATE,private val keepGapMs:Long=1500,private val padMs:Long=300,
-                                  private val floor:Float=PipelineAudioMath.SPEECH_FLOOR) {
+                                  private val floor:Float=PipelineAudioMath.SPEECH_FLOOR,
+                                  /** v3.3 B7 (golden variant only): share of the loud level that counts as speech. */
+                                  private val loudShare:Float=PipelineAudioMath.LOUD_SHARE) {
     class Part(val chunk:Int,val from:Int,val to:Int)
     /** [origin]: start sample on the original timeline (from the chunk's ms offset, as before). */
     class Piece(val origin:Long){ val parts=ArrayList<Part>(2);var length=0L;private set
@@ -410,7 +416,7 @@ internal class PipelineSpeechPlan(private val rate:Int=PipelineAudioMath.TARGET_
         val rms=PipelineAudioMath.rmsWindows(data,rate,30,from,to)
         if(rms.isEmpty())return
         val sorted=rms.sorted();val low=sorted[rms.size/5];val loud=sorted[rms.size*9/10]
-        val threshold=max(floor,min(low*3,loud*0.3f)) // continuous speech: the floor is speech itself
+        val threshold=max(floor,min(low*3,loud*loudShare)) // continuous speech: the floor is speech itself
         val gap=(keepGapMs/30).toInt();val pad=(padMs/30).toInt()
         val start=offsetMs*rate/1000
         var i=0
