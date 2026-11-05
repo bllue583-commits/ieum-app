@@ -48,8 +48,8 @@ internal object CallCardOverlay {
     const val NOTICE_TAG="callcard"
     const val NOTICE_ID=3_011
     /** Settings keys, the same strings as r11-1's `PipelineSettingsKeys.CARD_UNKNOWN` / `CARD_POS_Y` (one of them at merge). */
-    const val KEY_UNKNOWN="cardUnknown"
-    const val KEY_POS_Y="cardPosY"
+    const val KEY_UNKNOWN=kr.callbrief.pipeline.PipelineSettingsKeys.CARD_UNKNOWN
+    const val KEY_POS_Y=kr.callbrief.pipeline.PipelineSettingsKeys.CARD_POS_Y
     const val DEFAULT_POS_Y=0.38f
     /** The card is never taller than this share of the screen. */
     const val MAX_HEIGHT=0.40f
