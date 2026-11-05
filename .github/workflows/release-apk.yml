@@ -177,6 +177,14 @@ jobs:
           EOF
           # v3.1 (DESIGN_V4 2.2-2): promptVersion, tidyVersion and certSha256 for the watchdog, which never reads this repository.
           APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner" python3 tools/release/version_fields.py --root . --apk "$RUNNER_TEMP/ieum.apk" --merge version.json
+          # v3.4: the scheduled tasks read their instructions and the watchdog from the inbox, so the copies go up with the app
+          # (before version.json, so a routine never meets a newer app with older instructions).
+          for pair in "docs/routines/hourly.md:routines/hourly.md" "docs/routines/tidy.md:routines/tidy.md" "tools/inbox/watchdog.py:tools/watchdog.py"; do
+            src=${pair%%:*}; dst=${pair#*:}
+            prev=$(gh api "repos/$INBOX/contents/$dst" --jq .sha 2>/dev/null || true)
+            if [ -n "$prev" ] && [ "$(git hash-object "$src")" = "$prev" ]; then continue; fi
+            gh api -X PUT "repos/$INBOX/contents/$dst" -f message="$dst for $tag" -f content="$(base64 -w0 "$src")" ${prev:+-f sha="$prev"} > /dev/null
+          done
           old=$(gh api "repos/$INBOX/contents/app/version.json" --jq .sha 2>/dev/null || true)
           gh api -X PUT "repos/$INBOX/contents/app/version.json" -f message="app $tag" -f content="$(base64 -w0 version.json)" ${old:+-f sha="$old"} > /dev/null
           # Keep the three newest releases. The new release is already out: a failed clean-up only warns (the API sometimes answers 500).
