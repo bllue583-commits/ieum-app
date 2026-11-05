@@ -81,6 +81,17 @@ class WatchdogTest(unittest.TestCase):
         self.assertEqual([w.T_ROUTINE], titles(last_run={"processed": 0}, inbox_oldest_ms=NOW - H, inbox_count=1))
         self.assertEqual([], titles(last_run={"processed": 0}))
 
+    def test_inbox_age_counts_only_routine_hours(self):
+        # v2.9: the routine runs 07:00 to 22:30 KST. NOW is 17:00 KST; 07:00 KST that day is NOW - 10 h.
+        seven = NOW - 10 * H
+        self.assertEqual(2 * H, w.routine_ms(seven + H, seven + 3 * H))
+        # Sent at 22:00, read at 08:30 the next day: 1 h before 23:00 and 1.5 h after 07:00.
+        self.assertEqual(int(2.5 * H), w.routine_ms(seven + 15 * H - DAY, seven + int(1.5 * H)))
+        self.assertEqual(0, w.routine_ms(seven - 5 * H, seven))
+        # A request from 23:30 the night before is not stuck at 08:30; at 10:30 it is.
+        self.assertEqual([], [p["title"] for p in w.evaluate(seven + int(1.5 * H), {"atMs": seven + H}, {"processed": 3}, seven - int(7.5 * H), 1)])
+        self.assertEqual([w.T_INBOX], [p["title"] for p in w.evaluate(seven + int(3.5 * H), {"atMs": seven + 3 * H}, {"processed": 3}, seven - int(7.5 * H), 1)])
+
     def test_limit_replaces_idle_routine(self):
         self.assertEqual([w.T_LIMIT], titles(last_run={"processed": 0, "limitHit": True}, inbox_oldest_ms=NOW - H, inbox_count=1))
 

@@ -40,6 +40,28 @@ def hours(ms):
     return f"{ms / HOUR:.1f}시간"
 
 
+# v2.9 (r10-3): the hourly routine runs every 30 minutes from 07:00 to 22:30 KST (cron "*/30 7-22 * * *", Asia/Seoul).
+# A request that went up at night waits for 07:00 by design, so its age counts only the time the routine runs.
+KST_OFFSET_MS = 9 * HOUR
+ROUTINE_FIRST_HOUR = 7
+ROUTINE_END_HOUR = 23  # the last run is 22:30; the next one is 07:00
+
+
+def routine_ms(from_ms, to_ms):
+    """Milliseconds between from_ms and to_ms that fall in the routine's hours (07:00 to 23:00 KST)."""
+    if to_ms <= from_ms:
+        return 0
+    day = 24 * HOUR
+    total = 0
+    start_day = (from_ms + KST_OFFSET_MS) // day
+    end_day = (to_ms + KST_OFFSET_MS) // day
+    for d in range(start_day, end_day + 1):
+        lo = d * day - KST_OFFSET_MS + ROUTINE_FIRST_HOUR * HOUR
+        hi = d * day - KST_OFFSET_MS + ROUTINE_END_HOUR * HOUR
+        total += max(0, min(hi, to_ms) - max(lo, from_ms))
+    return total
+
+
 def ms(phone, key):
     try:
         return int(phone.get(key) or 0)
@@ -149,9 +171,10 @@ def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count):
             add(T_UPDATE, f"앱 업데이트가 실패했어요. 코드: {err}\n앱 버전: {phone.get('appVersion', '?')}\n\n추정 원인: 설치 권한, 저장 공간, 서명 불일치예요.")
 
     if inbox_oldest_ms is not None:
-        iage = now_ms - inbox_oldest_ms
+        # Counted in the routine's hours only (07:00 to 23:00 KST): six missed 30-minute runs and more.
+        iage = routine_ms(inbox_oldest_ms, now_ms)
         if iage > INBOX_STUCK_MS:
-            add(T_INBOX, f"분석을 기다리는 요청 {inbox_count}개 중 가장 오래된 것이 {hours(iage)} 됐어요 (기준 3시간).\n\n"
+            add(T_INBOX, f"분석을 기다리는 요청 {inbox_count}개 중 가장 오래된 것이 루틴이 도는 시간으로 {hours(iage)} 됐어요 (기준 3시간).\n\n"
                 "추정 원인: 루틴 실행 한도, 루틴 저장소 토큰 만료, 루틴 일시 중지예요.")
 
     if last_run is not None:
