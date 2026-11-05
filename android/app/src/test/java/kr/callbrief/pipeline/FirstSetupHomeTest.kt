@@ -197,7 +197,8 @@ class FirstSetupHomeTest:ProtectedTextHostTestBase() {
         val a=settings()
         // The first group on the page, right under the title.
         val groups=views(a.window.decorView).mapNotNull { (it.tag as? String)?.takeIf { t -> t.startsWith("group_") } }
-        assertEquals(SettingsScreen.GROUP_NOW,groups.first())
+        // v3.3: an amber light puts "지금 상태" above it (DESIGN_V4 3.3-4); then this group.
+        assertEquals(SettingsScreen.GROUP_NOW,groups.first { it!="group_"+SettingsScreen.STATUS_NAME })
         assertEquals("다음 할 일: 녹음 폴더 연결",text(a,"setup_next_label"))
         val all=texts(tag(a,SettingsScreen.SETUP_TAG))
         assertTrue(all.toString(),all.contains("처음 설정 남은 9단계"))

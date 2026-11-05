@@ -35,7 +35,7 @@ class CallCardSettingsTest:ProtectedTextHostTestBase() {
         val incoming=tag<Switch>(a,"card_incoming_switch")!!;val outgoing=tag<Switch>(a,"card_outgoing_switch")!!;val unknown=tag<Switch>(a,"card_unknown_switch")!!
         assertEquals("전화 올 때",incoming.text.toString());assertTrue(incoming.isChecked)
         assertEquals("전화 걸 때",outgoing.text.toString());assertTrue(outgoing.isChecked)
-        assertEquals("전화부에 없는 번호도",unknown.text.toString());assertFalse(unknown.isChecked)
+        assertEquals("아직 정리된 통화가 없는 번호도",unknown.text.toString());assertFalse(unknown.isChecked)
         // Not allowed yet on the host: the line says what it does and the button opens the overlay setting.
         assertTrue((tag<TextView>(a,"card_overlay_state")!!).text.contains("통화 화면 위에"))
         assertNotNull(tag<View>(a,"card_overlay_allow"))

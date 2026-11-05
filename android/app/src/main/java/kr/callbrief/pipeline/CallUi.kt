@@ -50,7 +50,12 @@ internal object CallUi {
     const val HEADING=20f
     const val BODY=19f
     const val SUMMARY=19f
+    /** 16sp: the canvas labels of a chart and a span inside a line; on its own a TextView only through [meta]. */
     const val CAPTION=16f
+    /** The META line of a list row (who asked, when, the time of a call): the one place text may be 16sp (v3.3, DESIGN_V4 3.3-2). */
+    const val META=16f
+    /** An aside under the text it belongs to (a reason, a note): reading size since v3.3. */
+    const val ASIDE=18f
     const val BADGE=15f
     const val TAB=16f
     /** Old name of [CAPTION], kept so call sites written before round 3 still compile. */
@@ -265,11 +270,16 @@ internal object CallUi {
         if(android.os.Build.VERSION.SDK_INT>=33)lineBreakWordStyle=android.graphics.text.LineBreakConfig.LINE_BREAK_WORD_STYLE_PHRASE // wrap Korean at word boundaries
         typeface=font(a,when { !bold -> Weight.REGULAR;size>=24f -> Weight.BOLD;else -> Weight.SEMIBOLD })
         letterSpacing=-0.01f
-        // Anything under reading size says so (the 18sp rule of the tests is "read: 18 and up, aside: 16 and up, badge: 15 and up").
-        if(size<18f) setTag(kr.callbrief.R.id.ui_min_sp,if(size<CAPTION) BADGE else CAPTION)
+        // v3.3 (DESIGN_V4 3.3-2): no size is let off by itself any more. Only [meta] (16sp) and the badges (15sp) say they are
+        // smaller on purpose (tag ui_min_sp); any other text under 18sp fails the size rule of the screen tests.
     }
-    /** An aside to the text above it (a time, a request date, a trade): 16sp. */
-    fun caption(a:Context,value:String,color:Int=SUBTLE,bold:Boolean=false)=text(a,value,CAPTION,bold,color)
+    /** An aside to the text above it (a reason, a note, a trade), in grey at reading size (18sp since v3.3; it was 16sp).
+     * New screens use [text] or [meta]; tools/check_ui_rules.py warns about new uses. */
+    fun caption(a:Context,value:String,color:Int=SUBTLE,bold:Boolean=false)=text(a,value,ASIDE,bold,color)
+    /** The META line of a list row only ("김민수 님, 오늘 요청", the time of a call): 16sp, marked so the size rule lets it be. */
+    fun meta(a:Context,value:String,color:Int=SUBTLE,bold:Boolean=false)=text(a,value,META,bold,color).apply { setTag(kr.callbrief.R.id.ui_min_sp,META) }
+    /** A badge's words: 15sp SemiBold, marked so the size rule lets it be. */
+    private fun badgeText(a:Context,value:String,color:Int)=text(a,value,BADGE,true,color).apply { setTag(kr.callbrief.R.id.ui_min_sp,BADGE) }
     fun title(a:Context,value:String)=text(a,value,TITLE,true).apply { letterSpacing=-0.02f;setPadding(0,dp(a,8),0,dp(a,2)) }
     fun heading(a:Context,value:String)=text(a,value,HEADING,true).apply { setPadding(dp(a,4),dp(a,24),0,dp(a,8)) }
     /** Section heading with a text link on the right ("전체 보기 ›"). */
@@ -351,13 +361,13 @@ internal object CallUi {
         layoutParams=LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,6);bottomMargin=dp(a,6) }
     }
     /** Small status word on a soft fill (e.g. "정리 중 1건"): 15sp SemiBold, corner 8. */
-    fun pill(a:Context,value:String,color:Int)=text(a,value,BADGE,true,color).apply {
+    fun pill(a:Context,value:String,color:Int)=badgeText(a,value,color).apply {
         val fill=when(color) { AMBER -> AMBER_SOFT;ACCENT -> ACCENT_SOFT;else -> CHIP }
         background=sheet(a,fill,radius=8);setPadding(dp(a,10),dp(a,3),dp(a,10),dp(a,3));gravity=Gravity.CENTER
         layoutParams=LinearLayout.LayoutParams(-2,-2).apply { topMargin=dp(a,6) }
     }
     /** Neutral badge for a company inside a row. */
-    fun chip(a:Context,value:String)=text(a,value,BADGE,true,SUBTLE).apply {
+    fun chip(a:Context,value:String)=badgeText(a,value,SUBTLE).apply {
         background=sheet(a,CHIP,radius=8);setPadding(dp(a,8),dp(a,2),dp(a,8),dp(a,2));gravity=Gravity.CENTER;setLineSpacing(0f,1.1f)
     }
     fun gap(a:Context,h:Int=12)=View(a).apply { layoutParams=LinearLayout.LayoutParams(-1,dp(a,h)) }
@@ -405,7 +415,7 @@ internal object CallUi {
      * (or under it, at the end, when the screen is narrow or the letters large); the AI's note at the bottom when there is one.
      * The whole row opens the call it came from when [onOpen] is given. Calm on purpose: no red, no countdown. */
     fun taskRow(a:Context,title:String,requestedMs:Long,company:String?,person:String?=null,status:String="",onDone:((View)->Unit)?=null,
-                onOpen:(()->Unit)?=null,aiNote:String?=null):LinearLayout {
+                onOpen:(()->Unit)?=null,aiNote:String?=null,unsure:Boolean=false):LinearLayout {
         val outer=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;setPadding(dp(a,16),dp(a,14),dp(a,16),dp(a,14)) }
         if(onOpen!=null) outer.apply { isClickable=true;isFocusable=true;background=rowRipple();onTap(this,action=onOpen);contentDescription=null }
         outer.addView(text(a,title,SUMMARY,true).apply { tag="task_title";setPadding(0,0,0,0) })
@@ -414,9 +424,13 @@ internal object CallUi {
         val meta=if(company.isNullOrBlank() && who.isEmpty()) null else FitRow(a,flex=if(company.isNullOrBlank()) 0 else 1,minFraction=0.6f,gapDp=8).apply {
             tag="task_meta"
             if(!company.isNullOrBlank()) addView(chip(a,company).apply { tag="task_company" },LinearLayout.LayoutParams(-2,-2))
-            if(who.isNotEmpty()) addView(caption(a,who,SUBTLE).apply { tag="task_who";setPadding(0,0,0,0) },LinearLayout.LayoutParams(-2,-2))
+            if(who.isNotEmpty()) addView(meta(a,who,SUBTLE).apply { tag="task_who";setPadding(0,0,0,0) },LinearLayout.LayoutParams(-2,-2))
         }
-        val pill=taskStatus(status).takeIf { it.isNotEmpty() }?.let { pill(a,it,ACCENT) }
+        val state=stateWords(status).takeIf { it.isNotEmpty() }?.let { pill(a,it,ACCENT) }
+        // v3.3: "확인 필요" (a number or date that may have been misheard) beside the state, in words.
+        val pill=if(!unsure) state else LinearLayout(a).apply { orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;tag="task_badges"
+            addView(unsureBadge(a),LinearLayout.LayoutParams(-2,-2).apply { topMargin=dp(a,6);marginEnd=dp(a,8) })
+            state?.let { addView(it) } }
         val done=onDone?.let { Button(a).apply {
             text="다 됐어요";isAllCaps=false;stateListAnimator=null;textSize=17f;typeface=font(a,Weight.SEMIBOLD);setTextColor(INK);tag="task_done"
             maxLines=1;isSingleLine=true;background=ripple(a,sheet(a,CHIP,radius=14))
@@ -479,7 +493,7 @@ internal object CallUi {
         // whole line (a phone number or "업체 사람" is never broken) and the time goes under it as an aside.
         val head=FitRow(a,flex=0,minFraction=1f,gapDp=10).apply { tag="memo_head" }
         head.addView(text(a,who,BODY,true).apply { tag="memo_who";setPadding(0,0,0,0) },LinearLayout.LayoutParams(-2,-2))
-        if(time.isNotEmpty()) head.addView(caption(a,time,SUBTLE).apply { tag="memo_time";maxLines=1;setPadding(0,0,0,0) },LinearLayout.LayoutParams(-2,-2))
+        if(time.isNotEmpty()) head.addView(meta(a,time,SUBTLE).apply { tag="memo_time";maxLines=1;setPadding(0,0,0,0) },LinearLayout.LayoutParams(-2,-2))
         words.addView(head)
         words.addView(text(a,memo,BODY,color=if(quiet) MUTED else SUBTLE).apply { setPadding(0,dp(a,2),0,0) })
         addView(words,LinearLayout.LayoutParams(0,-2,1f))
@@ -495,7 +509,7 @@ internal object CallUi {
         val words=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
         val head=FitRow(a,flex=0,minFraction=1f,gapDp=10).apply { tag="memo_head" }
         head.addView(text(a,who,BODY,true).apply { tag="memo_who";setPadding(0,0,0,0) },LinearLayout.LayoutParams(-2,-2))
-        head.addView(caption(a,time,SUBTLE).apply { tag="memo_time";maxLines=1;setPadding(0,0,0,0) },LinearLayout.LayoutParams(-2,-2))
+        head.addView(meta(a,time,SUBTLE).apply { tag="memo_time";maxLines=1;setPadding(0,0,0,0) },LinearLayout.LayoutParams(-2,-2))
         words.addView(head)
         words.addView(text(a,label,BODY,color=labelColor).apply { tag="log_label";setPadding(0,dp(a,2),0,0) })
         // The button goes under the words, so a long number or name always keeps its whole line.
@@ -807,4 +821,29 @@ internal object CallUi {
         return "$day $word"+if(next==e) " (통화 정리)" else " (체크할 일)"
     }
     fun taskStatus(status:String)=when(status) { "needs_confirmation" -> "확인 필요";"in_progress" -> "진행 중";"waiting" -> "기다리는 중";"done" -> "완료";else -> "" }
+
+    // ---- "확인 필요" (DESIGN_V4 3.1-2; moved here from the check rows in v3.3 r13-3) ----------------------------------------
+    /** An item whose numbers or date may have been misheard (tentative). */
+    const val UNSURE="확인 필요"
+    /** Letters of the badge: the same dark ink on the amber of both themes (well above 4.5:1). */
+    private const val BADGE_INK=0xFF191F28.toInt()
+    /** "확인 필요": 18sp bold, dark letters on [AMBER_RAIL]; the words themselves carry the meaning, not the colour. */
+    fun unsureBadge(a:Context)=text(a,UNSURE,18f,true,BADGE_INK).apply {
+        tag="task_unsure";background=sheet(a,AMBER_RAIL,radius=8);setPadding(dp(a,10),dp(a,2),dp(a,10),dp(a,2))
+        gravity=Gravity.CENTER;contentDescription="숫자나 날짜를 확인해 주세요" }
+    /** The pill of a check item's state: "끝났는지 확인" for an item the AI thinks is finished (so it is not mixed up with [UNSURE]). */
+    fun stateWords(status:String)=if(status=="needs_confirmation") "끝났는지 확인" else taskStatus(status)
+    /** [title] without a leading "김민수 님께" / "김민수 과장에게" when it names [person], the one the META line shows (DESIGN_V4 3.1-4,
+     * until rules v7 stop writing it). Nothing else of the title changes; a title that would be empty stays whole. */
+    fun shortTitle(title:String,person:String?):String {
+        val who=CallRecordStore.noNumber(person)?.trim()?.takeIf { it.isNotEmpty() } ?: return title
+        val names=(listOf(who,NameKey.withoutTitle(who))+who.split(Regex("\\s+"))).map { it.trim() }.filter { it.length>=2 }.distinct().sortedByDescending { it.length }
+        val roles=NameKey.TITLES.filter { it!="님" && it!="씨" }.joinToString("|") { Regex.escape(it) }
+        for(n in names) {
+            val re=Regex("^\\s*"+Regex.escape(n)+"\\s*(?:(?:$roles)\\s*)?(?:님|씨)?\\s*(?:께서|께|에게|한테)\\s+")
+            val m=re.find(title) ?: continue
+            return title.substring(m.range.last+1).trim().takeIf { it.isNotEmpty() } ?: title
+        }
+        return title
+    }
 }

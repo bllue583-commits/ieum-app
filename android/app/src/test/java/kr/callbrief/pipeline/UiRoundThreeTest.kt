@@ -40,11 +40,13 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
         assertTrue(CallIcons.kinds.containsAll(listOf("tick","chevron","plus")))
     }
 
-    @Test fun captionsAreMarkedAndSmallerThanBody() {
+    @Test fun onlyTheMetaLineAndBadgesAreMarkedSmaller() {
+        // v3.3 (DESIGN_V4 3.3-2): an aside is 18sp and unmarked; the META line (16sp) and the badges (15sp) are marked.
         val a=Robolectric.buildActivity(MainActivity::class.java).get()
-        val c=CallUi.caption(a,"오늘 요청");val b=CallUi.text(a,"본문")
-        assertEquals(16f,c.getTag(kr.callbrief.R.id.ui_min_sp));assertNull(b.getTag(kr.callbrief.R.id.ui_min_sp))
-        assertEquals(CallUi.CAPTION,c.textSize/c.resources.displayMetrics.scaledDensity,0.01f);assertEquals(CallUi.BODY,b.textSize/b.resources.displayMetrics.scaledDensity,0.01f)
+        val c=CallUi.caption(a,"오늘 요청");val b=CallUi.text(a,"본문");val m=CallUi.meta(a,"김민수 님, 오늘 요청")
+        assertNull(c.getTag(kr.callbrief.R.id.ui_min_sp));assertNull(b.getTag(kr.callbrief.R.id.ui_min_sp));assertEquals(16f,m.getTag(kr.callbrief.R.id.ui_min_sp))
+        assertEquals(CallUi.ASIDE,c.textSize/c.resources.displayMetrics.scaledDensity,0.01f);assertEquals(CallUi.BODY,b.textSize/b.resources.displayMetrics.scaledDensity,0.01f)
+        assertEquals(CallUi.META,m.textSize/m.resources.displayMetrics.scaledDensity,0.01f)
         assertEquals(15f,CallUi.pill(a,"정리 중 1건",CallUi.ACCENT).getTag(kr.callbrief.R.id.ui_min_sp))
     }
 
@@ -138,8 +140,10 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
         val all=texts(a).joinToString("\n") { it.text }
         assertTrue(all,all.contains("지금 상태") && all.contains("녹음 가져오기") && all.contains("글자로 바꾸기") && all.contains("통화 정리"))
         assertFalse(all,all.contains("녹음 1분을 글자로 바꾸는 데"))
-        assertEquals(listOf(SettingsScreen.NOW_NAME,"연결","통화 카드","정리","상태와 도움"),views(root).mapNotNull { (it.tag as? String)?.takeIf { t -> t.startsWith("group_") }?.removePrefix("group_") })
-        assertTrue(views(root).indexOfFirst { it.tag=="settings_status" } > views(root).indexOfFirst { it.tag=="folder_state" })
+        // v3.3 (DESIGN_V4 3.3-4): with an amber light (the seeded phone has no recording folder) the lights lead the page in
+        // their own group; with every light green they stay at the top of 상태와 도움.
+        assertEquals(listOf(SettingsScreen.STATUS_NAME,SettingsScreen.NOW_NAME,"연결","통화 카드","정리","상태와 도움"),views(root).mapNotNull { (it.tag as? String)?.takeIf { t -> t.startsWith("group_") }?.removePrefix("group_") })
+        assertTrue(views(root).indexOfFirst { it.tag=="settings_status" } < views(root).indexOfFirst { it.tag=="folder_state" })
     }
 
     @Test fun callDetailLinksToItsCompanyAndCompanyOpensFromTheLink() {

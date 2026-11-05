@@ -68,7 +68,7 @@ internal class CallCardView(context:Context):LinearLayout(context) {
             /** A number nothing is known about (only when the user asked for those; the settings switch says the same). */
             const val UNKNOWN="아직 정리된 통화가 없는 번호예요"
             /** The badge words, as on the check list. */
-            const val UNSURE=kr.callbrief.pipeline.CheckRows.UNSURE
+            const val UNSURE=kr.callbrief.pipeline.CallUi.UNSURE
             /** Amounts and long numbers taken out of a line the locked screen shows ("50만원", "3,000,000원", "1588"). */
             fun noAmounts(t:String):String =PrivacyRules.removePhoneTokens(t)
                 .replace(Regex("[0-9][0-9,.]*\\s*(?:억|천만|백만|십만|만|천)?\\s*원"),"").replace(Regex("[0-9][0-9,.\\-]{3,}"),"")
