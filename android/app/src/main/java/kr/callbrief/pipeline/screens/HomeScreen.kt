@@ -38,7 +38,11 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
                                  /** The model file being downloaded, for the percent shown every second. */
                                  val modelPart:String="",
                                  /** The person of each memo's and check item's call, by record id: the name opens the person page (v2.8). */
-                                 val people:Map<String,String> =emptyMap())
+                                 val people:Map<String,String> =emptyMap(),
+                                 /** v3.0 (r11-1): may draw the call card over other apps (the overlay permission). */
+                                 val overlay:Boolean=true,
+                                 /** v3.0 (r11-1), an optional step: the call redirection role is held, was asked for once, or does not exist. */
+                                 val callRole:Boolean=true)
     /** [audioMinutesLeft]: how long the recordings still to transcribe are, together. [lowBattery]: not charging and under half
      * the battery, so old recordings wait ([FirstPass.powerOk]). [stalled]: nothing came back for [FirstPass.STALL_MS], so no
      * new batch goes up (design C7). Either one shows the "잠시 쉬고 있어요" line (#20). */
@@ -68,6 +72,10 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
     /** v2.9 r10-1: the call state question, asked from its setup step after the reason is shown. */
     private val askPhoneState=a.registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok ->
         ReadingPermission.noteResult(a,android.Manifest.permission.READ_PHONE_STATE,ok);if(live()) load()
+    }
+    /** v3.0 r11-1: the optional "거는 전화에도 카드 보기" step; whatever the answer, the step is done (asked once). */
+    private val askCallRole=a.registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) {
+        if(live()) load()
     }
     private val askSms get()=a.askSms
     private val askCallLog get()=a.askCallLog
@@ -165,7 +173,8 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
             due.size,due.count{CallUi.overdue(it.due)},s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),batteryFree(),percent,next,companies,
             week,byCompany,memos,
             granted(android.Manifest.permission.READ_SMS),granted(android.Manifest.permission.READ_CALL_LOG),granted(android.Manifest.permission.READ_PHONE_STATE),
-            firstPass(storage,db,s),first,ModelWish.wanted(a),NotifyAsk.blocked(a),mm.partFile.path,people)
+            firstPass(storage,db,s),first,ModelWish.wanted(a),NotifyAsk.blocked(a),mm.partFile.path,people,
+            CallCardAsk.overlayAllowed(a),CallCardAsk.roleDone(a))
     }
     private fun firstPass(storage:android.content.Context,db:CallRecordStore,s:org.json.JSONObject):FirstPassView? {
         val start=FirstPass.start(s) ?: return null
@@ -259,6 +268,11 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
                 Step(false,"통화가 끝난 걸 바로 알아차리기","허용 창이 다시 뜨지 않아요. 앱 정보의 권한에서 전화 항목을 허용해 주세요.","앱 정보 열기") { ReadingPermission.openAppInfo(a) }
             else Step(s.phoneState,"통화가 끝난 걸 바로 알아차리기","통화가 끝나면 바로 녹음을 찾아 정리를 시작해요. 통화 내용은 듣지 않고, 전화가 끝났는지만 알아요.","전화 상태 허용") {
                 ReadingPermission.markAsked(a,android.Manifest.permission.READ_PHONE_STATE);askPhoneState.launch(android.Manifest.permission.READ_PHONE_STATE) },
+            // v3.0 r11-1: the call card over the call screen; and, optional, for calls that go out too.
+            Step(s.overlay,"통화 화면 위에 이음 카드 보기","전화가 오면 통화 화면 위에 상대와 지난 통화, 체크할 일을 보여 드려요. 열리는 화면에서 이음을 찾아 허용해 주세요.","카드 보기 허용") {
+                CallCardAsk.openOverlaySettings(a) },
+            Step(s.callRole,"거는 전화에도 카드 보기","전화를 걸 때도 카드를 보여 드려요. 원하지 않으면 거절해도 돼요. 전화는 그대로 걸려요.","거는 전화도 허용") {
+                CallCardAsk.askRole(a,askCallRole) },
             Step(s.consent,"정리 동의","녹음 파일은 휴대폰에 그대로 두고, 글자로 바꾼 통화 내용만 보내 정리해요. 설정에서 언제든 끌 수 있어요.","동의하고 켜기") { agree() },
             // On mobile data the download waits for Wi-Fi: the step says so and keeps saying it (review #23); while it comes,
             // the percent moves every second.
@@ -420,6 +434,36 @@ internal object ModelWish {
 
 /** Text and call-log access. A sideloaded app on recent Android can get these refused as "제한된 설정" without a dialog:
  * after one ask, the screens point to App info, where the restriction is lifted and the permission is allowed. */
+/** v3.0 (r11-1): the call card's two questions, shared by the setup steps and the settings group. */
+internal object CallCardAsk {
+    private const val ROLE_ASKED="asked_call_redirection_role"
+    private fun prefs(c:android.content.Context)=c.getSharedPreferences("ieum_ui",android.content.Context.MODE_PRIVATE)
+    fun overlayAllowed(c:android.content.Context)=runCatching { android.provider.Settings.canDrawOverlays(c) }.getOrDefault(false)
+    /** "다른 앱 위에 표시" for this app, else the list of all apps. */
+    fun openOverlaySettings(a:android.app.Activity) {
+        runCatching { a.startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,android.net.Uri.parse("package:${a.packageName}"))) }
+            .onFailure { runCatching { a.startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION)) } }
+    }
+    fun roleAvailable(c:android.content.Context):Boolean {
+        if(android.os.Build.VERSION.SDK_INT<29) return false
+        val rm=c.getSystemService(android.app.role.RoleManager::class.java) ?: return false
+        return runCatching { rm.isRoleAvailable(android.app.role.RoleManager.ROLE_CALL_REDIRECTION) }.getOrDefault(false)
+    }
+    fun roleHeld(c:android.content.Context):Boolean {
+        if(android.os.Build.VERSION.SDK_INT<29 || !roleAvailable(c)) return false
+        val rm=c.getSystemService(android.app.role.RoleManager::class.java) ?: return false
+        return runCatching { rm.isRoleHeld(android.app.role.RoleManager.ROLE_CALL_REDIRECTION) }.getOrDefault(false)
+    }
+    /** The optional step is done: the role is held, was asked for once (a "no" is an answer), or this phone has no such role. */
+    fun roleDone(c:android.content.Context)=!roleAvailable(c) || roleHeld(c) || prefs(c).getBoolean(ROLE_ASKED,false)
+    fun askRole(a:android.app.Activity,launcher:androidx.activity.result.ActivityResultLauncher<Intent>) {
+        prefs(a).edit().putBoolean(ROLE_ASKED,true).apply()
+        if(android.os.Build.VERSION.SDK_INT<29) return
+        val rm=a.getSystemService(android.app.role.RoleManager::class.java) ?: return
+        runCatching { launcher.launch(rm.createRequestRoleIntent(android.app.role.RoleManager.ROLE_CALL_REDIRECTION)) }
+    }
+}
+
 internal object ReadingPermission {
     private fun prefs(c:android.content.Context)=c.getSharedPreferences("ieum_ui",android.content.Context.MODE_PRIVATE)
     fun asked(c:android.content.Context,permission:String)=prefs(c).getBoolean("asked_$permission",false)

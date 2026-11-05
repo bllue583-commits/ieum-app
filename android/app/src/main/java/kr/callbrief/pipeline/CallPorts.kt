@@ -111,6 +111,13 @@ object PipelineSettingsKeys {
     /** Design 6.2 (r10-2): one notice per finished work call, "정리하고 있어요" then "정리됐어요" (default on). Off: no notices;
      * results still reach the home screen and the reports. */
     const val FOLLOWUP_NOTICE="followupNotice"
+    /** Design 7 (v3.0, r11-1): the call card over the call screen for calls that come in (default on), that go out (default on;
+     * only with the call redirection role, which gives the number), and for numbers without a card (default off). */
+    const val CARD_INCOMING="cardIncoming"
+    const val CARD_OUTGOING="cardOutgoing"
+    const val CARD_UNKNOWN="cardUnknown"
+    /** Where the user dragged the card (r11-2 writes it); absent: the design's place (38% down the screen). */
+    const val CARD_POS_Y="cardPosY"
 }
 
 /** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets

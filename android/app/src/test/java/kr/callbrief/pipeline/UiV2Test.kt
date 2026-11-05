@@ -228,7 +228,7 @@ class UiV2Test:ProtectedTextHostTestBase() {
         SecureSettings(app).update { it.put(PipelineSettingsKeys.LAST_UPDATE_ERROR,"STATUS_FAILURE_STORAGE (6): 공간 부족") }
         val a=launchMain(Screen.SETTINGS)
         settle { tag(a,"status_update")!=null }
-        assertEquals(listOf("group_연결","group_정리","group_상태와 도움"),views(a.window.decorView).mapNotNull { it.tag as? String }.filter { it.startsWith("group_") })
+        assertEquals(listOf("group_연결","group_통화 카드","group_정리","group_상태와 도움"),views(a.window.decorView).mapNotNull { it.tag as? String }.filter { it.startsWith("group_") })
         val update=views(tag(a,"status_update")).filterIsInstance<TextView>().joinToString { it.text }
         assertTrue(update,update.contains("저장 공간이 부족해 설치하지 못했어요") && !update.contains("STATUS") && !update.contains("공간 부족"))
         assertEquals("저장 공간이 부족해 설치하지 못했어요.",(tag(a,"update_error") as TextView).text.toString())
