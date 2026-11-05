@@ -176,27 +176,29 @@ say "unknown: off quiet=$off_quiet, on card=$on_card"
 keep_log "unknown"
 
 # ---- 통화 대기: 통화 중 둘째 벨 → 첫 카드 숨김, IDLE까지 아무것도 없음 (v3.4, DESIGN_V4 4.1-3) ----------------------
-# The first call is from the unknown number ("전화부에 없는 번호도" still on), the second from the number with a card: a
-# card that would show by itself, so its absence is the waiting rule and not a missing card.
+# The first call is from the number with a card (its strip stays in view while answered: a card with nothing in it is
+# taken away at OFFHOOK since r14-2), the second from the unknown number with "전화부에 없는 번호도" still on: a card that
+# would show by itself, so its absence is the waiting rule and not a missing card.
 begin call-waiting
-gsm call "$unknown"
+gsm call "$known"
 first_card=false; first_line() { window_up && logged CallCardOverlay "card shown"; }
 wait_for 10 first_line && first_card=true
-gsm accept "$unknown"; sleep 4
-gsm call "$known"
+gsm accept "$known"; sleep 4
+strip_up=$(b window_up)
+gsm call "$unknown"
 hidden=false; wait_for 3 not_window && hidden=true
 sleep 3; quiet_ring=$(b not_window)
 shot waiting
-gsm accept "$known"; sleep 3; quiet_answered=$(b not_window)
+gsm accept "$unknown"; sleep 3; quiet_answered=$(b not_window)
 shown_lines=$(count_logged CallCardOverlay "card shown")
-gsm cancel "$known"; sleep 2; quiet_after_second=$(b not_window)
-gsm cancel "$unknown"
+gsm cancel "$unknown"; sleep 2; quiet_after_second=$(b not_window)
+gsm cancel "$known"
 w_gone=false; wait_for 3 not_window && w_gone=true
 w_service=false; wait_for 10 not_service && w_service=true
-say "call waiting: first card=$first_card, hidden at second ring=$hidden, quiet while ringing=$quiet_ring, quiet after answer=$quiet_answered, quiet after second ended=$quiet_after_second, card lines=$shown_lines, gone=$w_gone, service gone=$w_service"
-[ "$first_card" = true ] && [ "$hidden" = true ] && [ "$quiet_ring" = true ] && [ "$quiet_answered" = true ] && \
+say "call waiting: first card=$first_card, strip before second ring=$strip_up, hidden at second ring=$hidden, quiet while ringing=$quiet_ring, quiet after answer=$quiet_answered, quiet after second ended=$quiet_after_second, card lines=$shown_lines, gone=$w_gone, service gone=$w_service"
+[ "$strip_up" = true ] && [ "$first_card" = true ] && [ "$hidden" = true ] && [ "$quiet_ring" = true ] && [ "$quiet_answered" = true ] && \
   [ "$quiet_after_second" = true ] && [ "$shown_lines" = 1 ] && [ "$w_gone" = true ] && [ "$w_service" = true ] && callWaiting=true
-hang_up "$known"; hang_up "$unknown"
+hang_up "$unknown"; hang_up "$known"
 instrument unknownOff || say "unknownOff failed"
 keep_log "call-waiting"
 
