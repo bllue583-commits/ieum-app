@@ -256,6 +256,12 @@ class V31RulesTest(unittest.TestCase):
         self.assertEqual([], self.run_rules(phone(), last_run={"routine": "tidy", "processed": 1, "promptVersion": ""}, version={"versionCode": 1040}))
         self.assertEqual([], self.run_rules(phone(), last_run={"routine": "other", "processed": 1, "promptVersion": "1"}, version=v))
         self.assertEqual([], self.run_rules(phone(), last_run={"processed": 1}, version=v))
+        # A report that ended before version.json last changed is no evidence (an empty hourly run writes none): nothing until a
+        # run after the release still reports the old version.
+        old = {"routine": "hourly", "processed": 1, "promptVersion": "5", "endedMs": NOW - 5 * H}
+        self.assertEqual([], self.run_rules(phone(), last_run=old, version=v, version_ms=NOW - 4 * H))
+        self.assertEqual([w.T_ROUTINE_OLD], self.run_rules(phone(), last_run=dict(old, endedMs=NOW - 1 * H), version=v, version_ms=NOW - 4 * H))
+        self.assertEqual([], self.run_rules(phone(), last_run=dict(old, endedMs=NOW - 1 * H, promptVersion="6"), version=v, version_ms=NOW - 4 * H))
 
     # (다) permissions.phoneState false for 24 hours, only when the heartbeat carries permissions.
     def test_phone_state_off_for_a_day(self):

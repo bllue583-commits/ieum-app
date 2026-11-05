@@ -114,6 +114,11 @@ def v31_rules(now_ms, phone, last_run, version, version_ms, history, add):
         field = {"hourly": "promptVersion", "tidy": "tidyVersion"}.get(routine)
         want = version.get(field) if field else None
         want = "" if want is None or isinstance(want, bool) else str(want).strip()
+        # Only a run that ended after version.json last changed can be behind it: an empty run writes no report, so an old report
+        # from before a release says nothing about the routine's text (11/5: the 16:36 v5 report stood after the 17:00 v6 paste).
+        ended = num(last_run.get("endedMs"))
+        if want and version_ms and (not ended or ended < version_ms):
+            want = ""
         if want:
             got = last_run.get("promptVersion")
             got = "" if got is None or isinstance(got, bool) else str(got).strip()
