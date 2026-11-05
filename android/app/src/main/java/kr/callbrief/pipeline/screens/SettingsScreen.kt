@@ -241,6 +241,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         hourRow("저녁 통화 정리",PipelineSettingsKeys.EVENING_HOUR,s.optInt(PipelineSettingsKeys.EVENING_HOUR,19),15..23)
         body.addView(CallUi.divider(a))
         hourRow("아침 체크할 일",PipelineSettingsKeys.MORNING_HOUR,s.optInt(PipelineSettingsKeys.MORNING_HOUR,6),4..11)
+        body.addView(CallUi.divider(a));body.addView(switchRow("followup_switch",s.optBoolean(PipelineSettingsKeys.FOLLOWUP_NOTICE,true),PipelineSettingsKeys.FOLLOWUP_NOTICE) { "통화마다 알림" })
         // Design 3.3 (r7-3): a verified new version installs by itself; off, a notification only.
         body.addView(CallUi.divider(a))
         body.addView(switchRow("auto_install_switch",s.optBoolean(PipelineSettingsKeys.AUTO_INSTALL,true),PipelineSettingsKeys.AUTO_INSTALL) { "새 버전은 자동으로 설치" })

@@ -93,6 +93,7 @@ internal class CallRecordAnalysisRunner(
                 val a=analyzer.filter(analysis,request,db.openTaskIds()).copy(siteMemo=null,companyMemo=null,companyTrade=null)
                 val dropped=analysis.tasks.size+analysis.promises.size-a.tasks.size-a.promises.size
                 val applied=db.applyAnalysis(record.recordId,if(FirstPass.stale(record.dayMs,clock())) FirstPass.restrict(a,record.dayMs,clock()) else a)
+                CallFollowupNotice.onResult(context,record.recordId,db) // r10-2: the call's notice says "정리됐어요"
                 duplicates+=applied.count { it.duplicate }
                 save { it.put(PipelineSettingsKeys.LAST_ANALYZED_MS,clock()).put(PipelineSettingsKeys.DROPPED_ITEMS,it.optLong(PipelineSettingsKeys.DROPPED_ITEMS,0)+dropped) }
             }.onFailure { failedFiles+=name }
@@ -311,6 +312,7 @@ internal class CallAnalysisWork(context:Context,params:WorkerParameters):Corouti
         val storage=CallPipelineStartup.storage(applicationContext)
         val ok=CallRecordAnalysisRunner(storage).runPending()
         ContactCards.warm(storage) // r9-2: the hour's touched cards worked out, then all read into memory
+        CallFollowupNotice.sweep(storage) // r10-2: late notices say so, reported ones go
         if(ok) Result.success() else Result.retry()
     }
 }

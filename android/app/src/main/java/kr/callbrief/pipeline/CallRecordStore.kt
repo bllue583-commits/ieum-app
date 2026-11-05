@@ -794,8 +794,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     }
     // ---- v2 screens: a check item the user wrote down, and the ones finished lately -------------------------------------------
     /** The user's own check item ("+ 직접 적기"): no call made it, so analysis never touches it. [company] is an existing or new company name.
-     * Returns the item id, or null for an empty title. */
-    fun addUserItem(title:String,company:String?=null):String? = port.transaction {
+     * Returns the item id, or null for an empty title. [recordId] (r10-2, a memo from a call's notice): the call it was written
+     * after. It is bound to that call with last_revision 0, never its revision, so it stays the user's own (analysis only notes on it). */
+    fun addUserItem(title:String,company:String?=null,recordId:String?=null):String? = port.transaction {
         val clean=title.trim().take(240);if(clean.isEmpty()) return@transaction null
         val now=clock()
         port.execute("INSERT OR IGNORE INTO folder_grants VALUES('messages',?,'content://messages',1,1,1)",GeneralLocalStore.OWNER)
@@ -805,9 +806,21 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         port.execute("INSERT INTO workflow_items(id,recording_id,case_id,kind,title,edition,due_text,status,revision,source_key,evidence_quote,created_ms,source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             item,"user:items",null,"TODO",clean,"","","open",1,null,"",now,"user")
         company?.takeIf { normName(it)!=null }?.let { port.execute("INSERT OR REPLACE INTO task_companies VALUES(?,?)",item,upsertCompany(it,now)) }
+        recordId?.takeIf { rows("SELECT 1 FROM call_records WHERE record_id=?",it).isNotEmpty() }?.let { port.execute("INSERT INTO call_task_bindings VALUES(?,?,?,?)",item,it,0,now) }
         port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER)
         item
     }.also { ContactCards.touch(this) { cardKeysOfItem(it) } }
+    /** r10-2: the user's own items written on a call's notice before its record existed, bound to that call once it is known
+     * (as [addUserItem] does with a record id). Items bound already or not the user's are left alone. Returns how many. */
+    fun bindUserItems(items:Collection<String>,recordId:String):Int = port.transaction {
+        if(items.isEmpty() || rows("SELECT 1 FROM call_records WHERE record_id=?",recordId).isEmpty()) return@transaction 0
+        val now=clock()
+        items.distinct().count { item ->
+            val own=rows("SELECT 1 FROM workflow_items WHERE id=? AND recording_id='user:items' AND id NOT IN (SELECT item_id FROM call_task_bindings)",item).isNotEmpty()
+            if(own) port.execute("INSERT INTO call_task_bindings VALUES(?,?,?,?)",item,recordId,0,now)
+            own
+        }
+    }.also { if(it>0) ContactCards.touch(this) { cardKeysOfRecord(recordId) } }
     /** Check items the user finished at or after [sinceMs], the latest first (the folded "끝낸 일 보기"). Undo works on them like on open ones. */
     fun doneItems(sinceMs:Long):List<OpenItem> =rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.edition,i.created_ms,
         (SELECT c.counterpart FROM call_records c WHERE c.recording_id=i.recording_id ORDER BY c.created_ms DESC LIMIT 1) AS counterpart,
