@@ -44,7 +44,10 @@ class FirstSetupHomeTest:ProtectedTextHostTestBase() {
         HomeScreen.setupStepHook=null;HomeScreen.checkHook=null;CallRetry.hook=null
     }
     private fun home(s:HomeScreen.Snapshot):MainActivity {
-        val a=launchMain(Screen.HOME);settle { tag(a,"home_today")!=null || tag(a,"retry_card")!=null };a.home.render(s);idle();return a
+        // The screen's own read (this host has no folder) must land before the snapshot, or it draws over it later (a race
+        // that showed on the slower ci runner).
+        val a=launchMain(Screen.HOME);settle { tag(a,"home_today")!=null || tag(a,"retry_card")!=null };awaitRead(a);idle()
+        a.home.render(s);idle();return a
     }
     /** Every required step done: the optional ones are left. */
     private val required=HomeScreen.Snapshot(folder=true,consent=true,model="READY",calls=0,working=0,newTasks=0,due=0,overdue=0,lastAnalyzedMs=0)

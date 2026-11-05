@@ -250,8 +250,8 @@ internal object PhoneStatus {
         val sdk=android.os.Build.VERSION.SDK_INT
         val phone=app.checkSelfPermission(android.Manifest.permission.READ_PHONE_STATE)==android.content.pm.PackageManager.PERMISSION_GRANTED
         val overlay=android.provider.Settings.canDrawOverlays(app)
-        val role=sdk>=29 && runCatching { app.getSystemService(android.app.role.RoleManager::class.java)
-            ?.isRoleHeld(android.app.role.RoleManager.ROLE_CALL_REDIRECTION)==true }.getOrDefault(false)
+        val role=if(android.os.Build.VERSION.SDK_INT>=29) runCatching { app.getSystemService(android.app.role.RoleManager::class.java)
+            ?.isRoleHeld(android.app.role.RoleManager.ROLE_CALL_REDIRECTION)==true }.getOrDefault(false) else false
         val install=runCatching { app.packageManager.canRequestPackageInstalls() }.getOrDefault(false)
         Permissions(phone,overlay,role,install)
     }.onFailure { Log.w(TAG,"permissions not read: ${it.javaClass.simpleName}") }.getOrNull()
