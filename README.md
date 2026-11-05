@@ -33,6 +33,7 @@ APK에는 네이티브 빌드(NDK 28.2.13676358, CMake 3.22 이상)가 필요하
 ## 문서
 
 - [docs/DESIGN.md](docs/DESIGN.md): 현재 설계도(기술). 구현된 그대로의 구조, 흐름, 저장, 시험. 설계를 바꿀 때 먼저 고칩니다.
+- [docs/DESIGN_V5.md](docs/DESIGN_V5.md): 다음 버전(v3.5 카톡 아침 보고) 설계. 배포 뒤 `docs/history/`로.
 - [docs/HANDOFF.md](docs/HANDOFF.md): 인수인계. 현재 상태, 다음 할 일, 워크플로, 함정. 새 세션은 이 파일부터 읽습니다. 지난 세션 이력은 `docs/history/HANDOFF_HISTORY.md`.
 - [docs/PRODUCT.md](docs/PRODUCT.md): 앱 목적, 기능, 화면과 UX 설계(무엇을, 누구를 위해, 어떻게 보여 줄지).
 - [docs/OPERATIONS.md](docs/OPERATIONS.md): 예약 작업, 우편함, 상태 파일, 워치독, 배포 흐름. 지시문 원본은 `docs/routines/`.

@@ -1,6 +1,6 @@
 # 이음 앱 인수인계 (2026-11-06 08시 기준, v3.4 빌드 1045 배포)
 
-> **읽는 순서:** 이 파일(규칙 → 지금 상태 → 다음 할 일 → 함정) → [DESIGN.md](DESIGN.md)(현재 설계, 구현된 그대로) → [OPERATIONS.md](OPERATIONS.md)(예약 작업·우편함·워치독). 앱의 목적·기능·UX는 [PRODUCT.md](PRODUCT.md), 작업 방식·로컬 환경은 [DEVELOPMENT.md](DEVELOPMENT.md).
+> **읽는 순서:** 이 파일(규칙 → 지금 상태 → 다음 할 일 → 함정) → [DESIGN.md](DESIGN.md)(현재 설계, 구현된 그대로) → [DESIGN_V5.md](DESIGN_V5.md)(다음 버전 v3.5 설계) → [OPERATIONS.md](OPERATIONS.md)(예약 작업·우편함·워치독). 앱의 목적·기능·UX는 [PRODUCT.md](PRODUCT.md), 작업 방식·로컬 환경은 [DEVELOPMENT.md](DEVELOPMENT.md).
 > 버전별 설계와 구현 대조, 10/30~11/6 세션 기록은 `docs/history/`([DESIGN_V3.md](history/DESIGN_V3.md) v2.6~v3.0, [DESIGN_V4.md](history/DESIGN_V4.md) v3.1~v3.4, [HANDOFF_HISTORY.md](history/HANDOFF_HISTORY.md)). 묶음 지시문·작업자 보고서·검토 원문은 `docs/orchestration/`, `docs/reviews/`.
 
 ## 0. 작업 규칙 (꼭 지킬 것)
@@ -81,7 +81,7 @@
 3. **루틴 감시:** `status/last-run-hourly.json`이 슬롯마다 갱신되고 `pushed=true`인지 하루 지켜본다. 내일 05:16 새벽 정리가 v6·`last-run-tidy.json`을 남기는지. 폰이 1045가 되면 옛 `status/last-run.json`은 지운다.
 4. **사용자 할 일:** S26 체크리스트(`docs/REAL_DEVICE_CHECKLIST.md`, 10분) · 실녹음 골든 받아쓰기 3~5건(설정 › 상태와 도움 › 골든 측정; 숫자는 아라비아 숫자, 충전 중 측정) · 합쳐진 feature 브랜치 68개 정리(Actions → cleanup-branches → Run workflow; 세션의 자동 권한 검사가 원격 삭제를 막음) · GitHub 비밀 `IEUM_SIGNING_SEED`에 현재 토큰 값 복사(서명 키가 우편함 토큰에 묶여 있음) · 저장소 비공개 복귀 전 Actions 분량 조정(DESIGN.md 11절) · 예약 작업 알림 조정(정상 답도 매시간 옴).
 5. **Claude Docs 설계도 갱신:** `docs/DESIGN.md`를 기준으로 Docs 쪽 "자동 흐름"·"결정 사항"·"보고와 화면"·"개인정보와 보안" 절을 옮긴다(옮길 목록은 `history/DESIGN_V4.md` 6절).
-6. **v3.5 이후:** 사용자 결정(11/6)으로 아직 설계하지 않는다. 재료는 DESIGN.md 11절(보류 목록)과 실녹음 골든 결과(나오면 자막 상수 B1~B7 A/B부터).
+6. **v3.5 「카톡으로 오는 아침 보고」:** 설계는 [DESIGN_V5.md](DESIGN_V5.md)(11/6 08:40). 매일 04:46 새벽 정리가 `report/YYYY-MM-DD.json`을 쓰고 아내 폰이 05:30에 카카오 "나에게 보내기"로 최대 4통(각 200자) 전송, 실패면 앱 알림. 착수 조건은 v3.4.x 선행 묶음 배포 + 폰 1045 이상. 사용자가 먼저 할 일은 DESIGN_V5 4절(카카오 developers 앱·동의 항목·비밀 `IEUM_KAKAO_APP_KEY`·팀원 등록). 그 밖의 v3.5 이후 재료는 DESIGN.md 11절과 실녹음 골든 결과.
 
 ## 6. 알아 둘 함정
 - **예약 작업:** 프롬프트는 저장소 파일을 읽는 짧은 안내다. 지시문은 `docs/routines/*.md`를 고치고 배포(release-apk)하면 우편함에 올라간다. 배포 없이 급히 바꾸려면 ieum-inbox `routines/`에 직접 커밋. 예약 작업을 이 세션에서 만들면 이 세션에 붙은 저장소가 소스로 붙는다 — 다른 세션에서 만들면 ieum-inbox가 빠져 "성공"인데 아무것도 못 한다(11/5 17시). 1시간보다 짧은 간격은 불가. `fire_trigger`·끄기·지우기는 자동 권한 검사가 막는 경우가 있어 사용자가 화면에서.
