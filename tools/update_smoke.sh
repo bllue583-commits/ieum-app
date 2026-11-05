@@ -19,4 +19,30 @@ echo "scheduled jobs of $pkg: $jobs"
 [ "$jobs" -ge 5 ] || { echo "fewer than five scheduled jobs"; fail=1; }
 adb shell screencap -p /sdcard/home.png && adb pull /sdcard/home.png "$out/home.png" >/dev/null
 adb shell dumpsys package "$pkg" | grep -m2 -E "versionName|versionCode" > "$out/version.txt"
+
+# v3.1 (DESIGN_V4 2.2-6): the app installs the new APK by itself, the way a phone gets it. The previous release (the
+# installed app here) is what runs the install, so until it is a v3.1 build (which declares UPDATE_PACKAGES_WITHOUT_USER_ACTION)
+# Android may ask for a tap: a warning unless IEUM_SELF_INSTALL_STRICT=1.
+vcode() { adb shell dumpsys package "$pkg" | sed -n 's/.*versionCode=\([0-9]*\).*/\1/p' | head -1; }
+self_install() {
+  adb uninstall "$pkg" >/dev/null 2>&1; adb install -r -g "$prev" >/dev/null || return 1
+  local before; before=$(vcode); [ -n "$before" ] || return 1
+  adb shell appops set "$pkg" REQUEST_INSTALL_PACKAGES allow
+  adb shell am start -n "$pkg/.pipeline.MainActivity" >/dev/null; sleep 5; adb shell am force-stop "$pkg"
+  adb push "$new" /data/local/tmp/ieum.apk >/dev/null || return 1
+  adb shell run-as "$pkg" sh -c 'mkdir -p cache/update && cp /data/local/tmp/ieum.apk cache/update/ieum.apk' || return 1
+  local sha size code; sha=$(sha256sum "$new" | cut -d' ' -f1); size=$(stat -c %s "$new"); code=$((before+1))
+  printf "<?xml version='1.0' encoding='utf-8' standalone='yes' ?><map><int name=\"code\" value=\"%s\" /><string name=\"sha\">%s</string><long name=\"size\" value=\"%s\" /><string name=\"name\">v-smoke</string></map>" "$code" "$sha" "$size" \
+    | adb shell run-as "$pkg" sh -c 'mkdir -p shared_prefs && cat > shared_prefs/ieum.update.xml' || return 1
+  adb shell am start -n "$pkg/.pipeline.MainActivity" --ez install_update true >/dev/null
+  local now=""; for i in $(seq 1 30); do now=$(vcode); [ -n "$now" ] && [ "$now" -gt "$before" ] && break; sleep 2; done
+  echo "self-install: before=$before after=$now" | tee "$out/self-install.txt"
+  [ -n "$now" ] && [ "$now" -gt "$before" ]
+}
+if self_install; then echo "self-install raised versionCode without a tap"
+else
+  adb shell dumpsys window | grep -m1 mCurrentFocus >> "$out/self-install.txt" 2>/dev/null
+  if [ "${IEUM_SELF_INSTALL_STRICT:-0}" = "1" ]; then echo "SELF-INSTALL DID NOT RAISE versionCode"; fail=1
+  else echo "::warning title=update-smoke::self-install did not raise versionCode (the previous build may ask for a tap)"; fi
+fi
 exit $fail

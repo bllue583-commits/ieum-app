@@ -1,5 +1,5 @@
 # 이음 새벽 정리 (매일) 지시문
-지시문 버전 4
+지시문 버전 5
 
 이 파일이 예약 작업 "이음 새벽 정리 (매일)" 프롬프트의 원본이다(설계도 C2, "새벽 정리" 절). 루틴 프롬프트에는 아래 "---" 다음부터 끝까지를 그대로 붙여 넣는다.
 지금 예약 작업에 들어 있는 판(11/4 2판: 중복 방지, 자가 보고 설계도 B3 포함)과 같다. 저장소 문장만 clone 안내를 더해 고쳤다.
@@ -13,7 +13,7 @@ v2.6(11/5): state의 tasks에 rev, state에 mergeCandidates가 실린다. 6번�
 
 작업 폴더는 ieum-inbox 저장소의 기본 브랜치다. 읽는 파일:
 - ledger/ledger.json: 장부 {rev, updatedMs, siteMemo, companies[{name, trade, memo}], people[{id, name, company, role, isStaff, aliases[], locked[]}], issues[{id, title, companies[], status, recordKeys[], taskIds[]}], issueSuggestions[], corrections[], tidiedOnce}
-- tidy/state.json: 폰이 밤에 올린 자료 {generatedMs, firstPassDone, tasks[{id, title, due, status, company, createdMs, locked, rev}], records[{key, atMs, kind, counterpartId, company, summary, keyPoints}], recentlyDone[], mergeCandidates[](있을 때만)}
+- tidy/state.json: 폰이 밤에 올린 자료 {generatedMs, firstPassDone, tasks[{id, title, due, status, company, createdMs, locked, rev}], records[{key, atMs, kind, counterpartId, company, summary, keyPoints}], recentlyDone[], mergeCandidates[](있을 때만), personCandidates[](있을 때만)}
 - tidy/proposal.json: 이번에 쓸 제안(이전 것이 있으면 덮어쓴다)
 - tidy/project.md, tidy/history/YYYY-MM.md, tidy/briefing.md: 이 작업의 기억(9번)
 
@@ -32,7 +32,7 @@ v2.6(11/5): state의 tasks에 rev, state에 mergeCandidates가 실린다. 6번�
    create가 아닌 각 제안 항목에는 state의 rev를 그대로 적는다(그 항목의 state tasks에 있는 rev 값, 바꾸거나 계산하지 않는다). 폰은 rev가 지금 값과 다르면(state를 올린 뒤 통화로 바뀐 일) 그 제안을 건너뛴다. create에는 rev가 없다.
    state에 mergeCandidates가 있으면 폰이 서로 비슷해 중복일 수 있다고 본 체크할 일의 id 쌍 목록이다. merge를 판단할 때 이 쌍부터 대조하되, 대상(문서, 공정, 회차)이 다르면 합치지 않는다.
    완료 처리는 하지 않는다(사용자가 누른다). locked가 true인 항목은 바꾸지 않는다. 제목에 가운데 점, 말줄임표, 영어를 쓰지 않는다.
-7. 장부 정리: 같은 업체의 다른 표기는 하나로 합치고 없어지는 쪽에 mergedInto를 적는다. 번호 없이 이름으로만 있는 중복 사람도 mergedInto로 합친다(번호가 다른 두 사람은 폰이 합치지 않으므로 합치지 않는다). 없어지는 쪽 업체와 사람 항목은 지우지 말고 mergedInto만 적어 둔다(폰은 그 항목의 mergedInto를 보고 합친다). 다음 새벽 정리에서 폰 state에 그 이름이 더 이상 보이지 않으면 지운다. siteMemo는 600자, 업체 memo는 400자 안으로 짧게 다시 쓴다. locked 항목은 바꾸지 않는다. 끝나면 tidiedOnce를 true로 쓴다. 단 state의 firstPassDone이 false인 날(3번)에는 tidiedOnce를 쓰지 않고 장부에 있던 값을 그대로 둔다.
+7. 장부 정리: 같은 업체의 다른 표기는 하나로 합치고 없어지는 쪽에 mergedInto를 적는다. 번호 없이 이름으로만 있는 중복 사람도 mergedInto로 합친다(번호가 다른 두 사람은 폰이 합치지 않으므로 합치지 않는다). 없어지는 쪽 업체와 사람 항목은 지우지 말고 mergedInto만 적어 둔다(폰은 그 항목의 mergedInto를 보고 합친다). 다음 새벽 정리에서 폰 state에 그 이름이 더 이상 보이지 않으면 지운다. siteMemo는 600자, 업체 memo는 400자 안으로 짧게 다시 쓴다. locked 항목은 바꾸지 않는다. 끝나면 tidiedOnce를 true로 쓴다. 단 state의 firstPassDone이 false인 날(3번)에는 tidiedOnce를 쓰지 않고 장부에 있던 값을 그대로 둔다. state에 personCandidates(사람 id 쌍)가 있으면 폰이 같은 번호인데 이름이 조금 다르거나 같은 업체에 같은 이름이라 자동으로 합치지 않은 쌍이다. 자막과 기록으로 같은 사람이 확실할 때만 mergedInto로 합치고, 애매하면 그대로 둔다.
 8. 원칙: 근거 없는 내용을 만들지 않는다. 파일은 Read 도구로 읽고 직접 판단하며, 결과를 스크립트로 일괄 생성하지 않고 파일 내용을 터미널에 출력하지 않는다. 장부와 기억 파일에 전화번호, 녹음, 자막과 문자 원문을 넣지 않는다. JSON은 `python3 -c 'import json;json.load(open("파일"))'`로 형식만 확인한다.
 9. 기억 파일을 쓴다. 이 작업은 매번 새로 시작해 지난 실행을 기억하지 못하므로, 아래 파일과 장부가 10월 1일부터 공사가 끝날 때까지의 모든 흐름을 아는 유일한 기억이다. 공사는 몇 달에서 몇 년 이어지므로 지난 기록은 지우거나 줄이지 않는다. 시작할 때(1번 뒤) project.md, 이번 달과 지난달의 history 파일, briefing.md를 먼저 전부 읽고, 진행 중인 일이 더 오래된 달과 이어져 있으면 그 달 파일도 찾아 읽는다. 오늘 정리는 그 흐름에 이어서 한다.
    - tidy/project.md: 공사 전체의 큰 그림(통째로 다시 쓰되, 지난 내용은 지우지 말고 고치거나 보탠다). 순서: "## 현장 개요"(현장, 공사 범위, 우리 쪽 담당), "## 공정 흐름"(공정별 시작·끝·현재 상태를 날짜와 함께, 예: "3층 슬래브 타설 11/12 예정"), "## 업체별 현황"(업체마다 공종, 계약·견적·발주 상태, 주요 담당자, 마지막 연락일, 이 업체와 있었던 중요한 일 날짜순), "## 주요 결정"(언제 누가 무엇을 정했는지 날짜순, 쌓기만 한다), "## 반복되는 문제"(같은 문제가 여러 번 나온 것, 예: 반입 지연).
@@ -67,7 +67,7 @@ v2.6(11/5): state의 tasks에 rev, state에 mergeCandidates가 실린다. 6번�
 - `processed`: 읽은 기록 수. `skipped`: 건너뛴 수. `failed`: 처리하려다 실패한 수. `batches`: 제안한 항목 수.
 - `model`: 이번 실행에 쓴 모델 이름.
 - `limitHit`: 사용 한도 오류를 만났으면 `true`, 아니면 `false`.
-- `ledgerRev`: 이번에 쓴 장부의 rev. `promptVersion`은 빈 문자열, `promptMismatch`는 `false`로 둔다.
+- `ledgerRev`: 이번에 쓴 장부의 rev. `promptVersion`은 "5"(이 지시문의 버전, 문자열)로 적고, `promptMismatch`는 `false`로 둔다.
 - `loggedTranscript`: 원문을 출력하거나 로그에 남기지 않았으므로 항상 `false`.
 
 이 파일에는 시각, 숫자, 모델 이름, 참/거짓만 쓴다. 자막 원문, 이름, 전화번호, 회사 이름, 요약, 오류 메시지 본문은 절대 쓰지 않는다. 실행이 중간에 막혀 결과를 못 썼더라도 이 파일은 `processed`를 실제 값(0이어도)으로 써서 커밋한다. 커밋 메시지에는 건수 외에 내용을 적지 않는다.

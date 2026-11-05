@@ -81,6 +81,14 @@ class RoutineDocTest {
         assertTrue(text.contains("\"loggedTranscript\":false"));assertTrue(text.contains("`loggedTranscript`: 자막이나 문자 원문을 출력하거나 로그에 남기지 않았으므로 항상 `false`"))
     }
 
+    /** v3.1: the watchdog compares the routine's self-reported promptVersion with version.json's tidyVersion (the head line), so the
+     * number written in the pasted text must be the head's. */
+    @Test fun tidySelfReportCarriesTheHeadVersion() {
+        val text=File(doc().parentFile,"tidy.md").readText()
+        val head=Regex("""^지시문 버전\s*(\d+)\s*$""",RegexOption.MULTILINE).find(text.substringBefore("\n---"))!!.groupValues[1]
+        assertTrue(text.substringAfter("\n---").contains("`promptVersion`은 \"$head\""))
+        assertTrue(text.contains("personCandidates"))
+    }
     @Test fun tidyDocEndsWithTheSelfReport() {
         val text=File(doc().parentFile,"tidy.md").readText()
         assertTrue(text.contains("\"routine\":\"tidy\""));assertTrue(text.contains("status/last-run.json"))

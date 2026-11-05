@@ -126,8 +126,15 @@ jobs:
           fp() { APKSIGNER="$apksigner" bash tools/rotate_signing_key.sh fp "$1"; }
           new=$(fp "$RUNNER_TEMP/ieum.apk")
           [ -n "$new" ] || { echo "::error title=release::could not read the new APK's signing certificate"; exit 1; }
+          # v3.1 (DESIGN_V4 2.2-2): version.json carries the published certificate, so the comparison works even when the
+          # previous APK cannot be downloaded (1034-1038 were never compared for that reason).
+          prev_cert=$(gh api "repos/$INBOX/contents/app/version.json" --jq .content 2>/dev/null | base64 -d 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('certSha256',''))" 2>/dev/null || true)
           asset=$(gh api "repos/$INBOX/contents/app/version.json" --jq .content 2>/dev/null | base64 -d 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['apk'].rsplit('/',1)[-1])" 2>/dev/null || true)
           if [ -z "$asset" ] || ! gh api -H "Accept: application/octet-stream" "repos/$INBOX/releases/assets/$asset" > "$RUNNER_TEMP/previous.apk" 2>/dev/null; then
+            if [ -n "$prev_cert" ] && [ "$ROTATE" != "1" ]; then
+              [ "$(echo "$new" | tr 'A-F' 'a-f' | tr -d ':')" = "$prev_cert" ] || { echo "::error title=release::signing certificate differs from version.json certSha256 ($prev_cert): not publishing"; exit 1; }
+              echo "signing certificate matches version.json certSha256"; exit 0
+            fi
             echo "::warning title=release::previous APK could not be downloaded: signing certificate not compared"; exit 0
           fi
           old=$(fp "$RUNNER_TEMP/previous.apk")
@@ -168,6 +175,8 @@ jobs:
           name = "v" + v.read_text(encoding="utf-8").strip() if v.is_file() and v.read_text(encoding="utf-8").strip() else "v" + code
           print(json.dumps({"versionCode": int(code), "versionName": name, "apk": "releases/assets/" + asset, "sha256": sha, "size": int(size), "notes": notes}, ensure_ascii=False))
           EOF
+          # v3.1 (DESIGN_V4 2.2-2): promptVersion, tidyVersion and certSha256 for the watchdog, which never reads this repository.
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner" python3 tools/release/version_fields.py --root . --apk "$RUNNER_TEMP/ieum.apk" --merge version.json
           old=$(gh api "repos/$INBOX/contents/app/version.json" --jq .sha 2>/dev/null || true)
           gh api -X PUT "repos/$INBOX/contents/app/version.json" -f message="app $tag" -f content="$(base64 -w0 version.json)" ${old:+-f sha="$old"} > /dev/null
           # Keep the three newest releases. The new release is already out: a failed clean-up only warns (the API sometimes answers 500).

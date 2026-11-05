@@ -107,7 +107,7 @@ internal object AutomaticRecordingDiscovery {
                 }finally{active(null)}
             }
             if(sawNew&&!cancelled())runCatching{scheduleFollowup(context,binding,fromFollowup)} // A4: look again soon instead of waiting for the next 15 minutes
-            if(!cancelled())runCatching{kr.callbrief.pipeline.CallTranscriptionWork.enqueue(context)} // new recordings -> transcribe soon
+            if(sawNew&&!cancelled())runCatching{kr.callbrief.pipeline.CallTranscriptionWork.enqueue(context)} // only when a new recording was stored; the hourly tick is the safety net (DESIGN_V4 2.3-5)
             blocked(context,binding,stopped)?.let{return it}
             scan?.let(observed)
             // A pass that could not store anything says why (consent, vault key, folder grant) next to its code,
