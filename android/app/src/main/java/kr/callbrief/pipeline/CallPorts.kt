@@ -22,7 +22,9 @@ data class CallTranscript(
     val modelSha256:String,
     val vadApplied:Boolean,
 ) {
-    data class Segment(val startMs:Long,val endMs:Long,val text:String)
+    /** [uncertainNumbers] (v3.3 seam, r13-2 fills, r13-1 reads): number tokens in [text] whose lowest token probability was
+     * under 0.5, as they appear in [text] (digits as written by the recognizer). Empty when all were sure or unknown. */
+    data class Segment(val startMs:Long,val endMs:Long,val text:String,val uncertainNumbers:List<String> =emptyList())
 }
 
 /** Implemented by the analysis side: store the transcript durably (idempotent per recordingId+sourceVersion+audioSha256)
@@ -151,6 +153,15 @@ object PipelineSettingsKeys {
     /** r12-8 (DESIGN_V4 2-3-5 A1): transcription runs of the day (KST), a JSON string {"day":yyyymmdd,"runs","minutes",
      * "ends":{pass end code: count},"prev":{the same for the day before}} ([TranscriptionRuns.add]); the heartbeat's transcription.runs. */
     const val TRANSCRIPTION_RUNS="transcriptionRuns"
+
+    // ---- v3.3 (DESIGN_V4 3절, key commit): names only. ----
+    /** r13-1: "잠금 화면에서도 이름과 한 줄 보기" (default on). */
+    const val LOCK_SCREEN_DETAIL="lockScreenDetail"
+    /** r13-1: check items and promises marked tentative by the number guard, by reason, a JSON object
+     * {"number","date","asr","quote","confusable"} (running counts; heartbeat guard). */
+    const val GUARD_STATS="guardStats"
+    /** r13-2: the last golden measurement on real recordings, a JSON string of numbers only (heartbeat golden). */
+    const val GOLDEN="golden"
 }
 
 /** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets
