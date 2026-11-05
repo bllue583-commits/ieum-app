@@ -12,6 +12,10 @@ import java.util.concurrent.Executors
 internal object NotificationActions {
     const val ACTION_DONE="kr.callbrief.action.TASK_DONE"
     const val EXTRA_ITEM="itemId";const val EXTRA_REVISION="revision"
+    /** [메모 남기기] on a call's follow-up notice (r10-2, [CallFollowupNotice]): one typed line under [KEY_MEMO] becomes the user's
+     * own check item. [EXTRA_RECORD]: the call record when known; [EXTRA_FOLLOWUP]: the notice id. */
+    const val ACTION_MEMO="kr.callbrief.action.CALL_MEMO"
+    const val KEY_MEMO="memo";const val EXTRA_RECORD="recordId";const val EXTRA_FOLLOWUP="followupId"
     /** Request code of the button's PendingIntent: one per item, so the next item's button never rewrites the extras of a
      * press already on its way (a press always carries the item it was shown for). */
     const val REQUEST_DONE=701
@@ -31,6 +35,7 @@ internal object NotificationActions {
     /** Runs off the main thread. Returns true when this press finished the item (false for a repeated or stale press or a failure).
      * The report is posted again in every case, so it always shows what is still open. Never throws. */
     fun handle(context:Context,intent:Intent):Boolean {
+        if(intent.action==ACTION_MEMO) return CallFollowupNotice.handleMemo(context,intent)
         if(intent.action!=ACTION_DONE) return false
         val id=intent.getStringExtra(EXTRA_ITEM) ?: return false
         val revision=intent.getLongExtra(EXTRA_REVISION,-1L)

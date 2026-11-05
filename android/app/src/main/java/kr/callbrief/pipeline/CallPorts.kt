@@ -108,6 +108,9 @@ object PipelineSettingsKeys {
     /** First-pass batches put up on one KST day (design C7: at most [FirstPass.BATCHES_PER_DAY]): the day and the count. */
     const val FIRST_PASS_BATCH_DAY="firstPassBatchDay"
     const val FIRST_PASS_BATCHES_TODAY="firstPassBatchesToday"
+    /** Design 6.2 (r10-2): one notice per finished work call, "정리하고 있어요" then "정리됐어요" (default on). Off: no notices;
+     * results still reach the home screen and the reports. */
+    const val FOLLOWUP_NOTICE="followupNotice"
 }
 
 /** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets
