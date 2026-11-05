@@ -13,7 +13,6 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import kr.callbrief.R
-import kr.callbrief.SecureSettings
 import kr.callbrief.pipeline.ContactCards
 import kr.callbrief.pipeline.PipelineSettingsKeys
 
@@ -30,7 +29,14 @@ import kr.callbrief.pipeline.PipelineSettingsKeys
  * The card itself is r11-2's [CallCardOverlay] (the overlay window, or a heads-up notification when the overlay may not be
  * drawn or the screen is locked); this service only says when: `show(context, phoneKey, state)` on RINGING and on OFFHOOK,
  * `collapse()` [COLLAPSE_AFTER_MS] after OFFHOOK, `hide()` on IDLE. Personal and excluded numbers ([CallSession.Snapshot.ignored]):
- * nothing, not even the service. No number is put in an Intent or a log; the service reads the key from [CallSession.current]. */
+ * nothing, not even the service. No number is put in an Intent or a log; the service reads the key from [CallSession.current].
+ *
+ * v3.4 (DESIGN_V4 4.1-1, 4.1-3, 4.1-4, r14-1): a call going out no longer needs the call redirection role (the number comes
+ * with the OFFHOOK broadcast; the role only brings it sooner and stays an option in settings). The settings are the call's
+ * memory snapshot ([CallSession.callSettings]), not read again for every state. During call waiting ([CallSession.Snapshot.waiting])
+ * the card goes and nothing shows until IDLE. A start Android refuses is counted ([CardStats.fgsRefused]); a running service
+ * hears later states through a static reference in this process ([running]) instead of another start. The service starts
+ * whether or not the overlay may be drawn: the notice instead of the card needs the process too. */
 class CallCardService:Service() {
     /** What the service tells the card. [CallCardOverlay] by default; replaceable in host tests. */
     internal interface Card {
@@ -65,7 +71,8 @@ class CallCardService:Service() {
         @Volatile internal var card:Card=Overlay
         /** A call goes on (TelecomManager.isInCall, needs READ_PHONE_STATE). Replaceable in host tests. */
         @Volatile internal var inCall:(Context)->Boolean=::telecomInCall
-        /** The call redirection role is held (calls that go out give their number). Replaceable in host tests. */
+        /** The call redirection role is held (calls that go out give their number sooner; optional since v3.4, counted as
+         * [CardStats.NO_ROLE] only). Replaceable in host tests. */
         @Volatile internal var roleHeld:(Context)->Boolean=::redirectionRoleHeld
         /** The number has a contact card (v2.8 [ContactCards]). Replaceable in host tests. */
         @Volatile internal var hasCard:(Context,String)->Boolean={ c,k -> ContactCards.get(c,k)!=null }
@@ -76,6 +83,8 @@ class CallCardService:Service() {
 
         /** The card on the main thread, shared by the service and the direct path (when Android refuses the service). */
         internal val driver=Driver()
+        /** v3.4 (4.1-4): the service of this process once it is up; later states go to it directly (no new start). */
+        @Volatile internal var running:CallCardService?=null
 
         /** One call state, from [CallStateReceiver] (the session's thread). Starts the service when a card is wanted and it is
          * not running; tells a running one the state in any case. When the start is refused (Android 12 and later from the
@@ -85,15 +94,18 @@ class CallCardService:Service() {
             val verdict=runCatching { verdict(app,snap) }.getOrNull()
             val show=verdict==SHOW
             // r11-3: calls dropped here never reach the card, so they are counted here (once per call, see CardStats).
-            runCatching { stats(app,snap,verdict.takeIf { it!=SHOW }) }
+            runCatching { stats(app,snap,verdict) }
             if(!active && !show && !driver.shown) return
             val intent=Intent(app,CallCardService::class.java).putExtra(EXTRA_STATE,snap.state.name).putExtra(EXTRA_SHOW,show)
             if(!active && snap.state==CallSession.State.IDLE) {
                 // Nothing running but a card shown directly: hide it.
                 main.post { driver.apply(app,CallSession.State.IDLE,null,false) };return
             }
+            // Already up in this process: tell it directly.
+            running?.let { svc -> val state=snap.state;main.post { svc.onState(state,show) };return }
             val started=runCatching { startService(app,intent);true }.onFailure { Log.w(TAG,"start refused: ${it.javaClass.simpleName}") }.getOrDefault(false)
             if(started) { active=true;return }
+            runCatching { CardStats.fgsRefused(app) }
             val key=snap.phoneKey
             main.post {
                 driver.apply(app,snap.state,key,show)
@@ -102,26 +114,29 @@ class CallCardService:Service() {
             }
         }
 
-        /** Whether this call shows a card: not ignored, not IDLE, the number known, the switch for its direction on (calls that
-         * go out also need the role), and a card for the number or the switch for numbers without one. */
+        /** Whether this call shows a card: not ignored, not IDLE, not call waiting, the number known, the switch for its
+         * direction on, and a card for the number or the switch for numbers without one. */
         internal fun wanted(context:Context,snap:CallSession.Snapshot):Boolean=verdict(context,snap)==SHOW
 
-        /** [wanted] with the reason when not (r11-3, for [CardStats]): [SHOW]; [CallCardOverlay.NO_NUMBER] (the switch is on but
-         * the number is not known); [CallCardOverlay.NO_CARD] (no card for the number and numbers without one are off); null
-         * when no card is meant to show at all (IDLE, a personal or excluded number, the switch off, going out without the role). */
+        /** [wanted] with the reason (r11-3, for [CardStats]): [SHOW]; [CallCardOverlay.NO_NUMBER] (the switch is on but the number
+         * is not known); [CallCardOverlay.NO_CARD] (no card for the number and numbers without one are off); [IGNORED] (personal
+         * or excluded); [OFF] (the switch for the direction is off, or settings cannot be read); [WAITING] (call waiting); null
+         * on IDLE. v3.4 (4.1-1): a call going out needs no role; only the number decides ([CallCardOverlay.NO_NUMBER]). */
         internal fun verdict(context:Context,snap:CallSession.Snapshot):String? {
-            if(snap.ignored || snap.state==CallSession.State.IDLE) return null
-            val s=runCatching { SecureSettings(context).snapshot() }.getOrNull() ?: return null
+            if(snap.state==CallSession.State.IDLE) return null
+            if(snap.ignored) return IGNORED
+            if(snap.waiting) return WAITING
+            val s=runCatching { CallSession.callSettings(context) }.getOrNull() ?: return OFF
             val on=when(snap.direction) {
-                CallSession.Direction.OUT -> s.optBoolean(PipelineSettingsKeys.CARD_OUTGOING,true) && runCatching { roleHeld(context) }.getOrDefault(false)
+                CallSession.Direction.OUT -> s.optBoolean(PipelineSettingsKeys.CARD_OUTGOING,true)
                 else -> s.optBoolean(PipelineSettingsKeys.CARD_INCOMING,true)
             }
-            if(!on) return null
+            if(!on) return OFF
             val key=snap.phoneKey ?: return CallCardOverlay.NO_NUMBER
             return if(runCatching { hasCard(context,key) }.getOrDefault(false) || s.optBoolean(PipelineSettingsKeys.CARD_UNKNOWN,false)) SHOW
                 else CallCardOverlay.NO_CARD
         }
-        internal const val SHOW="show"
+        internal const val SHOW="show";internal const val IGNORED="ignored";internal const val OFF="off";internal const val WAITING="waiting"
         /** Counts what the service decided ([CardStats.follow]). Replaceable in host tests. */
         @Volatile internal var stats:(Context,CallSession.Snapshot,String?)->Unit={ c,snap,reason -> CardStats.follow(c,snap,reason) }
 
@@ -138,7 +153,7 @@ class CallCardService:Service() {
 
         /** Host tests: back to the start. */
         internal fun resetForHost() {
-            active=false;card=Overlay;inCall=::telecomInCall;roleHeld=::redirectionRoleHeld;clock={ System.currentTimeMillis() }
+            active=false;running=null;card=Overlay;inCall=::telecomInCall;roleHeld=::redirectionRoleHeld;clock={ System.currentTimeMillis() }
             hasCard={ c,k -> ContactCards.get(c,k)!=null };mainHandler=null
             startService={ c,i -> c.startForegroundService(i) }
             stats={ c,snap,reason -> CardStats.follow(c,snap,reason) }
@@ -189,25 +204,35 @@ class CallCardService:Service() {
         super.onCreate();active=true;startedMs=clock()
         main.postDelayed(check,CHECK_MS)
     }
+    /** Up as a foreground service (the first start went through [foreground]). */
+    private var up=false
     override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int {
-        if(!foreground()) { driver.apply(this,CallSession.State.IDLE,null,false);finish();return START_NOT_STICKY }
+        if(!up) {
+            if(!foreground()) { runCatching { CardStats.fgsRefused(this) };driver.apply(this,CallSession.State.IDLE,null,false);finish();return START_NOT_STICKY }
+            up=true;running=this
+        }
         val state=runCatching { CallSession.State.valueOf(intent?.getStringExtra(EXTRA_STATE) ?: "") }.getOrNull() ?: CallSession.current().state
-        val show=intent?.getBooleanExtra(EXTRA_SHOW,false)==true
-        // The number from the session itself (never through the Intent); a state that moved on since is handled by its own Intent.
+        onState(state,intent?.getBooleanExtra(EXTRA_SHOW,false)==true)
+        return START_NOT_STICKY
+    }
+    /** One call state for the card (main thread): from a start's Intent, or directly from [follow] once the service is up. */
+    internal fun onState(state:CallSession.State,show:Boolean) {
+        // The number from the session itself (never through the Intent); a state that moved on since is handled by its own call.
         val key=CallSession.current().takeIf { it.state==state && !it.ignored }?.phoneKey
         driver.apply(this,state,key,show && key!=null)
         main.removeCallbacks(stop)
         if(!driver.shown) main.postDelayed(stop,STOP_AFTER_IDLE_MS)
-        return START_NOT_STICKY
     }
     override fun onDestroy() {
         main.removeCallbacks(stop);main.removeCallbacks(check)
         if(driver.shown) driver.apply(this,CallSession.State.IDLE,null,false)
+        if(running===this) running=null
         active=false;super.onDestroy()
     }
     private fun finish() {
         main.removeCallbacks(stop);main.removeCallbacks(check)
         runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+        if(running===this) running=null
         active=false;stopSelf()
     }
 

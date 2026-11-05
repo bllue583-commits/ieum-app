@@ -240,7 +240,7 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
             week,byCompany,memos,
             granted(android.Manifest.permission.READ_SMS),granted(android.Manifest.permission.READ_CALL_LOG),granted(android.Manifest.permission.READ_PHONE_STATE),
             null,first,NotifyAsk.blocked(a),mm.partFile.path,people,
-            CallCardAsk.overlayAllowed(a),CallCardAsk.roleDone(a),installStep(a),gapBanner(a)?.text?.takeIf { it.isNotBlank() },updateState(a),partBytes,story)
+            CallCardAsk.overlayAllowed(a),true /* v3.4 (4.1-1): no role step */,installStep(a),gapBanner(a)?.text?.takeIf { it.isNotBlank() },updateState(a),partBytes,story)
     }
 
     /** While a new version or the voice model is coming, home looks every second whether it now needs the person (the update
@@ -394,7 +394,8 @@ internal object SetupSkip {
 
 /** Text and call-log access. A sideloaded app on recent Android can get these refused as "제한된 설정" without a dialog:
  * after one ask, the screens point to App info, where the restriction is lifted and the permission is allowed. */
-/** v3.0 (r11-1): the call card's two questions, shared by the setup steps and the settings group. */
+/** v3.0 (r11-1): the call card's two questions, shared by the setup steps and the settings group. v3.4 (DESIGN_V4 4.1-1): the
+ * role is no longer a setup step (calls going out show the card without it); settings offer it as an option only. */
 internal object CallCardAsk {
     private const val ROLE_ASKED="asked_call_redirection_role"
     private fun prefs(c:android.content.Context)=c.getSharedPreferences("ieum_ui",android.content.Context.MODE_PRIVATE)
@@ -414,8 +415,6 @@ internal object CallCardAsk {
         val rm=c.getSystemService(android.app.role.RoleManager::class.java) ?: return false
         return runCatching { rm.isRoleHeld(android.app.role.RoleManager.ROLE_CALL_REDIRECTION) }.getOrDefault(false)
     }
-    /** The optional step is done: the role is held, was asked for once (a "no" is an answer), or this phone has no such role. */
-    fun roleDone(c:android.content.Context)=!roleAvailable(c) || roleHeld(c) || prefs(c).getBoolean(ROLE_ASKED,false)
     fun askRole(a:android.app.Activity,launcher:androidx.activity.result.ActivityResultLauncher<Intent>) {
         prefs(a).edit().putBoolean(ROLE_ASKED,true).apply()
         if(android.os.Build.VERSION.SDK_INT<29) return

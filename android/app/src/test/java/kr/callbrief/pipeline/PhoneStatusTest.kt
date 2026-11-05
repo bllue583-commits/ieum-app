@@ -50,6 +50,25 @@ class PhoneStatusTest {
 class PhoneStatusHealthTest {
     private fun base()=PhoneStatus.Input(1_000L,"v2.4",1040,0,null,5,6,"READY","","",12)
 
+    /** v3.4 r14-1 (DESIGN_V4 4.1-5): the places r14-3 fills, update.error, messages.mailError and recordTime.fileVsRecordMin,
+     * always there (null inside until written), codes and counts only. */
+    @Test fun versionThreeFourPlacesAreCodesAndCountsOnly() {
+        val empty=PhoneStatus.build(base())
+        assertTrue(empty.getJSONObject("update").isNull("error"))
+        assertTrue(empty.getJSONObject("messages").isNull("mailError"))
+        assertTrue(empty.getJSONObject("recordTime").isNull("fileVsRecordMin"))
+        val s=org.json.JSONObject().put(PipelineSettingsKeys.UPDATE_ERROR_CODE,"HTTP_404 김")
+            .put(PipelineSettingsKeys.MAIL_ERROR_CODES,org.json.JSONObject().put("AUTH",2).put("TIMEOUT",1).put("note","김").toString())
+            .put(PipelineSettingsKeys.RECORD_TIME,org.json.JSONObject().put("neg1d",1).put("zero",7).put("plus1d",2))
+        val o=PhoneStatus.build(base().copy(v34=PhoneStatus.v34(s)))
+        assertEquals("HTTP_404",o.getJSONObject("update").getString("error"))
+        assertFalse(o.toString(),Regex("[가-힣]").containsMatchIn(o.toString()))
+        val mail=o.getJSONObject("messages").getJSONObject("mailError")
+        assertEquals(2,mail.getInt("AUTH"));assertEquals(1,mail.getInt("TIMEOUT"));assertFalse(mail.has("note"))
+        assertEquals(7,o.getJSONObject("recordTime").getJSONObject("fileVsRecordMin").getInt("zero"))
+        assertNull(PhoneStatus.v34(org.json.JSONObject()).updateError)
+    }
+
     @Test fun quietPhoneFieldsAreAlwaysThere() {
         val o=PhoneStatus.build(base().copy(health=PhoneStatus.Health(consent=true,folder=false,notifyAllowed=true,batteryFree=false,
             standbyBucket="RARE",lastDiscoveryMs=900,lastUploadMs=800,pendingAnalysis=3,rescheduledMs=700,tokenExpiresMs=2_000_000L,audioChannels=2,audioChannelCorr=0.12345)))

@@ -77,7 +77,9 @@ class CallCardSafetyTest:ProtectedTextHostTestBase() {
     private val offhook=TelephonyManager.EXTRA_STATE_OFFHOOK
     private val idle=TelephonyManager.EXTRA_STATE_IDLE
     private fun stats():JSONObject=CardStats.read(SecureSettings(app).snapshot())
-    private fun counts()=CardStats.KINDS.associateWith { stats().optInt(it,0) }.filterValues { it>0 }
+    /** The four outcomes of v3.0 (the v3.4 counts are checked in R14OneCallTest). */
+    private val FOUR=listOf(CallCardOverlay.SHOWN,CallCardOverlay.NO_PERMISSION,CallCardOverlay.NO_NUMBER,CallCardOverlay.NO_CARD)
+    private fun counts()=FOUR.associateWith { stats().optInt(it,0) }.filterValues { it>0 }
 
     // ---- counts (settings CARD_STATS, the heartbeat's callCard) ----
     @Test fun theCardsOwnOutcomeIsCountedOncePerCall() {
@@ -113,13 +115,21 @@ class CallCardSafetyTest:ProtectedTextHostTestBase() {
         phone(ringing,null);phone(offhook);phone(idle)
         assertEquals(mapOf(CallCardOverlay.SHOWN to 1,CallCardOverlay.NO_NUMBER to 1),counts())
     }
-    @Test fun personalNumbersSwitchedOffCardsAndCallsGoingOutWithoutTheRoleAreNotFailures() {
+    @Test fun personalNumbersAndSwitchedOffCardsAreNotFailuresButCounted() {
+        assertNull("no call seen yet",CardStats.heartbeat(SecureSettings(app).snapshot()))
         phone(ringing,"010-0000-9999");CardStats.record(app,CallCardOverlay.NO_CARD);phone(idle)
         SecureSettings(app).update { it.put(PipelineSettingsKeys.CARD_INCOMING,false) }
         phone(ringing,"010-0000-5555");phone(idle)
-        phone(offhook);phone(idle) // a call going out, no role
         assertEquals(emptyMap<String,Int>(),counts())
-        assertNull(CardStats.heartbeat(SecureSettings(app).snapshot()))
+        // v3.4 (DESIGN_V4 4.1-5): seen calls make the heartbeat say 0 rather than null, with why nothing showed.
+        val hb=CardStats.heartbeat(SecureSettings(app).snapshot())!!
+        assertEquals(2,hb.getInt(CardStats.CALLS));assertEquals(1,hb.getInt(CardStats.IGNORED));assertEquals(1,hb.getInt(CardStats.OFF))
+        assertEquals(0,hb.getInt(CardStats.SHOWN));assertEquals(0,hb.getInt(CardStats.NO_PERMISSION))
+        // A call going out whose number never came, without the role: a noNumber of a call going out (noRole for reference).
+        phone(offhook);phone(idle)
+        val out=CardStats.heartbeat(SecureSettings(app).snapshot())!!
+        assertEquals(1,out.getInt(CardStats.NO_NUMBER));assertEquals(1,out.getInt(CardStats.NO_NUMBER_OUT));assertEquals(0,out.getInt(CardStats.NO_NUMBER_IN))
+        assertEquals(1,out.getInt(CardStats.ELIGIBLE_OUTGOING));assertEquals(1,out.getInt(CardStats.NO_ROLE))
     }
     @Test fun todayStartsAgainOnANewKoreanDay() {
         var s=JSONObject()
