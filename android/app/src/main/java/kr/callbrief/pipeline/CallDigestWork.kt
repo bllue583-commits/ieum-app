@@ -49,11 +49,13 @@ internal object CallDigestText {
     /** Up to [ISSUE_LINES] "진행 중인 일" lead the morning lines (design: 새벽 정리). */
     const val ISSUE_LINES=3
     /** Every open check item, oldest request first, with when it was asked for. No deadlines, no "지남" (user rule;
-     * round 2: before, items without a date never reached this report). */
+     * round 2: before, items without a date never reached this report). An item that may hold a misheard number ends in ", 확인 필요". */
     fun morning(items:List<CallTodoItem>,today:LocalDate,issues:List<Issue> =emptyList()):Message {
         val lines=issues.take(ISSUE_LINES).map { "진행 중, ${it.title}"+(if(it.status.isBlank()) "" else ": ${it.status}") }+
             items.sortedBy { it.createdMs }.map { "${it.company?.let { c -> "[$c] " } ?: ""}${it.title}"+CallUi.requested(it.createdMs).let { r -> if(r.isEmpty()) "" else ", $r" }+
-                (if(it.status=="needs_confirmation") ", 끝났는지 확인" else "") }
+                (if(it.status=="needs_confirmation") ", 끝났는지 확인" else "")+
+                // v3.3 (DESIGN_V4 3.1-2): a number or date that may have been misheard, said in words (a notification has no badge).
+                (if(it.tentative) ", ${CheckRows.UNSURE}" else "") }
         val first=items.minByOrNull { it.createdMs }
         return Message("체크할 일 ${items.size}개",if(items.isEmpty()) "체크할 일이 없어요" else lines[minOf(issues.take(ISSUE_LINES).size,lines.size-1)],more(lines),
             first?.id,first?.revision ?: 0)

@@ -5,6 +5,9 @@ import org.json.JSONObject
 
 internal class ClaudeCallException(val code:String):Exception(code)
 
+/** How a quote was found ([ClaudeCallAnalyzer.filter]). */
+private const val PROOF_EXACT=0;private const val PROOF_CLOSE=1;private const val PROOF_LOW=2
+
 /** Context the model gets besides the transcript. The model has no memory between calls, so everything it
  * should know about the site, the counterpart's company and the open work travels with every call. */
 internal data class ClaudeCallRequest(
@@ -46,6 +49,9 @@ internal data class ClaudeCallRequest(
     val sameNumberPeople:List<String> =emptyList(),
     /** The user as entered under "내 정보" (name, company and site, title); null or blank: roles only. */
     val user:UserInfo?=null,
+    /** v3.3 (DESIGN_V4 3.1-1): when each transcript line was said (and its unsure numbers), for the number guard; null for
+     * texts, mail and records stored before v3.3 (the guard then reads lines around the quote instead). Never sent. */
+    val segmentTimes:NumberGuard.Times?=null,
 ) {
     data class UserInfo(val name:String?,val company:String?,val role:String?) {
         val empty get()=listOf(name,company,role).all { it.isNullOrBlank() }
@@ -79,21 +85,31 @@ internal data class ClaudeCallAnalysis(
     val companyTrade:String?=null,
     /** False when a text or mail turns out personal: it is then dropped, not stored or summarised. */
     val business:Boolean=true,
+    /** v3.3 (DESIGN_V4 3.1-6, rules v7): the answer's own "corrected" mark (a mishearing it fixed), kept as JSON text, not shown yet. */
+    val corrected:String?=null,
 ) {
     /** Kept to read results stored before the section was merged into [tasks]; new answers have none. */
     data class Promise(val text:String,val due:String?,val owner:String,val quote:String,val quoteFuzzy:Boolean=false)
     /** [owner]: who does it, "me" (the user), "them" or "unknown". [quoteFuzzy]: the quote was not found letter for letter. */
     /** [tentative]: certainty "tentative" ("알아볼게요"), not a firm promise. */
-    data class Task(val op:String,val taskId:String?,val title:String,val due:String?,val quote:String,val company:String?=null,val owner:String="unknown",val quoteFuzzy:Boolean=false,val tentative:Boolean=false)
+    /** [guard]: why the number guard marked it tentative ([NumberGuard.REASONS]), empty when it did not. [corrected]: the
+     * answer's "corrected" mark of this item as JSON text (rules v7), kept only. */
+    data class Task(val op:String,val taskId:String?,val title:String,val due:String?,val quote:String,val company:String?=null,val owner:String="unknown",val quoteFuzzy:Boolean=false,val tentative:Boolean=false,
+                    val guard:List<String> =emptyList(),val corrected:String?=null)
     data class Counterpart(val personName:String?,val companyName:String?,val role:String?,val isStaff:Boolean)
     fun toJson():JSONObject=JSONObject().put("summary",summary).put("keyPoints",JSONArray(keyPoints))
         .put("counterpartName",counterpartName ?: JSONObject.NULL).put("counterpartCompany",counterpartCompany ?: JSONObject.NULL)
         .put("counterpart",counterpart?.let { JSONObject().put("personName",it.personName ?: JSONObject.NULL).put("companyName",it.companyName ?: JSONObject.NULL).put("role",it.role ?: JSONObject.NULL).put("isStaff",it.isStaff) } ?: JSONObject.NULL)
         .put("siteMemo",siteMemo ?: JSONObject.NULL).put("companyMemo",companyMemo ?: JSONObject.NULL).put("companyTrade",companyTrade ?: JSONObject.NULL)
-        .put("business",business)
+        .put("business",business).apply { corrected?.let { put("corrected",rawJson(it)) } }
         .put("promises",JSONArray().apply { promises.forEach { put(JSONObject().put("text",it.text).put("due",it.due ?: JSONObject.NULL).put("owner",it.owner).put("quote",it.quote).put("quoteFuzzy",it.quoteFuzzy)) } })
-        .put("tasks",JSONArray().apply { tasks.forEach { put(JSONObject().put("op",it.op).put("taskId",it.taskId ?: JSONObject.NULL).put("title",it.title).put("due",it.due ?: JSONObject.NULL).put("quote",it.quote).put("company",it.company ?: JSONObject.NULL).put("owner",it.owner).put("certainty",if(it.tentative) "tentative" else "sure").put("quoteFuzzy",it.quoteFuzzy)) } })
+        .put("tasks",JSONArray().apply { tasks.forEach { put(JSONObject().put("op",it.op).put("taskId",it.taskId ?: JSONObject.NULL).put("title",it.title).put("due",it.due ?: JSONObject.NULL).put("quote",it.quote).put("company",it.company ?: JSONObject.NULL).put("owner",it.owner).put("certainty",if(it.tentative) "tentative" else "sure").put("quoteFuzzy",it.quoteFuzzy)
+            .apply { if(it.guard.isNotEmpty()) put("guard",JSONArray(it.guard));it.corrected?.let { c -> put("corrected",rawJson(c)) } }) } })
     companion object {
+        /** A value of any JSON type as JSON text ("corrected" is kept whatever shape rules v7 gives it); null when absent. */
+        internal fun rawText(o:JSONObject,k:String):String? { if(!o.has(k) || o.isNull(k)) return null
+            return when(val v=o.opt(k)) { is String -> JSONObject.quote(v);else -> v.toString() }.takeIf { it.length<=2000 } }
+        internal fun rawJson(t:String):Any = runCatching { org.json.JSONTokener(t).nextValue() }.getOrDefault(t)
         /** Parses the model's JSON (or a stored copy of [toJson]). Fields added later are optional. */
         fun parse(o:JSONObject):ClaudeCallAnalysis {
             fun JSONObject.str(k:String)=if(isNull(k)) null else optString(k).trim().takeIf { it.isNotEmpty() }
@@ -109,8 +125,9 @@ internal data class ClaudeCallAnalysis(
                 name,company,
                 o.optJSONArray("promises").objects().map { Promise(it.optString("text").trim(),it.str("due"),it.optString("owner","unknown").lowercase(),it.optString("quote").trim(),it.optBoolean("quoteFuzzy",false)) },
                 o.optJSONArray("tasks").objects().map { Task(it.optString("op").lowercase(),it.str("taskId"),it.optString("title").trim(),it.str("due"),it.optString("quote").trim(),it.str("company"),it.optString("owner","unknown").lowercase(),it.optBoolean("quoteFuzzy",false),
-                    it.optString("certainty").trim().lowercase()=="tentative") },
-                counterpart,o.str("siteMemo"),o.str("companyMemo"),o.str("companyTrade"),o.optBoolean("business",true))
+                    it.optString("certainty").trim().lowercase()=="tentative",
+                    it.optJSONArray("guard")?.let { g -> (0 until g.length()).map { i -> g.optString(i) }.filter { r -> r in NumberGuard.REASONS } }.orEmpty(),rawText(it,"corrected")) },
+                counterpart,o.str("siteMemo"),o.str("companyMemo"),o.str("companyTrade"),o.optBoolean("business",true),rawText(o,"corrected"))
         }
     }
 }
@@ -342,16 +359,21 @@ internal class ClaudeCallAnalyzer {
             }
             return false
         }
-        /** null: no proof; false: found letter for letter; true: found closely. */
-        fun proof(q:String,title:String):Boolean? {
+        /** null: no proof; [PROOF_EXACT]: found letter for letter; [PROOF_CLOSE]: found closely; [PROOF_LOW]: only 70 to 90% of it (v3.3: kept, tentative). */
+        fun proofOf(q:String,title:String):Int? {
             val b=NameKey.bare(q);if(b.length<MIN_QUOTE) return null
             val c=count(inCall,b);val t=count(inTexts,b)
-            if(c==1 || (c==0 && t==1)) return false
+            if(c==1 || (c==0 && t==1)) return PROOF_EXACT
             // Said several times (a repeated phrase, a looping transcript): only next to what the title is about, and only as a close match.
-            if(c+t>1) return if(nearTitleWord(b,title)) true else null
+            if(c+t>1) return if(nearTitleWord(b,title)) PROOF_CLOSE else null
             // Close: one stretch of the call (or of the texts) the quote's length plus 20% holds 90% of its 3-letter pieces.
-            return if(maxOf(NameKey.windowCoverage3(b,inCall),NameKey.windowCoverage3(b,inTexts))>=FUZZY_COVERAGE) true else null
+            val cover=maxOf(NameKey.windowCoverage3(b,inCall),NameKey.windowCoverage3(b,inTexts))
+            return when { cover>=FUZZY_COVERAGE -> PROOF_CLOSE;cover>=NumberGuard.QUOTE_LOW -> PROOF_LOW;else -> null }
         }
+        fun proof(q:String,title:String):Boolean? = proofOf(q,title)?.takeIf { it!=PROOF_LOW }?.let { it!=PROOF_EXACT }
+        // The number guard (DESIGN_V4 3.1-1) reads the lines of the call (and of the texts) as they were sent.
+        val callLines=r.transcript.split("\n").map(::maskNumbers);val textLines=r.recentTexts.split("\n").map(::maskNumbers)
+        val callDay=r.callDay
         fun iso(d:String?)=d?.trim()?.takeIf { Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(it) && runCatching { java.time.LocalDate.parse(it) }.isSuccess }
         val heard=NameKey.squash(r.transcript+r.recentTexts+(r.callLog?.phoneBookName ?: ""))
         val names=r.companyNames+r.personNames+listOfNotNull(r.counterpart,r.person?.name,r.person?.company,r.company?.name)+r.openTasks.mapNotNull { it.company }
@@ -364,8 +386,16 @@ internal class ClaudeCallAnalyzer {
         return a.copy(
             counterpart=cp,siteMemo=memo(a.siteMemo,600),companyMemo=memo(a.companyMemo,400),companyTrade=memo(a.companyTrade,20),
             promises=a.promises.mapNotNull { p -> proof(p.quote,p.text)?.takeIf { p.text.isNotEmpty() }?.let { p.copy(owner=owner(p.owner),due=iso(p.due),quoteFuzzy=it) } },
-            tasks=a.tasks.mapNotNull { t -> val fuzzy=proof(t.quote,t.title)
-                if(fuzzy==null || t.title.isEmpty() || !when(t.op) { "create" -> true;"update","done_suggested" -> t.taskId in known;else -> false }) null
-                else t.copy(taskId=if(t.op=="create") null else t.taskId,company=seen(t.company),due=iso(t.due),owner=owner(t.owner),quoteFuzzy=fuzzy) }.take(MAX_TASKS))
+            tasks=a.tasks.mapNotNull { t -> val found=proofOf(t.quote,t.title)
+                if(found==null || t.title.isEmpty() || !when(t.op) { "create" -> true;"update","done_suggested" -> t.taskId in known;else -> false }) null
+                else {
+                    val due=iso(t.due)
+                    // done_suggested changes neither title nor date: nothing to guard.
+                    val v=if(t.op=="done_suggested") NumberGuard.Verdict(emptyList(),due)
+                        else NumberGuard.check(t.title,due,t.quote,callLines,textLines,r.segmentTimes,callDay,lowQuote=found==PROOF_LOW)
+                    t.copy(taskId=if(t.op=="create") null else t.taskId,company=seen(t.company),due=v.due,owner=owner(t.owner),quoteFuzzy=found!=PROOF_EXACT,
+                        tentative=t.tentative || v.reasons.isNotEmpty(),guard=v.reasons)
+                } }.take(MAX_TASKS))
     }
+
 }

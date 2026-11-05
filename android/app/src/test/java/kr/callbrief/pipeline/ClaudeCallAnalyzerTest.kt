@@ -144,8 +144,9 @@ class ClaudeCallAnalyzerTest {
     @Test fun aQuoteTidiedFromTheSpeechIsKeptAsFuzzyOnlyWhenNearlyAllItsPiecesAreThere() {
         val said="견적서는 내일까지 메일로 보내드릴께요 그리고 계약서는 다음 주에 받기로 했어요"
         val r=filter.filter(parsed(tasks(task("create",null,"견적서 보내기","견적서는 내일까지 메일로 보내드릴게요"))),request(transcript=said))
-        // 보내드릴게요 vs 보내드릴께요: only 13 of the quote's 15 3-letter pieces are there (0.87): below 0.9, dropped.
-        assertEquals(0,r.tasks.size)
+        // 보내드릴게요 vs 보내드릴께요: only 13 of the quote's 15 3-letter pieces are there (0.87): below 0.9, dropped before v3.3;
+        // kept now as tentative with the quote reason (DESIGN_V4 3.1-1 (6)).
+        assertEquals(1,r.tasks.size);assertTrue(r.tasks.single().tentative);assertTrue(NumberGuard.QUOTE in r.tasks.single().guard)
         val long="네 그래서 정리하면 견적서는 내일까지 메일로 보내드릴께요 그리고 나머지 도면도 같이 보내드리겠습니다 확인 부탁드립니다"
         val q="네 그래서 정리하면 견적서는 내일까지 메일로 보내드릴께요 그리고 나머지 도면도 같이 보내드리겠습니다"
         val ok=filter.filter(parsed(tasks(task("create",null,"견적서와 도면 보내기",q.replace("드릴께요","드릴게요")))),request(transcript=long))

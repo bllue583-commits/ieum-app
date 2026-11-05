@@ -81,8 +81,9 @@ class CallRecordStoreTest:ProtectedTextHostTestBase() {
             assertFalse(s.insert(transcript()))
         }
         assertEquals("홍길동",CallRecordStore.counterpartKey("  홍길동 "));assertNull(CallRecordStore.counterpartKey(" "))
-        // The segments are no longer kept (review B20).
-        assertEquals("[]",port().use { it.query("SELECT segments_json FROM call_records").single()["segments_json"] })
+        // The segments' words are no longer kept (review B20); v3.3 keeps only when each line was said, for the number guard.
+        val kept=port().use { it.query("SELECT segments_json FROM call_records").single()["segments_json"] as String }
+        assertEquals("{\"v\":1,\"s\":[0],\"d\":[5]}",kept)
     }
 
     @Test fun createdTaskIsVisibleInWorkflowItemsAndRerunIsIdempotent() {
