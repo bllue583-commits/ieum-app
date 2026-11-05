@@ -384,7 +384,8 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
             cardOverlay=CallCardAsk.overlayAllowed(a),
             phoneState=a.checkSelfPermission(android.Manifest.permission.READ_PHONE_STATE)==android.content.pm.PackageManager.PERMISSION_GRANTED,
             cardRole=!CallCardAsk.roleAvailable(a) || CallCardAsk.roleHeld(a),
-            cardOn=s.optBoolean(PipelineSettingsKeys.CARD_INCOMING,true) || s.optBoolean(PipelineSettingsKeys.CARD_OUTGOING,true))
+            cardOn=s.optBoolean(PipelineSettingsKeys.CARD_INCOMING,true) || s.optBoolean(PipelineSettingsKeys.CARD_OUTGOING,true),
+            gap=RecordingGap.confirmed(s,now)) // r12-1 (DESIGN_V4 2.1-2)
         card.removeAllViews()
         card.addView(CallUi.text(a,"지금 상태",CallUi.HEADING,true).apply { setPadding(0,0,0,CallUi.dp(a,4)) })
         // A light that names a group of this page goes there when it is pressed (review #24).

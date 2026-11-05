@@ -44,6 +44,10 @@ internal object CallFollowupNotice {
     const val MAX_ENTRIES=40
     const val MAX_AGE_MS=36*3_600_000L
     const val WORKING="working";const val DONE="done";const val LATE="late"
+    /** v3.1 (DESIGN_V4 2.1-3): a good discovery pass that started after the call found no file in the call's window. */
+    const val NO_RECORDING="norec"
+    /** A pass this long after the call ended can see its recording (the recorder closed its file). */
+    const val NO_RECORDING_AFTER_MS=2*60_000L
     private const val LOG="ieum.followup"
 
     /** The notice id of a call record: `("followup"+recordId).hashCode()`. A notice posted before its record existed keeps the id
@@ -78,6 +82,8 @@ internal object CallFollowupNotice {
         try {
             val s=settings(context)
             if(!enabled(s) || !end.answered) return
+            // 2.1-3: while calls are not being recorded at all, the home banner speaks instead of one notice per call.
+            if(RecordingGap.last(s)?.let { it.code==PipelineSettingsKeys.GAP_NO_RECORDING && end.endedMs-it.atMs<RecordingGap.STALE_MS }==true) return
             val key=PhoneKey.of(end.phoneKey) ?: return
             val rules=kr.callbrief.LocalPrivacy.rules(s)
             if(rules.excluded(key,key)) return
@@ -131,6 +137,27 @@ internal object CallFollowupNotice {
         val done=e.copy(record=record.recordId,state=DONE)
         save(context) { list -> list.map { if(it.id==e.id) done else it } }
         post(context,done,record)
+    }
+
+    // ---- 2b. no recording (v3.1) -------------------------------------------------------------------------------------
+    /** Called after every good discovery pass that started at [passStartedMs] ([RecordingGap.afterPass]): a call still waiting
+     * whose pass came [NO_RECORDING_AFTER_MS] after it ended and found no file in its window ([RecordingGap.window];
+     * [hasFile] answers for the folder) gets "이 통화는 녹음이 없어 정리할 수 없어요" with [메모 남기기], and is counted in
+     * [PipelineSettingsKeys.FOLLOWUP_NO_RECORDING]. No timer of its own. Returns how many notices changed. */
+    fun checkNoRecording(context:Context,passStartedMs:Long,now:Long=System.currentTimeMillis(),hasFile:(Long,Long)->Boolean):Int {
+        return try {
+            val entries=entries(context)
+            if(entries.isEmpty() || !enabled(settings(context))) return 0
+            val none=entries.filter { e -> e.state==WORKING && e.record==null && passStartedMs>=e.endedMs+NO_RECORDING_AFTER_MS && now-e.endedMs<MAX_AGE_MS &&
+                RecordingGap.window(e.startedMs,e.endedMs-e.startedMs).let { w -> !hasFile(w.first,w.last) } }
+            if(none.isEmpty()) return 0
+            val ids=none.map { it.id }.toSet()
+            save(context) { list -> list.map { if(it.id in ids && it.state==WORKING) it.copy(state=NO_RECORDING) else it } }
+            runCatching { SecureSettings(CallPipelineStartup.storage(context)).update {
+                it.put(PipelineSettingsKeys.FOLLOWUP_NO_RECORDING,it.optLong(PipelineSettingsKeys.FOLLOWUP_NO_RECORDING,0)+none.size) } }
+            none.forEach { post(context,it.copy(state=NO_RECORDING),null) }
+            none.size
+        } catch(t:Throwable) { Log.w(LOG,"no-recording check failed: ${t.javaClass.simpleName}");0 }
     }
 
     // ---- 3. the hourly tick and the evening report ------------------------------------------------------------------
@@ -216,7 +243,11 @@ internal object CallFollowupNotice {
                 val task=when(made.size) { 0 -> "새 체크할 일은 없어요";1 -> "체크할 일: ${made[0].title}";else -> "체크할 일: ${made[0].title} 외 ${made.size-1}개" }
                 Words("${withParticle(e.who)} 통화가 정리됐어요",first,"$first\n$task$memo")
             }
-            LATE -> Words("${withParticle(e.who)} 통화","정리가 늦어지고 있어요, 저녁 보고에 넣어 드릴게요","정리가 늦어지고 있어요, 저녁 보고에 넣어 드릴게요$memo")
+            // v3.1 (2.1-3): the evening report is promised only for a call that has its record (only then is it in that report).
+            LATE -> if(e.record!=null) Words("${withParticle(e.who)} 통화","정리가 늦어지고 있어요, 저녁 보고에 넣어 드릴게요","정리가 늦어지고 있어요, 저녁 보고에 넣어 드릴게요$memo")
+                else Words("${withParticle(e.who)} 통화","정리가 늦어지고 있어요","정리가 늦어지고 있어요$memo")
+            NO_RECORDING -> Words("${withParticle(e.who)} 통화","이 통화는 녹음이 없어 정리할 수 없어요",
+                "이 통화는 녹음이 없어 정리할 수 없어요. 메모를 남기면 체크할 일에 넣어 드려요$memo")
             else -> Words("${withParticle(e.who)} 통화를 정리하고 있어요","끝나면 여기에 요약이 와요","끝나면 여기에 요약이 와요$memo")
         }
     }

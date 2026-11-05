@@ -25,10 +25,16 @@ internal object SelfCheckNotices {
         /** Days (yyyy-MM-dd, KST) the analysis side last said "정리가 멈췄어요" and "연결이 끊겼어요". */
         val stallWarnedDay:String="",val disconnectWarnedDay:String="",
         /** Rows in the store (a snapshot holds at most [StatusLights.ROW_LIMIT]); null when not read. */
-        val dbRows:Long?=null)
+        val dbRows:Long?=null,
+        /** v3.1 (DESIGN_V4 2.1-2): a confirmed recording-gap verdict due tonight ([RecordingGap.noticeDue]: day 1, day 2, then
+         * every 7 days); null: nothing to tell. */
+        val gap:RecordingGap.Verdict?=null,
+        /** v3.1 (2.2-4): a verified new version has waited more than a day to be installed ([CallUpdate.notInstalledForADay]). */
+        val updateStuck:Boolean=false)
 
     const val TRANSCRIBE_LATE="transcribe_late";const val MODEL_FAILED="model_failed";const val FOLDER_LOST="folder_lost"
     const val NO_RESULT="no_result";const val STORAGE_FULL="storage_full"
+    const val RECORDING_GAP="recording_gap";const val UPDATE_STUCK="update_stuck"
     /** Same thresholds as the status lights and the watchdog (B2, B5). */
     const val TRANSCRIBE_LATE_MS=StatusLights.TRANSCRIBE_LATE_MS
     const val NO_RESULT_MS=StatusLights.NO_RESULT_MS
@@ -45,6 +51,8 @@ internal object SelfCheckNotices {
     /** Every problem found now, in the order they are listed. */
     fun check(i:Input):List<Notice> = buildList {
         val today=day(i.now)
+        // v3.1: calls are not being recorded comes first, it is why nothing else happens. A lost folder grant has its own line below.
+        i.gap?.let { v -> gapNotice(v) }?.takeIf { !(i.gap.code==PipelineSettingsKeys.GAP_FOLDER && i.folderChosen && !i.folderReadable) }?.let(::add)
         if(i.modelState=="READY" && i.queued>0 && (i.oldestQueuedMs ?: i.now)<=i.now-TRANSCRIBE_LATE_MS && i.now-i.lastTranscribedMs>TRANSCRIBE_LATE_MS)
             add(Notice(TRANSCRIBE_LATE,"통화 글자 바꾸기가 밀려 있어요","충전기에 꽂아 두면 밤에 끝나요."))
         if(i.modelState=="FAILED")
@@ -56,6 +64,15 @@ internal object SelfCheckNotices {
             add(Notice(NO_RESULT,"정리가 늦어지고 있어요","통화 정리 결과가 오래 오지 않아요. 휴대폰이 인터넷에 연결되어 있으면 매시간 다시 받아 봐요."))
         StatusLights.dbPercent(i.dbBytes,i.dbRows)?.takeIf { it>=STORAGE_SHARE_PERCENT }?.let { p ->
             add(Notice(STORAGE_FULL,"이음 저장 공간이 거의 찼어요","저장 공간을 ${p}% 쓰고 있어요. 관리하는 분께 이 알림을 보여 주세요.")) }
+        if(i.updateStuck)
+            add(Notice(UPDATE_STUCK,"새 버전이 하루 넘게 설치되지 않았어요","이음 설정의 앱 버전에서 지금 업데이트를 눌러 주세요."))
+    }
+    /** The self-check notice of a recording-gap verdict (spoken codes only). */
+    fun gapNotice(v:RecordingGap.Verdict):Notice? = when(v.code) {
+        PipelineSettingsKeys.GAP_NO_RECORDING -> Notice(RECORDING_GAP,"통화 녹음이 꺼져 있는 것 같아요","${RecordingGap.counted(v)} ${RecordingGap.PHONE_PATH}.")
+        PipelineSettingsKeys.GAP_PARTIAL -> Notice(RECORDING_GAP,"통화가 일부만 녹음되고 있어요","${RecordingGap.counted(v)} ${RecordingGap.PHONE_PATH}.")
+        PipelineSettingsKeys.GAP_FOLDER -> Notice(RECORDING_GAP,"녹음 폴더를 다시 골라 주세요","이음 설정의 연결 묶음에서 녹음 폴더를 다시 골라 주세요.")
+        else -> null
     }
 
     /** The problems not yet told today, given the settings snapshot [s]. */
