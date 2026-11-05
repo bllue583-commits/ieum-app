@@ -161,7 +161,7 @@ class UiV2Test:ProtectedTextHostTestBase() {
     @Test fun statusLightsJudgeEachLine() {
         val ok=StatusLights.Input(now=100L*3_600_000,folderConnected=true,modelState="READY",consent=true)
         assertTrue(StatusLights.lights(ok).all { it.ok && it.words=="정상" })
-        assertEquals(listOf("녹음 가져오기","글자로 바꾸기","통화 정리","알림","업데이트"),StatusLights.lights(ok).map { it.label })
+        assertEquals(listOf("녹음 가져오기","글자로 바꾸기","통화 정리","알림","업데이트","통화 카드"),StatusLights.lights(ok).map { it.label })
         fun bad(i:StatusLights.Input,tag:String)=StatusLights.lights(i).single { !it.ok }.also { assertEquals(tag,it.tag) }.words
         assertTrue(bad(ok.copy(folderConnected=false),"status_import").contains("폴더"))
         assertTrue(bad(ok.copy(modelState="FAILED"),"status_transcribe").contains("모델"))
@@ -228,7 +228,7 @@ class UiV2Test:ProtectedTextHostTestBase() {
         SecureSettings(app).update { it.put(PipelineSettingsKeys.LAST_UPDATE_ERROR,"STATUS_FAILURE_STORAGE (6): 공간 부족") }
         val a=launchMain(Screen.SETTINGS)
         settle { tag(a,"status_update")!=null }
-        assertEquals(listOf("group_연결","group_정리","group_상태와 도움"),views(a.window.decorView).mapNotNull { it.tag as? String }.filter { it.startsWith("group_") })
+        assertEquals(listOf("group_연결","group_통화 카드","group_정리","group_상태와 도움"),views(a.window.decorView).mapNotNull { it.tag as? String }.filter { it.startsWith("group_") })
         val update=views(tag(a,"status_update")).filterIsInstance<TextView>().joinToString { it.text }
         assertTrue(update,update.contains("저장 공간이 부족해 설치하지 못했어요") && !update.contains("STATUS") && !update.contains("공간 부족"))
         assertEquals("저장 공간이 부족해 설치하지 못했어요.",(tag(a,"update_error") as TextView).text.toString())

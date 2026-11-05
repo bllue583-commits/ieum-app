@@ -193,6 +193,21 @@ class WatchdogTest(unittest.TestCase):
         self.assertEqual([], titles(phone=phone(dbPercent=80)))
         self.assertEqual([], titles(phone=phone(dbPercent=None)))
 
+    def test_call_card_permission_off_three_times_a_day(self):
+        card = lambda np, shown=0: {"shown": 9, "noPermission": 20, "noNumber": 1, "noCard": 2, "day": 20261105,
+                                    "today": {"shown": shown, "noPermission": np, "noNumber": 0, "noCard": 0}}
+        self.assertEqual([w.T_CARD_PERMISSION], titles(phone=phone(callCard=card(3))))
+        body = problems(phone=phone(callCard=card(4, shown=1)))[0]["body"]
+        self.assertIn("4번", body)
+        self.assertIn("카드가 뜬 횟수: 1번", body)
+        self.assertEqual([], titles(phone=phone(callCard=card(2))))
+        # Totals over many days are no reason; nothing counted or an old app without the field: nothing.
+        self.assertEqual([], titles(phone=phone(callCard={"noPermission": 50})))
+        self.assertEqual([], titles(phone=phone(callCard=None)))
+        self.assertEqual([], titles(phone=phone()))
+        self.assertEqual([], titles(phone=phone(callCard={"today": {"noPermission": True}})))
+        self.assertEqual([], titles(phone=phone(callCard={"today": {"noPermission": "5"}})))
+
     def test_exempted_bucket_is_no_cause(self):
         body = problems(phone=phone(atMs=NOW - 20 * H, standbyBucket="EXEMPTED"))[0]["body"]
         self.assertNotIn("EXEMPTED", body)

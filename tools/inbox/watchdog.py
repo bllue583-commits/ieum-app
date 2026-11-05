@@ -34,6 +34,8 @@ T_CALL_LOG = "통화 목록을 빠뜨리고 있어요"
 T_NOT_INSTALLED = "새 버전이 설치되지 않아요"
 T_INBOX_ERROR = "우편함 오류가 계속돼요"
 T_DB_FULL = "폰 저장 공간이 거의 찼어요"
+T_CARD_PERMISSION = "통화 카드 권한이 꺼져 있어요"
+CARD_NO_PERMISSION_PER_DAY = 3
 
 
 def hours(ms):
@@ -166,6 +168,15 @@ def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count):
         if ie and ie_since and now_ms - ie_since > INBOX_ERROR_STUCK_MS:
             add(T_INBOX_ERROR, f"폰이 {hours(now_ms - ie_since)} 동안 같은 우편함 오류를 보내요 (기준 2시간). 코드: {ie}\n\n"
                 "추정 원인: 우편함 토큰 만료나 권한 문제, 요청 형식 오류예요.")
+        # v3.0 (r11-3): the call card fell back to a notice for lack of the overlay permission 3 times or more on one day
+        # (callCard.today: the phone's counts of its current KST day, zeros on a day without such calls, so the issue closes).
+        card = phone.get("callCard") if isinstance(phone.get("callCard"), dict) else {}
+        today = card.get("today") if isinstance(card.get("today"), dict) else {}
+        np = today.get("noPermission")
+        if isinstance(np, int) and not isinstance(np, bool) and np >= CARD_NO_PERMISSION_PER_DAY:
+            add(T_CARD_PERMISSION, f"하루에 {np}번 통화 카드 대신 알림으로 보여 드렸어요 (기준 3번). "
+                f"카드가 뜬 횟수: {ms(today, 'shown')}번.\n\n"
+                "추정 원인: 휴대폰 설정에서 이음의 다른 앱 위에 표시 권한이 꺼졌어요. 앱 설정의 통화 카드 묶음에서 다시 허용해 주세요.")
         err = phone.get("lastUpdateError")
         if err:
             add(T_UPDATE, f"앱 업데이트가 실패했어요. 코드: {err}\n앱 버전: {phone.get('appVersion', '?')}\n\n추정 원인: 설치 권한, 저장 공간, 서명 불일치예요.")

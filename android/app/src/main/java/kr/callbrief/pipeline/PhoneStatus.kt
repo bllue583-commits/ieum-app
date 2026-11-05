@@ -52,7 +52,10 @@ internal object PhoneStatus {
         /** r8-1: how long the last store open and the last home read took (ms, measurement only). */
         val dbOpenMs:Long?=null,val homeReadMs:Long?=null,
         /** r10-3: the result chain's round now set (0 = ended) and when it runs next; null before the first chain. */
-        val resultChainRound:Int?=null,val resultChainNextMs:Long?=null)
+        val resultChainRound:Int?=null,val resultChainNextMs:Long?=null,
+        /** r11-3 (design 7.3): the call card's counts, {shown,noPermission,noNumber,noCard,day,today:{the four}}
+         * ([kr.callbrief.pipeline.call.CardStats.heartbeat]); null before any call was counted. */
+        val callCard:JSONObject?=null)
     /** One window (since 10/1, or today KST) of the phone's call log by type, with what the app made of it. */
     data class CallLogWindow(val total:Int=0,val incoming:Int=0,val outgoing:Int=0,val missed:Int=0,val rejected:Int=0,val other:Int=0,
         val recorded:Int=0,val unrecorded:Int=0,val personal:Int=0)
@@ -92,6 +95,8 @@ internal object PhoneStatus {
             .put("resultChain",w.resultChainRound?.let { r -> JSONObject().put("round",r).put("nextMs",w.resultChainNextMs ?: JSONObject.NULL) } ?: JSONObject.NULL)
         val match=w.callLogMatch?.let(::counts)
         o.put("callLogMatch",match ?: JSONObject.NULL)
+        // Counts only (the same filter as the match statistics), whatever is stored under the key.
+        o.put("callCard",w.callCard?.let(::counts) ?: JSONObject.NULL)
         w.dbRecovery?.let(::code)?.takeIf { it.isNotEmpty() }?.let { o.put("dbRecovery",it) }
         i.callLog?.let { c -> o.put("callLog",callLogJson(c).also { j -> match?.let { j.put("match",JSONObject(it.toString())) } }) }
         i.firstPass?.let { f -> o.put("firstPass",JSONObject().put("done",f.done).put("toTranscribe",f.toTranscribe)
@@ -200,7 +205,8 @@ internal object PhoneStatus {
                 (s.opt(UPDATE_READY_SINCE_MS) as? Number)?.toLong()?.takeIf { it>0 },
                 matchStats(s),s.optString(DB_RECOVERY_LAST).takeIf { it.isNotBlank() },inboxErrorSince(app,s,now),
                 (s.opt(kr.callbrief.IeumApplication.DB_OPEN_MS) as? Number)?.toLong(),(s.opt(kr.callbrief.IeumApplication.HOME_READ_MS) as? Number)?.toLong(),
-                (s.opt(ResultChain.ROUND_KEY) as? Number)?.toInt(),(s.opt(ResultChain.NEXT_MS_KEY) as? Number)?.toLong()?.takeIf { it>0 }))
+                (s.opt(ResultChain.ROUND_KEY) as? Number)?.toInt(),(s.opt(ResultChain.NEXT_MS_KEY) as? Number)?.toLong()?.takeIf { it>0 },
+                runCatching { kr.callbrief.pipeline.call.CardStats.heartbeat(s,now) }.getOrNull()))
     }
     private fun inboxErrorSince(app:Context,s:JSONObject,now:Long):Long? {
         val c=code(s.optString(PipelineSettingsKeys.LAST_INBOX_ERROR,""))

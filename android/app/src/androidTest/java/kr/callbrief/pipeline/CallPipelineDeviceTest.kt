@@ -190,6 +190,29 @@ class CallPipelineDeviceTest {
         shot("6_company_detail",Screen.COMPANIES){ a ->
             if(!opened) a.window.decorView.findViewWithTag<View>(companyTag)?.let { it.performClick();opened=true }
             text(a,"사람 (")&&text(a,"이름 고치기") }
+        // v3.0: the call detail, the person page (v2.8) and the home at 1.3 times the font size (design 4.2: no cut words).
+        fun shotWith(name:String,intent:android.content.Intent,ready:(MainActivity)->Boolean) {
+            ActivityScenario.launch<MainActivity>(intent).use { s ->
+                var ok=false
+                repeat(300){ if(!ok){ s.onActivity{a->ok=ready(a)};if(!ok)Thread.sleep(100) } }
+                inst.waitForIdleSync();Thread.sleep(2000);inst.waitForIdleSync()
+                var bmp:Bitmap?=null
+                repeat(3){ if(bmp==null){ bmp=inst.uiAutomation.takeScreenshot();if(bmp==null)Thread.sleep(1000) } }
+                bmp?.let { b -> File(out,"$name.png").outputStream().use{b.compress(Bitmap.CompressFormat.PNG,100,it)} }
+                shots.put(name,ok);assertTrue("$name did not render",ok)
+            }
+        }
+        val call=CallRecordStore(storage).use{ it.day(CallUi.today()).first() }
+        shotWith("7_call_detail",MainActivity.intent(context,Screen.CALLS,call.startedMs ?: call.createdMs,call.recordId)){ a -> text(a,"요약") || has(a,"call_state") }
+        val personId=CallRecordStore(storage).use{ it.peopleForSearch().first().first.id }
+        var personOpened=false
+        shotWith("8_person",MainActivity.intent(context,Screen.CALLS)){ a ->
+            if(!personOpened) { a.openPerson(personId);personOpened=true }
+            has(a,"person_section_recent") }
+        fun shell(cmd:String) { inst.uiAutomation.executeShellCommand(cmd).close();Thread.sleep(1500) }
+        shell("settings put system font_scale 1.3")
+        try { shotWith("9_home_large",MainActivity.intent(context,Screen.HOME)){ has(it,"home_calls_button")&&has(it,"home_today") } }
+        finally { shell("settings put system font_scale 1.0") }
         report("t4_screens",shots)
     }
 

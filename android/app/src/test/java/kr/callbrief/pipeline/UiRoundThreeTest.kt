@@ -137,7 +137,7 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
         val all=texts(a).joinToString("\n") { it.text }
         assertTrue(all,all.contains("지금 상태") && all.contains("녹음 가져오기") && all.contains("글자로 바꾸기") && all.contains("통화 정리"))
         assertFalse(all,all.contains("녹음 1분을 글자로 바꾸는 데"))
-        assertEquals(listOf("연결","정리","상태와 도움"),views(root).mapNotNull { (it.tag as? String)?.takeIf { t -> t.startsWith("group_") }?.removePrefix("group_") })
+        assertEquals(listOf("연결","통화 카드","정리","상태와 도움"),views(root).mapNotNull { (it.tag as? String)?.takeIf { t -> t.startsWith("group_") }?.removePrefix("group_") })
         assertTrue(views(root).indexOfFirst { it.tag=="settings_status" } > views(root).indexOfFirst { it.tag=="folder_state" })
     }
 

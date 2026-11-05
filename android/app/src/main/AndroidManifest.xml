@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -10,6 +10,13 @@
     <!-- v2.9: knows at once that a call ended, so its recording is looked for right away (design 6.1). -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
+    <!-- v3.0: the call card over the call screen (design 7.2): drawn over other apps, kept alive during a call by a short
+         foreground service (phoneCall, else specialUse). MANAGE_OWN_CALLS only makes the phoneCall type allowed; no call is made. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Registers the call pipeline again after a restart of the phone, without opening the app. -->
@@ -35,6 +42,19 @@
                 <action android:name="android.intent.action.PHONE_STATE" />
             </intent-filter>
         </receiver>
+        <!-- v3.0 (design 7.2, r11-1): the call card's service, only while a call rings or goes on. -->
+        <service android:name=".pipeline.call.CallCardService" android:exported="false"
+            android:foregroundServiceType="phoneCall|specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Shows the user's own notes about the caller over the call screen while a call rings or goes on." />
+        </service>
+        <!-- v3.0: the number of a call that goes out, with the optional call redirection role. Never redirects or cancels. -->
+        <service android:name=".pipeline.call.OutgoingCallService" android:exported="true"
+            android:permission="android.permission.BIND_CALL_REDIRECTION_SERVICE" tools:targetApi="29">
+            <intent-filter>
+                <action android:name="android.telecom.CallRedirectionService" />
+            </intent-filter>
+        </service>
         <receiver android:name=".pipeline.StartupReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />

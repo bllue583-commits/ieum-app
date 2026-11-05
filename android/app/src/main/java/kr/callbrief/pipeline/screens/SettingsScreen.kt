@@ -57,6 +57,10 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
     private val askPhoneState=a.registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok ->
         ReadingPermission.noteResult(a,android.Manifest.permission.READ_PHONE_STATE,ok);if(live()) enter()
     }
+    /** v3.0 r11-1: the call redirection role ("전화 걸 때"), asked from the 통화 카드 group. */
+    private val askCallRole=a.registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) {
+        if(live()) enter()
+    }
     private fun settings()=SecureSettings(CallPipelineStartup.storage(a))
     private fun store()=kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(a))
 
@@ -245,6 +249,8 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         sub("메일")
         mailGroup(s)
 
+        callCardGroup(s)
+
         // ---- 정리: what is sent for summaries, and when the reports come ----
         group("정리")
         sub("정리 동의",first=true)
@@ -335,6 +341,29 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         setOnCheckedChangeListener { v,checked -> v.text=words(checked);save(redraw=false) { it.put(key,checked) } }
     }
 
+    /** v3.0 r11-1 (design 7.3): "통화 카드": the overlay permission, three switches, and the card's place back to the start. */
+    private fun callCardGroup(s:JSONObject) {
+        group("통화 카드")
+        val overlay=CallCardAsk.overlayAllowed(a)
+        body.addView(CallUi.text(a,if(overlay) "허용됨 ✓  전화가 오면 통화 화면 위에 이음 카드를 보여 드려요." else "허용하면 전화가 올 때 통화 화면 위에 상대와 지난 통화, 체크할 일을 보여 드려요.",
+            CallUi.BODY,overlay,if(overlay) CallUi.OK else CallUi.INK).apply { tag="card_overlay_state" })
+        if(!overlay) body.addView(button("카드 보기 허용") { CallCardAsk.openOverlaySettings(a) }.apply { tag="card_overlay_allow" })
+        body.addView(CallUi.divider(a))
+        body.addView(switchRow("card_incoming_switch",s.optBoolean(PipelineSettingsKeys.CARD_INCOMING,true),PipelineSettingsKeys.CARD_INCOMING) { "전화 올 때" })
+        body.addView(CallUi.divider(a))
+        body.addView(switchRow("card_outgoing_switch",s.optBoolean(PipelineSettingsKeys.CARD_OUTGOING,true),PipelineSettingsKeys.CARD_OUTGOING) { "전화 걸 때" })
+        if(CallCardAsk.roleAvailable(a) && !CallCardAsk.roleHeld(a)) {
+            body.addView(CallUi.text(a,"거는 전화에 카드를 보려면 한 번 허용해 주세요. 전화는 그대로 걸려요.",CallUi.CAPTION,color=CallUi.SUBTLE).apply { tag="card_role_state" })
+            body.addView(button("거는 전화도 허용") { CallCardAsk.askRole(a,askCallRole) }.apply { tag="card_role_allow" })
+        }
+        body.addView(CallUi.divider(a))
+        body.addView(switchRow("card_unknown_switch",s.optBoolean(PipelineSettingsKeys.CARD_UNKNOWN,false),PipelineSettingsKeys.CARD_UNKNOWN) { "전화부에 없는 번호도" })
+        body.addView(CallUi.divider(a))
+        body.addView(button("카드 위치 처음으로") {
+            save(redraw=false,done={ Toast.makeText(a,"카드 위치를 처음으로 돌렸어요.",Toast.LENGTH_SHORT).show() }) { it.remove(PipelineSettingsKeys.CARD_POS_Y) }
+        }.apply { tag="card_position_reset" })
+    }
+
     private fun notifyAllowed()=android.os.Build.VERSION.SDK_INT<33||a.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)==android.content.pm.PackageManager.PERMISSION_GRANTED
     /** The "지금 상태" sheet part, kept so a switch or a slider can draw only the lights again. */
     private var lightsCard:LinearLayout?=null
@@ -351,7 +380,11 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
             w?.lateLive ?: 0,w?.failed ?: (counts[CallRecordStore.FAILED] ?: 0),w?.oldestLateMs,s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),
             s.optString(PipelineSettingsKeys.LAST_UPDATE_ERROR),CallUpdate.ready(a)!=null,
             folderReadable=folderReadable,lastDiscoveryMs=s.optLong(kr.callbrief.AutomaticRecordingDiscovery.LAST_DISCOVERY_MS,0L),
-            oldestQueuedMs=w?.queue?.oldestMs,updateReadySinceMs=s.optLong(PhoneStatus.UPDATE_READY_SINCE_MS,0L))
+            oldestQueuedMs=w?.queue?.oldestMs,updateReadySinceMs=s.optLong(PhoneStatus.UPDATE_READY_SINCE_MS,0L),
+            cardOverlay=CallCardAsk.overlayAllowed(a),
+            phoneState=a.checkSelfPermission(android.Manifest.permission.READ_PHONE_STATE)==android.content.pm.PackageManager.PERMISSION_GRANTED,
+            cardRole=!CallCardAsk.roleAvailable(a) || CallCardAsk.roleHeld(a),
+            cardOn=s.optBoolean(PipelineSettingsKeys.CARD_INCOMING,true) || s.optBoolean(PipelineSettingsKeys.CARD_OUTGOING,true))
         card.removeAllViews()
         card.addView(CallUi.text(a,"지금 상태",CallUi.HEADING,true).apply { setPadding(0,0,0,CallUi.dp(a,4)) })
         // A light that names a group of this page goes there when it is pressed (review #24).
