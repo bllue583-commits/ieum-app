@@ -619,8 +619,11 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         val companyNames=rows("SELECT name FROM companies ORDER BY updated_ms DESC LIMIT 60").mapNotNull { it.str("name") }
         // The name list carries what is known of each person (company, title, and the wrong spellings the user corrected).
         val aliases=rows("SELECT person_id,name_key FROM person_aliases").groupBy({ it.str("person_id") },{ it.str("name_key").orEmpty() })
-        val people=rows("""SELECT p.id,p.name,p.role,p.is_staff,co.name AS cname FROM people p LEFT JOIN companies co ON co.id=p.company_id WHERE p.name!='' ORDER BY p.updated_ms DESC LIMIT 300""")
-        val personNames=people.mapNotNull { it.str("name") }.distinct()
+        val people=rows("""SELECT p.id,p.name,p.role,p.is_staff,co.name AS cname FROM people p LEFT JOIN companies co ON co.id=p.company_id WHERE p.name!=''
+            ORDER BY EXISTS(SELECT 1 FROM call_links l JOIN call_records c ON c.record_id=l.record_id WHERE l.person_id=p.id
+                AND COALESCE(c.started_ms,c.created_ms)>=CAST(? AS INTEGER)) DESC,p.updated_ms DESC LIMIT 300""",before-30L*24*3600*1000)
+        // v3.3 (DESIGN_V4 3.2-2): people called in the last 30 days first, and never a number-shaped name.
+        val personNames=people.mapNotNull { noNumber(it.str("name")) }.distinct()
         val personDetails=LinkedHashMap<String,String>()
         for(p in people) { val n=p.str("name") ?: continue;if(n in personDetails) continue
             val wrong=aliases[p.str("id")].orEmpty().filter { it.isNotBlank() && it!=personKey(n) }
