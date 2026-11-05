@@ -84,14 +84,14 @@ class PhoneStatusHealthTest {
     /** Design 3.6 item 2: the new heartbeat fields, null when the phone does not know yet; counts and codes only. */
     @Test fun watchFieldsAreThereAndHoldNoContent() {
         val keys=listOf("newQueuedCount","newOldestQueuedMs","oldQueuedCount","lastDiscoveryAttemptMs","lastDiscoveryOutcome","inventoryTruncated",
-            "heldUnsupported","dbPercent","updateAvailableCode","updateReadySinceMs","callLogMatch","dbOpenMs","homeReadMs")
+            "heldUnsupported","dbPercent","updateAvailableCode","updateReadySinceMs","callLogMatch","dbOpenMs","homeReadMs","resultChain")
         val empty=PhoneStatus.build(base())
         for(k in keys) assertTrue(k,empty.has(k))
         for(k in keys.drop(3)) assertTrue(k,empty.isNull(k))
         assertEquals(0,empty.getInt("newQueuedCount"));assertFalse(empty.has("dbRecovery"));assertFalse(empty.has("lastInboxErrorSinceMs"))
         val match=org.json.JSONObject().put("success",12).put("noCandidate",3).put("name","홍길동").put("01012345678",1)
             .put("startGapHistogram",org.json.JSONArray().put(4).put(2).put("010-1111-2222")).put("nested",org.json.JSONObject().put("x",1).put("y","김"))
-        val o=PhoneStatus.build(base().copy(lastInboxError="INBOX_HTTP_401",watch=PhoneStatus.Watch(3,900,40,950,"TIME_LIMIT 김부장",true,2,83,1050,800,match,"PROMOTED_NEW",700,45,320),
+        val o=PhoneStatus.build(base().copy(lastInboxError="INBOX_HTTP_401",watch=PhoneStatus.Watch(3,900,40,950,"TIME_LIMIT 김부장",true,2,83,1050,800,match,"PROMOTED_NEW",700,45,320,4,1_234),
             callLog=PhoneStatus.CallLogStatus(true,0,0,PhoneStatus.CallLogWindow(),PhoneStatus.CallLogWindow(),null,null,null,0,0)))
         assertEquals(3,o.getInt("newQueuedCount"));assertEquals(900L,o.getLong("newOldestQueuedMs"));assertEquals(40,o.getInt("oldQueuedCount"))
         assertEquals(950L,o.getLong("lastDiscoveryAttemptMs"));assertEquals("TIME_LIMIT",o.getString("lastDiscoveryOutcome"))
@@ -100,6 +100,10 @@ class PhoneStatusHealthTest {
         assertEquals("PROMOTED_NEW",o.getString("dbRecovery"));assertEquals(700L,o.getLong("lastInboxErrorSinceMs"))
         // r8-1: the store open and home read timings ride along (ms only).
         assertEquals(45L,o.getLong("dbOpenMs"));assertEquals(320L,o.getLong("homeReadMs"))
+        // r10-3: the result chain's round and next run.
+        val chain=o.getJSONObject("resultChain");assertEquals(4,chain.getInt("round"));assertEquals(1_234L,chain.getLong("nextMs"))
+        val ended=PhoneStatus.build(base().copy(watch=PhoneStatus.Watch(resultChainRound=0))).getJSONObject("resultChain")
+        assertEquals(0,ended.getInt("round"));assertTrue(ended.isNull("nextMs"))
         val m=o.getJSONObject("callLogMatch")
         assertEquals(12,m.getInt("success"));assertEquals(3,m.getInt("noCandidate"));assertFalse(m.has("name"));assertFalse(m.has("01012345678"))
         assertEquals(2,m.getJSONArray("startGapHistogram").length());assertEquals(1,m.getJSONObject("nested").getInt("x"))
