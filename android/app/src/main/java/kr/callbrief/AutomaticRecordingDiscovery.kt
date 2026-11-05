@@ -189,6 +189,22 @@ internal object AutomaticRecordingDiscovery {
         catch(error:Exception) { return if(stopped())"LOCAL_WORK_STOPPED" else errorCode(error) } // the cycle already wrote it to settings
         finally { runCatching(rearm) }
     }
+    /** v2.9 r10-1 (design 6.1): queued by [kr.callbrief.pipeline.call.CallSession] when a call that went off hook ends. One
+     * expedited pass [AFTERCALL_WAIT_MS] later (an expedited job cannot carry an initial delay, so the worker waits itself):
+     * it sees the new recording, and its follow-up ([FOLLOWUP_NAME], 150 s, the "partial" rule) stores it and queues the
+     * transcription at once; a finished transcript queues the upload at once ([kr.callbrief.pipeline.CallSinkImpl]).
+     * The call log trigger and the 15 minute pass stay as the safety net. */
+    const val AFTERCALL_NAME="ieum.discovery.aftercall"
+    const val AFTERCALL_WAIT_MS=15_000L
+    internal fun afterCallRequest(binding:Binding)=OneTimeWorkRequestBuilder<AfterCallDiscoveryWorker>()
+        .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST).setInputData(binding.data()).addTag(TAG).addTag(AFTERCALL_NAME).build()
+    /** False when no folder is chosen (nothing to look at). APPEND_OR_REPLACE: a pass that runs for the call before is not
+     * cut off; the new one follows it. */
+    fun scheduleAfterCall(context:Context):Boolean {
+        val binding=capture(context) ?: return false
+        WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(AFTERCALL_NAME,ExistingWorkPolicy.APPEND_OR_REPLACE,afterCallRequest(binding))
+        return true
+    }
     fun ensure(context:Context) {
         runCatching{ensureCallLogTrigger(context)}
         val binding=capture(context) ?: return
@@ -231,4 +247,32 @@ class CallLogDiscoveryWorker(context:Context,parameters:WorkerParameters):Worker
         return Result.success(workDataOf("automation_state" to code))
     }
     override fun onStopped(){active?.cancel();super.onStopped()}
+}
+
+/** v2.9 r10-1: one discovery pass right after a call ([AutomaticRecordingDiscovery.AFTERCALL_NAME]). */
+class AfterCallDiscoveryWorker(context:Context,parameters:WorkerParameters):Worker(context,parameters) {
+    @Volatile private var active:NativeDiscoverySession?=null
+    override fun doWork():Result {
+        // The recorder closes its file when the call ends; the wait lets it finish writing before the folder is listed.
+        val until=SystemClock.elapsedRealtime()+AutomaticRecordingDiscovery.AFTERCALL_WAIT_MS
+        while(!isStopped && SystemClock.elapsedRealtime()<until) runCatching { Thread.sleep(500) }
+        if(isStopped) return Result.failure(workDataOf("automation_state" to "LOCAL_WORK_STOPPED"))
+        val code=try {
+            // The folder may have changed since the call ended: the binding is taken fresh, as for the call log work.
+            AutomaticRecordingDiscovery.code(AutomaticRecordingDiscovery.cycle(applicationContext,AutomaticRecordingDiscovery.capture(applicationContext),{isStopped},{active=it}))
+        } catch(error:Exception) { if(isStopped) "LOCAL_WORK_STOPPED" else AutomaticRecordingDiscovery.errorCode(error) }
+        // Success even on a failed pass: a later call is appended to this work and would fail with it. The code stays.
+        return Result.success(workDataOf("automation_state" to code))
+    }
+    override fun onStopped(){active?.cancel();super.onStopped()}
+    /** Before Android 12 an expedited work runs as a foreground service and must show a notification: a quiet one. */
+    override fun getForegroundInfo():ForegroundInfo {
+        val app=applicationContext
+        val manager=app.getSystemService(android.app.NotificationManager::class.java)
+        manager?.createNotificationChannel(android.app.NotificationChannel(AFTERCALL_CHANNEL,"이음 통화 확인",android.app.NotificationManager.IMPORTANCE_MIN))
+        val note=android.app.Notification.Builder(app,AFTERCALL_CHANNEL).setSmallIcon(R.drawable.ic_stat_ieum)
+            .setContentTitle("방금 끝난 통화의 녹음을 찾고 있어요").setOngoing(true).build()
+        return ForegroundInfo(AFTERCALL_NOTICE_ID,note)
+    }
+    private companion object { const val AFTERCALL_CHANNEL="ieum.discovery.aftercall";const val AFTERCALL_NOTICE_ID=731 }
 }

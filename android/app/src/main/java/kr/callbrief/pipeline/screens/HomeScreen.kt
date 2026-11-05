@@ -25,6 +25,8 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
                                  /** Today's calls, latest first, for the memo list. */
                                  val memos:List<CallRecord> =emptyList(),
                                  val sms:Boolean=true,val callLog:Boolean=true,
+                                 /** v2.9: the phone's call state may be read (READ_PHONE_STATE), so a call's end is seen at once. */
+                                 val phoneState:Boolean=true,
                                  /** 처음 정리 while it runs, else null. */
                                  val firstPass:FirstPassView?=null,
                                  /** Open to-dos asked for today and the ones asking for a check, those first (the short list on home). */
@@ -62,6 +64,10 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
     /** The notification question; a refusal is counted so that after two the step opens the notification settings (review #13). */
     private val askNotify=a.registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok ->
         NotifyAsk.noteResult(a,ok);if(live()) load()
+    }
+    /** v2.9 r10-1: the call state question, asked from its setup step after the reason is shown. */
+    private val askPhoneState=a.registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok ->
+        ReadingPermission.noteResult(a,android.Manifest.permission.READ_PHONE_STATE,ok);if(live()) load()
     }
     private val askSms get()=a.askSms
     private val askCallLog get()=a.askCallLog
@@ -158,8 +164,8 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
             model,CallsScreen.callCount(calls,logs),calls.count{it.state!=CallRecordStore.ANALYZED},newTasks,
             due.size,due.count{CallUi.overdue(it.due)},s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),batteryFree(),percent,next,companies,
             week,byCompany,memos,
-            granted(android.Manifest.permission.READ_SMS),granted(android.Manifest.permission.READ_CALL_LOG),firstPass(storage,db,s),first,
-            ModelWish.wanted(a),NotifyAsk.blocked(a),mm.partFile.path,people)
+            granted(android.Manifest.permission.READ_SMS),granted(android.Manifest.permission.READ_CALL_LOG),granted(android.Manifest.permission.READ_PHONE_STATE),
+            firstPass(storage,db,s),first,ModelWish.wanted(a),NotifyAsk.blocked(a),mm.partFile.path,people)
     }
     private fun firstPass(storage:android.content.Context,db:CallRecordStore,s:org.json.JSONObject):FirstPassView? {
         val start=FirstPass.start(s) ?: return null
@@ -248,6 +254,11 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
                 if(!savingFolder) pickFolder.launch(CallFolder.pickIntent()) },
             readingStep(s.sms,android.Manifest.permission.READ_SMS,"문자","업무 문자도 통화와 함께 정리해요. 문자는 휴대폰 안에서 읽어요.",askSms),
             readingStep(s.callLog,android.Manifest.permission.READ_CALL_LOG,"통화기록","녹음과 통화기록을 맞춰서 상대 번호를 찾아요. 통화기록은 휴대폰 밖으로 나가지 않아요.",askCallLog),
+            // v2.9 r10-1: the reason first, then the question; refused for good, the step opens the app's settings.
+            if(!s.phoneState && ReadingPermission.blocked(a,android.Manifest.permission.READ_PHONE_STATE))
+                Step(false,"통화가 끝난 걸 바로 알아차리기","허용 창이 다시 뜨지 않아요. 앱 정보의 권한에서 전화 항목을 허용해 주세요.","앱 정보 열기") { ReadingPermission.openAppInfo(a) }
+            else Step(s.phoneState,"통화가 끝난 걸 바로 알아차리기","통화가 끝나면 바로 녹음을 찾아 정리를 시작해요. 통화 내용은 듣지 않고, 전화가 끝났는지만 알아요.","전화 상태 허용") {
+                ReadingPermission.markAsked(a,android.Manifest.permission.READ_PHONE_STATE);askPhoneState.launch(android.Manifest.permission.READ_PHONE_STATE) },
             Step(s.consent,"정리 동의","녹음 파일은 휴대폰에 그대로 두고, 글자로 바꾼 통화 내용만 보내 정리해요. 설정에서 언제든 끌 수 있어요.","동의하고 켜기") { agree() },
             // On mobile data the download waits for Wi-Fi: the step says so and keeps saying it (review #23); while it comes,
             // the percent moves every second.

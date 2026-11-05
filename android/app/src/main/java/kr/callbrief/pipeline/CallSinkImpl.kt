@@ -113,44 +113,5 @@ internal class CallAnalysisTick(context:Context,params:WorkerParameters):Worker(
     override fun doWork():Result { CallPipelineStartup.enqueueAnalysis(applicationContext);CallPipelineStartup.ensureWork(applicationContext,includeInbox=false);PhoneStatus.publish(applicationContext);return Result.success() }
 }
 
-/** The result pass (design D, v2.4, in place of the 10-minute chain): the hourly routine runs at :30 KST from 07:30 to
- * 22:30, so a request that went up is most likely answered by the next :45. One one-time work under [NAME] collects then,
- * and while an answer is still missing it comes back at the following :45, [MAX_TRIES] times in all. A pass that sends
- * something new starts the count again. Nothing is registered while nothing waits. */
-internal class CallResultsWork(context:Context,params:WorkerParameters):CoroutineWorker(context,params) {
-    override suspend fun doWork():Result=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-        val app=CallPipelineStartup.storage(applicationContext)
-        val attempt=inputData.getInt(ATTEMPT,1)
-        val runner=CallRecordAnalysisRunner(app)
-        runner.runPending()
-        val waiting=runCatching { kr.callbrief.IeumApplication.store(app).let { it.awaitingResult() } }.getOrDefault(false)
-        // Appended after this one (KEEP would see this work still running and do nothing).
-        runCatching { schedule(app,if(runner.sent>0) 1 else attempt+1,ExistingWorkPolicy.APPEND_OR_REPLACE,waiting) }
-        Result.success()
-    }
-    companion object {
-        const val NAME="ieum.calls.results"
-        const val MAX_TRIES=3
-        private const val ATTEMPT="attempt"
-        /** First and last :45 of a day (KST), just after the routine's first and last :30. */
-        private const val FIRST_HOUR=7;private const val LAST_HOUR=22
-        /** The first HH:45 KST after [nowMs] between 07:45 and 22:45 (after 22:45: 07:45 the next day). */
-        fun nextSlot(nowMs:Long):Long {
-            val now=java.time.Instant.ofEpochMilli(nowMs).atZone(CallRecordStore.KST)
-            var at=now.withMinute(45).withSecond(0).withNano(0)
-            if(!at.isAfter(now)) at=at.plusHours(1)
-            if(at.hour<FIRST_HOUR) at=at.withHour(FIRST_HOUR)
-            if(at.hour>LAST_HOUR) at=at.plusDays(1).withHour(FIRST_HOUR)
-            return at.toInstant().toEpochMilli()
-        }
-        /** How long until the result pass of try [attempt]; null when nothing waits or the tries are used up. */
-        fun delayMs(nowMs:Long,attempt:Int,waiting:Boolean):Long? = if(!waiting || attempt !in 1..MAX_TRIES) null else nextSlot(nowMs)-nowMs
-        fun schedule(context:Context,attempt:Int,policy:ExistingWorkPolicy,waiting:Boolean=true,nowMs:Long=System.currentTimeMillis()) {
-            val delay=delayMs(nowMs,attempt,waiting) ?: return
-            val request=OneTimeWorkRequestBuilder<CallResultsWork>().setInitialDelay(delay,java.util.concurrent.TimeUnit.MILLISECONDS)
-                .setInputData(workDataOf(ATTEMPT to attempt))
-                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build()
-            WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(NAME,policy,request)
-        }
-    }
-}
+// The result chain (CallResultsWork under ieum.calls.results) moved to CallRecordWork.kt as ResultChain (r10-3): every
+// 10 minutes after an upload while an answer waits, at most 12 rounds. The class name stays, so works queued by v2.8 still run.

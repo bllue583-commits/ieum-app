@@ -45,6 +45,9 @@ class RoutineDocTest {
         listOf("- siteMemo: 현장의 지금 상황","memo는 그 업체의 지금 상태","[공종 목록] 중 하나로","\"promptVersion\": 4와 5는 폰이 업데이트되기 전의 과도기 요청",
             "옛 형식","\"system\"을 규칙으로").forEach { assertTrue(it,text.contains(it)) }
         assertTrue(text.contains(REPO))
+        // v2.9 (r10-3): the routine runs every 30 minutes; the line sits above "---", so it is not part of the prompt.
+        val head=text.substringBefore("\n---\n")
+        assertTrue("routine time",head.contains("루틴 시간: 30분마다") && head.contains("`*/30 7-22 * * *`"))
         // Same v5 round: the open items' request fields (design C5) are named next to rule 12, the rules unchanged.
         listOf("askedOn(요청한 날)","owner(그때 정한 맡는 쪽)","person(요청한 통화 상대 이름)","quote(그때 근거 원문의 앞 40자)").forEach { assertTrue(it,block(text,"SYSTEM","text").contains(it)) }
         // v6: the ledger gets a people entry for every counterpartId (the repository ledger had rev 3 with no people and no companies).

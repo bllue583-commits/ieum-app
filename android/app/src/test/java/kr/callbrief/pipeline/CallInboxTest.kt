@@ -150,20 +150,7 @@ class CallInboxTest:ProtectedTextHostTestBase() {
         assertEquals(apk,CallUpdate.file(context).readText())
     }
 
-    // ---- v2.4 #9: the result pass at :45 KST, and only while something waits ---------------------------------------
-    private fun kst(s:String)=java.time.LocalDateTime.parse(s).atZone(CallRecordStore.KST).toInstant().toEpochMilli()
-    @Test fun resultPassRunsAtTheNext45KstAndOnlyWhileSomethingWaits() {
-        assertEquals(kst("2026-11-04T10:45:00"),CallResultsWork.nextSlot(kst("2026-11-04T10:31:00")))
-        assertEquals(kst("2026-11-04T11:45:00"),CallResultsWork.nextSlot(kst("2026-11-04T10:45:00")))
-        assertEquals(kst("2026-11-04T07:45:00"),CallResultsWork.nextSlot(kst("2026-11-04T02:10:00")))
-        assertEquals(kst("2026-11-04T22:45:00"),CallResultsWork.nextSlot(kst("2026-11-04T22:00:00")))
-        assertEquals(kst("2026-11-05T07:45:00"),CallResultsWork.nextSlot(kst("2026-11-04T22:50:00")))
-        // 10:31 KST is 01:31 UTC: the slot is KST 10:45, not UTC.
-        assertEquals(14*60_000L,CallResultsWork.delayMs(kst("2026-11-04T10:31:00"),1,true))
-        assertNull("nothing waits: nothing is registered",CallResultsWork.delayMs(kst("2026-11-04T10:31:00"),1,false))
-        assertNotNull(CallResultsWork.delayMs(kst("2026-11-04T10:31:00"),3,true))
-        assertNull("three tries at most",CallResultsWork.delayMs(kst("2026-11-04T10:31:00"),4,true))
-    }
+    // ---- The result chain itself (r10-3, 10 minutes, 12 rounds): CallRecordWorkChainTest ----------------------------
     @Test fun aPassSchedulesTheResultPassOnlyWhenItSentSomething() {
         var scheduled=0
         val quiet=CallRecordAnalysisRunner(context,ClaudeCallAnalyzer(),{ JSONObject().put(PipelineSettingsKeys.CONSENT_GRANTED,true) },{ now },FakeInbox(),afterSend={ scheduled++ })

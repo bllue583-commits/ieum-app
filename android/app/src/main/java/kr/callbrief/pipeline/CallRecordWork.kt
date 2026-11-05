@@ -24,8 +24,8 @@ internal class CallRecordAnalysisRunner(
     private val callLog:()->List<FirstPass.LogEntry> ={ val rules=kr.callbrief.LocalPrivacy.rules(settings())
         FirstPass.readCallLog(context) { n -> rules.excluded(n,n) } },
     private val smsAllowed:()->Boolean={ context.checkSelfPermission(android.Manifest.permission.READ_SMS)==android.content.pm.PackageManager.PERMISSION_GRANTED },
-    /** Runs after a pass that sent something: the result pass at the next :45 (design D, v2.4). */
-    private val afterSend:()->Unit={ CallResultsWork.schedule(context,1,androidx.work.ExistingWorkPolicy.KEEP) },
+    /** Runs after a pass that sent something: the result chain starts again, its first round 10 minutes on (r10-3). */
+    private val afterSend:()->Unit={ ResultChain.start(context) },
 ) {
     /** Requests this runner put in the inbox (one batch counts once). */
     var sent=0;private set
@@ -62,6 +62,9 @@ internal class CallRecordAnalysisRunner(
     private fun runInbox(store:CallInboxStore):Boolean = try {
         val s=settings()
         val consent=s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false)
+        // r10-3: the results listing's ETag is kept in settings, so a new process asks with it too (304: no body).
+        InboxETags.results=ETagSlot({ settings().optString(InboxETags.RESULTS_ETAG_KEY).ifEmpty { null } },
+            { v -> if(settings().optString(InboxETags.RESULTS_ETAG_KEY)!=(v ?: "")) save { it.put(InboxETags.RESULTS_ETAG_KEY,v ?: "") } })
         withStore { db ->
           try {
             runCatching { db.reconcileCallLog(callLog()) }
@@ -93,6 +96,7 @@ internal class CallRecordAnalysisRunner(
                 val a=analyzer.filter(analysis,request,db.openTaskIds()).copy(siteMemo=null,companyMemo=null,companyTrade=null)
                 val dropped=analysis.tasks.size+analysis.promises.size-a.tasks.size-a.promises.size
                 val applied=db.applyAnalysis(record.recordId,if(FirstPass.stale(record.dayMs,clock())) FirstPass.restrict(a,record.dayMs,clock()) else a)
+                CallFollowupNotice.onResult(context,record.recordId,db) // r10-2: the call's notice says "정리됐어요"
                 duplicates+=applied.count { it.duplicate }
                 save { it.put(PipelineSettingsKeys.LAST_ANALYZED_MS,clock()).put(PipelineSettingsKeys.DROPPED_ITEMS,it.optLong(PipelineSettingsKeys.DROPPED_ITEMS,0)+dropped) }
             }.onFailure { failedFiles+=name }
@@ -311,34 +315,115 @@ internal class CallAnalysisWork(context:Context,params:WorkerParameters):Corouti
         val storage=CallPipelineStartup.storage(applicationContext)
         val ok=CallRecordAnalysisRunner(storage).runPending()
         ContactCards.warm(storage) // r9-2: the hour's touched cards worked out, then all read into memory
+        CallFollowupNotice.sweep(storage) // r10-2: late notices say so, reported ones go
         if(ok) Result.success() else Result.retry()
     }
 }
 
+/** The result chain (r10-3, in place of the :45 pass of v2.4): right after an upload the one unique work [NAME] is set
+ * [INTERVAL_MS] ahead; while a request still waits for its answer it comes back every [INTERVAL_MS], [MAX_ROUNDS] rounds
+ * in all, and after that only the hourly tick collects. A pass that sends something new starts the count again; once every
+ * answer is in, the chain stops. The round and the next run go to settings for the heartbeat (`resultChain`). */
+internal object ResultChain {
+    const val NAME="ieum.calls.results"
+    const val INTERVAL_MS=10*60_000L
+    const val MAX_ROUNDS=12
+    /** Settings keys: the round now set (0 = no chain) and when it runs (0 = none). */
+    const val ROUND_KEY="resultChainRound"
+    const val NEXT_MS_KEY="resultChainNextMs"
+    internal const val ROUND="round"
+    /** One registration: round [round], [delayMs] from now, under [policy]. */
+    data class Plan(val round:Int,val delayMs:Long,val policy:androidx.work.ExistingWorkPolicy)
+
+    /** The round after [round], or null when the chain ends: something sent starts it again at 1; nothing waiting or
+     * [MAX_ROUNDS] used up ends it. */
+    fun next(round:Int,sent:Int,waiting:Boolean):Int? = when {
+        sent>0 -> 1
+        !waiting -> null
+        round>=MAX_ROUNDS -> null
+        else -> round+1
+    }
+    /** Right after an upload: round 1, [INTERVAL_MS] from now, replacing a round that was set for later. */
+    fun start(context:Context,nowMs:Long=System.currentTimeMillis(),enqueue:(Plan)->Unit=enqueuer(context),save:((JSONObject)->Unit)->Unit=saver(context)) =
+        set(Plan(1,INTERVAL_MS,androidx.work.ExistingWorkPolicy.REPLACE),nowMs,enqueue,save)
+    /** At the end of a round: the next one appended after this running work (REPLACE would cancel it), or the chain ends. */
+    fun afterRound(context:Context,round:Int,sent:Int,waiting:Boolean,nowMs:Long=System.currentTimeMillis(),
+                   enqueue:(Plan)->Unit=enqueuer(context),save:((JSONObject)->Unit)->Unit=saver(context)) {
+        val n=next(round,sent,waiting)
+        if(n==null) save { it.put(ROUND_KEY,0).put(NEXT_MS_KEY,0L) }
+        else set(Plan(n,INTERVAL_MS,androidx.work.ExistingWorkPolicy.APPEND_OR_REPLACE),nowMs,enqueue,save)
+    }
+    private fun set(plan:Plan,nowMs:Long,enqueue:(Plan)->Unit,save:((JSONObject)->Unit)->Unit) {
+        enqueue(plan)
+        save { it.put(ROUND_KEY,plan.round).put(NEXT_MS_KEY,nowMs+plan.delayMs) }
+    }
+    private fun saver(context:Context):((JSONObject)->Unit)->Unit = { edit -> runCatching { SecureSettings(context).update { edit(it) } } }
+    private fun enqueuer(context:Context):(Plan)->Unit = { plan ->
+        val request=androidx.work.OneTimeWorkRequestBuilder<CallResultsWork>().setInitialDelay(plan.delayMs,java.util.concurrent.TimeUnit.MILLISECONDS)
+            .setInputData(androidx.work.workDataOf(ROUND to plan.round))
+            .setConstraints(androidx.work.Constraints.Builder().setRequiredNetworkType(androidx.work.NetworkType.CONNECTED).build()).build()
+        androidx.work.WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(NAME,plan.policy,request)
+    }
+}
+
+/** One round of [ResultChain]: the usual pass (results in, the user's edits up, waiting records out), then the next round. */
+internal class CallResultsWork(context:Context,params:WorkerParameters):CoroutineWorker(context,params) {
+    override suspend fun doWork():Result=withContext(Dispatchers.IO) {
+        val app=CallPipelineStartup.storage(applicationContext)
+        val round=inputData.getInt(ResultChain.ROUND,1)
+        // The runner's own afterSend would REPLACE this running work; the round decides what follows (sent>0: round 1).
+        val runner=CallRecordAnalysisRunner(app,afterSend={})
+        runner.runPending()
+        val waiting=runCatching { kr.callbrief.IeumApplication.store(app).awaitingResult() }.getOrDefault(true)
+        // Replaced by an upload's new round while this one waited for the pass lock: that round goes on, not this one.
+        if(!isStopped) runCatching { ResultChain.afterRound(app,round,runner.sent,waiting) }
+        Result.success()
+    }
+}
+
+/** A conditional read's ETag kept outside the process (r10-3), read and written through the runner's settings. */
+internal class ETagSlot(val get:()->String?,val set:(String?)->Unit)
+
 /** Conditional reads (If-None-Match) of what every pass reads and what seldom changes: the results folder listing, the
  * ledger and the tidy proposal. A 304 is answered with the copy kept from the last 200, so the store sees a plain 200,
  * nothing is downloaded again and GitHub does not count it against the rate limit. Kept in memory only (the ledger holds
- * names, it is not written to disk): a new process starts with one full read. */
+ * names, it is not written to disk): a new process starts with one full read. The one exception (r10-3): the ETag of an
+ * EMPTY results listing goes to [results] (settings), so a new process asks with it too and a 304 ends the read with no
+ * body (the empty listing). A listing with files is never remembered there: a result kept for a retry is read again. */
 internal object InboxETags:okhttp3.Interceptor {
+    /** Settings key: the ETag of the last results listing when it was empty ("" when it was not). */
+    const val RESULTS_ETAG_KEY="resultsListingETag"
     private class Kept(val etag:String,val body:ByteArray,val type:okhttp3.MediaType?)
     private val kept=java.util.concurrent.ConcurrentHashMap<String,Kept>()
     private val PATHS=listOf(CallInbox.RESULTS,CallInbox.LEDGER,CallInbox.TIDY_PROPOSAL).map { "/contents/$it" }
     internal fun cacheable(path:String)=PATHS.any { path.endsWith(it) }
+    /** Where the empty results listing's ETag is kept; set by the runner at the start of each pass. */
+    @Volatile internal var results:ETagSlot?=null
     internal fun clear()=kept.clear()
+    private fun isResults(path:String)=path.endsWith("/contents/"+CallInbox.RESULTS)
+    /** A contents listing with no file in it (anything that is not a listing: false, nothing is remembered). */
+    private fun emptyListing(body:ByteArray)=runCatching { val a=JSONArray(String(body,Charsets.UTF_8))
+        (0 until a.length()).none { a.getJSONObject(it).optString("type")=="file" } }.getOrDefault(false)
     override fun intercept(chain:okhttp3.Interceptor.Chain):okhttp3.Response {
         val r=chain.request()
         if(r.method!="GET" || !cacheable(r.url.encodedPath)) return chain.proceed(r)
         val key=r.url.toString()+"|"+r.header("Accept").orEmpty()
         val k=kept[key]
-        val res=chain.proceed(if(k==null) r else r.newBuilder().header("If-None-Match",k.etag).build())
+        val slot=if(isResults(r.url.encodedPath)) results else null
+        val saved=if(k==null) slot?.let { s -> runCatching { s.get() }.getOrNull() } else null
+        val etag=k?.etag ?: saved
+        val res=chain.proceed(if(etag==null) r else r.newBuilder().header("If-None-Match",etag).build())
         return when {
             res.code==304 && k!=null -> { res.close();res.newBuilder().code(200).message("OK").body(k.body.toResponseBody(k.type)).build() }
+            // Still the empty listing this phone saw last (perhaps in another process): no body to read.
+            res.code==304 && saved!=null -> { res.close();res.newBuilder().code(200).message("OK").body("[]".toResponseBody(null)).build() }
             res.code==200 && res.header("ETag")!=null -> {
                 val type=res.body?.contentType();val bytes=res.body?.bytes() ?: ByteArray(0)
                 kept[key]=Kept(res.header("ETag")!!,bytes,type)
+                slot?.let { s -> runCatching { s.set(if(emptyListing(bytes)) res.header("ETag") else null) } }
                 res.newBuilder().body(bytes.toResponseBody(type)).build()
             }
-            else -> { if(res.code==404) kept.remove(key);res }
+            else -> { if(res.code==404) { kept.remove(key);slot?.let { s -> runCatching { s.set(null) } } };res }
         }
     }
 }

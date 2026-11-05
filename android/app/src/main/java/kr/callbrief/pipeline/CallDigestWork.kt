@@ -145,6 +145,7 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
             }
             // The evening report carries its day, so a tap the next morning still opens that day's calls.
             post(kind,message,plan.day.atTime(12,0).atZone(CallRecordStore.KST).toInstant().toEpochMilli())
+            if(kind==CallDigestSchedule.EVENING) CallFollowupNotice.afterEvening(applicationContext) // r10-2: the day's call notices are in the report now
         } catch(e:Exception) { Log.w(TAG,"$kind report not posted: ${e.javaClass.simpleName}") } // class only, never a message with names
         CallDigestSchedule.next(applicationContext,kind)
         if(kind==CallDigestSchedule.EVENING) {

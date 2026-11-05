@@ -36,7 +36,8 @@ internal object CheckRows {
         // 2. The title.
         outer.addView(CallUi.text(a,item.title,CallUi.SUMMARY,true).apply { tag="task_title";setPadding(0,0,0,0) })
         // 3. META: who asked and when. The name is a link to that call when a call made the item.
-        val person=item.counterpart?.takeIf { it.isNotBlank() }?.let(CallUi::who)
+        // A name written with its number shows the name only; a bare number (no name known) stays a number.
+        val person=item.counterpart?.takeIf { it.isNotBlank() }?.let { CallRecordStore.noNumber(it) ?: it }?.let(CallUi::who)
         val asked=CallUi.requested(item.createdMs)
         if(person!=null || asked.isNotEmpty()) {
             val meta=CallUi.FitRow(a,flex=if(person!=null && asked.isNotEmpty()) 1 else 0,minFraction=0.3f,gapDp=0).apply { tag="task_meta" }
