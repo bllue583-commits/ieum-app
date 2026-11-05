@@ -128,4 +128,138 @@ class UpdateAutoInstallTest:ProtectedTextHostTestBase() {
         settle { notes().getNotification("ieum.update",701)!=null }
         assertTrue(s().optLong(PipelineSettingsKeys.UPDATE_READY_SINCE_MS)>0)
     }
+
+    // ---- v3.1 (DESIGN_V4 2.2-4, 2.2-5) ----
+    @org.junit.After fun resetHooks() { CallUpdate.storeHook=null;CallUpdate.clock={ System.currentTimeMillis() } }
+    @Suppress("DEPRECATION")
+    private fun network(type:Int?) {
+        val cm=shadowOf(app.getSystemService(android.net.ConnectivityManager::class.java))
+        cm.setActiveNetworkInfo(type?.let { org.robolectric.shadows.ShadowNetworkInfo.newInstance(android.net.NetworkInfo.DetailedState.CONNECTED,it,0,true,android.net.NetworkInfo.State.CONNECTED) })
+    }
+    private fun progressSetting()=JSONObject(s().getString(PipelineSettingsKeys.UPDATE_PROGRESS))
+
+    @Test fun installsNotAllowedKeepsACodeAndOffersTheSetupStep() {
+        shadowOf(app.packageManager).setCanRequestPackageInstalls(false)
+        assertTrue(CallUpdate.setupStep(app))
+        assertTrue(CallUpdate.check(app,Store()))
+        assertEquals(CallUpdate.INSTALL_SOURCE_NOT_ALLOWED,s().optString(PipelineSettingsKeys.LAST_UPDATE_ERROR))
+        val st=CallUpdate.state(app)
+        assertEquals(CallUpdate.P_READY,st.phase);assertTrue(st.canInstall);assertTrue(st.words.contains("준비됐어요"))
+        assertNotNull(CallUpdate.errorWords(CallUpdate.INSTALL_SOURCE_NOT_ALLOWED))
+        // Allowed later: the setup step goes away and the next try clears the code and installs by itself.
+        shadowOf(app.packageManager).setCanRequestPackageInstalls(true)
+        assertFalse(CallUpdate.setupStep(app))
+        assertTrue(CallUpdate.check(app,Store()))
+        assertEquals("",s().optString(PipelineSettingsKeys.LAST_UPDATE_ERROR))
+        assertEquals(1,installer.allSessions.size)
+    }
+
+    @Test fun pendingUserActionIsKeptAsACodeAndShownAsWaitingForConfirmation() {
+        assertTrue(CallUpdate.check(app,Store()))
+        val id=installer.allSessions.single().sessionId
+        UpdateStatusReceiver().onReceive(app,Intent().putExtra(PackageInstaller.EXTRA_STATUS,PackageInstaller.STATUS_PENDING_USER_ACTION)
+            .putExtra(PackageInstaller.EXTRA_SESSION_ID,id).putExtra(CallUpdate.EXTRA_BACKGROUND,true)
+            .putExtra(Intent.EXTRA_INTENT,Intent("android.content.pm.action.CONFIRM_INSTALL")))
+        settle { s().optString(PipelineSettingsKeys.LAST_UPDATE_ERROR)==CallUpdate.USER_ACTION_REQUIRED }
+        assertEquals(CallUpdate.P_WAITING_CONFIRM,progressSetting().getString("phase"))
+        val st=CallUpdate.state(app)
+        assertEquals(CallUpdate.P_WAITING_CONFIRM,st.phase);assertTrue(st.canInstall);assertEquals(CallUpdate.CONFIRM_WORDS,st.words)
+        assertNotNull(notes().getNotification("ieum.update",701))
+        // The heartbeat sends the code as it is (the watchdog's old-version issue names it).
+        assertEquals(CallUpdate.USER_ACTION_REQUIRED,PhoneStatus.build(PhoneStatus.Input(1L,"v3.1",1,0,null,0,0,"READY","",CallUpdate.USER_ACTION_REQUIRED,0)).getString("lastUpdateError"))
+    }
+
+    @Test fun theDownloadWritesItsProgressEverySecond() {
+        var now=1_000_000L;CallUpdate.clock={ now }
+        val seen=mutableListOf<Long>()
+        val store=object:CallInboxStore by Store() {
+            override fun download(path:String,to:File,progress:(Long,Long)->Unit) {
+                val step=apk.size/10
+                to.outputStream().use { out -> for(i in 1..10) {
+                    val got=if(i==10) apk.size else i*step
+                    out.write(apk,(i-1)*step,got-(i-1)*step)
+                    now+=400 // a block every 0.4 seconds
+                    progress(got.toLong(),apk.size.toLong())
+                    CallUpdate.progress(app)?.takeIf { it.getString("phase")==CallUpdate.P_DOWNLOADING }?.getLong("doneBytes")?.let { if(seen.lastOrNull()!=it) seen+=it }
+                    if(i==5) {
+                        val st=CallUpdate.state(app)
+                        assertEquals(CallUpdate.P_DOWNLOADING,st.phase);assertFalse(st.canInstall)
+                        assertTrue(st.words,st.words.contains("받는 중") && st.words.contains("MB / ") && st.words.contains("%"))
+                        assertEquals(CallUpdate.P_DOWNLOADING,progressSetting().getString("phase"))
+                        assertEquals(apk.size.toLong(),progressSetting().getLong("totalBytes"))
+                    }
+                } }
+            }
+        }
+        SecureSettings(app).update { it.put(PipelineSettingsKeys.AUTO_INSTALL,false) }
+        assertTrue(CallUpdate.check(app,store))
+        // 0 first, then one write per second of download (every third block of 0.4 s), not one per block.
+        assertEquals(listOf(0L,15_000L,30_000L,45_000L),seen)
+        val done=progressSetting();assertEquals(CallUpdate.P_READY,done.getString("phase"));assertEquals(apk.size.toLong(),done.getLong("doneBytes"))
+        assertEquals(next,done.getInt("code"))
+    }
+
+    @Test fun progressWordsShowPercentAndMegabytes() {
+        assertEquals("42% (3.1MB / 7.0MB)",CallUpdate.progressWords(42,3_100_000,7_000_000))
+        assertEquals("21% (123MB / 574MB)",CallUpdate.progressWords(-1,123_000_000,574_041_195))
+        assertEquals("42%",CallUpdate.progressWords(42,-1,0))
+        assertEquals("",CallUpdate.progressWords(-1,-1,0))
+    }
+
+    @Test fun checkNowGetsTheNewVersionOnMobileData() {
+        network(android.net.ConnectivityManager.TYPE_MOBILE)
+        CallUpdate.storeHook={ Store() }
+        var got:CallUpdate.UpdateState?=null
+        CallUpdate.checkNow(app) { got=it }
+        settle { got!=null }
+        assertNotNull("downloaded on mobile data",CallUpdate.ready(app))
+        assertTrue(got!!.phase,got!!.phase in setOf(CallUpdate.P_READY,CallUpdate.P_WAITING_CONFIRM))
+        assertEquals(1,installer.allSessions.size) // and on to the background install
+    }
+
+    @Test fun checkNowOfflineSaysItWaitsForTheConnection() {
+        network(null)
+        CallUpdate.storeHook={ Store() }
+        var got:CallUpdate.UpdateState?=null
+        CallUpdate.checkNow(app) { got=it }
+        settle { got!=null }
+        assertEquals(CallUpdate.P_OFFLINE,got!!.phase);assertEquals(CallUpdate.OFFLINE_WORDS,got!!.words)
+        assertNull(CallUpdate.ready(app))
+        assertEquals(CallUpdate.P_OFFLINE,progressSetting().getString("phase"))
+    }
+
+    @Test fun upToDateIsNothingToShow() {
+        CallUpdate.storeHook={ object:CallInboxStore by Store() {
+            override fun get(path:String)=JSONObject(Store().get(path)).put("versionCode",kr.callbrief.BuildConfig.VERSION_CODE).toString() } }
+        var got:CallUpdate.UpdateState?=null
+        CallUpdate.checkNow(app) { got=it }
+        settle { got!=null }
+        assertEquals(CallUpdate.UpdateState(),got)
+    }
+
+    @Test fun notInstalledForADayCountsFromTheVerification() {
+        SecureSettings(app).update { it.put(PipelineSettingsKeys.AUTO_INSTALL,false) }
+        assertFalse(CallUpdate.notInstalledForADay(app))
+        assertTrue(CallUpdate.check(app,Store()))
+        val since=s().optLong(PipelineSettingsKeys.UPDATE_READY_SINCE_MS)
+        assertFalse(CallUpdate.notInstalledForADay(app,since+23*3_600_000L))
+        assertTrue(CallUpdate.notInstalledForADay(app,since+25*3_600_000L))
+        UpdateStatusReceiver().onReceive(app,Intent().putExtra(PackageInstaller.EXTRA_STATUS,PackageInstaller.STATUS_SUCCESS))
+        settle { s().optLong(PipelineSettingsKeys.UPDATE_READY_SINCE_MS,-1)==0L }
+        assertFalse(CallUpdate.notInstalledForADay(app,since+25*3_600_000L))
+    }
+
+    @Test fun everyUpdateAndModelWorkUsesAnyConnection() {
+        assertEquals(androidx.work.NetworkType.CONNECTED,CallUpdate.periodicRequest().workSpec.constraints.requiredNetworkType)
+        val open=CallUpdate.openRequest().workSpec
+        assertEquals(androidx.work.NetworkType.CONNECTED,open.constraints.requiredNetworkType);assertEquals("no 30-second wait",0L,open.initialDelay)
+        val model=PipelineModelDownloadWork.request().workSpec.constraints
+        assertEquals(androidx.work.NetworkType.CONNECTED,model.requiredNetworkType);assertTrue(model.requiresStorageNotLow())
+    }
+
+    @Test fun manifestAsksForUpdatesWithoutUserAction() {
+        val info=app.packageManager.getPackageInfo(app.packageName,android.content.pm.PackageManager.GET_PERMISSIONS)
+        assertTrue(info.requestedPermissions!!.contains("android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION"))
+        assertTrue(info.requestedPermissions!!.contains(android.Manifest.permission.REQUEST_INSTALL_PACKAGES))
+    }
 }
