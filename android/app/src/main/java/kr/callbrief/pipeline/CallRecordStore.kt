@@ -630,6 +630,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         val clean=normName(name)?.take(40) ?: return@transaction null
         val old=companyById(id) ?: return@transaction null
         if(old.str("name")==clean) return@transaction id
+        // v3.4 (DESIGN_V4 4.3-7): the fix goes up like a person's rename, so the repository ledger follows (the routines apply
+        // {"type":"renameCompany","from","to"}; an existing "to" makes the two one there too).
+        companyEdit(old.str("name").orEmpty(),clean)
         val other=findCompany(clean)?.takeIf { it!=id }
         if(other!=null) { mergeCompany(id,other);return@transaction other }
         val oldKey=old.str("name_key") ?: companyKey(old.str("name"));val newKey=companyKey(clean)
@@ -638,6 +641,12 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         if(oldKey.isNotEmpty() && oldKey!=newKey) port.execute("INSERT OR REPLACE INTO company_aliases VALUES(?,?)",oldKey,id)
         port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER)
         id
+    }
+    /** A ledger edit for a company name the user fixed (names only; the ledger knows companies by name). */
+    private fun companyEdit(from:String,to:String) {
+        if(from.isBlank()) return
+        port.execute("INSERT INTO ledger_edits VALUES(?,?,?)","e_"+UUID.randomUUID().toString().replace("-",""),
+            JSONObject().put("type","renameCompany").put("from",from).put("to",to).put("atMs",clock()).toString(),clock())
     }
     /** The user fixes a misheard name. The old name is kept as an alias so the same mishearing maps back to this person. */
     fun renamePerson(id:String,name:String):Boolean=port.transaction {
@@ -1170,6 +1179,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
             if(t.has("rev") && !t.isNull("rev") && t.optLong("rev",-1)!=rev) continue
             when(t.optString("op")) {
                 "rewrite" -> { val title=t.optString("title").trim().take(240);if(title.isEmpty()) continue
+                    // v3.4 (DESIGN_V4 4.3-7): a rewrite may say it more clearly, never with other numbers (amounts, counts, rounds).
+                    val oldTitle=rows("SELECT title FROM workflow_items WHERE id=?",id).single().str("title").orEmpty()
+                    if(titleNumbers(title)!=titleNumbers(oldTitle)) continue
                     // No "due" in the proposal keeps the date (an omission must not drop it from the morning report).
                     val due=if(!t.has("due") || t.isNull("due")) rows("SELECT due_text FROM workflow_items WHERE id=?",id).single().str("due_text").orEmpty()
                         else t.optString("due").trim().takeIf { d -> d.isEmpty() || ISO_DATE.matches(d) } ?: continue
@@ -1537,6 +1549,57 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         AND recording_id NOT LIKE 'sms:%' AND recording_id NOT LIKE 'mail:%' AND summary IS NOT NULL""",sinceMs)
         .mapNotNull { r -> val e=r.long("end_ms");val a=r.long("analyzed_ms");if(e==null || a==null) null else maxOf(0L,a-e)/60_000L }
     // ---- r12-3 end ----
+
+    // ---- r14-3 (DESIGN_V4 4.3-5): time diagnosis -----------------------------------------------------------------------
+    /** Call end to result in minutes ([minutes]) without the samples that say nothing about the routine ([outliers]): a
+     * first-pass record (stored more than [FirstPass.LIVE_DAYS] days after its call ended) and any value over 7 days (a
+     * wrong started_ms, 11/6 p50 324,972 minutes). */
+    data class LatencySample(val minutes:List<Long>,val outliers:Int)
+    fun resultLatency(sinceMs:Long):LatencySample {
+        val limit=LATENCY_OUTLIER_MS
+        var out=0
+        val kept=rows("""SELECT started_ms+duration_ms AS end_ms,analyzed_ms,created_ms FROM call_records
+            WHERE state='ANALYZED' AND analyzed_ms IS NOT NULL AND analyzed_ms>=CAST(? AS INTEGER) AND started_ms IS NOT NULL
+            AND recording_id NOT LIKE 'sms:%' AND recording_id NOT LIKE 'mail:%' AND summary IS NOT NULL""",sinceMs)
+            .mapNotNull { r ->
+                val e=r.long("end_ms") ?: return@mapNotNull null;val a=r.long("analyzed_ms") ?: return@mapNotNull null
+                val firstPass=(r.long("created_ms") ?: e)-e>FirstPass.LIVE_MS
+                if(firstPass || a-e>limit || a-e< -limit) { out++;null } else maxOf(0L,a-e)/60_000L }
+        return LatencySample(kept,out)
+    }
+    /** created_ms − started_ms of every call record, counted by sign and day bucket (numbers only, for the heartbeat
+     * recordTime.fileVsRecordMin): a large positive value is a recording found long after its call (the first pass) or a
+     * started_ms in the past by mistake; a negative one a started_ms in the future (2-2's first diagnosis). */
+    fun recordTimeBuckets():JSONObject {
+        val o=JSONObject()
+        RECORD_TIME_BUCKETS.forEach { o.put(it,0) }
+        rows("""SELECT created_ms-started_ms AS d FROM call_records WHERE started_ms IS NOT NULL
+            AND recording_id NOT LIKE 'sms:%' AND recording_id NOT LIKE 'mail:%'""").forEach { r ->
+            val k=recordTimeBucket(r.long("d") ?: return@forEach);o.put(k,o.optInt(k,0)+1) }
+        return o
+    }
+    // ---- r14-3 end ----
+}
+
+/** r14-3: a call end to result time beyond this is an outlier (DESIGN_V4 4.3-5). */
+internal const val LATENCY_OUTLIER_MS=7*86_400_000L
+/** r14-3: the buckets of created_ms − started_ms, in this order (heartbeat recordTime.fileVsRecordMin). */
+internal val RECORD_TIME_BUCKETS=listOf("negOver1d","neg","d0","d1","d2to7","d8to30","over30d")
+/** r14-3: the numbers of a check item title without thousands commas, sorted ("1,500만 원 2회" -> [1500, 2]); a tidy
+ * rewrite must keep them all (it may put them in another order). */
+internal fun titleNumbers(title:String):List<String> =
+    Regex("\\d+(?:[.,]\\d+)*").findAll(title).map { it.value.replace(",","").trimStart('0').ifEmpty { "0" } }.toList().sorted()
+internal fun recordTimeBucket(diffMs:Long):String {
+    val day=86_400_000L
+    return when {
+        diffMs< -day -> "negOver1d"
+        diffMs<0 -> "neg"
+        diffMs<day -> "d0"
+        diffMs<2*day -> "d1"
+        diffMs<8*day -> "d2to7"
+        diffMs<31*day -> "d8to30"
+        else -> "over30d"
+    }
 }
 
 /** A call-log entry the call list shows as its own line (no record to open): a missed or rejected call, an answered one

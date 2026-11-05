@@ -13,7 +13,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
-/** r10-3: the result chain (ieum.calls.results every 10 minutes after an upload, 12 rounds) and the results listing's
+/** r10-3: the result chain (v3.4: at the routine's runs +3, +8, +15 minutes, at most 24 hours) and the results listing's
  * If-None-Match that survives a new process. WorkManager and settings are fakes: what would be registered is recorded. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[35])
@@ -27,46 +27,92 @@ class CallRecordWorkChainTest {
     @Before fun setup() { context=RuntimeEnvironment.getApplication();InboxETags.clear();InboxETags.results=null }
     @After fun tearDown() { InboxETags.clear();InboxETags.results=null }
 
-    @Test fun anUploadSetsTheResultsWorkTenMinutesOn() {
-        assertEquals("ieum.calls.results",ResultChain.NAME)
-        ResultChain.start(context,now,enqueue,save)
-        assertEquals(listOf(ResultChain.Plan(1,10*60_000L,ExistingWorkPolicy.REPLACE)),plans)
-        assertEquals(1,s.getInt(ResultChain.ROUND_KEY));assertEquals(now+10*60_000L,s.getLong(ResultChain.NEXT_MS_KEY))
-    }
-
-    @Test fun whileARequestWaitsItComesBackEveryTenMinutes() {
-        ResultChain.afterRound(context,1,sent=0,waiting=true,nowMs=now,enqueue=enqueue,save=save)
-        assertEquals(listOf(ResultChain.Plan(2,10*60_000L,ExistingWorkPolicy.APPEND_OR_REPLACE)),plans)
-        assertEquals(2,s.getInt(ResultChain.ROUND_KEY));assertEquals(now+10*60_000L,s.getLong(ResultChain.NEXT_MS_KEY))
-    }
-
-    @Test fun afterTwelveRoundsOnlyTheHourlyTickIsLeft() {
-        ResultChain.start(context,now,enqueue,save)
-        var round=1;var t=now
-        // Nothing ever answers: the chain runs its rounds and then registers nothing.
+    // ---- v3.4 (DESIGN_V4 4.3-3): the chain follows the routine's cron, +3, +8, +15 minutes, at most 24 hours ---------------
+    /** now is 17:00 KST; [kst] gives a KST clock time of that day (or [day] days on). */
+    private val kstMidnight=now-17*3_600_000L
+    private fun kst(h:Int,m:Int,day:Int=0)=kstMidnight+day*86_400_000L+h*3_600_000L+m*60_000L
+    private val read:()->JSONObject={ s }
+    private fun start(at:Long)=ResultChain.start(context,at,enqueue,save,read)
+    private fun after(round:Int,sent:Int,waiting:Boolean,at:Long)=ResultChain.afterRound(context,round,sent,waiting,at,enqueue,save,read)
+    /** The times the chain would run at, from an upload at [upload] with no answer ever. */
+    private fun looks(upload:Long):List<Long> {
+        start(upload)
+        val out=mutableListOf<Long>()
         while(true) {
-            t+=10*60_000L
+            val next=s.getLong(ResultChain.NEXT_MS_KEY);if(next==0L) break
+            out+=next
             val before=plans.size
-            ResultChain.afterRound(context,round,sent=0,waiting=true,nowMs=t,enqueue=enqueue,save=save)
+            after(plans.last().round,0,true,next)
             if(plans.size==before) break
-            round=plans.last().round
         }
-        assertEquals((1..12).toList(),plans.map { it.round })
-        assertTrue(plans.all { it.delayMs==10*60_000L })
-        assertEquals(12,round);assertNull(ResultChain.next(12,0,true))
+        return out
+    }
+
+    @Test fun anUploadWaitsForTheNextRunPlusThreeMinutes() {
+        assertEquals("ieum.calls.results",ResultChain.NAME)
+        assertEquals(now,kst(17,0))
+        start(now)
+        assertEquals(listOf(ResultChain.Plan(1,37*60_000L,ExistingWorkPolicy.REPLACE)),plans)
+        assertEquals(1,s.getInt(ResultChain.ROUND_KEY));assertEquals(kst(17,37),s.getLong(ResultChain.NEXT_MS_KEY))
+        assertEquals(now,s.getLong(ResultChain.SINCE_KEY))
+    }
+
+    @Test fun whileARequestWaitsItLooksAtThreeEightAndFifteenMinutesThenTheNextRun() {
+        val times=looks(now)
+        assertEquals(listOf(kst(17,37),kst(17,42),kst(17,49),kst(18,37),kst(18,42),kst(18,49)),times.take(6))
+        assertEquals((1..times.size).toList(),plans.map { it.round })
+        assertTrue(plans.drop(1).all { it.policy==ExistingWorkPolicy.APPEND_OR_REPLACE })
+        // At most 24 hours after the upload, then only the hourly tick; the night (22:49 to 07:37) has no look.
+        assertTrue(times.last()<=now+ResultChain.HORIZON_MS)
+        assertEquals(kst(16,49,1),times.last())
+        assertFalse(times.any { it>kst(22,49) && it<kst(7,37,1) })
         assertEquals("chain over in settings",0,s.getInt(ResultChain.ROUND_KEY));assertEquals(0L,s.getLong(ResultChain.NEXT_MS_KEY))
+        // Half the GitHub calls of v3.3 in the first two hours (12 looks then, 6 now).
+        assertEquals(6,times.count { it<now+2*3_600_000L })
+    }
+
+    @Test fun anUploadAfterTheLastRunWaitsForTheFirstOneNextDay() {
+        start(kst(22,50))
+        assertEquals(kst(7,37,1),s.getLong(ResultChain.NEXT_MS_KEY))
+        // Just before a run: that run.
+        plans.clear();start(kst(10,30))
+        assertEquals(kst(10,37),s.getLong(ResultChain.NEXT_MS_KEY))
+    }
+
+    @Test fun twoCronsTakeTheNearerAndABrokenOneTheConstant() {
+        s.put(PipelineSettingsKeys.ROUTINE_CRONS,org.json.JSONArray(listOf("CRON_TZ=Asia/Seoul 34 7-22 * * *","CRON_TZ=Asia/Seoul 4 8-22 * * *")).toString())
+        start(now)
+        assertEquals(kst(17,7),s.getLong(ResultChain.NEXT_MS_KEY))
+        s.put(PipelineSettingsKeys.ROUTINE_CRONS,"[\"매시간\"]")
+        start(now)
+        assertEquals("unreadable: minute 34, 07 to 22",kst(17,37),s.getLong(ResultChain.NEXT_MS_KEY))
+        s.remove(PipelineSettingsKeys.ROUTINE_CRONS)
+        start(now)
+        assertEquals(kst(17,37),s.getLong(ResultChain.NEXT_MS_KEY))
+    }
+
+    @Test fun cronsAreReadLikeTheScheduler() {
+        val c=ResultChain.parseCron("CRON_TZ=Asia/Seoul 34 7-22 * * *")!!
+        assertEquals(listOf(34),c.minutes);assertEquals((7..22).toList(),c.hours);assertEquals(java.time.ZoneId.of("Asia/Seoul"),c.zone)
+        assertEquals(listOf(4,34),ResultChain.parseCron("4,34 8-22 * * *")!!.minutes)
+        assertEquals(listOf(0,30),ResultChain.parseCron("*/30 7 * * *")!!.minutes)
+        assertEquals(java.time.ZoneOffset.UTC,ResultChain.parseCron("34 7 * * *")!!.zone)
+        listOf(null,"","x","34 7-22 * * 1-5","61 7 * * *","34 9-7 * * *","CRON_TZ=Nowhere/Here 34 7 * * *","34 7 * *").forEach { assertNull(it,ResultChain.parseCron(it)) }
+        assertNull(ResultChain.nextFetch(now,now+ResultChain.HORIZON_MS,ResultChain.crons(JSONObject())))
     }
 
     @Test fun theChainStopsOnceEveryAnswerIsIn() {
-        ResultChain.afterRound(context,3,sent=0,waiting=false,nowMs=now,enqueue=enqueue,save=save)
-        assertTrue(plans.isEmpty());assertEquals(0,s.getInt(ResultChain.ROUND_KEY))
-        assertNull(ResultChain.next(1,0,false))
+        s.put(ResultChain.SINCE_KEY,now)
+        after(3,0,false,now+10*60_000L)
+        assertTrue(plans.isEmpty());assertEquals(0,s.getInt(ResultChain.ROUND_KEY));assertEquals(0L,s.getLong(ResultChain.SINCE_KEY))
     }
 
     @Test fun aRoundThatSentSomethingStartsTheCountAgain() {
-        ResultChain.afterRound(context,12,sent=1,waiting=true,nowMs=now,enqueue=enqueue,save=save)
-        assertEquals(listOf(ResultChain.Plan(1,10*60_000L,ExistingWorkPolicy.APPEND_OR_REPLACE)),plans)
-        assertEquals(1,ResultChain.next(7,2,false))
+        s.put(ResultChain.SINCE_KEY,now-23*3_600_000L)
+        after(12,1,true,kst(17,40))
+        // What went up at 17:40 missed the 17:34 run: the 18:34 run's first look.
+        assertEquals(listOf(ResultChain.Plan(1,57*60_000L,ExistingWorkPolicy.APPEND_OR_REPLACE)),plans)
+        assertEquals("counted from now",kst(17,40),s.getLong(ResultChain.SINCE_KEY))
     }
 
     /** A pass hands the interceptor its settings slot for the results listing's ETag, before anything is read. */

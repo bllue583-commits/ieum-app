@@ -264,6 +264,13 @@ internal object CallUpdate {
         e is java.io.IOException -> NET_WORDS
         else -> OTHER_WORDS }
     private val lock=Any()
+    /** v3.4 (DESIGN_V4 4.3-4): the code of a failed version check or download for the heartbeat's `update.error`: the
+     * exception's message when it is a code (INBOX_HTTP_404, UPDATE_SHA), else its class name; never a message text. */
+    internal fun checkErrorCode(e:Throwable):String = e.message?.takeIf { it.matches(Regex("[A-Z0-9_]{1,60}")) } ?: e.javaClass.simpleName.take(60).ifEmpty { "UNKNOWN" }
+    /** Keeps [code] in [PipelineSettingsKeys.UPDATE_ERROR_CODE] ("" once a check goes through); written only when it changed. */
+    internal fun noteCheckError(c:Context,code:String) {
+        runCatching { val s=settings(c);if(s.snapshot().optString(PipelineSettingsKeys.UPDATE_ERROR_CODE)!=code) s.update { it.put(PipelineSettingsKeys.UPDATE_ERROR_CODE,code) } }
+    }
 
     /** Returns true when a newer verified APK is ready. One at a time: the background check and [지금 받기] share the file. */
     fun check(c:Context,store:CallInboxStore):Boolean = synchronized(lock) {
@@ -271,7 +278,9 @@ internal object CallUpdate {
         val info=try { parse(store.get("app/version.json")) }
             catch(e:Exception) {
                 if(fetchState(c).stage==Stage.WAITING) stage(c,Stage.FAILED,reason=failWords(e)) // only when the user is watching
+                noteCheckError(c,checkErrorCode(e))
                 progress(c,if(e is java.io.IOException && !online(c)) P_OFFLINE else P_FAILED);throw e }
+        noteCheckError(c,"")
         val p=prefs(c)
         p.edit().putLong(CHECKED,System.currentTimeMillis()).apply()
         if(info.versionCode<=BuildConfig.VERSION_CODE) { saveError(c,null);settleInstalled(c);p.edit().remove(A_CODE).apply();stage(c,Stage.IDLE);progress(c,P_NONE);return false } // up to date: an old install failure is over
@@ -300,6 +309,7 @@ internal object CallUpdate {
             check(sha256(tmp)==info.sha256){"UPDATE_SHA"}
             check(tmp.renameTo(f) || run { tmp.copyTo(f,true);tmp.delete() }){"UPDATE_MOVE"}
         } catch(e:Exception) {
+            noteCheckError(c,checkErrorCode(e))
             tmp.delete();stage(c,Stage.FAILED,reason=failWords(e))
             progress(c,if(e is java.io.IOException && !online(c)) P_OFFLINE else P_FAILED,info.versionCode);throw e }
         p.edit().putInt("code",info.versionCode).putString("name",info.versionName).putString("sha",info.sha256).putString("notes",info.notes).putLong("size",f.length()).apply()

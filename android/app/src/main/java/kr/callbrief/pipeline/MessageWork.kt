@@ -196,10 +196,35 @@ internal object MessageIntake {
                 } finally { runCatching { inbox.close(false) } }
             }
             settings.update { it.put(PipelineSettingsKeys.LAST_MAIL_MS,newest).remove(PipelineSettingsKeys.MAIL_ERROR) }
-        } catch(_:javax.mail.AuthenticationFailedException) {
+        } catch(e:javax.mail.AuthenticationFailedException) {
+            noteMailError(settings,mailErrorCode(e))
             settings.update { it.put(PipelineSettingsKeys.MAIL_ERROR,"메일 앱 비밀번호가 맞지 않아요. 설정에서 다시 넣어 주세요.") }
-        } catch(_:Exception) { /* network: the next run tries again */ }
+        } catch(e:Exception) {
+            // v3.4 (DESIGN_V4 4.3-8): not swallowed any more: its reason code is counted for the heartbeat's messages.mailError.
+            // Network and the like: the next run tries again.
+            noteMailError(settings,mailErrorCode(e))
+        }
         return added
+    }
+    /** A fixed reason code for a failed mail intake, never the message (it may hold the address): AUTH, TIMEOUT, NETWORK,
+     * FOLDER, SERVER (another mail protocol error) or OTHER. */
+    internal fun mailErrorCode(e:Throwable):String {
+        val chain=generateSequence(e) { it.cause }.take(5).toList()
+        return when {
+            chain.any { it is javax.mail.AuthenticationFailedException } -> "AUTH"
+            chain.any { it is java.net.SocketTimeoutException } -> "TIMEOUT"
+            chain.any { it is java.net.UnknownHostException || it is java.net.ConnectException || it is java.net.NoRouteToHostException } -> "NETWORK"
+            chain.any { it is javax.mail.FolderNotFoundException } -> "FOLDER"
+            chain.any { it is java.io.IOException } -> "NETWORK"
+            chain.any { it is javax.mail.MessagingException } -> "SERVER"
+            else -> "OTHER"
+        }
+    }
+    /** Adds one to [code] in [PipelineSettingsKeys.MAIL_ERROR_CODES] ({code: count}). */
+    internal fun noteMailError(settings:SecureSettings,code:String) = runCatching { settings.update { addMailError(it,code) } }
+    internal fun addMailError(s:org.json.JSONObject,code:String) {
+        val o=runCatching { org.json.JSONObject(s.optString(PipelineSettingsKeys.MAIL_ERROR_CODES,"{}")) }.getOrDefault(org.json.JSONObject())
+        s.put(PipelineSettingsKeys.MAIL_ERROR_CODES,o.put(code,o.optLong(code,0)+1).toString())
     }
     private inline fun <T> javax.mail.Store.use(block:(javax.mail.Store)->T):T = try { block(this) } finally { runCatching { close() } }
 }

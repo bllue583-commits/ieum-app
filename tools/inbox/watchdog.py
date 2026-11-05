@@ -276,7 +276,8 @@ def routine_old(last_run, version, version_ms):
             if got != want:
                 out.append(f"{'매시간 분석' if routine == 'hourly' else '새벽 정리'} 루틴이 보고한 지시문 버전은 "
                     f"{w_code(got) or '없음'}인데 지금 앱 저장소의 지시문은 {w_code(want)}이에요.\n\n"
-                    f"해야 할 일: docs/routines/{routine}.md 의 \"---\" 다음 전문을 그 루틴(예약 작업)에 다시 붙여넣어 주세요.")
+                    f"해야 할 일: 앱 저장소의 docs/routines/{routine}.md 를 이 저장소의 routines/{routine}.md 로 복사해 주세요"
+                    f"(예약 작업은 그 파일을 읽어 따라요). 예약 작업 프롬프트가 아직 옛 전문이면 짧은 안내로 바꿔 주세요.")
     return out
 
 
@@ -499,7 +500,7 @@ def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count, version=None
                 f"실패 {last_run.get('failed', '?')}건.\n\n추정 원인: 구독 사용 한도예요. 한도가 풀리면 다음 실행에서 이어져요.")
         if last_run.get("promptMismatch"):
             add(T_PROMPT, "루틴이 자기 지시문과 다른 버전의 요청을 받았어요 (promptMismatch).\n\n"
-                "해야 할 일: docs/routines 의 최신 지시문을 루틴에 붙여넣어 주세요.")
+                "해야 할 일: 앱 저장소 docs/routines 의 최신 지시문을 이 저장소의 routines/ 로 복사해 주세요.")
 
     token_expiry_ms = ms(phone, "tokenExpiresMs") if phone else 0
     if token_expiry_ms:

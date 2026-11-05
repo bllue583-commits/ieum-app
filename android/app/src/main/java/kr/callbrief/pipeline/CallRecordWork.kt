@@ -28,6 +28,10 @@ internal class CallRecordAnalysisRunner(
     private val afterSend:()->Unit={ ResultChain.start(context) },
     /** Applies one result to its record (tests put a failing one here to reach the bad/ path, DESIGN_V4 2.3-2). */
     private val apply:(CallRecordStore,String,ClaudeCallAnalysis)->List<CallRecordStore.Applied> ={ db,id,a -> db.applyAnalysis(id,a) },
+    /** v3.4 (DESIGN_V4 4.3-4): app/version.json names a newer build than this one, seen by a results pass: check now. */
+    private val onNewVersion:(Int)->Unit={ CallUpdate.checkSoon(context) },
+    /** This build's version code (tests set another). */
+    private val runningCode:Int=kr.callbrief.BuildConfig.VERSION_CODE,
 ) {
     /** Requests this runner put in the inbox (one batch counts once). */
     var sent=0;private set
@@ -78,6 +82,10 @@ internal class CallRecordAnalysisRunner(
             runCatching { takeLedger(store,db) }
             // v3.2 (r12-6): today's call story for the top of home; missing (404) or broken, nothing happens.
             runCatching { takeStory(store) }
+            // v3.4 (DESIGN_V4 4.3-2, 4.3-3): the hourly routine's self-report, for the 분석 light and the result timing.
+            runCatching { takeRoutineStatus(store) }
+            // v3.4 (4.3-4): a new version within the hour (an ETag read: unchanged costs no download).
+            runCatching { takeVersion(store) }
             // Requests and results name a record by its key (a hash), never by its id, which may hold a phone number.
             val byKey=db.pending().associateBy { CallInbox.recordKey(it.recordId) }
             val files=store.list(CallInbox.RESULTS).filterNot { it.first.startsWith("selftest-") } // CI end-to-end check, not a call of this phone
@@ -262,6 +270,27 @@ internal class CallRecordAnalysisRunner(
         val text=o.toString()
         if(settings().optString(PipelineSettingsKeys.STORY)!=text) save { it.put(PipelineSettingsKeys.STORY,text) }
     }
+    /** v3.4: the hourly routine's self-report (status/last-run-hourly.json, else the old shared status/last-run.json when it
+     * is the hourly one's). Its `endedMs` goes to [PipelineSettingsKeys.ROUTINE_ENDED_MS] (the phone's second eye when the
+     * routine and its watchdog stop) and its cron strings to [PipelineSettingsKeys.ROUTINE_CRONS] (the result timing). Only
+     * times and cron strings are read; written only when they changed. */
+    private fun takeRoutineStatus(store:CallInboxStore) {
+        val o=RoutineStatus.read(store) ?: return
+        val ended=o.optLong("endedMs",0).takeIf { it>0 }
+        val crons=RoutineStatus.crons(o)
+        val s=settings()
+        val endedChanged=ended!=null && s.optLong(PipelineSettingsKeys.ROUTINE_ENDED_MS,0)!=ended
+        val cronsChanged=crons!=null && s.optString(PipelineSettingsKeys.ROUTINE_CRONS)!=crons.toString()
+        if(endedChanged || cronsChanged) save { if(endedChanged) it.put(PipelineSettingsKeys.ROUTINE_ENDED_MS,ended!!);if(cronsChanged) it.put(PipelineSettingsKeys.ROUTINE_CRONS,crons.toString()) }
+    }
+    /** v3.4 (DESIGN_V4 4.3-4): app/version.json read with its ETag on every results pass; a version code above this build's that
+     * this path has not handed on yet starts the update check now (the 6-hour check stays as it is). */
+    private fun takeVersion(store:CallInboxStore) {
+        val code=runCatching { JSONObject(store.get(RoutineStatus.VERSION)).optInt("versionCode",0) }.getOrDefault(0)
+        if(code<=runningCode || settings().optInt(VERSION_SEEN_KEY,0)==code) return
+        save { it.put(VERSION_SEEN_KEY,code) }
+        onNewVersion(code)
+    }
     private fun takeLedger(store:CallInboxStore,db:CallRecordStore) {
         val o=runCatching { JSONObject(store.get(CallInbox.LEDGER)) }.getOrNull() ?: return
         val rev=o.optLong("rev",0)
@@ -322,9 +351,14 @@ internal class CallRecordAnalysisRunner(
      * the numbers changed, or an hour after the last write (so atMs says it is still being measured). */
     private fun noteLatency(db:CallRecordStore) {
         val now=clock()
-        val o=latency(db.resultLatencyMinutes(now-LATENCY_DAYS*86_400_000L),now)
+        // v3.4 (DESIGN_V4 4.3-5): first-pass records and values over 7 days are counted apart as outliers (11/6: p50 324,972 min).
+        val sample=db.resultLatency(now-LATENCY_DAYS*86_400_000L)
+        val o=latency(sample.minutes,now).put("outliers",sample.outliers)
         val old=runCatching { JSONObject(settings().optString(PipelineSettingsKeys.LATENCY,"{}")) }.getOrDefault(JSONObject())
-        val same=listOf("p50Min","p90Min","n").all { old.opt(it)?.toString()==o.opt(it)?.toString() }
+        val same=listOf("p50Min","p90Min","n","outliers").all { old.opt(it)?.toString()==o.opt(it)?.toString() }
+        // The record time diagnosis (created_ms - started_ms by sign and day bucket, numbers only) goes with it.
+        val buckets=db.recordTimeBuckets().toString()
+        if(settings().optString(PipelineSettingsKeys.RECORD_TIME)!=buckets) save { it.put(PipelineSettingsKeys.RECORD_TIME,buckets) }
         if(same && now-old.optLong("atMs",0)<3_600_000L) return
         save { it.put(PipelineSettingsKeys.LATENCY,o.toString()) }
     }
@@ -355,6 +389,31 @@ internal object CallInboxConfig {
     /** The preview build shows the subscription screens but has no token, so nothing is uploaded. */
     val enabled get()=kr.callbrief.BuildConfig.IEUM_INBOX_TOKEN.isNotBlank()||kr.callbrief.BuildConfig.LOCAL_PREVIEW
 }
+/** Settings key (v3.4): the version code a results pass last handed to the update check (each new code once). */
+internal const val VERSION_SEEN_KEY="versionSeenCode"
+
+/** v3.4 (DESIGN_V4 4.3-1 to 4.3-4): where the routines report on the inbox repository, and reading the hourly one. */
+internal object RoutineStatus {
+    const val HOURLY="status/last-run-hourly.json"
+    const val TIDY="status/last-run-tidy.json"
+    /** Written by both routines up to prompt v7: read only when the hourly file is not there and it says "hourly". */
+    const val OLD="status/last-run.json"
+    const val VERSION="app/version.json"
+    /** The hourly self-report as a JSON object, or null (missing, broken, or the old file written by the tidy). */
+    fun read(store:CallInboxStore):JSONObject? {
+        fun get(path:String)=runCatching { JSONObject(store.get(path)) }.getOrNull()
+        get(HOURLY)?.let { return it }
+        return get(OLD)?.takeIf { it.optString("routine")=="hourly" }
+    }
+    /** The cron strings of a self-report ("crons" list or the one "cron") as a JSON array, or null when it names none. Only
+     * cron-shaped text is kept (digits, letters of the zone, "*", "/", ",", "-", "=" and spaces), at most 4 of 80 letters. */
+    fun crons(o:JSONObject):JSONArray? {
+        val raw=o.optJSONArray("crons")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: listOfNotNull(o.optString("cron").ifEmpty { null })
+        val ok=raw.map { it.trim() }.filter { it.length in 1..80 && it.all { c -> c.isLetterOrDigit() && c.code<128 || c in " */,-=_" } }.take(4)
+        return if(ok.isEmpty()) null else JSONArray(ok)
+    }
+}
+
 internal const val RESEND_MS=6*3_600_000L
 /** A received mark this old on a record still not analysed is taken off (r12-3). */
 internal const val STUCK_MS=24*3_600_000L
@@ -405,44 +464,114 @@ internal class CallAnalysisWork(context:Context,params:WorkerParameters):Corouti
     }
 }
 
-/** The result chain (r10-3, in place of the :45 pass of v2.4): right after an upload the one unique work [NAME] is set
- * [INTERVAL_MS] ahead; while a request still waits for its answer it comes back every [INTERVAL_MS], [MAX_ROUNDS] rounds
- * in all, and after that only the hourly tick collects. A pass that sends something new starts the count again; once every
- * answer is in, the chain stops. The round and the next run go to settings for the heartbeat (`resultChain`). */
+/** The result chain (r10-3; v3.4 DESIGN_V4 4.3-3 times it to the routine): after an upload the one unique work [NAME] is set
+ * for the next scheduled run of the hourly routine plus [OFFSETS_MS] (3, 8 and 15 minutes); while a request still waits for
+ * its answer it goes on to the next scheduled run's three times, at most [HORIZON_MS] after the upload, and after that only
+ * the hourly tick collects. The schedule is the routine's own cron as its self-report names it ([PipelineSettingsKeys.ROUTINE_CRONS],
+ * written by the results pass), else [DEFAULT_CRON]. An upload after the last run of the day waits for the next day's first.
+ * A pass that sends something new starts again from then; once every answer is in, the chain stops. The round and the next
+ * run go to settings for the heartbeat (`resultChain`). Half the GitHub calls of v3.3's every-10-minutes, and a result is
+ * on the phone about 3 minutes after the routine instead of 0 to 10. */
 internal object ResultChain {
     const val NAME="ieum.calls.results"
-    const val INTERVAL_MS=10*60_000L
-    const val MAX_ROUNDS=12
-    /** Settings keys: the round now set (0 = no chain) and when it runs (0 = none). */
+    /** After a scheduled run: when the result is most likely there, then two later looks for a slow run. */
+    val OFFSETS_MS=listOf(3*60_000L,8*60_000L,15*60_000L)
+    const val HORIZON_MS=24*3_600_000L
+    /** The hourly routine's schedule since 11/5 (hourly.md): used when the self-report's cron cannot be read. */
+    const val DEFAULT_CRON="CRON_TZ=Asia/Seoul 34 7-22 * * *"
+    /** Settings keys: the round now set (0 = no chain) and when it runs (0 = none); since when the chain counts (the upload). */
     const val ROUND_KEY="resultChainRound"
     const val NEXT_MS_KEY="resultChainNextMs"
+    const val SINCE_KEY="resultChainSinceMs"
     internal const val ROUND="round"
     /** One registration: round [round], [delayMs] from now, under [policy]. */
     data class Plan(val round:Int,val delayMs:Long,val policy:androidx.work.ExistingWorkPolicy)
 
-    /** The round after [round], or null when the chain ends: something sent starts it again at 1; nothing waiting or
-     * [MAX_ROUNDS] used up ends it. */
-    fun next(round:Int,sent:Int,waiting:Boolean):Int? = when {
-        sent>0 -> 1
-        !waiting -> null
-        round>=MAX_ROUNDS -> null
-        else -> round+1
+    /** A daily cron: its zone, minutes and hours. */
+    data class Cron(val zone:java.time.ZoneId,val minutes:List<Int>,val hours:List<Int>)
+    private fun field(text:String,lo:Int,hi:Int):List<Int>? {
+        val out=sortedSetOf<Int>()
+        for(raw in text.split(',')) {
+            var part=raw;var step=1
+            if('/' in part) { step=part.substringAfter('/').toIntOrNull()?.takeIf { it>0 } ?: return null;part=part.substringBefore('/') }
+            val (a,b)=when {
+                part=="*" -> lo to hi
+                '-' in part -> (part.substringBefore('-').toIntOrNull() ?: return null) to (part.substringAfter('-').toIntOrNull() ?: return null)
+                else -> (part.toIntOrNull() ?: return null).let { it to it }
+            }
+            if(a<lo || b>hi || a>b) return null
+            out.addAll(a..b step step)
+        }
+        return out.toList().takeIf { it.isNotEmpty() }
     }
-    /** Right after an upload: round 1, [INTERVAL_MS] from now, replacing a round that was set for later. */
-    fun start(context:Context,nowMs:Long=System.currentTimeMillis(),enqueue:(Plan)->Unit=enqueuer(context),save:((JSONObject)->Unit)->Unit=saver(context)) =
-        set(Plan(1,INTERVAL_MS,androidx.work.ExistingWorkPolicy.REPLACE),nowMs,enqueue,save)
-    /** At the end of a round: the next one appended after this running work (REPLACE would cancel it), or the chain ends. */
+    /** "CRON_TZ=Asia/Seoul 34 7-22 * * *" (also "4,34", "*&#47;30", "8-22/2"); day, month and weekday must be "*". No zone:
+     * UTC, as the scheduler reads it. Null when it cannot be read. */
+    fun parseCron(text:String?):Cron? {
+        var parts=text?.trim()?.split(Regex("\\s+"))?.filter { it.isNotEmpty() } ?: return null
+        var zone:java.time.ZoneId=java.time.ZoneOffset.UTC
+        if(parts.firstOrNull()?.startsWith("CRON_TZ=")==true) {
+            zone=runCatching { java.time.ZoneId.of(parts.first().removePrefix("CRON_TZ=")) }.getOrNull() ?: return null
+            parts=parts.drop(1)
+        }
+        if(parts.size!=5 || parts.drop(2)!=listOf("*","*","*")) return null
+        return Cron(zone,field(parts[0],0,59) ?: return null,field(parts[1],0,23) ?: return null)
+    }
+    /** The routine's crons as kept in settings (a JSON array of strings, or one string); none readable: [DEFAULT_CRON]. */
+    fun crons(s:JSONObject):List<Cron> {
+        val raw=when(val v=s.opt(PipelineSettingsKeys.ROUTINE_CRONS)) {
+            is JSONArray -> (0 until v.length()).map { v.optString(it) }
+            is String -> runCatching { JSONArray(v).let { a -> (0 until a.length()).map { a.optString(it) } } }.getOrElse { listOf(v) }
+            else -> emptyList()
+        }
+        return raw.mapNotNull(::parseCron).ifEmpty { listOf(parseCron(DEFAULT_CRON)!!) }
+    }
+    /** Scheduled runs of [crons] with [fromMs] <= t <= [toMs], sorted. */
+    fun runs(crons:List<Cron>,fromMs:Long,toMs:Long):List<Long> {
+        val out=sortedSetOf<Long>()
+        for(c in crons) {
+            var day=java.time.Instant.ofEpochMilli(fromMs).atZone(c.zone).toLocalDate()
+            val last=java.time.Instant.ofEpochMilli(toMs).atZone(c.zone).toLocalDate()
+            while(!day.isAfter(last)) {
+                for(h in c.hours) for(m in c.minutes) {
+                    val t=day.atTime(h,m).atZone(c.zone).toInstant().toEpochMilli()
+                    if(t in fromMs..toMs) out+=t
+                }
+                day=day.plusDays(1)
+            }
+        }
+        return out.toList()
+    }
+    /** When to look next: the first scheduled run at or after [sinceMs] (the upload) plus 3, 8 or 15 minutes that is after
+     * [nowMs], then the same after the next runs; null once that is more than [HORIZON_MS] after [sinceMs]. */
+    fun nextFetch(sinceMs:Long,nowMs:Long,crons:List<Cron>):Long? {
+        val end=sinceMs+HORIZON_MS
+        return runs(crons,sinceMs,end).asSequence().flatMap { r -> OFFSETS_MS.asSequence().map { r+it } }
+            .firstOrNull { it>nowMs && it<=end }
+    }
+
+    /** Right after an upload: round 1 at the next run's first look, replacing a round that was set for later. */
+    fun start(context:Context,nowMs:Long=System.currentTimeMillis(),enqueue:(Plan)->Unit=enqueuer(context),save:((JSONObject)->Unit)->Unit=saver(context),
+              read:()->JSONObject=reader(context)) {
+        val at=nextFetch(nowMs,nowMs,crons(read())) ?: return save { it.put(ROUND_KEY,0).put(NEXT_MS_KEY,0L).put(SINCE_KEY,0L) }
+        set(Plan(1,at-nowMs,androidx.work.ExistingWorkPolicy.REPLACE),nowMs,nowMs,enqueue,save)
+    }
+    /** At the end of a round: the next one appended after this running work (REPLACE would cancel it), or the chain ends
+     * (nothing waits any more, or the next look would be more than [HORIZON_MS] after the upload). Something sent in the
+     * round counts from now, like an upload. */
     fun afterRound(context:Context,round:Int,sent:Int,waiting:Boolean,nowMs:Long=System.currentTimeMillis(),
-                   enqueue:(Plan)->Unit=enqueuer(context),save:((JSONObject)->Unit)->Unit=saver(context)) {
-        val n=next(round,sent,waiting)
-        if(n==null) save { it.put(ROUND_KEY,0).put(NEXT_MS_KEY,0L) }
-        else set(Plan(n,INTERVAL_MS,androidx.work.ExistingWorkPolicy.APPEND_OR_REPLACE),nowMs,enqueue,save)
+                   enqueue:(Plan)->Unit=enqueuer(context),save:((JSONObject)->Unit)->Unit=saver(context),read:()->JSONObject=reader(context)) {
+        val s=read()
+        val since=if(sent>0) nowMs else s.optLong(SINCE_KEY,0).takeIf { it in 1..nowMs } ?: nowMs
+        val at=if(sent>0 || waiting) nextFetch(since,nowMs,crons(s)) else null
+        if(at==null) save { it.put(ROUND_KEY,0).put(NEXT_MS_KEY,0L).put(SINCE_KEY,0L) }
+        else set(Plan(if(sent>0) 1 else round+1,at-nowMs,androidx.work.ExistingWorkPolicy.APPEND_OR_REPLACE),since,nowMs,enqueue,save)
     }
-    private fun set(plan:Plan,nowMs:Long,enqueue:(Plan)->Unit,save:((JSONObject)->Unit)->Unit) {
+    private fun set(plan:Plan,sinceMs:Long,nowMs:Long,enqueue:(Plan)->Unit,save:((JSONObject)->Unit)->Unit) {
         enqueue(plan)
-        save { it.put(ROUND_KEY,plan.round).put(NEXT_MS_KEY,nowMs+plan.delayMs) }
+        save { it.put(ROUND_KEY,plan.round).put(NEXT_MS_KEY,nowMs+plan.delayMs).put(SINCE_KEY,sinceMs) }
     }
     private fun saver(context:Context):((JSONObject)->Unit)->Unit = { edit -> runCatching { SecureSettings(context).update { edit(it) } } }
+    private fun reader(context:Context):()->JSONObject = { runCatching { SecureSettings(context).snapshot() }.getOrDefault(JSONObject()) }
     private fun enqueuer(context:Context):(Plan)->Unit = { plan ->
         val request=androidx.work.OneTimeWorkRequestBuilder<CallResultsWork>().setInitialDelay(plan.delayMs,java.util.concurrent.TimeUnit.MILLISECONDS)
             .setInputData(androidx.work.workDataOf(ROUND to plan.round))
@@ -480,7 +609,9 @@ internal object InboxETags:okhttp3.Interceptor {
     const val RESULTS_ETAG_KEY="resultsListingETag"
     private class Kept(val etag:String,val body:ByteArray,val type:okhttp3.MediaType?)
     private val kept=java.util.concurrent.ConcurrentHashMap<String,Kept>()
-    private val PATHS=listOf(CallInbox.RESULTS,CallInbox.LEDGER,CallInbox.TIDY_PROPOSAL,CallInbox.STORY).map { "/contents/$it" }
+    // v3.4: the routine's self-reports and app/version.json are read on every results pass too (a 304 costs nothing).
+    private val PATHS=listOf(CallInbox.RESULTS,CallInbox.LEDGER,CallInbox.TIDY_PROPOSAL,CallInbox.STORY,
+        RoutineStatus.HOURLY,RoutineStatus.OLD,RoutineStatus.VERSION).map { "/contents/$it" }
     internal fun cacheable(path:String)=PATHS.any { path.endsWith(it) }
     /** Where the empty results listing's ETag is kept; set by the runner at the start of each pass. */
     @Volatile internal var results:ETagSlot?=null
