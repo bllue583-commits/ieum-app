@@ -310,6 +310,7 @@ $HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu 
 ## 7. 알아 둘 함정
 - 예약 작업 프롬프트는 저장소 파일을 읽는 짧은 안내다. 지시문을 바꿀 때는 `docs/routines/*.md`를 고치고 배포하면(release-apk) 우편함에 올라간다. 배포 없이 급히 바꾸려면 ieum-inbox `routines/`에 직접 커밋.
 - 예약 작업을 이 세션에서 만들면 이 세션에 붙은 저장소(ieum-app, ieum-inbox)가 소스로 붙는다. 다른 세션에서 만들면 ieum-inbox가 빠져 "성공"인데 아무것도 못 하는 일이 생긴다(11/5 17시). `fire_trigger`(지금 실행)와 끄기·지우기는 자동 권한 검사가 막는 경우가 있어 사용자가 화면에서.
+- 수동 실행(Run workflow) 버튼은 **기본 브랜치 `main`에 있는 워크플로만** 보인다. main에는 `cleanup-branches.yml`만 있다(1db2a4c). 다른 워크플로를 손으로 돌릴 때는 REST `.../actions/workflows/<file>/dispatches -f ref=feature/lean-calls`.
 - 이 세션의 자동 권한 검사는 원격 브랜치 삭제(`git push --delete`), 예약 작업 끄기·지우기·지금 실행을 막는다. 브랜치는 `cleanup-branches` 워크플로를 사용자가 실행, 예약 작업은 사용자가 화면에서.
 - 이 세션은 CPU 2개라 작업자 둘이 Gradle을 번갈아 기다린다. 작업자는 컴파일·자기 시험만 로컬, 전체 시험·lint는 GitHub ci로(작업자 지침 11/6).
 - 통합 브랜치에 `[skip ci]` 커밋만 올리면 ci가 돌지 않는다. 합친 뒤에는 코드나 워크플로가 바뀐 커밋을 머리에 두고 push.
