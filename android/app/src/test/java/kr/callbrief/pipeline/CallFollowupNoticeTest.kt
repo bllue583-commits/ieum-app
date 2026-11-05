@@ -137,7 +137,8 @@ class CallFollowupNoticeTest:ProtectedTextHostTestBase() {
         assertEquals("끝나면 여기에 요약이 와요",text(only().notification))
         CallFollowupNotice.sweep(app,t0+120_000+CallFollowupNotice.LATE_MS+1)
         assertEquals(id,only().id)
-        assertEquals("정리가 늦어지고 있어요, 저녁 보고에 넣어 드릴게요",text(only().notification))
+        // v3.1 (DESIGN_V4 2.1-3): no record yet, so no promise of the evening report.
+        assertEquals("정리가 늦어지고 있어요",text(only().notification))
         assertEquals("김민수 대표와 통화",title(only().notification))
         // A call after the report keeps its notice; the earlier one goes.
         val later=end.copy(phoneKey=number,startedMs=t0+7*3_600_000L,endedMs=t0+7*3_600_000L+60_000)

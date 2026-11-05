@@ -71,6 +71,23 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
             c.state==CallRecordStore.TRANSCRIBED -> "정리하고 있어요"
             else -> CallUi.state(c.state)
         }
+        /** v3.1 (DESIGN_V4 2.1-4, r12-1): an answered or made call-log line with no record yet, in words. Being turned into text
+         * only while a transcription job's recording falls in the call's window ([RecordingGap.window]); without one, still
+         * being looked for up to [SEARCH_MS] after the call ended, then no recording. Null for lines this does not cover
+         * (personal, missed, not connected, blocked). The call list puts it after "받은 전화 3분, " (r12-5). */
+        internal fun stateWords(e:LoggedCall,now:Long,jobStarts:List<Long>):String? {
+            if(e.personal || e.kind!=FirstPass.LogKind.NO_RECORDING) return null
+            val w=RecordingGap.window(e.startMs,e.durationMs)
+            return when {
+                jobStarts.any { it in w } -> TRANSCRIBING
+                now<e.startMs+e.durationMs+SEARCH_MS -> SEARCHING
+                else -> NO_RECORDING
+            }
+        }
+        /** After a call ends, its recording is looked for this long before the line says there is none. */
+        const val SEARCH_MS=10*60_000L
+        const val SEARCHING="녹음을 찾는 중이에요"
+        const val NO_RECORDING="녹음 없음"
         /** Whether [다시 정리하기] can help: a failed call, except one whose recording had no speech. */
         internal fun canRetry(c:CallRecord)=c.state==CallRecordStore.FAILED && c.error!="EMPTY_TRANSCRIPT"
         /** One call made searchable once: its record, all its words in lower case, and the same without spaces. */

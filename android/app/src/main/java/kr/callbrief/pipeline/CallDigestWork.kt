@@ -29,13 +29,22 @@ internal object CallDigestText {
     private fun more(lines:List<String>)=if(lines.size>MAX_LINES) lines.take(MAX_LINES-1)+"외 ${lines.size-MAX_LINES+1}개" else lines
     /** The body's first line is the latest call, one line ("오후 2:10 △△철강 김민수, 단가를 다시 받기로 했어요"), then the waiting count; the expanded
      * notification lists every call, the latest first. */
-    fun evening(calls:List<CallRecord>,newTasks:Int):Message {
+    /** [callCount]: the day's calls as home counts them ([CallsScreen.callCount]: records and call-log lines); null: the
+     * records alone (older callers). v3.1 (DESIGN_V4 2.1-5): with calls in the log but none recorded the title says so,
+     * "오늘 통화 n건, 녹음된 통화 0건". */
+    fun evening(calls:List<CallRecord>,newTasks:Int,callCount:Int?=null):Message {
         val lines=calls.sortedByDescending { it.startedMs ?: it.createdMs }.map { c ->
             "${CallUi.time(c.startedMs)} ${c.displayName}, "+(c.summary?.let(CallUi::firstSentence) ?: CallUi.state(c))
         }
+        val n=callCount ?: calls.size
+        val recorded=calls.count { it.kind=="통화" }
+        if(n>0 && recorded==0 && callCount!=null) {
+            val text=if(calls.isEmpty()) "녹음이 없어 정리한 통화가 없어요" else lines.first()
+            return Message("오늘 통화 ${n}건, 녹음된 통화 0건",text,listOf("녹음이 없어 정리한 통화가 없어요")+more(lines))
+        }
         val waiting=calls.count { it.summary==null && it.state!=CallRecordStore.FAILED }
         val text=if(calls.isEmpty()) "오늘 정리된 통화가 없어요" else lines.first()+(if(waiting>0) ", 아직 정리 중인 통화가 ${waiting}건 있어요" else "")
-        return Message("오늘 통화 ${calls.size}건, 새 체크할 일 ${newTasks}개",text,more(lines))
+        return Message("오늘 통화 ${n}건, 새 체크할 일 ${newTasks}개",text,more(lines))
     }
     /** Up to [ISSUE_LINES] "진행 중인 일" lead the morning lines (design: 새벽 정리). */
     const val ISSUE_LINES=3
@@ -54,7 +63,12 @@ internal object CallDigestText {
         val lines=issues.take(ISSUE_LINES).map { "진행 중, ${it.title}"+(if(it.status.isBlank()) "" else ": ${it.status}") }
         return Message("체크할 일을 다 끝냈어요","남은 체크할 일이 없어요",lines)
     }
-    fun evening(store:CallRecordStore,day:LocalDate)=evening(store.day(day),store.newTaskCount(day))
+    fun evening(store:CallRecordStore,day:LocalDate):Message {
+        val calls=store.day(day)
+        // The same count as home's "오늘 통화" (r12-1): records and the call-log lines the call list shows beside them.
+        val logs=runCatching { store.dayLog(day) }.getOrDefault(emptyList())
+        return evening(calls,store.newTaskCount(day),CallsScreen.callCount(calls,logs))
+    }
     fun morning(store:CallRecordStore,day:LocalDate)=morning(store.openTodos(),day,store.issues())
 }
 
@@ -106,10 +120,11 @@ internal object CallDigestSchedule {
     fun next(context:Context,kind:String) = enqueue(context,kind,ExistingWorkPolicy.APPEND_OR_REPLACE)
 }
 
-/** Before a report is composed, one try at the analysis pass (inbox results in), at most [TIMEOUT_MS]: the report
- * then has the latest summaries. Whatever happens (no network, an error, too slow) the report goes out as it is. */
+/** Before a report is composed, one try at the result pass (`ieum.calls.results`: inbox results in), in the same work and at
+ * most [TIMEOUT_MS] (v3.1, DESIGN_V4 2.1-5: 3 minutes, no separate 18:45 work): the report then has the latest summaries.
+ * Whatever happens (no network, an error, too slow) the report goes out as it is. */
 internal object CallDigestPrefetch {
-    const val TIMEOUT_MS=60_000L
+    const val TIMEOUT_MS=3*60_000L
     enum class Outcome { DONE, FAILED, TIMED_OUT }
     /** Runs [block] on its own thread and waits at most [timeoutMs]; a slow block is left to finish by itself. Never throws. */
     fun run(timeoutMs:Long=TIMEOUT_MS,block:()->Boolean):Outcome {
@@ -156,11 +171,12 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
     }
     private fun post(kind:String,m:CallDigestText.Message,dayMs:Long?=null)=CallDigestNotifier.post(applicationContext,kind,m,dayMs)
 
-    /** One analysis pass. When the hourly one is running right now, waits for it instead of starting a second pass beside it. */
+    /** One result pass, the body of `ieum.calls.results` ([ResultChain.NAME]) run here synchronously. When the hourly pass or a
+     * chain round is running right now, waits for it instead of starting a second pass beside it. */
     private fun fetchResults():CallDigestPrefetch.Outcome {
         val storage=CallPipelineStartup.storage(applicationContext)
-        fun running()=runCatching { WorkManager.getInstance(storage).getWorkInfosForUniqueWork(CallPipelineStartup.ANALYSIS_WORK).get()
-            .any { it.state==WorkInfo.State.RUNNING } }.getOrDefault(false)
+        fun running()=runCatching { val wm=WorkManager.getInstance(storage)
+            listOf(CallPipelineStartup.ANALYSIS_WORK,ResultChain.NAME).any { n -> wm.getWorkInfosForUniqueWork(n).get().any { it.state==WorkInfo.State.RUNNING } } }.getOrDefault(false)
         return CallDigestPrefetch.run {
             if(running()) { var n=0;while(running() && n++<CallDigestPrefetch.TIMEOUT_MS/2_000) Thread.sleep(2_000);true }
             else CallRecordAnalysisRunner(storage).runPending()
@@ -174,7 +190,11 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
             val settings=SecureSettings(app);val s=settings.snapshot()
             val due=SelfCheckNotices.due(SelfCheckNotices.check(selfCheckInput(app,s,now)),now,s)
             val m=SelfCheckNotices.message(due) ?: return
-            if(CallDigestNotifier.post(app,SELF_CHECK,m)) settings.update { SelfCheckNotices.remember(it,due,now) }
+            if(CallDigestNotifier.post(app,SELF_CHECK,m)) settings.update {
+                SelfCheckNotices.remember(it,due,now)
+                // r12-1: the recording-gap notice counts its days (1st, 2nd, then every 7th).
+                if(due.any { d -> d.code==SelfCheckNotices.RECORDING_GAP }) RecordingGap.rememberNotice(it,now)
+            }
         } catch(e:Exception) { Log.w(TAG,"self-check not done: ${e.javaClass.simpleName}") }
     }
     private fun selfCheckInput(app:Context,s:org.json.JSONObject,now:Long):SelfCheckNotices.Input {
@@ -190,7 +210,8 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
             queued,oldestQueued,s.optLong(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,0),
             s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false) && CallInboxConfig.enabled && !kr.callbrief.BuildConfig.LOCAL_PREVIEW,
             oldestWaiting,s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),dbBytes,
-            s.optString(PipelineSettingsKeys.STALL_WARNED_DAY),s.optString(PipelineSettingsKeys.DISCONNECT_WARNED_DAY),store.dbRows)
+            s.optString(PipelineSettingsKeys.STALL_WARNED_DAY),s.optString(PipelineSettingsKeys.DISCONNECT_WARNED_DAY),store.dbRows,
+            RecordingGap.noticeDue(s,now),runCatching { CallUpdate.notInstalledForADay(app,now) }.getOrDefault(false))
     }
 }
 

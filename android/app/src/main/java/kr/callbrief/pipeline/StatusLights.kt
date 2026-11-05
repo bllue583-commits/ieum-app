@@ -37,7 +37,9 @@ internal object StatusLights {
         /** v3.0 r11-3 (design 7.2): the call card may be drawn over other apps ([cardOverlay]), the call state may be read
          * ([phoneState], READ_PHONE_STATE: without it no call is seen), the optional call redirection role is held or this
          * phone has none ([cardRole]), and either card switch is on ([cardOn]). */
-        val cardOverlay:Boolean=true,val phoneState:Boolean=true,val cardRole:Boolean=true,val cardOn:Boolean=true)
+        val cardOverlay:Boolean=true,val phoneState:Boolean=true,val cardRole:Boolean=true,val cardOn:Boolean=true,
+        /** v3.1 (DESIGN_V4 2.1-2): the recording-gap verdict confirmed for the wife ([RecordingGap.confirmed]); null: nothing to say. */
+        val gap:RecordingGap.Verdict?=null)
 
     const val TRANSCRIBE_LATE_MS=6*3_600_000L
     const val ANALYZE_LATE_MS=3*3_600_000L
@@ -58,7 +60,10 @@ internal object StatusLights {
             !i.folderReadable -> "녹음 폴더 연결이 풀렸어요. 위 연결 묶음에서 폴더를 다시 골라 주세요."
             i.lastDiscoveryMs<=0 || i.now-i.lastDiscoveryMs>DISCOVERY_LATE_MS ->
                 "하루 넘게 녹음을 가져오지 못했어요. 위 연결 묶음에서 폴더를 다시 골라 주세요."
-            else -> null }
+            // v3.1: the folder is read, but the calls of the last day have (almost) no recordings, or the folder is too full.
+            else -> i.gap?.let(RecordingGap::lightWords) }
+        val importTarget=if(import!=null && i.gap!=null && i.folderConnected && i.folderReadable && i.lastDiscoveryMs>0 &&
+            i.now-i.lastDiscoveryMs<=DISCOVERY_LATE_MS) RecordingGap.lightTarget(i.gap) else GROUP_CONNECT
         val transcribe=when {
             i.modelState=="UNSUPPORTED" -> "이 휴대폰에서는 통화를 글자로 바꿀 수 없어요."
             i.modelState=="FAILED" -> "음성 인식 모델을 받지 못했어요. Wi-Fi에서 아래 모델 받기를 눌러 주세요."
@@ -82,7 +87,7 @@ internal object StatusLights {
         // 상태와 도움 (below the lights); the notification switch is in the phone's settings, so that line has no target.
         val analyzeTarget=if(!i.consent) GROUP_SUMMARY else GROUP_STATUS
         val transcribeTarget=if(i.modelState=="UNSUPPORTED") null else GROUP_STATUS
-        return listOf(light("status_import","녹음 가져오기",import,GROUP_CONNECT),light("status_transcribe","글자로 바꾸기",transcribe,transcribeTarget),
+        return listOf(light("status_import","녹음 가져오기",import,importTarget),light("status_transcribe","글자로 바꾸기",transcribe,transcribeTarget),
             light("status_analyze","통화 정리",analyze,analyzeTarget),light("status_notify","알림",notify),light("status_update","업데이트",update,GROUP_STATUS),
             card(i))
     }
@@ -104,10 +109,15 @@ internal object StatusLights {
 
     /** Transcription queue split by the first pass: [newCount] recent recordings, [oldCount] first-pass ones; each with the
      * time its oldest row entered the queue (jobs.updated_ms), not the call time. Recordings before 10/1 are not counted. */
-    data class Queue(val newCount:Int=0,val newOldestMs:Long?=null,val oldCount:Int=0,val oldOldestMs:Long?=null) {
+    data class Queue(val newCount:Int=0,val newOldestMs:Long?=null,val oldCount:Int=0,val oldOldestMs:Long?=null,
+                     /** v3.1 (DESIGN_V4 2.3-4): when the oldest queued job entered the queue by its own queued_ms
+                      * ([CallTranscriptionStore.oldestQueuedMs]); null: not known, the rows' times above are used. */
+                     val queuedSinceMs:Long?=null) {
         val count get()=newCount+oldCount
-        val oldestMs get()=listOfNotNull(newOldestMs,oldOldestMs).minOrNull()
+        val oldestMs get()=queuedSinceMs ?: listOfNotNull(newOldestMs,oldOldestMs).minOrNull()
     }
+    /** [q] with the queue's own entry time when the transcription store knows it ([oldest], r12-3), else as it is. */
+    fun withQueuedSince(q:Queue,oldest:Long?):Queue = if(oldest==null || q.count==0) q else q.copy(queuedSinceMs=oldest)
     /** One QUEUED row: the recording's call time (null: unknown) and when the row entered the queue. */
     data class QueuedRow(val callMs:Long?,val enteredMs:Long)
     fun queue(rows:List<QueuedRow>,s:JSONObject,now:Long=System.currentTimeMillis()):Queue {
@@ -159,6 +169,8 @@ internal object StatusLights {
                 } else { late=0;failed=0 }
             }
         }.onFailure { android.util.Log.w("ieum.status","store not read: ${it.javaClass.simpleName}") }
+        // v3.1: the age of the wait by the queue's own entry time (r12-3); null keeps the rows' times.
+        queue=queue?.let { q -> if(q.count==0) q else withQueuedSince(q,runCatching { CallTranscriptionStore(app).use { it.oldestQueuedMs() } }.getOrNull()) }
         return Store(queue,late,oldestLate,failed,bytes,rowsTotal)
     }
     /** Android still lets the app read the chosen folder (the heartbeat's "folder" and the folder light). */

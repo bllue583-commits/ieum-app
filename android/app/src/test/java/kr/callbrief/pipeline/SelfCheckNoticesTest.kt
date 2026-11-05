@@ -126,7 +126,7 @@ class SelfCheckNoticesTest:ProtectedTextHostTestBase() {
         val started=System.nanoTime()
         assertEquals(CallDigestPrefetch.Outcome.TIMED_OUT,CallDigestPrefetch.run(200) { Thread.sleep(5_000);true })
         assertTrue((System.nanoTime()-started)/1_000_000<2_000)
-        assertEquals(60_000L,CallDigestPrefetch.TIMEOUT_MS)
+        assertEquals(3*60_000L,CallDigestPrefetch.TIMEOUT_MS) // v3.1 (DESIGN_V4 2.1-5): at most 3 minutes
     }
 
     // ---- update failure words ----

@@ -80,7 +80,11 @@ internal object AutomaticRecordingDiscovery {
             return attempt(context,binding,stopped,active,observed,fromFollowup,facts).also { facts.code=code(it) }
         } catch(error:Throwable) {
             facts.code=if(stopped())"LOCAL_WORK_STOPPED:"+errorCode(error).removePrefix("ERROR:") else errorCode(error);throw error
-        } finally { recordAttempt(context,started,facts.code ?: "ERROR:UNKNOWN",facts.truncated,facts.heldTooLarge) }
+        } finally {
+            recordAttempt(context,started,facts.code ?: "ERROR:UNKNOWN",facts.truncated,facts.heldTooLarge)
+            // v3.1 (DESIGN_V4 2.1-1, 2.1-3): are calls being recorded, and which ended call has no recording. Never throws.
+            kr.callbrief.pipeline.RecordingGap.afterPass(context,facts.code ?: "ERROR:UNKNOWN",started)
+        }
     }
     private class PassFacts { var code:String?=null;var truncated:Boolean?=null;var heldTooLarge:Int?=null }
     private fun attempt(context:Context,binding:Binding?,stopped:()->Boolean,active:(NativeDiscoverySession?)->Unit,observed:(DiscoveryPump.Cycle)->Unit,fromFollowup:Boolean,facts:PassFacts):JSONObject {
