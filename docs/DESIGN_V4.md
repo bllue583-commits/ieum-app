@@ -1,8 +1,8 @@
 # 이음 v3.0 평가와 v3.1 → v3.3 설계도 (2026-11-05 저녁)
 
-> 기준: 저장소 `feature/lean-calls` 157ffab(v3.0 배포본, 빌드 1038), 실제 폰 상태(우편함 `status/phone.json` 11/5 16:13, `status/verify-log.md` 11/5 09:10), v3.0 기기 시험(run 41973214685). Opus 검토자 넷(화면·UX, 파이프라인·자동화, 데이터·정확도·보안, 통화 카드)의 읽기 전용 검토를 Fable 오케스트레이터가 종합하고, 개정안은 다시 Opus 설계 검토자와 상의해 고쳤다. 검토 원문 요약은 `docs/orchestration/reports/review-r1~r4-*.md`.
+> 기준: 저장소 `feature/lean-calls` 157ffab(v3.0 배포본, 빌드 1038), 실제 폰 상태(우편함 `status/phone.json` 11/5 16:13, `status/verify-log.md` 11/5 09:10), v3.0 기기 시험(run 41973214685). Opus 검토자 넷(화면·UX, 파이프라인·자동화, 데이터·정확도·보안, 통화 카드)의 읽기 전용 검토를 Fable 오케스트레이터가 종합해 초안을 쓰고, Opus 설계 검토자가 초안을 따진 25개 지적을 반영해 고쳤다(2차). 검토 원문 요약은 `docs/orchestration/reports/review-r1~r4-*.md`, 설계 검토는 `review-design-v4.md`.
 >
-> 이 문서는 [DESIGN_V3.md](DESIGN_V3.md)의 뒤를 잇는다. 둘이 다르면 이 문서가 우선한다. 설계도(Claude Docs)에는 요약 절과 이 파일의 링크를 둔다. 진행 방식(릴리스 트레인, 묶음·통합·배포·HANDOFF)은 DESIGN_V3.md 2절 그대로다.
+> 이 문서는 [DESIGN_V3.md](DESIGN_V3.md)의 뒤를 잇는다. 둘이 다르면 이 문서가 우선한다. 설계도(Claude Docs)에는 "5회차" 요약 절과 이 파일의 링크를 둔다. 진행 방식(릴리스 트레인, 묶음·통합·배포·HANDOFF)은 DESIGN_V3.md 2절 그대로이고, **묶음은 파일이 겹치지 않게**(2절 규칙)를 이번에는 묶음별 파일 소유 표로 못 박는다.
 
 ## 0. 한눈에 보기
 
@@ -10,13 +10,13 @@
 
 | 버전 | 이름 | 사용자에게 보이는 큰 변화 | 기술 핵심 | 시험 게이트 |
 | --- | --- | --- | --- | --- |
-| v3.1 | 스스로 말하는 이음 | 녹음이 안 되거나, 업데이트가 안 되거나, 권한이 빠지면 앱이 먼저 말한다. 처음 설정은 막히지 않고, 홈 첫 화면에 체크할 일이 보인다. 진행 중인 일이 처음 정리를 기다리지 않고 생긴다 | 녹음 공백 판정, 워치독 규칙 4개, 무인 설치 완성, 통화별 알림 "녹음 없음" 상태, 새벽 정리 분리, 결과 고착 해제, v2.4→v3.x 직행 마이그레이션 시험 | ci + 무인 설치 smoke(앱이 스스로 설치) |
-| v3.2 | 믿을 수 있는 숫자 | 잘못 들렸을 수 있는 숫자·날짜·규격은 "확인 필요"로 보이고, 체크할 일 제목에서 이름이 빠지며, 사람 합치기를 되돌릴 수 있다 | 숫자 가드(tentative), 실제 모델(large-v3-turbo) 골든 재측정과 초기 프롬프트, 이름 힌트, 지시문 v7, 합치기 되돌리기, 18sp 강제 | ci + 골든 셋(turbo) 1회 |
-| v3.3 | 어디서나 보이는 카드 | 잠긴 폰에 전화가 와도 카드가 보이고, 앱이 꺼져 있어도 1초 안에 뜨며, 받기 버튼을 가리지 않는다. 정리된 통화가 없는 상대에게도 "지난 통화 n일 전, 30일 n번"은 보인다 | 잠금 위 오버레이 우선·공개 알림, 콜드 경로 개인 번호 캐시, 최소 카드, 3초용 카드 글, 통화 중 위치, 서비스 상태 프로세스 안 전달, 통계 보정, 실기기 체크리스트 | ci + device-test(call-card, 콜드·통화 대기 시나리오) + **S25 실기기 체크리스트** |
+| v3.1 | 스스로 말하는 이음 | 녹음이 안 되거나, 업데이트가 안 되거나, 권한이 빠지면 앱이 먼저 말한다. 처음 설정은 막히지 않고, 홈 첫 화면에 체크할 일이 보인다. 진행 중인 일이 처음 정리를 기다리지 않고 생긴다 | 녹음 공백 판정(원인 코드), 워치독 규칙 4개, 무인 설치 완성, 통화별 알림 "녹음 없음", 새벽 정리 분리, 결과 고착 해제, 지연 실측, v2.4→v3.x 직행 마이그레이션 시험 | ci + update-smoke(앱이 스스로 설치) + 배포 48시간 지표(2.7) |
+| v3.2 | 믿을 수 있는 숫자 | 잘못 들렸을 수 있는 숫자·날짜는 "확인 필요"로 보이고, 체크 제목에서 이름이 빠지며, 사람 합치기를 되돌릴 수 있다. 정리된 통화가 없는 상대에게도 통화기록으로 만든 작은 카드가 보이고, 잠긴 폰의 알림에도 이름과 한 줄이 보인다 | 숫자 가드(정규화·자막 구간·토큰 확률), 실제 모델(large-v3-turbo) 골든 재측정과 초기 프롬프트, 이름 힌트, 지시문 v7, 합치기 되돌리기, thin 카드, 18sp 강제, 화면 다듬기 | ci + 골든 셋(turbo) 1회 |
+| v3.3 | 어디서나 보이는 카드 | 잠긴 폰에 전화가 와도 카드가 뜨고, 앱이 꺼져 있어도 1초 안에 뜨며, 받기·통화 중 버튼을 가리지 않는다 | 잠금 위 오버레이+알림 동시, 안드로이드 15 FGS 순서, 콜드 경로 개인 번호 캐시, 3초용 카드 글, 통화 중 위치, 통화 대기, 통계 보정, S25 실기기 체크리스트 | ci + device-test(call-card 새 시나리오) + **S25 체크리스트** |
 
-순서의 이유: v3.1 없이는 v3.2·v3.3이 보여 줄 데이터가 생기지 않는다(지금 장부가 비어 있는 원인이 v3.1 항목들이다). v3.2는 결과가 흐르기 시작한 뒤 "틀린 숫자"가 아내 눈에 보이기 전에 막아야 한다. v3.3은 아내 폰(S25) 실측을 받아서 고쳐야 하므로 마지막이다.
+순서의 이유: v3.1 없이는 v3.2·v3.3이 보여 줄 데이터가 생기지 않는다(장부가 빈 원인이 v3.1 항목들이다). v3.2는 결과가 흐르기 시작한 뒤 "틀린 숫자"가 아내 눈에 보이기 전에 막아야 하고, 지금 장부가 작아 카드가 거의 비는 문제(thin 카드)도 실측 없이 할 수 있어 여기로 당겼다. v3.3은 아내 폰(S25) 실측을 받아 고쳐야 하므로 마지막이다.
 
-**버전과 무관하게 지금 바로 할 것(사용자, 1절 끝 표).** v3.0 APK 손 설치, 삼성 자동 녹음 확인, 루틴 두 개 교체(v6 본문·30분 주기), 권한 3개 허용. 이것 없이는 v3.1도 의미가 없다.
+**v3.1 착수 조건.** 1.4절의 설치가 끝나고 v3.0 하트비트가 24시간치 쌓이면, 오케스트레이터가 녹음 0의 원인을 `inventoryTruncated`(가: 2000 한도), `lastDiscoveryOutcome`(마: 폴더), `callLogMatch.last`의 noTime·noCandidate·nameNull·several(나·다: 대조), `newQueuedCount` 대 `callLog.today.unrecordedCalls`(라: 녹음 꺼짐)로 가려 2.0절 머리에 적는다. 원인이 대조(나·다)면 r12-4를 v3.1의 첫 묶음으로 올리고, 녹음 꺼짐(라)이면 1.4로 해결된 것을 확인한 뒤 r12-1의 판정 임계값을 실측으로 정한다. 하트비트가 없으면(설치가 안 됐으면) v3.1은 시작하지 않고 1.4를 다시 안내한다.
 
 ## 1. v3.0 평가
 
@@ -24,12 +24,13 @@
 
 | 수치 | 뜻 |
 | --- | --- |
-| 앱 v2.4(1033), 최신 배포 v3.0(1038) | v2.6의 무인 설치는 v2.6이 깔려야 동작한다. v2.4는 "새 버전" 알림을 사람이 눌러야 하고, 아무도 안 눌렀다. 워치독은 이 정체를 경보하지 않는다(v2.6 이상 필드만 봄) |
+| 앱 v2.4(1033), 최신 배포 v3.0(1038) | v2.4는 새 APK를 내려받아 "새 버전" 알림과 홈 배너를 띄우지만 설치는 사람이 그 알림을 한 번 눌러야 한다. 아무도 안 눌렀다. 워치독은 이 정체를 경보하지 않는다(v2.6 이상 필드만 봄) |
 | 10/1 이후 통화 1,022건(개인 71 제외 983), 녹음과 이어진 통화 0건, 대기열 49건, 가장 오래된 대기 10/17 | 가장 유력한 원인은 v2.4 발견의 2000개 한도(폴더 전체를 공급자 순서로 끊어 새 녹음이 목록에 안 잡힘; v2.6 r7-2가 고쳤으나 폰에 없음). 다음 후보는 삼성 자동 녹음이 일부만 켜짐, v2.4 대조의 이름 완전 일치 규칙, 파일 이름이 통화 끝 시각이라 창(−2분~+1분) 밖. **앱·하트비트·워치독 어디에도 "녹음이 안 되고 있다"는 판정이 없다** |
-| 장부 rev 8: 사람 4, 업체 4, 진행 중인 일 0 | 진행 중인 일은 새벽 정리만 만들고, 새벽 정리는 처음 정리가 끝나야 돈다(구조). 사람 추가 규칙은 지시문 v6에만 있는데 루틴 본문은 아직 v5(last-run promptVersion 5). 둘 다 지금 막혀 있다 |
+| 장부 rev 8: 사람 4, 업체 4, 진행 중인 일 0 | 진행 중인 일은 새벽 정리만 만들고, 새벽 정리는 처음 정리가 끝나야 돈다(구조). 사람 추가 규칙은 지시문 v6에만 있는데 루틴 본문이 17시까지 v5였다(11/5 17시 다른 세션이 v6으로 교체, 매시 34분 07~22시 — 예약 작업은 1시간 미만 간격을 허용하지 않아 설계 6.3의 30분은 불가) |
 | 결과를 가져갔는데 요약 대기 15건 | 받은 표시가 붙은 기록은 재전송되지 않고, 푸는 길은 적용 3회 실패뿐 |
 | 자막 골든(에뮬레이터 base 모델) CER 18%, 업체명 0/3, 규격 1/8 | 실제 폰 모델은 large-v3-turbo-q5_0이라 수치는 대표성이 없다. 그러나 숫자·날짜·규격 오인식이 체크할 일에 그대로 들어가는 것을 막는 장치가 없다는 점은 모델과 무관하다 |
 | v3.0 기기 시험: 화면 9장, 카드 7항목 모두 통과 | 잠금 없는 API 34 에뮬레이터, 앱을 띄운 직후, 권한을 강제 부여한 조건. S25(안드로이드 15+)의 백그라운드 서비스 제한, 잠금 화면, 앱이 꺼진 상태, 삼성 통화 화면은 증명되지 않았다 |
+| release-apk의 서명 인증서 비교가 1034~1038 모두 "not compared"(이전 APK 내려받기 실패) | 1033과 1038의 인증서가 같다는 자동 증거가 없다. 서명 시드(`IEUM_SIGNING_SEED`)가 비어 있어 키가 우편함 토큰에서 파생되므로, 토큰이 바뀌지 않았다면 같다. 설치가 "서명이 다르다"로 실패하면 **지우지 말고** 알릴 것 |
 
 ### 1.2 잘된 것
 
@@ -46,143 +47,151 @@
 | 2 | 치명 | 폰이 옛 버전에 머물러도 경보가 없다. 워치독은 v2.6 이상 필드만 본다 | P1: `watchdog.py:158-161` |
 | 3 | 치명 | 진행 중인 일이 처음 정리가 끝날 때까지 영원히 0이다 | D1: `tidy.md:20`, `CallRecordWork.kt:175-180,261` |
 | 4 | 높음 | 통화별 알림이 녹음 여부를 안 보고 "정리하고 있어요", 6시간 뒤 "저녁 보고에 넣어 드릴게요"(안 들어감). 저녁 알림 통화 수가 홈과 다름. 녹음 없는 통화도 12시간 "글자로 바꾸는 중" | U2·U3·U4·P3: `CallFollowupNotice.kt:77-96,219`, `CallsScreen.kt:61-65`, `CallDigestWork.kt:38` |
-| 5 | 높음 | 무인 설치가 완성되지 않았다: `UPDATE_PACKAGES_WITHOUT_USER_ACTION` 권한 선언 없음, 설치 출처 미허용이면 오류 코드 없이 포기, smoke는 adb 설치만 | P5·P6: `AndroidManifest.xml:3-23`, `CallUpdate.kt:218,230` |
-| 6 | 높음 | 루틴 본문이 v5, 주기 30분 변경 미확인, 문서끼리 어긋남. 워치독이 지시문 버전을 안 본다 | P7·P8·D2: `hourly.md:264,274`, `OPERATIONS.md:21` |
+| 5 | 높음 | 무인 설치가 완성되지 않았다: `UPDATE_PACKAGES_WITHOUT_USER_ACTION` 권한 선언 없음, 설치 출처 미허용이면 오류 코드 없이 포기, smoke는 adb 설치만. **그래서 v3.0 → v3.1도 알림을 한 번 눌러야 한다** | P5·P6: `AndroidManifest.xml:3-23`, `CallUpdate.kt:218,230` |
+| 6 | 높음 | 루틴 본문이 v5였고(17시 교체), 워치독이 지시문 버전을 안 본다. 지연 목표 25분은 루틴 처리 시간이 빠진 값(실제 35~50분) | P7·P8·D2 |
 | 7 | 높음 | 숫자·날짜·규격 오인식 가드 없음. tentative는 저장만 되고 화면에 안 나온다 | D3: `ClaudeCallAnalyzer.kt:217,346-369`, `TasksScreen.kt:20-60` |
 | 8 | 높음 | v2.4 → v3.x 직행 마이그레이션 시험 없음(시험은 v3에서 시작). 열기 실패는 Log.w뿐. 사람 합치기는 되돌릴 수 없다(2음절 자모 1 차이도 합침) | D4·D5: `StoreFoundationTest.kt:69`, `IeumApplication.kt:17,45`, `NameKey.kt:111` |
 | 9 | 높음 | 잠긴 폰에 벨이 울리면(가장 흔함) 오버레이를 시도조차 않고 내용 없는 알림만. 그 경우가 "권한 없음"으로 세어져 워치독이 틀린 경보를 낸다 | C1·C2·U6: `CallCardOverlay.kt:69,161,180,263-273` |
 | 10 | 높음 | 앱이 꺼진 상태에서 벨이 울리면 개인 번호 확인이 보호 DB 전체를 열어 카드가 늦는다. 상대 카드가 있는 번호가 거의 없어 대부분 noCard | C3·C4: `CallSession.kt:160-169` |
-| 11 | 높음 | 처음 설정이 한 줄로만 진행된다(막히면 뒤 단계 불가, 건너뛰기 없음). 처음 설정·처음 정리 카드가 홈 첫 화면을 차지해 체크할 일이 밀린다 | U5·U7: `HomeScreen.kt:292-314` |
+| 11 | 높음 | 처음 설정이 한 줄로만 진행된다(막히면 뒤 단계 불가, 건너뛰기 없음). 처음 설정·처음 정리 카드가 홈 첫 화면을 차지해 체크할 일이 밀린다. 배터리 제한 해제가 단계에 없다 | U5·U7: `HomeScreen.kt:292-314` |
 | 12 | 높음 | 하트비트에 권한(전화 상태·오버레이·역할·설치 허용) 상태가 없어 권한이 빠져도 조용하다 | P9: `PhoneStatus.kt:65-70,243-257` |
 | 13 | 중간 | 거는 전화 카드가 15초 동안 세로 38~78%를 덮어 통화 중 버튼(스피커·키패드)을 가릴 수 있다. 수신 중 1.3배 글자면 받기 영역에 닿는다 | C6·U12: `CallCardOverlay.kt:53,58,198` |
 | 14 | 중간 | 안드로이드 15+에서는 SAW 예외가 "보이는 창이 있을 때만"이라 첫 서비스 시작이 거부된다(재시도로 살아남). 상태 전달마다 start를 불러 IDLE을 놓치면 서비스가 10분 남는다. 통화 대기 때 첫 상대 카드가 남는다 | C7·C8·C9: `CallCardService.kt:90-102,178-201`, `CallSession.kt:123-128` |
 | 15 | 중간 | 발신 역할이 꼭 필요한지 검증되지 않았다(READ_CALL_LOG가 있으면 OFFHOOK에도 번호가 온다). 역할 대화상자는 50대 사용자에게 낯설다 | C11: `CallCardService.kt:116` |
-| 16 | 중간 | 결과 적용 실패·자막 실패·근거 부족 버림·중복 건너뜀이 하트비트에 없다. 대기열 나이는 시도마다 갱신된다 | P10·P11·D6: `CallRecordWork.kt:102-110`, `StatusLights.kt:151` |
+| 16 | 중간 | 결과 적용 실패·자막 실패·근거 부족 버림·중복 건너뜀이 하트비트에 없다(계수 `DROPPED_ITEMS`·`DUPLICATE_SKIPPED`는 이미 센다). 대기열 나이는 시도마다 갱신된다 | P10·P11·D6: `CallRecordWork.kt:102-110`, `StatusLights.kt:151`, `CallPorts.kt:64,100` |
 | 17 | 중간 | 18sp 규칙에 구멍(16sp 글이 스스로 최소값 태그를 달아 시험 통과), 1.3배 스크린샷이 실제 1.3배인지 의심, 어두운 모드 샷 없음 | U10·U11: `CallUi.kt:269`, `CallPipelineDeviceTest.kt:213-215` |
 | 18 | 중간 | 체크 제목에 이름 중복("김민수 님께 … / 김민수 님"), 카드 첫 줄이 이름(삼성 화면과 중복)이라 3초 안에 약속을 못 읽는다 | U15·C12: `TasksScreen.kt:37-50`, `CallCardView.kt:128-157` |
 | 19 | 중간 | 메일 보낸 사람 주소가 요청에 그대로. mergeCandidates 형식이 문서와 다름. 15분마다 새 녹음 없어도 자막 작업이 깨어남 | D8·D9·P12 |
-| 20 | 낮음 | 서명 시드(`IEUM_SIGNING_SEED`)가 비어 있어 서명 키가 우편함 토큰에서 파생된다. 공개 저장소 자체에는 비밀이 없다 | D17: `build.gradle.kts:9` |
+| 20 | 낮음 | 서명 시드가 비어 있어 서명 키가 우편함 토큰에서 파생되고, 배포의 인증서 비교가 실제로는 한 번도 돌지 않았다. 공개 저장소 자체에는 비밀이 없다 | D17: `build.gradle.kts:9`, release-apk 로그 |
 
 ### 1.4 사용자가 지금 할 일 (버전과 무관, 순서대로)
 
-| 할 일 | 왜 | 확인 |
-| --- | --- | --- |
-| 아내 폰에 v3.0 APK 손 설치(우편함 `app/version.json`의 링크, 빌드 1038) | v2.4에는 무인 설치가 없다 | 다음 하트비트 `versionCode` 1038 |
-| 설치 뒤 처음 설정 카드의 새 단계 3개 허용: 전화 상태, 다른 앱 위에 표시(목록에서 "이음" 찾기), 거는 전화 역할(선택) | 통화 직후 정리와 카드 | 하트비트 `callCard.shown` > 0 |
-| 삼성 전화 앱 › 설정 › 통화 녹음 › **모든 통화 자동 녹음**이 켜져 있는지 확인 | 녹음이 없으면 아무것도 정리되지 않는다 | 다음 날 하트비트 `newQueuedCount` ≈ 그날 업무 통화 수 |
-| 예약 작업 두 개 교체: "이음 통화 분석 (매시간)" 본문을 `docs/routines/hourly.md`의 "---" 아래 전문(v6)으로, 일정 `CRON_TZ=Asia/Seoul */30 7-22 * * *`; "이음 새벽 정리 (매일)" 본문을 `tidy.md` 전문으로 | 사람·업체가 장부에 쌓이고 결과가 30분 안에 온다 | `status/last-run.json`의 `promptVersion` "6" |
-| GitHub 비밀 `IEUM_SIGNING_SEED`에 현재 토큰 값 복사(HANDOFF 6절) | 서명 키가 우편함 토큰에 묶여 있다 | release-apk 로그 "signing source" |
-| v3.3 배포 뒤 저장소 비공개 복귀 | 사용자 결정(v3.0까지 공개) | — |
+| 순서 | 할 일 | 왜 | 확인 |
+| --- | --- | --- | --- |
+| 0 | (오케스트레이터) r12-4-1의 v2.4 픽스처 → 157ffab 직행 마이그레이션 시험을 157ffab 위에서 먼저 통과시킨다. 실패하면 손 설치를 미루고 고친 뒤 배포한다 | 1033의 저장소가 1038에서 열리지 않으면 앱 전체가 조용히 멈춘다 | 시험 통과 |
+| 1 | 아내 폰에서 이음의 "새 버전 v3.0" 알림(또는 홈 배너)을 한 번 눌러 설치. 처음 한 번 "이 앱의 설치 허용"을 켠다. 삼성 "자동 차단"은 꺼 둔다(끄면 계속 꺼짐). 설치가 "서명이 다르다"로 실패하면 **지우지 말고** 알린다(지우면 저장된 통화가 사라진다) | v2.4는 알림을 눌러야 설치된다 | 다음 하트비트 `versionCode` 1038 |
+| 2 | 설치 뒤 처음 설정 카드의 새 단계 허용: 전화 상태, 다른 앱 위에 표시(목록에서 "이음"을 찾아 켬), 그리고 설정 › 애플리케이션 › 이음 › 배터리 › **제한 없음**. 거는 전화 역할은 지금 묻지 않는다(v3.3에서 검증 뒤 결정) | 통화 직후 정리와 카드, 대기 버킷 | 하트비트 `batteryFree=true`, `standbyBucket=EXEMPTED`, 통화 뒤 `callCard.noPermission=0` |
+| 3 | 내 파일 › 내장 저장공간 › Recordings › Call에 오늘 통화 수만큼 파일이 있는지 보고, 이음 설정의 "녹음 폴더"가 그 폴더인지 확인. 파일이 없으면 전화 앱 › ⋮ › 설정 › 통화 녹음 › 자동으로 통화 녹음 › **모든 통화** | 녹음이 없으면 아무것도 정리되지 않는다 | 다음 날 하트비트 `newQueuedCount` ≈ 그날 업무 통화 수, `recordingGapVerdict`(v3.1부터) |
+| 4 | 루틴은 11/5 17시에 교체됨(hourly v6, 매시 34분 07~22시; tidy v2.6판). **v3.1 배포 뒤 tidy.md 전문을, v3.2 배포 뒤 hourly.md v7 전문을 다시 붙여넣는다**(배포 보고 맨 위에 적음). 일정은 그대로 둔다(예약 작업은 1시간 미만 간격 불가) | 지시문이 바뀌면 루틴 본문도 바뀌어야 한다 | 워치독 지시문 버전 규칙(2.2) |
+| 5 | GitHub 비밀 `IEUM_SIGNING_SEED`에 현재 토큰 값 복사(HANDOFF 6절) | 서명 키가 우편함 토큰에 묶여 있다 | release-apk 로그 "signing source" |
+| 6 | v3.3 배포 뒤 저장소 비공개 복귀 | 사용자 결정(v3.0까지 공개) | — |
 
 ## 2. v3.1 「스스로 말하는 이음」
 
-**큰 변화:** 앱이 일을 못 하면 먼저 말한다. 녹음이 안 되면 "통화 녹음이 꺼져 있는 것 같아요", 업데이트가 안 되면 관리자에게 경보, 권한이 빠지면 신호등과 하트비트에. 지키지 못할 약속("정리하고 있어요")은 하지 않는다. 처음 설정은 막히지 않고, 홈 첫 화면에 체크할 일이 온다. 진행 중인 일이 처음 정리를 기다리지 않고 생긴다. 1.3절 #1~#6, #8(마이그레이션), #11, #12, #16, #19 일부를 닫는다.
+**큰 변화:** 앱이 일을 못 하면 먼저 말한다. 녹음이 안 되면 "통화 녹음이 꺼져 있는 것 같아요", 업데이트가 안 되면 관리자에게 경보, 권한이 빠지면 신호등과 하트비트에. 지키지 못할 약속은 하지 않는다. 처음 설정은 막히지 않고, 홈 첫 화면에 체크할 일이 온다. 진행 중인 일이 처음 정리를 기다리지 않고 생긴다. 통화 끝부터 결과까지의 시간을 실측한다. 1.3절 #1~#6, #8(마이그레이션·합치기 범위), #11, #12, #16, #19 일부를 닫는다.
 
-다섯 묶음을 병렬로. 모두 `feature/r12-v31`(= v3.0 157ffab) 위에서.
+**착수 순서.** r12-2가 하트비트 키·설정 상수(`PipelineSettingsKeys`, `PhoneStatus.Input`)를 **한 커밋으로 먼저** 넣고 통합 브랜치 `feature/r12-v31`(= v3.0 157ffab)에 올린다. r12-4가 `CallRecordStore`를 먼저 하고 r12-3은 r12-4 브랜치에서 시작한다. 나머지는 병렬.
 
-### 2.1 묶음 r12-1 녹음 공백과 약속 문구 (`StatusLights.kt`, `SelfCheckNotices.kt`, `CallFollowupNotice.kt`, `CallDigestWork.kt`, `screens/CallsScreen.kt`, `screens/HomeScreen.kt` 배너)
-1. **녹음 공백 판정** `RecordingGap.judge(store, now)`: 최근 24시간 받은·건 통화(길이 30초 이상, 개인 번호 제외) n건과 그 시각 ±3분에 발견된 새 녹음(대기열 포함) m건, 폴더의 가장 새 녹음 시각. n ≥ 3이고 m/n < 30%면 "공백". 결과는 설정 `RECORDING_GAP`(n, m, newestFileMs, sinceMs)과 하트비트 `recordingGap{calls,recorded,newestFileMs,sinceMs}`.
-2. 공백이면: 신호등 "녹음 가져오기" 주황 "최근 하루 통화 n건 중 녹음 m건. 삼성 전화 앱 › 설정 › 통화 녹음 › 자동 녹음을 켜 주세요", 홈 숫자 아래 한 줄 배너(누르면 설정의 그 줄로), 자가 진단 알림(21시)에 같은 문장 하루 1회. `inventoryTruncated`가 참이면 문구는 "녹음 폴더에 파일이 너무 많아요"로(원인이 다름).
-3. **통화별 알림**: 통화 종료 뒤 30분 안에 그 시각 ±3분의 발견·자막 작업이 없으면 "이 통화는 녹음이 없어 정리할 수 없어요" + [메모 남기기]로 바꾸고 `CARD_STATS`와 별도로 `followup.noRecording` 계수. "저녁 보고에 넣어 드릴게요"는 실제로 저녁 보고가 그 통화를 싣는 경우(기록이 있는 통화)에만. 아침·저녁 보고가 나가면 그날 통화별 알림은 지운다(기존).
-4. **통화 목록**: "녹음을 글자로 바꾸는 중이에요"는 자막 작업 ±2분이 맞을 때만. 맞는 작업이 없으면 통화 뒤 10분까지 "녹음을 찾는 중이에요", 그 뒤 "녹음 없음".
-5. **저녁 알림 통화 수**는 홈과 같은 `CallsScreen.callCount(records, dayLog)`. 정리된 통화가 0이면 "통화 n건, 녹음된 통화 0건"처럼 이유를 말한다.
-6. 하트비트: `followup{noRecording,late}`, `recordingGap`. 워치독 규칙 "recordingGap.recorded/calls < 0.3이 2일" → 이슈 "통화 녹음이 안 되고 있어요".
-- 시험: 통화기록 10건·녹음 0개 시드에서 주황·배너·자가 진단 1회, 녹음 없는 통화 종료 → 알림 "녹음이 없어", 저녁 제목 "통화 n건, 녹음된 통화 0건", `watchdog` 규칙 시험.
+**묶음별 파일 소유(겹치면 안 됨).** r12-1: `RecordingGap.kt`(신설), `StatusLights.kt`, `SelfCheckNotices.kt`, `CallFollowupNotice.kt`, `CallDigestWork.kt`, `AutomaticRecordingDiscovery.kt`(녹음 없음 판정 호출 한 줄) · r12-2: `PhoneStatus.kt`, `PipelineSettingsKeys`, `CallUpdate.kt`, `AndroidManifest.xml`, `tools/inbox/watchdog.py`·`test_watchdog.py`, `tools/release/`(version.json 필드) · r12-3: `CallRecordWork.kt`, `CallTranscriptionStore.kt`, `docs/routines/tidy.md` · r12-4: `CallRecordStore.kt`, `IeumApplication.kt`, `FirstPass.kt`, `ProtectedDatabase.java`, 시험 픽스처 · r12-5: `screens/HomeScreen.kt`, `screens/CallsScreen.kt`, `screens/SettingsScreen.kt`(r12-1의 `RecordingGap.banner()/lightText()`와 r12-2의 `CallUpdate.setupStep()`을 붙이는 쪽).
 
-### 2.2 묶음 r12-2 감시와 무인 설치 완성 (`tools/inbox/watchdog.py`, `PhoneStatus.kt`, `CallUpdate.kt`, `AndroidManifest.xml`, `screens/HomeScreen.kt` 처음 설정 단계, `.github/workflows/update-smoke.yml`은 제안만)
-1. 워치독 규칙 4개: (가) `app/version.json`의 versionCode > 하트비트 `versionCode`가 24시간 → "폰이 옛 버전(n)에 머물러 있어요"(옛 폰 형식에도 통함) (나) `status/last-run.json`의 `promptVersion` ≠ 저장소 `docs/routines/hourly.md` 머리의 버전 → "루틴 지시문이 옛 버전이에요" (다) v2.9 이상 폰에서 `permissions.phoneState=false` 24시간 (라) `recordingGap`(r12-1). 모든 규칙은 `test_watchdog.py`에 사례.
-2. 하트비트 `permissions{phoneState,overlay,redirectRole,installAllowed,callLog,notifications}`(참/거짓)와 `storeOpenError`(코드, r12-4), `resultApplyFailed`, `badResults`, `transcriptionFailed`, `droppedItems`, `duplicateSkipped`(r12-3이 계수, 여기서 올림).
-3. 무인 설치: 매니페스트 `android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION` 선언. `canRequestPackageInstalls()`가 거짓이면 `LAST_UPDATE_ERROR="INSTALL_SOURCE_NOT_ALLOWED"`를 남기고 처음 설정 카드에 단계 "새 버전을 저절로 설치하기"(이유: "앞으로 고친 버전을 알아서 받아요", `ACTION_MANAGE_UNKNOWN_APP_SOURCES`)가 나타난다. 설치 세션 결과 코드를 모두 `LAST_UPDATE_ERROR`로. 자가 진단 알림에 "새 버전이 하루 넘게 설치되지 않았어요" 항목.
-4. update-smoke에 "앱 자신이 설치하는 경로"(설정에서 [지금 업데이트]를 adb로 눌러 사용자 확인 없이 versionCode가 오르는지) 단계를 **오케스트레이터가** 넣는다(작업자는 보고서에 명령만).
-- 시험: `PhoneStatusTest` 키 목록, `UpdateAutoInstallTest`에 출처 미허용 사례, 워치독 4규칙.
+**v3.1 하트비트 새 키(이것뿐, r12-2가 먼저 정의).** `permissions{phoneState,overlay,redirectRole,installAllowed}`(알림·통화기록 허용은 기존 `notifyAllowed`·`callLog.allowed`), `recordingGap{calls,withFile,matched,newestFileMs,sinceMs}`와 최상위 `recordingGapVerdict`(문자열 코드), `followup{noRecording}`, `storeOpenError`(문자열), `results{applyFailed,bad,receivedNotApplied}`, `transcriptionFailed`, `droppedItems`, `duplicateSkipped`(둘은 기존 계수 `DROPPED_ITEMS`·`DUPLICATE_SKIPPED`를 올림), `latency{p50Min,p90Min,n}`. 문자열 값은 `code()`로 최상위에 두어 `counts()` 필터에 잘리지 않게 한다. FAILED 이유 코드는 `RESULT_NOT_APPLIED`.
 
-### 2.3 묶음 r12-3 새벽 정리 분리와 결과 고착 (`CallRecordWork.kt`, `CallRecordStore.kt`, `docs/routines/tidy.md`·`hourly.md` 머리(버전 7은 v3.2에서; 여기서는 조건 한 줄), `AutomaticRecordingDiscovery.kt`)
-1. **새벽 정리를 처음 정리에서 분리**: `takeTidy`는 `firstPassDone`과 무관하게 최근 14일 기록으로 state를 올린다. `tidy.md`의 "firstPassDone이 거짓이면 아무것도 하지 않는다"를 "최근 14일 범위만 정리한다"로. `firstPassDone`은 "10월부터 전체 재정리" 여부에만 쓴다.
-2. **결과 고착 해제**: 받은 표시(`result_ms`)가 있는데 24시간 넘게 ANALYZED가 아니면 받은 표시를 풀어 다시 보낸다. 같은 기록이 bad로 두 번 가면 FAILED(`RESULT_APPLY_FAILED`)로 두고 통화 상세에 "정리 결과를 적용하지 못했어요"와 [다시 정리하기]. 계수 `resultApplyFailed`, `badResults`, `receivedNotApplied`.
-3. **계수**: 근거 부족으로 버린 체크할 일(`DROPPED_ITEMS`), 중복으로 건너뛴 것(`DUPLICATE_SKIPPED`), "비슷한 말" 인용 비율을 설정에 누적(하트비트는 r12-2).
-4. 자막 대기열 진입 시각 `queued_ms` 열(처음 QUEUED 시각, claim·finish에 안 바뀜); 신호등·하트비트의 대기 나이는 이것으로. `transcriptionFailed` 계수.
-5. 발견 사이클 끝의 자막 작업 enqueue는 새 파일을 저장했을 때만(`sawNew`). 매시간 틱이 안전망.
-6. 저녁 보고 직전에 결과 체인 1회(18:45 고정, `ieum.calls.results` 즉시 실행)를 걸고 수신을 최대 3분 기다린다.
-- 시험: 처음 정리 미완료 폰에서 tidy 요청이 나감, 적용 예외 3회 → bad → 24시간 뒤 재전송 1회 → FAILED, 새 파일 없을 때 transcription 작업 0회.
+### 2.1 묶음 r12-1 녹음 공백과 약속 문구
+1. **`RecordingGap.judge(store, folder, now)`**: 대상 통화 = 최근 24시간 통화기록의 받은·건 통화, 길이 ≥ 30초, 개인·제외 번호 아님, 통화 끝이 마지막 발견 성공 시각보다 15분 이상 앞섬. n = 대상 수. 통화마다 창 = [시작 − 2분, 끝 + 5분], 파일 시각 = 파일 이름 시각(없으면 수정 시각). `withFile` = 창 안에 폴더 파일이 하나라도 있는 통화 수(대조와 무관), `matched` = 그중 기록과 이어진 수. 판정 순서: 폴더 오류 → `folder`, `inventoryTruncated` → `tooMany`, n < 3 → `ok`, withFile/n < 0.3 → `noRecording`, withFile/n < 0.7 → `partial`, matched/withFile < 0.5 → `noMatch`, 그 밖 → `ok`. 결과는 설정 `RECORDING_GAP`과 하트비트 `recordingGap`·`recordingGapVerdict`.
+2. 아내에게 말하는 것은 `noRecording`·`partial`·`folder`만, **6시간 넘게 떨어진 두 번 연속 판정부터**. 신호등 "녹음 가져오기" 주황: "최근 하루 통화 n건 중 녹음 m건. 전화 앱 › 설정 › 통화 녹음 › 자동으로 통화 녹음 › 모든 통화를 켜 주세요"(`partial`은 "일부만 녹음되고 있어요"), `folder`는 "녹음 폴더를 다시 골라 주세요", `tooMany`는 "녹음 폴더에 파일이 너무 많아요". 홈 숫자 아래 한 줄 배너(누르면 설정의 그 줄로). 자가 진단 알림(21시)은 1일째, 2일째, 그 뒤 7일마다. `noMatch`는 하트비트·워치독에만.
+3. **통화별 알림**: 판정이 `noRecording`인 동안은 통화별 알림을 띄우지 않고 홈 배너 하나로 대신한다. 통화별 "녹음 없음"은 **따로 타이머를 두지 않고** 통화 끝 뒤 시작한 발견이 성공했는데 그 통화의 창(1번과 같은 창) 안에 파일이 없을 때 발견 작업 안에서 정한다 → 알림을 "이 통화는 녹음이 없어 정리할 수 없어요" + [메모 남기기]로 바꾸고 `followup.noRecording` 계수. "저녁 보고에 넣어 드릴게요"는 기록이 있는 통화에만.
+4. **통화 목록**: "녹음을 글자로 바꾸는 중이에요"는 자막 작업과 창이 맞을 때만. 맞는 작업이 없으면 통화 뒤 10분까지 "녹음을 찾는 중이에요", 그 뒤 "녹음 없음"(문구 함수는 r12-1이 `CallsScreen.stateWords`에 두되 화면 파일은 r12-5가 붙임 — `stateWords`는 companion 함수라 r12-1 소유로 한 줄만).
+5. **저녁 알림 통화 수**는 홈과 같은 `CallsScreen.callCount(records, dayLog)`. 정리된 통화가 0이면 "통화 n건, 녹음된 통화 0건". 저녁 보고 작업이 시작하면 먼저 `ieum.calls.results` 1회를 같은 작업 안에서 동기로 실행하고(최대 3분) 그 뒤 보고를 만든다(따로 18:45 작업을 두지 않는다).
+- 시험: 통화기록 10건·녹음 0개 시드 → `noRecording`, 두 번째 판정(6시간 뒤)부터 주황·배너·자가 진단 1회; 파일은 있는데 대조 0 → `noMatch`(아내에게 말하지 않음); 녹음 없는 통화 종료 → 발견 뒤 "녹음이 없어"; 저녁 제목 "통화 n건, 녹음된 통화 0건".
 
-### 2.4 묶음 r12-4 마이그레이션 안전과 통화기록 대조 진단 (`CallRecordStore.kt`, `IeumApplication.kt`, `FirstPass.kt`, `ProtectedDatabase.java`, 시험 픽스처)
-1. **v2.4(마이그레이션 2) 형태 픽스처**(사람·번호 표기 섞임, 옛 QUEUED 행, 25MB CHECK)로 v2→v4 직행 시험. 16MB·10만 행 경계 시험.
-2. 저장소 열기 실패는 설정 `STORE_OPEN_ERROR`(예외 클래스 + 단계)와 하트비트 `storeOpenError`, 사용자 알림 1회 "저장된 통화를 열지 못했어요. 앱을 다시 설치하지 말고 알려 주세요". 복구 실패 코드는 저장소별로.
-3. **자동 합치기 범위 축소**: 마이그레이션의 사람 합치기는 "같은 번호 + 이름이 같거나 한쪽이 빔"만. 2음절 자모 1 차이·성+직책은 새벽 정리 제안으로 넘긴다. `mergeLog`에 원래 행(people, people_phones, call_links)을 JSON으로 저장.
-4. **대조 진단**: `FirstPass.match`에서 noCandidate 기록마다 가장 가까운 통화기록과의 시작 차이(±60분, 1분 구간) 분포 `missGapMin`을 `callLogMatchStats`에. 창 안에 후보가 없으면 "기록 시각 − 길이"(파일 이름이 통화 끝 시각인 경우)로 한 번 더 맞춘다.
-- 시험: 직행 마이그레이션, 끝 시각 이름 녹음 10개가 이어짐, 합치기 범위.
+### 2.2 묶음 r12-2 감시, 하트비트, 무인 설치
+1. **하트비트 키**(위 표)를 먼저 한 커밋으로. `permissions`는 실제 권한·역할·`canRequestPackageInstalls()`·`canDrawOverlays()`로.
+2. **release-apk가 `app/version.json`에 더 쓰는 것**: `promptVersion`(= `ClaudeCallAnalyzer.PROMPT_VERSION`), `tidyVersion`(tidy.md 머리의 "지시문 버전 n"), `certSha256`(새 APK 서명 인증서; 이전 APK 내려받기가 실패해도 비교할 수 있게). 워크플로 수정은 오케스트레이터가, 값을 만드는 스크립트는 r12-2가 `tools/release/version_fields.py`로.
+3. **워치독 규칙 4개**(ieum-inbox에서 돌므로 앱 저장소 파일을 읽지 않는다): (가) `app/version.json`의 versionCode > 하트비트 `versionCode`가 24시간 — 기준 시각은 `git log -1 --format=%ct -- app/version.json`(마지막 변경 커밋), 하트비트 `atMs`가 12시간 안일 때만 판정 → "폰이 옛 버전(n)에 머물러 있어요" (나) `status/last-run.json`의 `routine`별로 `promptVersion`을 version.json의 `promptVersion`/`tidyVersion`과 비교, 다른 routine 값으로는 판정하지 않음 → "루틴 지시문이 옛 버전이에요" (다) 하트비트에 `permissions` 키가 있을 때만, `phoneState=false` 24시간 → "전화 상태 권한이 빠졌어요" (라) `recordingGapVerdict`가 `noRecording`·`partial`·`folder`·`tooMany`로 2일 → 원인별 이슈; `noMatch` 2일 → "녹음은 있는데 통화기록과 이어지지 않아요". 모두 `test_watchdog.py`에 사례(옛 v2.4 형식 하트비트 포함). tidy.md 머리에 "지시문 버전 n"을 두고 자가 보고 `promptVersion`에 적게 한다(문서 수정은 r12-3과 조율: r12-2는 머리 한 줄만).
+4. **무인 설치 완성**: 누르지 않고 설치되는 조건을 코드 주석과 이 문서에 적는다 — API 31 이상, 매니페스트 `android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION`, 자기 자신을 업데이트하는 세션, `canRequestPackageInstalls()` 참, 설치할 APK의 targetSdk가 기기별 최소(안드로이드 15: 33, 16: 34) 이상(현재 36), 다른 스토어가 업데이트 소유권을 갖지 않음. 하나라도 어긋나면 `STATUS_PENDING_USER_ACTION`이 오고 기존 `notifyConfirm`으로 한 번 누른다; 그 코드도 `LAST_UPDATE_ERROR=USER_ACTION_REQUIRED`로. `canRequestPackageInstalls()`가 거짓이면 `LAST_UPDATE_ERROR=INSTALL_SOURCE_NOT_ALLOWED`와 `CallUpdate.setupStep()`(처음 설정 단계 "새 버전을 저절로 설치하기", `ACTION_MANAGE_UNKNOWN_APP_SOURCES`; 화면에 붙이는 것은 r12-5). 자가 진단 알림에 "새 버전이 하루 넘게 설치되지 않았어요"(문구는 r12-1의 SelfCheckNotices에 r12-2가 조건 함수만 제공).
+5. update-smoke: 옛 버전을 adb로 깔고 `appops set kr.callbrief REQUEST_INSTALL_PACKAGES allow`를 한 뒤 앱이 직접 설치하는 경로(설정 [지금 업데이트]를 adb로 누름)에서 사용자 확인 없이 versionCode가 오르는지 — 워크플로 수정은 오케스트레이터, 명령은 r12-2 보고서에.
+- 시험: `PhoneStatusTest` 키 목록, `UpdateAutoInstallTest`에 출처 미허용·PENDING 사례, 워치독 4규칙.
 
-### 2.5 묶음 r12-5 처음 설정과 홈 (`screens/HomeScreen.kt`, `screens/SettingsScreen.kt`)
-1. 처음 설정: 단계는 "필수(폴더, 정리 동의, 통화기록, 전화 상태, 알림)"와 "선택(문자, 카드 보기, 거는 전화, 배터리, 자동 설치)"로 나눈다. 선택 단계에는 [나중에 할게요] 글자 링크(설정에 남음). 기다리는 단계(모델 받기)는 다음 단계를 막지 않는 진행 줄. 모델은 정리 동의 직후 Wi-Fi에서 저절로 받기 시작. 이유 문장은 BODY 19 INK로 버튼 바로 위, 폴더·모델 단계에도 이유. "n/10" 대신 "다음 할 일, 남은 n단계". 다른 앱 위에 표시는 돌아왔는데 허용이 안 됐으면 "목록에서 '이음'을 찾아 스위치를 켜 주세요"를 굵게 + [다시 열기].
-2. 홈: 처음 설정과 처음 정리는 숫자 아래 **한 줄 배너**("처음 설정 4단계 남음 ›", "지난 통화 정리 중, 녹음 59개 남음 ›")로 접고 누르면 펼침. 393×852dp에서 처음 정리 중이어도 "먼저 볼 체크할 일" 첫 행이 첫 화면 안.
-3. 설정: 신호등 알림 판정 `NotifyAsk.allowed`, [모델 받기]에 `ModelWish`와 퍼센트, 주황 불이 하나라도 있으면 "지금 상태" 묶음을 맨 위로. 업체 검색어 유지. 통화 상세 체크할 일에 [다 됐어요](`CheckRows.row(onDone)`), 전체 보기 토글 "접기".
-4. 아침 알림: [다 됐어요] 줄 앞에 "지금 할 일:" 말머리, 진행 중인 일은 체크할 일 아래.
-- 시험: 문자를 거절해도 다음 단계가 열림, 모바일 데이터에서 9·10단계 진행, 배너 상태에서 체크 첫 행 y < 화면 높이(Robolectric), 설정 신호등 알림 스위치 반영.
+### 2.3 묶음 r12-3 새벽 정리 분리, 결과 고착, 지연 실측
+1. **새벽 정리 분리**: `tidy.md` 1번의 "firstPassDone이 거짓이면 중단"을 지운다. firstPassDone이 거짓인 동안은 3번(10월부터 전체) 대신 최근 14일 records만 읽고, 7번 끝의 `tidiedOnce`는 쓰지 않는다. 폰 `tidyState(all=…)`은 `FirstPass.done(s) && !TIDIED_ONCE`일 때만 참이고, 그 밖에는 최근 14일만 보낸다. `takeTidy`는 `firstPassDone`과 무관하게 돈다. 처음 정리가 끝난 뒤의 전체 재정리(기존 흐름)는 그대로 한 번 일어난다.
+2. **결과 고착 해제**: 받은 표시(`result_ms`)가 있는데 24시간 넘게 ANALYZED가 아니면 받은 표시를 풀어 다시 보낸다(`results.receivedNotApplied` 계수). 같은 기록이 bad로 두 번 가면 FAILED(`RESULT_NOT_APPLIED`)로 두고 통화 상세에 "정리 결과를 적용하지 못했어요"와 [다시 정리하기](화면 문구는 r12-5). `results.applyFailed`, `results.bad` 계수.
+3. **지연 실측**: 기록마다 통화 끝(`startedMs+durationMs`) → 결과 적용(`analyzed_ms`)의 분 단위 차이를 최근 7일치로 모아 하트비트 `latency{p50Min,p90Min,n}`(설정에 중앙값·90분위 캐시). 루틴 자가 보고(`last-run.json`)에 `cron`과 처리 소요(`endedMs-startedMs`)가 이미 있으면 그대로, 없으면 hourly.md 자가 보고 절에 한 줄(r12-2의 머리 한 줄과 충돌하지 않게 절 끝에).
+4. 자막 대기열 진입 시각 `queued_ms` 열(`CallTranscriptionStore.kt`, ALTER 추가; claim·finish에 안 바뀜); 신호등·하트비트의 대기 나이는 이것으로(StatusLights 쪽 한 줄은 r12-1과 조율해 r12-3이 `CallTranscriptionStore.oldestQueuedMs()`를 제공하고 r12-1이 쓴다). `transcriptionFailed` 계수.
+5. 발견 사이클 끝의 자막 작업 enqueue는 새 파일을 저장했을 때만(`sawNew`, `AutomaticRecordingDiscovery.kt`의 그 한 줄은 r12-1 소유 파일이므로 r12-3이 보고서에 적고 통합 때 오케스트레이터가 넣는다). 매시간 틱이 안전망.
+- 시험: 처음 정리 미완료 폰에서 tidy 요청(최근 14일)이 나감, 적용 예외 3회 → bad → 24시간 뒤 재전송 1회 → FAILED, `latency` 계산.
 
-### 2.6 확인 기준
-- 단위: 각 묶음의 시험 + 전체 `:app:testDebugUnitTest`. `check_ui_rules` 0. 워치독 `test_watchdog.py` 4규칙.
-- update-smoke(앱 자신 설치) 통과. device-test는 기다리지 않음.
-- 배포 뒤 하트비트: `permissions` 여섯 값, `recordingGap`, `storeOpenError=null`, `versionCode` 1039+.
+### 2.4 묶음 r12-4 마이그레이션 안전과 통화기록 대조 진단
+1. **v2.4(마이그레이션 2) 형태 픽스처**(사람·번호 표기 섞임, 옛 QUEUED 행, 25MB CHECK)로 v2→v4 직행 시험 1개(경계 시험은 16MB 하나만). **이 시험은 1.4절 0번(손 설치 전)에서 157ffab 위에서도 먼저 돌린다.**
+2. 저장소 열기 실패는 설정 `STORE_OPEN_ERROR`(예외 클래스 + 단계)와 하트비트 `storeOpenError`, 사용자 알림 1회 "저장된 통화를 열지 못했어요. 앱을 지우지 말고 알려 주세요". 복구 실패 코드는 저장소별로(`ProtectedDatabase`의 카드 파일 코드와 분리).
+3. **자동 합치기 범위 축소**: 마이그레이션의 사람 합치기는 "같은 번호 + 이름이 같거나 한쪽이 빔"만. 2음절 자모 1 차이·성+직책은 새벽 정리 제안으로. `mergeLog`에 원래 행(people, people_phones, call_links)을 JSON으로 저장(되돌리기 화면은 v3.2).
+4. **대조 진단**: `FirstPass.match`에서 noCandidate 기록마다 가장 가까운 통화기록과의 시작 차이(±60분, 10분 구간) 분포 `missGapMin`을 `callLogMatchStats`에. 끝 시각 후보("기록 시각 − 길이")는 **원래 창 안에 후보가 0일 때만**, 길이 일치(20% 또는 15초)에 더해 파일 이름의 번호 또는 이름이 일치할 때만 잇고, 번호·이름이 모두 없는 녹음에는 쓰지 않는다.
+- 시험: 직행 마이그레이션, 끝 시각 이름 녹음(번호 있음) 10개가 이어지고 번호 없는 것은 안 이어짐, 합치기 범위.
+
+### 2.5 묶음 r12-5 처음 설정과 홈
+1. 처음 설정: **필수**(폴더, 정리 동의, 통화기록, 전화 상태, 알림, 배터리 제한 없음)와 **선택**(문자, 카드 보기(다른 앱 위에 표시), 자동 설치)으로 나눈다. 거는 전화 역할은 처음 설정에서 빼고 설정의 선택 항목으로만(v3.3 r14-2 검증 결과에 따라 남길지 정함). 선택 단계에는 [나중에 할게요] 글자 링크(설정에 남음). 기다리는 단계(모델 받기)는 다음 단계를 막지 않는 진행 줄. 모델은 정리 동의 직후 Wi-Fi에서 저절로 받기 시작. 이유 문장은 BODY 19 INK로 버튼 바로 위, 폴더·모델 단계에도 이유. "n/10" 대신 "다음 할 일, 남은 n단계". 다른 앱 위에 표시는 돌아왔는데 허용이 안 됐으면 "목록에서 '이음'을 찾아 스위치를 켜 주세요"를 굵게 + [다시 열기].
+2. 홈: 처음 설정과 처음 정리는 숫자 아래 **한 줄 배너**("처음 설정 4단계 남음 ›", "지난 통화 정리 중, 녹음 59개 남음 ›")로 접고 누르면 펼침. 393×852dp에서 처음 정리 중이어도 "먼저 볼 체크할 일" 첫 행이 첫 화면 안. r12-1의 녹음 공백 배너와 r12-2의 자동 설치 단계를 붙인다.
+3. 통화 목록·상세: r12-1의 `stateWords`를 쓰고, FAILED(`RESULT_NOT_APPLIED`)에 "정리 결과를 적용하지 못했어요" + [다시 정리하기].
+- 시험: 문자를 거절해도 다음 단계가 열림, 모바일 데이터에서 알림·배터리 단계로 진행, 배너 상태에서 체크 첫 행 y < 화면 높이(Robolectric).
+- (v3.2로 미룸: 설정 신호등 알림 판정 `NotifyAsk.allowed`, 설정 [모델 받기] 퍼센트, 업체 검색어 유지, 통화 상세 [다 됐어요]·접기 토글, 아침 알림 "지금 할 일:" 말머리.)
+
+### 2.6 오케스트레이터가 할 것
+- r12-2의 키 커밋을 먼저 받아 통합 브랜치에 올리고 나머지를 띄운다. 통합 때 r12-3-5의 `sawNew` 한 줄, release-apk의 version.json 필드 셋, update-smoke 단계를 넣는다. 워치독을 ieum-inbox `tools/watchdog.py`에 복사한다.
+- 배포 보고 맨 위: "tidy.md 전문을 예약 작업 '이음 새벽 정리'에 다시 붙여넣기", "v3.0 → v3.1은 알림을 한 번 눌러 설치(그다음부터 무인)".
+
+### 2.7 확인 기준
+- 단위: 각 묶음의 시험 + 전체 `:app:testDebugUnitTest`. `check_ui_rules` 0. 워치독 `test_watchdog.py` 4규칙. update-smoke(앱 자신 설치) 통과. device-test는 기다리지 않음.
+- **배포 뒤 48시간**: `versionCode` 1039 이상(알림 한 번 눌러 설치), `permissions` 네 값 참, `recordingGapVerdict`가 `ok` 또는 원인 코드가 워치독 이슈로, `latency.p50Min` ≤ 60, 장부 진행 중인 일 ≥ 1.
 
 UPDATE_NOTE: `v3.1: 녹음이 안 되거나 새 버전이 안 깔리면 앱이 먼저 알려 줘요. 처음 설정은 건너뛸 수 있고, 홈 첫 화면에 체크할 일이 바로 보여요`
 
 ## 3. v3.2 「믿을 수 있는 숫자」
 
-**큰 변화:** 잘못 들렸을 수 있는 숫자·날짜·규격은 체크할 일·아침 보고·카드에서 "확인 필요"로 보인다. 체크 제목에서 이름이 빠져 짧아진다. 사람 합치기는 되돌릴 수 있다. 자막 정확도를 실제 모델로 재고, 장부의 이름·용어를 자막기에 미리 준다. 1.3절 #7, #8(합치기), #17, #18, #19를 닫는다.
+**큰 변화:** 잘못 들렸을 수 있는 숫자·날짜는 체크할 일·아침 보고·카드에서 "확인 필요"로 보인다. 체크 제목에서 이름이 빠져 짧아진다. 사람 합치기는 되돌릴 수 있다. 자막 정확도를 실제 모델로 재고, 장부의 이름·용어를 자막기에 미리 준다. 정리된 통화가 없는 상대에게도 통화기록으로 만든 작은 카드가 보이고, 잠긴 폰의 알림에도 이름과 한 줄이 보인다. 1.3절 #7, #8(되돌리기), #17, #18, #19, #10(noCard), #9(공개 알림 내용)를 닫는다.
 
-세 묶음 병렬, `feature/r13-v32`(= v3.1 완성본).
+통합 브랜치 `feature/r13-v32`(= v3.1 완성본). **순서**: r13-1이 `CallRecordStore`·`TasksScreen`을 먼저 하고 r13-3은 r13-1 브랜치에서 시작; r13-2는 병렬. **파일 소유**: r13-1: `ClaudeCallAnalyzer.kt`, `CallRecordStore.kt`, `screens/TasksScreen.kt`(CheckRows), `CallDigestWork.kt`, `ContactCards.kt`, `pipeline/call/CallCardView.kt`·`CallCardOverlay.kt`(publicVersion 내용) · r13-2: `AndroidWhisperEngine.kt`, `CallTranscriptionRunner.kt`, 골든 도구, `docs/routines/hourly.md`(v7), `MessageWork.kt` · r13-3: `screens/SettingsScreen.kt`, `screens/CallsScreen.kt`, `screens/CompaniesScreen.kt`, `CallUi.kt`, `CallUiSeniorTest`, `tools/check_ui_rules.py`, 기기 시험 하네스.
 
-### 3.1 묶음 r13-1 숫자 가드와 확실성 표시 (`ClaudeCallAnalyzer.kt` filter, `CallRecordStore.kt`, `screens/TasksScreen.kt` CheckRows, `CallDigestWork.kt`, `ContactCards.kt`, `pipeline/call/CallCardView.kt`)
-1. `filter`: 제목·기한·요약의 숫자 토큰(아라비아 숫자, 층·회·톤·미터·mm·A·D13류 규격, 날짜)이 인용(quote)이나 자막 원문에 같은 꼴로 없으면 항목을 `tentative=true`로 바꾸고 `tentativeWhy="number"`. 기한이 통화일보다 앞이거나 60일 넘게 뒤면 null.
-2. 화면: 체크 행·통화 상세·아침 알림·사람 화면·카드의 체크할 일에 "확인 필요" 배지(앰버, 15sp). 카드 "지난 통화" 40자 자르기는 띄어쓰기 경계에서, 요약의 "(숫자 확인 필요)"는 카드에서 "확인 필요" 배지로 치환.
-3. 중복 판정: 숫자만 다른 제목(같은 업체, 7일 안)은 새 일로 만들지 않고 기존 일에 `tentative` 표시와 "숫자가 다르게 들렸어요: 3층 / 13층" 메모.
-- 시험: "D13"→"D30" 제목에 배지, 과거 기한 null, 숫자만 다른 제목 병합.
+### 3.1 묶음 r13-1 숫자 가드, 확실성 표시, thin 카드
+1. **숫자 가드**(`ClaudeCallAnalyzer.filter`): (1) 대상은 체크할 일·약속의 `title`과 `due`만(요약 제외). (2) 정규화: 한글 수사(일~구, 십·백·천·만, 하나~열, 한·두·세·네)를 아라비아 숫자로, 쉼표·공백·하이픈 제거, 단위·문자 동의어 통일(미리=mm, 키로=kg, 디=D, 에이치=H, 프로=%). (3) title의 숫자 토큰(값+붙은 단위)이 정규화한 quote에 있거나, quote가 맞은 자막 구간 앞뒤 30초 안에 있으면 통과, 아니면 `tentative`(`number`). 자막 전체는 찾지 않는다. (4) due는 quote 또는 그 30초 구간에 날짜 표현(요일, 내일·모레·글피, 이번·다음 주, n일, n월)이 없으면 `tentative`(`date`); 통화일보다 앞이면 null, 60일 넘게 뒤면 `tentative`. (5) 네이티브 자막 출력에 토큰 확률(`whisper_full_get_token_p`, r13-2가 제공)을 실어 숫자 토큰의 최소 확률이 0.5 미만이면 `tentative`(`asr`). (6) 인용 3-gram 일치율이 0.7~0.9인 일은 버리지 않고 `tentative`(`quote`)로 남긴다.
+2. **"확인 필요" 배지**: 체크 행·통화 상세·아침 알림·사람 화면·카드의 체크할 일에 18sp 굵게, 앰버 배경에 진한 글자(대비 4.5:1 이상), 색만으로 뜻을 전하지 않는다(글자 "확인 필요"). 카드 "지난 통화" 40자 자르기는 띄어쓰기 경계에서, 요약의 "(숫자 확인 필요)"는 카드에서 배지로.
+3. **숫자가 다른 제목은 합치지 않는다.** 같은 업체, 7일 안이고 두 숫자가 혼동 쌍(13/30, 14/40, 15/50, 16/60, 17/70, 18/80, 19/90)일 때만 나중 일에 `tentative`와 "앞의 일과 숫자가 달라요(13층/30층)" 메모.
+4. 체크 제목에서 META 이름과 같은 "○○ 님께/에게" 접두를 화면에서 지운다(v7 적용 전 과도기).
+5. **thin 카드**: 상대 카드가 없어도 통화기록에 있는 번호면 "지난 통화 n일 전, 30일간 n번, 정리된 통화 없음"(ContactCards `thin`, 통화기록에서 계산, 개인 번호 제외). "전화부에 없는 번호예요"는 "아직 정리된 통화가 없는 번호예요"로, 스위치 이름도 맞춘다. 잠금 폴백 알림의 publicVersion: 설정 "잠금 화면에서도 이름과 한 줄 보기"(기본 켬)이면 이름·업체·체크 1줄(번호·금액·자막 없음), 꺼져 있으면 지금처럼.
+- 시험: "삼 층"(자막)과 "3층"(제목)은 배지 없음, 자막 다른 곳에만 "30"이 있으면 배지, 과거 기한 null, 혼동 쌍 메모, thin 카드, publicVersion 내용.
 
-### 3.2 묶음 r13-2 자막 정확도와 이름 힌트 (`AndroidWhisperEngine.kt`, `CallTranscriptionRunner.kt`, `CallRecordStore.kt` 이름 목록, 골든 셋 도구, `docs/routines/hourly.md` v7)
-1. 골든 셋을 실제 폰 모델(`ggml-large-v3-turbo-q5_0`)로 측정하는 수동 device-test(`golden=turbo`, 90분)를 1회 돌려 기준선을 다시 적는다(업체명·규격·숫자 적중률).
-2. Whisper 초기 프롬프트에 장부의 업체 이름·사람 이름·공종 용어(최대 200자, 최근 30일 상대 우선)를 넣는 A/B(골든 `prompt` 변형). 이상 세그먼트는 설계 A8대로 보정하고 버린 수를 계수.
+### 3.2 묶음 r13-2 자막 정확도, 이름 힌트, 지시문 v7
+1. 골든 셋을 실제 폰 모델(`ggml-large-v3-turbo-q5_0`)로 측정하는 수동 device-test(`golden=turbo`, 90분)를 1회 돌려 기준선을 `docs/reviews/golden_turbo_<날짜>.md`에 적는다(업체명·규격·숫자 적중률).
+2. Whisper 초기 프롬프트에 장부의 업체 이름·사람 이름·공종 용어(최대 200자, 최근 30일 상대 우선)를 넣는 A/B(골든 `prompt` 변형). 네이티브 출력에 토큰 확률을 싣는다(r13-1이 씀). 이상 세그먼트는 설계 A8대로 보정하고 버린 수를 계수.
 3. [이름 목록]은 전화부 이름(CACHED_NAME)과 최근 30일 상대를 먼저, 그다음 updated_ms 순. 사람 이름·카드 이름에 `noNumber`.
-4. 지시문 **v7**: 규칙 10을 "제목에 사람 이름을 넣지 않는다(META가 보여 줌)"로, mergeCandidates 형식을 폰이 보내는 `[item id, 기록 key]`로, 메일 "보낸 사람"은 이름만(주소는 상대 id로), 숫자 확실성 규칙(들린 대로 적되 확신이 없으면 `tentative`). `PROMPT_VERSION=7`, `RoutineDocTest`. 루틴 교체 전문은 사용자에게.
+4. 지시문 **v7**: 규칙 10을 "제목에 사람 이름을 넣지 않는다(META가 보여 줌)"로, mergeCandidates 형식을 폰이 보내는 `[item id, 기록 key]`로, 메일 "보낸 사람"은 이름만(주소는 상대 id로, `MessageWork.kt:179`), 숫자 확실성 규칙(들린 대로 적되 확신이 없으면 `tentative`). `PROMPT_VERSION=7`, `RoutineDocTest`. 루틴 교체 전문은 배포 보고 맨 위에.
 - 시험: 요청 본문에 '@' 없음, 이름 목록 순서, 초기 프롬프트 200자 한도.
 
-### 3.3 묶음 r13-3 합치기 되돌리기와 화면 규칙 (`CallRecordStore.kt`, `screens/SettingsScreen.kt`, `screens/TasksScreen.kt`, `CallUi.kt`, `CallUiSeniorTest`, `tools/check_ui_rules.py`, 기기 시험 하네스)
+### 3.3 묶음 r13-3 되돌리기, 화면 규칙, 다듬기
 1. 설정 "상태와 도움"에 [합친 사람 되돌리기](mergeLog의 원래 행 복원, 연결 수가 같아짐). 합치기는 ledger edit `{"type":"mergePeople",...}`로 올려 저장소 장부와 맞춘다.
-2. 체크 제목에서 META 이름과 같은 "○○ 님께/에게" 접두를 화면에서 지운다(v7 적용 전 과도기).
-3. 18sp 강제: `CallUi.meta()`(16sp, META 목록 전용)를 두고 `caption()`의 자동 최소값 태그를 없앤다. `check_ui_rules.py`에 `caption(` 신규 사용 경고. 처음 설정 이유·카드 회사 줄·마지막 통화 줄은 18sp 이상.
-4. 기기 시험 하네스: 1.3배 샷은 Activity를 다시 만들고 `Configuration.fontScale==1.3`을 확인한 뒤 찍는다. 어두운 모드 홈 샷 추가. 카드는 Robolectric 샷 4종(밝게/어둡게 × 1.0/1.3)을 evidence에.
-5. 용량 정책: 30일 넘은 미분석 자막은 비우고(기록은 유지) dbPercent 70%에서 자가 진단 알림. 장부 rev가 올라도 바뀐 사람·업체의 번호 카드만 재계산.
+2. 18sp 강제: `CallUi.meta()`(16sp, META 목록 전용)를 두고 `caption()`의 자동 최소값 태그를 없앤다. `check_ui_rules.py`에 `caption(` 신규 사용 경고. 처음 설정 이유·카드 회사 줄·마지막 통화 줄은 18sp 이상.
+3. 기기 시험 하네스: 1.3배 샷은 Activity를 다시 만들고 `Configuration.fontScale==1.3`을 확인한 뒤 찍는다. 어두운 모드 홈 샷 추가. 카드는 Robolectric 샷 4종(밝게/어둡게 × 1.0/1.3)을 evidence에.
+4. v3.1에서 미룬 다듬기: 설정 신호등 알림 판정 `NotifyAsk.allowed`, 설정 [모델 받기]에 `ModelWish`와 퍼센트, 업체 검색어 유지, 통화 상세 체크할 일에 [다 됐어요]·전체 보기 토글 "접기", 아침 알림 [다 됐어요] 줄 앞 "지금 할 일:" 말머리(진행 중인 일은 아래로), 주황 불이 있으면 "지금 상태" 묶음을 설정 맨 위로.
 - 시험: 합치고 되돌린 뒤 연결 수 동일, 16sp 캡션이 시험 실패, 1.3배 샷 제목 폭 ≥ 1.2배.
 
 ### 3.4 확인 기준
-- 단위 전체 + `RoutineDocTest`(v7). 골든 셋 turbo 1회 수동 실행 결과를 `docs/reviews/golden_turbo_<날짜>.md`에.
-- 배포 뒤: 아침 알림에 "확인 필요" 배지가 실제 결과에서 보이는지, 하트비트 `droppedItems` 비율.
+- 단위 전체 + `RoutineDocTest`(v7). 골든 셋 turbo 1회 수동 실행 결과 문서.
+- 배포 뒤: 아침 알림에 "확인 필요" 배지가 실제 결과에서 보이는지, 하트비트 `droppedItems` 비율, `callCard.noCard` 비율이 떨어지는지.
 
 UPDATE_NOTE: `v3.2: 잘못 들렸을 수 있는 숫자와 날짜는 확인 필요로 표시돼요. 체크할 일 제목이 짧아지고, 합쳐진 사람을 되돌릴 수 있어요`
 
 ## 4. v3.3 「어디서나 보이는 카드」
 
-**큰 변화:** 잠긴 폰에 전화가 와도 카드가 보이고, 앱이 꺼져 있어도 1초 안에 뜨며, 받기·통화 중 버튼을 가리지 않는다. 정리된 통화가 없는 상대에게도 통화기록으로 만든 최소 카드가 보인다. 통화 대기·발신·서비스 잔류 같은 가장자리가 정리되고, 통계가 사실을 센다. 1.3절 #9, #10, #13, #14, #15를 닫는다. **S25 실측(1.4절 설치 뒤 사용자 보고와 하트비트 `callCard`)을 받아 시작한다.**
+**큰 변화:** 잠긴 폰에 전화가 와도 카드가 뜨고(안 보이면 내용 있는 알림), 앱이 꺼져 있어도 1초 안에 뜨며, 받기·통화 중 버튼을 가리지 않는다. 통화 대기·발신·서비스 잔류 같은 가장자리가 정리되고, 통계가 사실을 센다. 1.3절 #9, #10(콜드), #13, #14, #15를 닫는다. **S25 실측(1.4절 설치 뒤 사용자 보고와 하트비트 `callCard`)을 받아 시작한다.**
 
-세 묶음, `feature/r14-v33`(= v3.2 완성본). r14-1·r14-2 병렬 뒤 r14-3.
+통합 브랜치 `feature/r14-v33`(= v3.2 완성본). **순서**: r14-2(`CallSession`·`CallCardService`)를 먼저, r14-1은 r14-2 브랜치에서 시작, r14-3은 둘이 합쳐진 뒤. **파일 소유**: r14-2: `pipeline/call/CallSession.kt`, `CallStateReceiver.kt`, `CallCardService.kt`, `OutgoingCallService.kt`, `StatusLights.kt` · r14-1: `CallCardOverlay.kt`, `CallCardView.kt`, `CardStats.kt`, `ContactCards.kt`(개인 번호 캐시 쪽은 `LocalPrivacy`/설정) · r14-3: `tools/device/call_card_test.sh`, `docs/REAL_DEVICE_CHECKLIST.md`, `docs/DESIGN_V3.md` 문장 수정, 워크플로는 오케스트레이터.
 
-### 4.1 묶음 r14-1 잠금·콜드·위치 (`pipeline/call/CallCardOverlay.kt`, `CallCardView.kt`, `CallSession.kt`, `LocalPrivacy`/설정)
-1. **잠금 화면**: `isKeyguardLocked`여도 오버레이를 먼저 `addView`하고, `onWindowVisibilityChanged`/`isShown`으로 실제 보이는지 판단해 안 보일 때만 알림으로 폴백. 폴백 알림의 공개 버전(publicVersion)에 설정 "잠금 화면에서도 이름과 한 줄 보기"(기본 켬)에 따라 이름·업체·체크할 일 1줄(번호·자막 없음). 서비스 알림과 카드 알림은 하나로(같은 id).
-2. **콜드 경로**: 개인 번호·제외 번호 키 집합을 설정(작은 파일)에 두고 벨 울림 판정은 그것만 읽는다. 큰 DB는 통화 뒤에. `CardStats`에 `ringToCardMs`(중앙값·최대), `cold`, `locked`, `fgsRefused`를 세고 하트비트 `callCard`에 올린다. `noPermission`은 `canDrawOverlays=false`일 때만. 워치독 경보도 그때만.
+### 4.1 묶음 r14-1 잠금·콜드·위치·카드 글
+1. **잠금 화면**: 잠금 상태에서 벨이 울리면 오버레이 `addView`와 내용 있는 알림(3.1-5의 publicVersion)을 **함께** 띄우고, `ACTION_USER_PRESENT`에서 알림을 지운다. 창이 보이는지 판정에 기대지 않는다(정책으로 가려져도 View에는 알림이 오지 않음). 서비스 알림과 카드 알림은 같은 id 하나. 잠금 위 표시 여부는 S25 체크리스트로만 확인한다.
+2. **콜드 경로**: 개인 번호·제외 번호 키 집합을 설정(작은 파일)에 두고 벨 울림 판정은 그것만 읽는다. 큰 DB는 통화 뒤에. `CardStats`에 `ringToCardMs`(중앙값·최대), `cold`, `locked`, `fgsRefused`를 세고 하트비트 `callCard`에. `noPermission`은 `canDrawOverlays=false`일 때만. 워치독 권한 경보도 그때만.
 3. **위치**: 수신 중 높이 한도 34%, 아래 끝 ≤ 72%(1.3배 포함). OFFHOOK에서 펼친 카드는 화면 위쪽(상대 이름 아래)에 높이 25% 이하. 거는 전화도 3초 뒤 띠. 요약·할 일이 없으면 OFFHOOK에서 띠 대신 숨김.
 4. **카드 글(3초용)**: 첫 줄은 약속이나 할 일 한 줄("지난번: 견적서 금요일까지", 20sp 굵게), 둘째 줄 이름·직책·업체(회색), 셋째 "마지막 통화 어제 오후 3시, 2분", 체크할 일 1줄 + "외 n개", 진행 중인 일 1줄. 줄 수 5 이하.
-5. **최소 카드**: 상대 카드가 없어도 통화기록에 있는 번호면 "지난 통화 n일 전, 30일간 n번, 정리된 통화 없음"을 보인다(ContactCards에 `thin` 카드, 통화기록에서 계산). "전화부에 없는 번호예요"는 "아직 정리된 통화가 없는 번호예요"로, 스위치 이름도 맞춘다.
-- 시험: Robolectric에서 잠금 상태 addView 시도 → 보이지 않음 → 알림 publicVersion 내용, 1.3배 꽉 찬 카드 아래 끝 ≤ 72%, 줄 수 ≤ 5, thin 카드.
+- 시험: Robolectric에서 1.3배 꽉 찬 카드 아래 끝 ≤ 72%, 줄 수 ≤ 5, 통계 분리(locked는 noPermission이 아님), 콜드 판정이 큰 DB를 열지 않음(open 카운터).
 
-### 4.2 묶음 r14-2 서비스·역할·통화 대기 (`pipeline/call/CallCardService.kt`, `CallSession.kt`, `CallStateReceiver.kt`, `OutgoingCallService.kt`, `StatusLights.kt`, 처음 설정 단계)
-1. 상태 전달은 이미 도는 서비스에 프로세스 안 정적 참조(또는 Handler)로; `startForegroundService`는 첫 시작에만. 시작을 거부당한 뒤 IDLE이 오면 오버레이 `hide`와 서비스 `stop`이 반드시 이어진다. 통화 대기(OFFHOOK 중 RINGING)면 카드를 숨기고 다음 IDLE까지 없음. 안드로이드 15+ 조건(보이는 창이 있을 때만 백그라운드 FGS 허용)을 설계 7.2·8절 문장에 반영.
-2. **발신 역할 검증**: 에뮬레이터와 S25에서 역할 없이 `am start CALL` → OFFHOOK 브로드캐스트에 번호가 오는지 확인. 오면 카드 판정의 role 조건을 지우고 처음 설정에서 "거는 전화에도 카드 보기" 단계를 뺀다(역할 요청은 설정의 선택 항목으로만). 안 오면 유지하되 시간 초과 대화상자를 실측(앱 강제 종료 뒤 걸기)하고 `onPlaceCall→응답 ms`를 하트비트에.
-3. 신호등 "통화 카드": READ_CALL_LOG 권한, 대기 버킷(EXEMPTED 아니면 주황), 최근 7일 `noNumber`·`noCard` 비율을 반영. 오버레이 권한이 없으면 서비스를 시작하지 않는다(설계 8절대로).
+### 4.2 묶음 r14-2 서비스 순서, 역할, 통화 대기, 신호등
+1. **안드로이드 15 FGS 순서**: 벨이 울리면 ① 오버레이 창을 먼저 붙이고 ② 창이 붙은 뒤 `startForegroundService`를 부른다. 시작이 거부되면 receiver `goAsync()` 안에서 알림만 띄우고, IDLE에 오버레이와 알림을 직접 지운다. `fgsRefused`를 센다. 상태 전달은 이미 도는 서비스에 프로세스 안 정적 참조로; start는 첫 시작에만. 시작을 거부당한 뒤 IDLE이 와도 `hide`·`stop`이 반드시 이어진다.
+2. 통화 대기(OFFHOOK 중 RINGING)면 카드를 숨기고 다음 IDLE까지 없음.
+3. **발신 역할 검증**: 에뮬레이터와 S25에서 역할 없이 걸었을 때 OFFHOOK 브로드캐스트에 번호가 오는지 확인(`am start -a CALL`, 역할 제거 상태). 오면 카드 판정의 role 조건을 지우고 역할은 설정의 선택 항목으로만 남긴다. 안 오면 유지하되 시간 초과 대화상자를 실측(최근 앱에서 밀어 닫은 뒤 걸기).
+4. 신호등 "통화 카드": READ_CALL_LOG 권한, 대기 버킷(EXEMPTED 아니면 주황), 최근 7일 `noNumber`·`noCard` 비율. 오버레이 권한이 없으면 서비스를 시작하지 않는다(설계 8절대로).
 - 시험: Robolectric에서 start 거부 + IDLE → hide·stop, 통화 대기 시나리오, 역할 없이 OFFHOOK 번호(에뮬레이터 call-card 시나리오에 추가).
 
-### 4.3 묶음 r14-3 실기기 체크리스트와 시험 (`tools/device/call_card_test.sh`, `docs/REAL_DEVICE_CHECKLIST.md`, device-test 워크플로는 오케스트레이터)
-1. 에뮬레이터 시나리오 추가: `am force-stop` 뒤 벨(콜드), 잠금(`input keyevent 26` 뒤 벨 → 알림 publicVersion), 통화 대기, 역할 없이 발신. 기준 "벨 → 창" 3초 유지(에뮬레이터), 하트비트 `ringToCardMs`로 실기기 1초 확인.
-2. S25 체크리스트(사용자가 10분, 앱이 결과를 하트비트로 올림): 잠긴 채 받기, 다른 앱 쓰는 중 벨(팝업 모드), 앱 강제 종료 뒤 벨과 걸기, 받기·거절 터치가 되는지, 통화 중 스피커·키패드 누르기, 1.3배 글자. 결과는 `callCard` 통계와 사용자 보고로.
-3. 설계 문장 바로잡기: DESIGN_V3 7.2·8절의 "SAW가 있으면 백그라운드 FGS 허용"(안드로이드 15 조건), "번호 2초 대기", "시간 초과면 그냥 연결", "SAW 없으면 서비스 안 시작"을 구현·실측에 맞춘다.
+### 4.3 묶음 r14-3 실기기 체크리스트와 시험
+1. 에뮬레이터 시나리오 추가: 홈으로 보낸 뒤 `am kill kr.callbrief`로 만든 콜드(**`am force-stop`은 쓰지 않는다** — 중지된 앱은 사용자가 열 때까지 PHONE_STATE를 받지 못하는 것이 정상), 잠금(`input keyevent 26` 뒤 벨 → 알림 publicVersion 내용), 통화 대기, 역할 없이 발신. 기준 "벨 → 창" 3초 유지(에뮬레이터), 하트비트 `ringToCardMs`로 실기기 1초 확인.
+2. S25 체크리스트(`docs/REAL_DEVICE_CHECKLIST.md`, 사용자가 10분, 앱이 결과를 하트비트로 올림): 잠긴 채 받기, 다른 앱 쓰는 중 벨(팝업 모드), 최근 앱에서 밀어 닫은 뒤 벨과 걸기(설정 › 강제 중지 뒤에는 카드가 안 뜨는 것이 정상임을 적는다), 받기·거절 터치가 되는지, 통화 중 스피커·키패드 누르기, 1.3배 글자. 결과는 `callCard` 통계와 사용자 보고로.
+3. 설계 문장 바로잡기: DESIGN_V3 7.2·8절의 "SAW가 있으면 백그라운드 FGS 허용"(안드로이드 15는 보이는 창 조건), "번호 2초 대기"(늦게 온 번호로 채움), "시간 초과면 그냥 연결"(실측 뒤), "SAW 없으면 서비스 안 시작"(4.2-4로 구현)을 구현·실측에 맞춘다.
 
 ### 4.4 확인 기준
 - 단위 전체. device-test call-card(기존 7 + 새 4 시나리오) 통과. S25 체크리스트 통과(사용자 보고). 하트비트 `callCard.shown` > 0, `ringToCardMs` 중앙값 < 1000(실기기), `locked`가 `noPermission`과 분리.
@@ -194,14 +203,17 @@ UPDATE_NOTE: `v3.3: 잠긴 폰에 전화가 와도 이음 카드가 보이고, �
 | 위험 | 대책 |
 | --- | --- |
 | 아내 폰이 v3.0을 손 설치하지 않으면 v3.1도 소용없다 | 1.4절을 배포 보고 맨 위에. 워치독 버전 정체 경보(r12-2)가 그 뒤의 정체를 잡는다 |
-| 녹음 공백 판정이 삼성 녹음 지연(파일이 통화 뒤 수 분 뒤 저장)으로 거짓 양성 | 24시간 창과 30% 임계, n ≥ 3 조건, `inventoryTruncated` 분기. 배포 뒤 2일 실측으로 임계 조정 |
-| 새벽 정리 분리로 처음 정리 중 옛 기록과 최근 기록의 state가 섞임 | tidy는 최근 14일만, 처음 정리 완료 뒤 1회 전체 재정리(기존 흐름) |
-| 숫자 가드가 맞는 숫자까지 "확인 필요"로 만들어 신뢰를 깎음 | 인용·자막 원문 둘 다 대조, 배지는 앰버 15sp(빨강 금지), `droppedItems`와 함께 비율을 하트비트로 보고 임계 조정 |
-| 잠금 위 오버레이가 S25에서 안 보일 수 있음 | 보이는지 판정 뒤 폴백(기존 경로 유지), 공개 알림에 한 줄 |
+| 1033과 1038의 서명 인증서가 다르면 설치가 실패한다(토큰 교체 시) | 설치 실패 안내 "지우지 말 것". r12-2의 `certSha256`으로 다음부터는 배포 전에 비교. `IEUM_SIGNING_SEED` 고정(1.4-5) |
+| 녹음 공백 판정이 삼성 녹음 지연이나 발견 지연으로 거짓 양성 | 끝+5분 창, 마지막 발견 성공 뒤 15분 조건, n ≥ 3, 두 번 연속(6시간 간격) 판정, `noMatch`는 아내에게 말하지 않음, `tooMany`·`folder` 분기. 배포 뒤 2일 실측으로 임계 조정 |
+| 새벽 정리 분리로 처음 정리 중 전체 재정리가 영영 안 일어남 | `tidiedOnce`는 firstPassDone 뒤의 전체 정리에서만 쓴다(2.3-1) |
+| 숫자 가드가 맞는 숫자까지 "확인 필요"로 만들어 신뢰를 깎음 | 정규화와 인용 구간(30초) 대조, 자막 전체 대조 금지, 배지는 18sp 앰버 배경(빨강 금지), `droppedItems`와 함께 비율을 하트비트로 보고 임계 조정 |
+| 숫자만 다른 일을 합쳐 다른 일을 잃음 | 합치지 않는다. 혼동 쌍에만 메모(3.1-3) |
+| 잠금 위 오버레이가 S25에서 안 보일 수 있음 | 알림을 함께 띄움(4.1-1), 공개 알림에 한 줄 |
 | 역할 단계를 뺐는데 일부 기기에서 OFFHOOK 번호가 안 옴 | 설정에 역할 요청을 선택 항목으로 남김, 신호등 `noNumber` 비율로 감지 |
+| 묶음 다섯이 2시간을 넘김 | 파일 소유 표로 충돌을 없애고, v3.1에서 다듬기 항목을 v3.2로 미룸 |
 
 ## 6. 설계도(Claude Docs)에 반영할 것
-- "자동 흐름" 표: 새벽 정리는 처음 정리와 무관하게 최근 14일(v3.1). 녹음 공백 판정과 안내(v3.1).
-- "결정 사항" 표에 추가: 지키지 못할 약속 문구 금지(상태는 실제 작업과 묶음), 마이그레이션 자동 합치기는 같은 번호+같은 이름만, 숫자 확실성은 화면에 보임, 잠금 화면 카드 공개 범위는 설정(기본 켬), 발신 역할은 검증 뒤 선택 항목.
-- "보고와 화면": 처음 설정 필수/선택 구분과 [나중에 할게요], 홈 배너, "확인 필요" 배지, 최소 카드.
-- "개인정보와 보안": 메일 주소는 요청에 넣지 않음, 서명 시드 분리.
+- "자동 흐름" 표: 매시간 루틴은 매시 34분 07~22시(예약 작업이 30분 간격 불가), 새벽 정리는 처음 정리와 무관하게 최근 14일(v3.1), 녹음 공백 판정과 안내(v3.1).
+- "결정 사항" 표에 추가: 지키지 못할 약속 문구 금지(상태는 실제 작업과 묶음), 마이그레이션 자동 합치기는 같은 번호+같은 이름만, 숫자 확실성은 화면에 보임(18sp 배지), 숫자만 다른 일은 합치지 않음, 잠금 화면 카드 공개 범위는 설정(기본 켬), 발신 역할은 검증 뒤 선택 항목, 처음 설정은 필수/선택(배터리 제한 없음은 필수).
+- "보고와 화면": [나중에 할게요], 홈 배너, "확인 필요" 배지, thin 카드.
+- "개인정보와 보안": 메일 주소는 요청에 넣지 않음, 서명 시드 분리, version.json에 인증서 지문.
