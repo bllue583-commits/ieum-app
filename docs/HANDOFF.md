@@ -1,16 +1,8 @@
 # 이음 앱 인수인계 (2026-11-06 새벽 기준, v3.4 배포)
 
-> 다음 세션은 이 파일부터 읽고 "4-3. v2.0"과 "6. 다음 할 일"부터 진행하세요. 설계도(Claude Docs)가 기준이며, 모든 변경은 설계도를 먼저 고친 뒤 개발합니다(11/4 사용자: "모든 과정에서 설계도를 철저히 반영").
+> **지금 상태 (11/6 06:40, Opus 오케스트레이션 세션 마무리):** v3.1~v3.4를 모두 `feature/lean-calls`에 합쳐 배포했다(빌드 1039~1044, 기록 4-10~4-13). 설계 기준은 [DESIGN_V4.md](DESIGN_V4.md) — 0절 "진행 상태" 표, 버전마다 "다르게 정한 것"(2.8, 2-1 끝, 3.5, 4.6), 7절 근거(보고서·시험 실행 번호·폰 실측). **아내 폰은 06:01 하트비트 기준 아직 v3.1(1040)** — 새 버전은 6시간마다 또는 앱을 열 때 받는다.
+> **다음 세션 읽는 순서:** 이 파일 0절(규칙) → 6절(다음 할 일) → 7절(함정) → DESIGN_V4 0절·7절. 예약 작업은 3절 표, 작업자 운영은 `docs/orchestration/worker-brief.md`.
 > 앱의 목적·기능·UX 설계 상세는 [PRODUCT.md](PRODUCT.md)에 있습니다.
-> **11/6 새벽 (Opus 오케스트레이션, 이 세션 마무리): v3.2 수정판·v3.3·v3.4를 lean-calls에 합쳐 배포(4-11~4-13).** 설계는 DESIGN_V4 2-1~2-3(v3.2), 3절(v3.3, 다르게 정한 것 3.5), 4절(v3.4, 다르게 정한 것 4.6). 예약 작업은 짧은 안내 프롬프트가 ieum-inbox `routines/hourly.md`·`tidy.md`를 읽는 방식으로 바꿨고, release-apk가 배포 때마다 `docs/routines/*.md`와 `tools/inbox/watchdog.py`를 우편함에 올린다(3절 표). 다음 세션은 **6절**부터.
-> **11/5 밤 (Opus 오케스트레이션): v3.1 「스스로 말하는 이음」 lean-calls에 합쳐 배포(4-10).** 묶음 r12-1~r12-5 모두 Opus 작업자, 통합 `feature/r12-v31` ad03b16, 전체 단위 시험 582건·lint 통과. 아내 폰은 11/5 18:43 하트비트 기준 아직 v2.4(1033) — 손 설치 안내함(DESIGN_V4 1.4). 다음은 6절.
-> **11/5 저녁 (Fable 평가 세션 종료 → 다음 세션이 v3.1부터 개발):** v3.0을 Opus 검토자 넷 + 설계 검토자로 평가해 **[DESIGN_V4.md](DESIGN_V4.md)**(v3.0 평가, v3.1~v3.3 설계)를 썼다. 다음 세션은 **6절 → DESIGN_V4.md 0절(착수 조건)·1.4절(사용자 할 일)·2절(v3.1 묶음 r12-1~r12-5)** 순으로 읽고 시작한다. 사용자 결정(11/5 18:26): 새 버전 확인·다운로드와 **Whisper 모델(570MB) 다운로드 모두 네트워크 종류 무관**(Wi-Fi 조건·스위치 없음, "무조건"), 앱 열 때 즉시, 진행 상황을 설정·홈에 표시(DESIGN_V4 2.2-5). 아내 폰은 아직 v2.4(1033)이며 "업데이트 눌러도 안 됨"은 v2.4가 Wi-Fi에서만 APK를 받기 때문 — Wi-Fi에서 앱을 열어 두라고 안내함.
-> **11/5 오후 (Opus): v3.0 lean-calls에 합쳐 배포(4-9).** v2.6~v3.0 모두 배포. 다음은 아내 폰 권한 확인과 저장소 비공개 복귀(6절).
-> **11/5 09시 (Opus 오케스트레이션 세션):** 저장소를 공개로 바꾼 뒤 **v2.6(빌드 1034)·v2.7(1035) 배포, v2.8은 lean-calls에 합쳐 배포 중.** v2.8 통합 기록은 "4-7", 다르게 정한 것은 설계 [DESIGN_V3.md](DESIGN_V3.md) 5.5절. v2.9 묶음 셋(r10-1~3)은 `feature/r10-v29` 위에서 작업자가 개발 중. 로컬 빌드는 메이븐 429 때문에 `$GRADLE_USER_HOME/init.d/mirror.gradle`(구글 미러, 저장소 밖)을 둠 — "7. 알아 둘 함정" 참고. 설계도는 개발하면서 같이 검증하고 다르게 정한 것을 설계 쪽에 적는다(사용자 11/5).
-> **11/5 08시 (Fable 오케스트레이션 세션 종료 → Opus가 이어받음):** v2.6은 lean-calls에 합쳐 배포 대기(ca9acf2), v2.7은 코드 완성(`feature/r8-v27` 964fd1b, 기기 시험 대기), v2.8은 묶음 셋이 브랜치에 올라와 통합 대기. **"4-6"·"4-7"과 "6. 다음 할 일"부터 읽으세요.** 작업자 지시문·보고서·통합 기록은 `docs/orchestration/`에 있습니다(사용자: "handoff 만들어주고 오케스트레이션 종료, 오푸스에게 이어가게").
-> **11/5 새벽 (v2.2~v2.5 마무리):** "4-4"에 v2.4 배포, v2.5 완성(배포는 GitHub Actions 결제 차단으로 대기), 예약 작업 세 개, 워치독 설치를 적었습니다. 6절 0번(v2.5 배포)부터 하세요.
-> **11/5 (Fable 세션, v2.6~v3.0 설계):** v2.5 이후의 개발 지시는 [DESIGN_V3.md](DESIGN_V3.md)입니다(버전마다 큰 변화 하나: v2.6 처음 정리 관문·무인 설치·정확도, v2.7 Activity 하나와 즉시 반응, v2.8 상대 카드와 사람 화면, v2.9 통화 직후 정리, v3.0 통화 중 이음 카드). 설계도(Claude Docs)의 다른 절과 다르면 이 파일이 우선합니다. 현재 앱 검증 원문은 `docs/reviews/20261105_ui.md`, `20261105_pipeline.md`, `20261105_data.md`입니다. 진행 방식은 DESIGN_V3.md 2절(기기 시험은 v2.7과 v3.0에서만 기다림, 나머지는 ci 통과 후 배포).
-> **11/4 낮 (채팅 세션, 설계도 개정):** 설계도에 "3회차 상세 설계 (11/4 낮, 종합 검토 반영)" 절이 추가됐습니다("남은 일" 바로 앞). 다른 절과 다르면 그 절이 우선하며, 사용자 결정 대기였던 항목(토큰 위치, 개인 문자, 낮 시간 자막, 새벽 Opus 빈도, 18sp 규칙, Activity 구조, promises 삭제)은 그 절의 "결정 사항" 표로 모두 확정됐습니다(사용자: "편리함 중점으로 정하라"). 묶음 r3-1~r3-9의 상세 지시와 묶음별 "확인 기준"이 거기 있으니, 3회차 통합 브랜치(`feature/r3-integrate`)를 합치기 전에 그 절과 대조하고, 사용자가 할 일 두 가지(비밀 `IEUM_SIGNING_SEED`에 현재 토큰 값 복사, "병합 후 브랜치 자동 삭제" 켜기)는 완료 보고에 적어 주세요. 종합 검토 원문은 [REVIEW_20261104_B.md](REVIEW_20261104_B.md)입니다.
 
 ## 0. 작업 규칙 (꼭 지킬 것)
 - **보고는 항상 한국어로.** 중간 보고, 최종 보고 모두 예외 없음.
@@ -29,14 +21,15 @@
 
 ## 1. 앱 목적과 사용자
 - 아내가 건설사 직원으로 업무 통화를 하루 약 2시간 함 → 저녁이면 통화 내용을 기억하지 못함 → 통화를 자동으로 정리해 할 일·요약·업체/사람 맥락을 보여주는 앱.
-- 사용 기기: Galaxy S25 (아내 폰). 현장은 하나, 협력업체·직원과 통화가 많음.
+- 사용 기기: Galaxy S26, 안드로이드 16 (아내 폰, 하트비트·Firebase 실기기 기준). 현장은 하나, 협력업체·직원과 통화가 많음.
 - **UI/UX 기준:** 50대 남자가 봐도 편하고, 어떤 기능이 있는지 바로 알 수 있게. **사용자 의견(10/30): "UI가 미관상 너무 엉망" → 다음 1순위 작업.**
 
 ## 2. 핵심 흐름 (전부 자동, 버튼 없음)
 ```
 통화 종료 → 통화 녹음 감지 → 폰에서 Whisper로 자막 생성
 → 자막만 비공개 저장소 ieum-inbox/inbox/ 에 업로드 (녹음 파일은 폰 밖으로 안 나감)
-→ Claude 예약 작업(매시간 정각, 07~23시, Sonnet 5.5)이 분석 → ieum-inbox/results/ 에 결과
+→ Claude 예약 작업(매시 34분, 07~22시, Sonnet 5.5, 지시문은 우편함 routines/hourly.md)이 분석 → ieum-inbox/results/ 에 결과
+→ 폰이 루틴 일정의 3·8·15분 뒤에 결과를 받음(v3.4)
 → 폰이 결과를 받아 통화 목록·할 일·업체/사람 장부 갱신, 결과 파일 삭제
 → 저녁 7시 정리 알림, 아침 6시 보고 알림
 ```
@@ -47,13 +40,13 @@
 ## 3. 저장소·환경
 | 항목 | 값 |
 |---|---|
-| 앱 저장소 | `github.com/bllue583-commits/ieum-app` (비공개), 작업 브랜치 `feature/lean-calls` |
+| 앱 저장소 | `github.com/bllue583-commits/ieum-app` (11/5 08시부터 **공개** — Actions 무료, 비공개 복귀는 사용자가 4.4-4 뒤), 작업 브랜치 `feature/lean-calls` |
 | 우편함 저장소 | `github.com/bllue583-commits/ieum-inbox` (비공개) — `inbox/`, `results/`, `app/version.json`, 릴리스 APK |
 | 예약 작업(루틴) | 세 개(11/6 기준): 매시간 분석 `trig_016vQxos9z6p1pdPJ28MjrsV` 매시 34분 07~22시 Sonnet 5.5, 새벽 정리 `trig_01Sp6piuvasw52ZR1KPupumB` 05:16 Opus 5.5, 통화 목록 검증 `trig_01KyuDNZWkmrQpJj8e8cr661` 09:00 Opus 5.5. 앞의 둘은 11/6 이 세션에서 다시 만듦(옛 것은 ieum-inbox 연결이 빠져 17시부터 분석 0건, 사용자가 옛 것 삭제). **프롬프트는 짧은 안내뿐이고 지시문은 ieum-inbox `routines/hourly.md`·`routines/tidy.md`(원본 `docs/routines/`, release-apk가 배포 때 자동 복사)**. 검증 작업은 프롬프트가 원본. 루틴 추가·수정은 사용자 승인됨(11/4, 11/5 "예약작업은 너가 수정하면 돼") |
 | 안드로이드 코드 | `android/app/src/main/java/kr/callbrief/` (패키지 `kr.callbrief`), 파이프라인은 `pipeline/` |
 | 장부(DB) | `pipeline/CallRecordStore.kt` — `companies`, `people`, `person_aliases`, `call_links`, `task_companies`, `site_memo` |
 | 분석 요청/결과 | `pipeline/ClaudeCallAnalyzer.kt` (요청 구성, 결과 검증·필터) |
-| 화면 | `HomeActivity`, `TodayCallsActivity`, `CallTasksActivity`, `CompaniesActivity`(업체·사람 보기), `CallSettingsActivity`, 공통 스타일 `CallUi.kt` |
+| 화면 | Activity 하나 `pipeline/MainActivity`(v2.7부터) + 화면 `pipeline/screens/HomeScreen`·`CallsScreen`·`TasksScreen`·`CompaniesScreen`·`PersonScreen`·`SettingsScreen`, 통화 카드 `pipeline/call/`, 골든 측정 `pipeline/GoldenMeasureActivity`(숨김), 공통 스타일 `CallUi.kt` |
 | Whisper 네이티브 | `android/app/src/main/cpp/ieum_whisper.cpp` |
 | 설계도 | Claude Docs "이음 설계도 개정안: 기기 Whisper 자막과 Claude 분석 자동화" — https://claude.ai/artifact/7VeJmAZtXJ8Z5dEJ6sZNqT |
 | 테스트용 GCP | `ieum-test-2946626`, 서비스 계정 `ftl-runner@…` (Firebase Test Lab, OIDC 인증) |
@@ -67,6 +60,8 @@
 | `real-device-test.yml` | Firebase 실기기(최신 Galaxy S, 현재 S26). **하루 5번 한도.** 수동 실행(`repeat`, `model`) | 약 40분 |
 | `inbox-e2e.yml` | 공개 합성 통화를 inbox에 넣고 → 분석 결과를 폰 파서로 검증 후 삭제 | 약 2분 |
 | `update-smoke.yml` | 직전 릴리스 APK 위에 새 APK를 덮어 설치해 시작 확인 (수동 실행) | 약 30분 |
+| `cleanup-branches.yml` | lean-calls에 다 들어간 `feature/*` 브랜치 삭제(수동 실행, `dry_run`이면 목록만). Actions 탭 → cleanup-branches → Run workflow | 1분 |
+- 워치독은 v3.4부터 Actions가 아니라 매시간·새벽 루틴 끝에서 돈다(ieum-inbox `tools/watchdog.py --apply`, ieum-inbox의 watchdog.yml은 지움). release-apk가 `docs/routines/*.md`·`tools/inbox/watchdog.py`를 우편함에 올린다.
 - 같은 브랜치에 새 push가 오면 진행 중인 device-test는 취소됨(동시 실행 제한).
 
 ### 여러 컴퓨터에서 이어 하기 (Windows 회사 PC ↔ 집 Mac)
@@ -128,15 +123,15 @@ $HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu 
 - Mac에는 JDK·Android SDK가 아직 없음 → 판정은 GitHub ci/device-test로. 작업 브랜치에서 CI 확인 후 `feature/lean-calls`에 합쳐야 폰 자동 업데이트(release-apk는 lean-calls·main에서만).
 
 ## 4-2. 11/4 밤샘 검토 반복 (설계도 "검토 기록" 절이 원본)
-- **1회차 → v1026**: Fable 검토서(`docs/REVIEW_20261104.md`)와 갈라진 세션 재확인. 통화 시각 미상의 진짜 원인(자동 발견 `finalizeDiscoveryAlias`가 파일 이름 시각을 NULL로 넣음, 실제 요청 16건 모두 미상이었음) 수정, 요청의 id를 기록 키(해시)로(문자 기록 id에 번호가 있었음), 결과 적용 한 작업 이름으로 일원화와 중복 적용 금지, 깨진 결과는 bad/, 409 재시도, 처음 정리 12시간 조용해야 끝, 인용 비교 정규화와 기한 형식 검사, 개인 번호 녹음은 통화기록 대조로 폰에서 삭제, 대조 자료(통화기록 이름·방향·실제 시각, 같은 상대 최근 7일 업무 문자·메일 원문 3,000자, 같은 날 같은 업체 기록), 설정 "앱 버전", 분석 멈춤 알림, 새벽 정리 팔로업(create).
+- **1회차 → v1026**: Fable 검토서(`docs/reviews/20261104_round1.md`)와 갈라진 세션 재확인. 통화 시각 미상의 진짜 원인(자동 발견 `finalizeDiscoveryAlias`가 파일 이름 시각을 NULL로 넣음, 실제 요청 16건 모두 미상이었음) 수정, 요청의 id를 기록 키(해시)로(문자 기록 id에 번호가 있었음), 결과 적용 한 작업 이름으로 일원화와 중복 적용 금지, 깨진 결과는 bad/, 409 재시도, 처음 정리 12시간 조용해야 끝, 인용 비교 정규화와 기한 형식 검사, 개인 번호 녹음은 통화기록 대조로 폰에서 삭제, 대조 자료(통화기록 이름·방향·실제 시각, 같은 상대 최근 7일 업무 문자·메일 원문 3,000자, 같은 날 같은 업체 기록), 설정 "앱 버전", 분석 멈춤 알림, 새벽 정리 팔로업(create).
 - **2회차 → v1027**: 하위 작업자 셋(맥락 정확도, 안정성·개인정보, 화면·비용, Sonnet). 앱을 안 열면 자막이 안 되던 문제(싱크가 HomeActivity에서만 설정됨) 수정, 자막 5분 조각 저장과 이어 하기(`call_transcription_parts`), 장부를 먼저 받고 결과를 통화 시각 순으로 적용, 적용 실패 파일은 남겨 3번째에 bad/, 장부·제안 실패 격리, 401/403/404면 "연결이 끊겼어요" 알림, update가 기한을 지우던 문제, 요청 날짜를 통화 시각으로, 같은 제목·최근 끝낸 일 재생성 금지, 새벽 팔로업도 AI 소유, 아침 보고는 열린 체크할 일 전부(요청 날짜, BigText), 권한은 처음 설정 카드에서 이유 먼저(자동 요청 없앰, 차단됐을 때만 제한된 설정 안내), 화면 글 가운데 점·말줄임표 제거, 7일 넘은 지난 기록 요청에서 열린 일 제외, 새벽 자료는 첫 정리 뒤 14일+이슈 기록만.
 - **예약 작업(11/4 새벽 상태)**: 매시간은 빈 실행 즉시 종료, atMs 순, 소스는 ieum-inbox만(앱 저장소 제외). 새벽 정리는 Opus 5.5(`claude-opus-5-5`), 첫 실행 전체 대조와 팔로업 지시. 새벽 정리도 11/4 10시에 소스를 ieum-inbox만으로 바꿈(지시문은 같음). 추론 수준(medium)은 API로 못 바꿔 사용자가 claude.ai/code/routines에서 설정해야 함.
 - **미룬 것**: 보호 저장 파일 `.new` 복구(ProtectedDatabase, 저장 핵심이라 실기기 검증 후), 사람 하나의 여러 키(번호와 메일), 묶음 구성 저장, 설정 화면과 처음 설정 카드 정리, [다 됐어요] 되돌리기, 약속 섹션 합치기, 시스템 지시 파일 분리(요청 크기), 설치 실패 표시, 릴리스 비디버그 빌드, 서명 시드 분리(사용자 확인 필요), 배포가 CI를 기다리게(워크플로 권한 필요), inbox-e2e 파일 이름 검증(워크플로 권한 필요), 우편함 이력 정리(강제 푸시 시험 먼저).
 - **사용자 결정이 필요한 것**: 개인 판정 번호를 폰이 기억해 다음부터 안 올리기, 매시간 분석을 업무 시간만, 새벽 Opus 빈도.
-- **원격 브랜치**: `feature/review-r1`, `feature/review-r2`는 lean-calls에 합쳐졌고, `review/20261104`의 유일한 변경(`docs/REVIEW_20261104.md`)은 lean-calls에 같은 내용으로 있음. 셋 다 지워도 되지만 이 세션의 자동 권한 확인에서 원격 삭제가 두 번 막혀 남아 있음. 사용자가 `git push origin --delete feature/review-r1 feature/review-r2 review/20261104`로 지우면 됨.
+- **원격 브랜치**: `feature/review-r1`, `feature/review-r2`는 lean-calls에 합쳐졌고, `review/20261104`의 유일한 변경(`docs/reviews/20261104_round1.md`)은 lean-calls에 같은 내용으로 있음. 셋 다 지워도 되지만 이 세션의 자동 권한 확인에서 원격 삭제가 두 번 막혀 남아 있음. 사용자가 `git push origin --delete feature/review-r1 feature/review-r2 review/20261104`로 지우면 됨.
 - **11/4 아침 확인**: 매시간 분석이 07:03에 정상 실행(1건), 저장소 장부가 처음 생김(rev 1, 옛 형식 요청이라 사람·업체는 아직 0). 07:54에 폰이 결과를 받아 감. 새벽 정리 첫 실행(05:07)은 처음 정리가 진행 중이라 할 일 없이 끝남.
 
-## 4-3. v2.0 (11/4 낮, 클라우드 세션, 기준 문서 `docs/REVIEW_20261104_B.md`와 설계도 "개정 3")
+## 4-3. v2.0 (11/4 낮, 클라우드 세션, 기준 문서 `docs/reviews/20261104_B.md`와 설계도 "개정 3")
 - 진행: 종합 검토 B → 작업자 병렬 개발(멈춤 방지, 정확도, 화면, 정리) → Opus 독립 검토 지적 수정 → 설계도 대조(Opus) → 차이 개발(파이프라인, 화면·알림·업데이트, 감시, 요청 v3) → v2.0. 시험 브랜치 `feature/r3-integrate`에서 합쳐 CI·device-test 통과 후 lean-calls로.
 - 주요 변경: 앱 시작·부팅·업데이트 때 작업 등록과 하루 자가 복구, 새 녹음 최신순 발견·10/1 이전 제외·통화기록 변화 즉시 발견·150초 재발견, 자막 2분 조각·중지 시 즉시 멈춤·모델 한 번만 읽기(JNI open/transcribeChunk/close)·환각 문구 제거, 결과 받은 기록 재전송 금지, 알림 날짜 고정, 서명 시드 폴백(`IEUM_SIGNING_SEED`), 배포 전 인증서 지문 비교, 이름 키·공유 번호·업체 별칭·중복 판정(숫자 다르면 다른 일)·AI 메모·인용 검증·통화기록 점수 대조, 요청 v3(format 3, promptVersion 3, 달력·용어·공종, 번호 가리기), 개인 번호 기억과 설정에서 되돌리기, 내 정보 세 칸, 처음 정리 자동 후퇴, 폰 하트비트 `status/phone.json`, 화면 토큰·어두운 모드·아이콘 14개·홈 재배치·되돌리기·전화 걸기·검색·신호등 다섯 줄·뒤로 가기 = 홈·직접 적기, 화면 규칙 CI 검사(`tools/check_ui_rules.py`), API 키 경로와 옛 폴더(worker, local_stt 등) 삭제.
 - **요청 v3 과도기:** 예약 루틴 지시문 교체가 이 세션의 자동 권한 검사에서 막혔음(사용자 승인 필요). 그래서 `CallInbox.CARRY_RULES=true`로 v3 요청에도 system·schema를 계속 싣고(지금 루틴은 요청의 system을 따름), 새 지시문 `docs/routines/hourly.md`는 두 형식을 모두 처리하게 썼음. 사용자가 루틴 교체를 승인하면: hourly.md·tidy.md의 "---" 아래 전문을 각 루틴 프롬프트에 넣고 → 다음 배포에서 `CARRY_RULES=false`.
@@ -244,7 +239,9 @@ $HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu 
 - 브랜치 정리: lean-calls에 합쳐진 원격 feature 브랜치 68개는 지우려 했으나 자동 권한 검사가 막음 — 사용자가 지우거나 그대로 둠(합쳐지지 않은 `feature/r4-v2-ui`, `feature/r6-v25-watchdog`는 남김).
 - 기기 시험: 벨→창 수신 1,081ms·역할 없이 발신 1,276ms·콜드 1,371ms. 통화 대기는 에뮬레이터가 재현 못 함(null).
 
-## 5. 현재 UI 상태와 문제점 (S26 스크린샷 기준, 다음 작업의 출발점)
+- 정리(11/6 06시, 사용자 "필요 없는 파일·코드 정리"): 아무 곳에서도 부르지 않는 코드 12곳 삭제(`AndroidWhisperEngine.transcribeVerifiedModel`, `SecureSettings.assign/recordUpload/uploadedId/commitExistingProcessingSetup`, `SelectedRecordingSource.openDeclaredSynthetic`, `CallRecordStore.canonName/knownPhones`, `CallUi.legend`, `TaskActions.openSource`, `SettingsScreen.isRunning`, `NumberGuard.Place`; 앱·단위 시험·기기 시험 컴파일 통과, 전체는 ci). 옛 검토 문서 `docs/REVIEW_20261104*.md` → `docs/reviews/`. 우편함 `bad/selftest-41772663690.json` 삭제. 브랜치 정리용 `cleanup-branches.yml` 추가(사용자가 실행). 과거 묶음 지시문·보고서(`docs/orchestration/`)는 근거라 남김.
+
+## 5. (10/30 기록) UI 상태와 문제점 — v2.7 Activity 하나·v3.2 요약 홈·v3.3 18sp 강제로 대부분 해결, 지금 화면 원칙은 PRODUCT.md
 사용자 평가(10/30): "미관상 너무 엉망", "**깔끔하긴 한데 세련되지 않았다**". 목표는 깔끔함을 넘어 세련됨. 개편 방향은 [PRODUCT.md 4.5](PRODUCT.md). Claude가 본 구체적 문제:
 1. **모든 버튼이 같은 연청색 큰 덩어리** — 전날/다음날, 할 일 전체 보기, 이름 고치기, 완료했어요, 업체 목록으로가 모두 같은 크기·색. 주요 동작과 보조 동작의 구분이 없음.
 2. **위계가 약함** — 제목/본문/보조 글자 크기 차이는 있으나 화면마다 글자 덩어리 나열. 아이콘이 전혀 없어 기능을 한눈에 알기 어려움.
@@ -284,14 +281,15 @@ $HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu 
 - **이 PC 빠른 확인**: `IEUM_LOCAL_PREVIEW=1 IEUM_SKIP_ANDROID_NATIVE=1`로 `assembleDebug` → 에뮬레이터 설치 → `powershell -File tools/preview_shots.ps1 <이름>` (시험 데이터 `PreviewSeed`가 첫 실행 때 채워짐, 아무것도 밖으로 안 나감). 캡처는 `evidence/shots/`.
 - 아직: 설정 화면은 제목 띠만 바뀜(카드 묶음 정리 필요), 아침·저녁 알림 문구의 "할 일" → "체크할 일" 통일, 설계도(Claude Docs) "화면 디자인" 절 개정, 앱 아이콘 다듬기, 모모콜에서 본 "전화 올 때 지난 통화 요약 띄우기" 검토.
 
-## 6. 다음 할 일 (11/6 새벽 기준 — 상세는 [DESIGN_V4.md](DESIGN_V4.md), 묶음 지시문·보고서는 `docs/orchestration/`)
-1. **아침 확인(07:34 이후)**: ieum-inbox `status/last-run-hourly.json`이 예정 슬롯마다 갱신되고 `pushed=true`인지, 워치독 이슈가 이상하게 열리지 않았는지. 예약 작업이 `routines/hourly.md`를 실제로 읽는지(새 방식 첫 정규 실행). 안 되면 프롬프트를 확인.
-2. **아내 폰 v3.4 설치 확인**: 하트비트 `versionCode`가 1044로 오르는지(r14-3으로 1시간 안). 안 오르면 `update.error`.
-3. **48시간 지표**: 2-3(100초 넘는 통화 완료율 `transcription.long48h.ratePct` ≥ 80, 녹음 연결 matched/withFile ≥ 0.8, `callLogMatch.last.before`·`missGapHour`로 남은 noMatch 원인), 4.5(`callCard` shown·shownOutgoing/eligibleOutgoing ≥ 90%, `ringToCardMs` p50 < 1000, cold, fgsRefused, locked). 결과로 v3.4.x 다듬기(카드 위치 상수, 1.0배 배지 카드 "외 1개" 줄 넘김).
-4. **사용자 할 일**: S26 체크리스트(`docs/REAL_DEVICE_CHECKLIST.md`, 10분), 실녹음 골든 받아쓰기 3~5건, 저장소 비공개 복귀 전 Actions 분량 조정(4.4-4), `IEUM_SIGNING_SEED` 복사, 예약 작업 알림 설정(정상 답도 매시간 옴).
-5. v3.5: 설계는 Fable이 쓰기로 함(사용자 11/6). 아직 DESIGN_V4에 없음.
+## 6. 다음 할 일 (11/6 06:40 기준 — 상세는 [DESIGN_V4.md](DESIGN_V4.md), 묶음 지시문·보고서는 `docs/orchestration/`)
+1. **아내 폰 업데이트 확인(최우선):** 06:01 하트비트는 v3.1(1040). 1044(v3.4)가 깔리면 하트비트 `versionCode` 1044, 새 키 `transcription`·`callCard`·`update`가 생긴다. 반나절 넘게 1040이면 아내에게 "이음 앱을 한 번 열기"(열면 바로 확인) → 그래도 안 되면 `lastUpdateError`·`updateAvailableCode`를 본다. 서명은 1039~1044 같음(`e4ee1db4…`) — "서명이 다르다"면 지우지 말 것.
+2. **루틴 새 방식 확인(07:34 첫 정규 실행부터):** 우편함에 `status/last-run-hourly.json`이 슬롯마다 생기고 `promptVersion` "8", `pushed=true`인지. 05:16 새벽 정리는 v5 지시문으로 돌았다(`status/last-run.json`, processed 0 — 손 실행 뒤라 "이미 정리됨"). 내일 05:16부터 v6·`last-run-tidy.json`. 옛 `status/last-run.json`은 폰이 v3.4가 된 뒤 지운다(워치독·폰이 과도기에 읽음).
+3. **48시간 지표(폰이 1044가 된 뒤):** DESIGN_V4 2-2·2-3(녹음 연결 matched/withFile ≥ 0.8, 100초 넘는 통화 완료율 `transcription.long48h.ratePct` ≥ 80, `callLogMatch.last.before`·`missGapHour`로 남은 noMatch 원인)과 4.5(`callCard` shownOutgoing/eligibleOutgoing ≥ 90%, `ringToCardMs` p50 < 1000, cold, fgsRefused, locked). 결과로 v3.4.x(카드 위치 상수, 1.0배 배지 카드의 "외 1개" 줄 넘김, 첫 벨 창 1회 실패 원인).
+4. **사용자 할 일:** S26 체크리스트(`docs/REAL_DEVICE_CHECKLIST.md`, 10분), 실녹음 골든 받아쓰기 3~5건(설정 › 상태와 도움 › 골든 측정), 합쳐진 브랜치 정리(Actions → cleanup-branches → Run workflow — 이 세션에서는 자동 권한 검사가 삭제를 막음), `IEUM_SIGNING_SEED` 복사, 저장소 비공개 복귀 전 Actions 분량 조정(DESIGN_V4 4.4-4), 예약 작업 알림 조정(정상 답도 매시간 옴).
+5. **설계도(Claude Docs) 옮기기:** DESIGN_V4 6절 목록. 이 저장소의 DESIGN_V4.md가 기준.
+6. **v3.5:** 설계는 Fable이 쓰기로 함(사용자 11/6). 아직 없음. 실녹음 골든 결과가 나오면 v3.3 3.2절 3단계(B1~B7 상수)부터.
 
-### 지난 기록 (11/5)
+### 지난 기록 (11/5, 끝난 항목 포함)
 **11/5 23시 추가(사용자 결정):** v3.2를 새로 끼워 넣음 — 「홈은 요약, 맨 위에 오늘 이야기」(DESIGN_V4 2-1절, 묶음 r12-6, 작업자 진행 중, 브랜치 `feature/r12-v31-r6`). 원래 v3.2 「믿을 수 있는 숫자」는 v3.3, v3.3 「어디서나 보이는 카드」는 v3.4로 밀림. 매시간 루틴 지시문에 5-1(오늘 통화 이야기 `story/today.json`) 추가. 새벽 정리 예약 작업은 tidy v5로 교체 완료(사용자 "예약작업은 너가 수정하면 돼"). 아내 폰은 22:04부터 v3.1(요청 promptVersion 6).
 
 **다음 세션 (11/5 밤 기준):**
@@ -312,6 +310,7 @@ $HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu 
 ## 7. 알아 둘 함정
 - 예약 작업 프롬프트는 저장소 파일을 읽는 짧은 안내다. 지시문을 바꿀 때는 `docs/routines/*.md`를 고치고 배포하면(release-apk) 우편함에 올라간다. 배포 없이 급히 바꾸려면 ieum-inbox `routines/`에 직접 커밋.
 - 예약 작업을 이 세션에서 만들면 이 세션에 붙은 저장소(ieum-app, ieum-inbox)가 소스로 붙는다. 다른 세션에서 만들면 ieum-inbox가 빠져 "성공"인데 아무것도 못 하는 일이 생긴다(11/5 17시). `fire_trigger`(지금 실행)와 끄기·지우기는 자동 권한 검사가 막는 경우가 있어 사용자가 화면에서.
+- 이 세션의 자동 권한 검사는 원격 브랜치 삭제(`git push --delete`), 예약 작업 끄기·지우기·지금 실행을 막는다. 브랜치는 `cleanup-branches` 워크플로를 사용자가 실행, 예약 작업은 사용자가 화면에서.
 - 이 세션은 CPU 2개라 작업자 둘이 Gradle을 번갈아 기다린다. 작업자는 컴파일·자기 시험만 로컬, 전체 시험·lint는 GitHub ci로(작업자 지침 11/6).
 - 통합 브랜치에 `[skip ci]` 커밋만 올리면 ci가 돌지 않는다. 합친 뒤에는 코드나 워크플로가 바뀐 커밋을 머리에 두고 push.
 - 이 클라우드 환경에서 repo.maven.apache.org가 429를 자주 낸다(특히 robolectric `nativeruntime-dist-compat`). `$GRADLE_USER_HOME/init.d/mirror.gradle`에 `maven-central.storage-download.googleapis.com/maven2/`를 맨 앞 저장소로 넣으면 풀린다(저장소 설정은 안 바꿈). JDK 17은 `apt-get update` 뒤에 설치된다(`tools/local_toolchain.sh`가 update를 안 하므로 처음 한 번 수동).
@@ -328,3 +327,15 @@ $HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu 
 - ieum-inbox `results/`의 `selftest-*.json`은 inbox-e2e가 검증 후 지움. 폰은 `selftest-`로 시작하는 파일을 무시.
 - Firebase 실기기는 하루 5번 — 화면 확인은 에뮬레이터(device-test)로 먼저.
 - `CallRecordStore`의 이름 매칭은 공백 무시(`REPLACE(name,' ','')`), 별칭도 공백 제거 키로 저장.
+
+## 8. 지난 세션 메모 (예전 머리말, 새것부터)
+> 다음 세션은 이 파일부터 읽고 "4-3. v2.0"과 "6. 다음 할 일"부터 진행하세요. 설계도(Claude Docs)가 기준이며, 모든 변경은 설계도를 먼저 고친 뒤 개발합니다(11/4 사용자: "모든 과정에서 설계도를 철저히 반영").
+> **11/6 새벽 (Opus 오케스트레이션, 이 세션 마무리): v3.2 수정판·v3.3·v3.4를 lean-calls에 합쳐 배포(4-11~4-13).** 설계는 DESIGN_V4 2-1~2-3(v3.2), 3절(v3.3, 다르게 정한 것 3.5), 4절(v3.4, 다르게 정한 것 4.6). 예약 작업은 짧은 안내 프롬프트가 ieum-inbox `routines/hourly.md`·`tidy.md`를 읽는 방식으로 바꿨고, release-apk가 배포 때마다 `docs/routines/*.md`와 `tools/inbox/watchdog.py`를 우편함에 올린다(3절 표). 다음 세션은 **6절**부터.
+> **11/5 밤 (Opus 오케스트레이션): v3.1 「스스로 말하는 이음」 lean-calls에 합쳐 배포(4-10).** 묶음 r12-1~r12-5 모두 Opus 작업자, 통합 `feature/r12-v31` ad03b16, 전체 단위 시험 582건·lint 통과. 아내 폰은 11/5 18:43 하트비트 기준 아직 v2.4(1033) — 손 설치 안내함(DESIGN_V4 1.4). 다음은 6절.
+> **11/5 저녁 (Fable 평가 세션 종료 → 다음 세션이 v3.1부터 개발):** v3.0을 Opus 검토자 넷 + 설계 검토자로 평가해 **[DESIGN_V4.md](DESIGN_V4.md)**(v3.0 평가, v3.1~v3.3 설계)를 썼다. 다음 세션은 **6절 → DESIGN_V4.md 0절(착수 조건)·1.4절(사용자 할 일)·2절(v3.1 묶음 r12-1~r12-5)** 순으로 읽고 시작한다. 사용자 결정(11/5 18:26): 새 버전 확인·다운로드와 **Whisper 모델(570MB) 다운로드 모두 네트워크 종류 무관**(Wi-Fi 조건·스위치 없음, "무조건"), 앱 열 때 즉시, 진행 상황을 설정·홈에 표시(DESIGN_V4 2.2-5). 아내 폰은 아직 v2.4(1033)이며 "업데이트 눌러도 안 됨"은 v2.4가 Wi-Fi에서만 APK를 받기 때문 — Wi-Fi에서 앱을 열어 두라고 안내함.
+> **11/5 오후 (Opus): v3.0 lean-calls에 합쳐 배포(4-9).** v2.6~v3.0 모두 배포. 다음은 아내 폰 권한 확인과 저장소 비공개 복귀(6절).
+> **11/5 09시 (Opus 오케스트레이션 세션):** 저장소를 공개로 바꾼 뒤 **v2.6(빌드 1034)·v2.7(1035) 배포, v2.8은 lean-calls에 합쳐 배포 중.** v2.8 통합 기록은 "4-7", 다르게 정한 것은 설계 [DESIGN_V3.md](DESIGN_V3.md) 5.5절. v2.9 묶음 셋(r10-1~3)은 `feature/r10-v29` 위에서 작업자가 개발 중. 로컬 빌드는 메이븐 429 때문에 `$GRADLE_USER_HOME/init.d/mirror.gradle`(구글 미러, 저장소 밖)을 둠 — "7. 알아 둘 함정" 참고. 설계도는 개발하면서 같이 검증하고 다르게 정한 것을 설계 쪽에 적는다(사용자 11/5).
+> **11/5 08시 (Fable 오케스트레이션 세션 종료 → Opus가 이어받음):** v2.6은 lean-calls에 합쳐 배포 대기(ca9acf2), v2.7은 코드 완성(`feature/r8-v27` 964fd1b, 기기 시험 대기), v2.8은 묶음 셋이 브랜치에 올라와 통합 대기. **"4-6"·"4-7"과 "6. 다음 할 일"부터 읽으세요.** 작업자 지시문·보고서·통합 기록은 `docs/orchestration/`에 있습니다(사용자: "handoff 만들어주고 오케스트레이션 종료, 오푸스에게 이어가게").
+> **11/5 새벽 (v2.2~v2.5 마무리):** "4-4"에 v2.4 배포, v2.5 완성(배포는 GitHub Actions 결제 차단으로 대기), 예약 작업 세 개, 워치독 설치를 적었습니다. 6절 0번(v2.5 배포)부터 하세요.
+> **11/5 (Fable 세션, v2.6~v3.0 설계):** v2.5 이후의 개발 지시는 [DESIGN_V3.md](DESIGN_V3.md)입니다(버전마다 큰 변화 하나: v2.6 처음 정리 관문·무인 설치·정확도, v2.7 Activity 하나와 즉시 반응, v2.8 상대 카드와 사람 화면, v2.9 통화 직후 정리, v3.0 통화 중 이음 카드). 설계도(Claude Docs)의 다른 절과 다르면 이 파일이 우선합니다. 현재 앱 검증 원문은 `docs/reviews/20261105_ui.md`, `20261105_pipeline.md`, `20261105_data.md`입니다. 진행 방식은 DESIGN_V3.md 2절(기기 시험은 v2.7과 v3.0에서만 기다림, 나머지는 ci 통과 후 배포).
+> **11/4 낮 (채팅 세션, 설계도 개정):** 설계도에 "3회차 상세 설계 (11/4 낮, 종합 검토 반영)" 절이 추가됐습니다("남은 일" 바로 앞). 다른 절과 다르면 그 절이 우선하며, 사용자 결정 대기였던 항목(토큰 위치, 개인 문자, 낮 시간 자막, 새벽 Opus 빈도, 18sp 규칙, Activity 구조, promises 삭제)은 그 절의 "결정 사항" 표로 모두 확정됐습니다(사용자: "편리함 중점으로 정하라"). 묶음 r3-1~r3-9의 상세 지시와 묶음별 "확인 기준"이 거기 있으니, 3회차 통합 브랜치(`feature/r3-integrate`)를 합치기 전에 그 절과 대조하고, 사용자가 할 일 두 가지(비밀 `IEUM_SIGNING_SEED`에 현재 토큰 값 복사, "병합 후 브랜치 자동 삭제" 켜기)는 완료 보고에 적어 주세요. 종합 검토 원문은 [reviews/20261104_B.md](reviews/20261104_B.md)입니다.

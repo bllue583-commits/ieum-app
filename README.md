@@ -32,9 +32,12 @@ APK에는 네이티브 빌드(NDK 28.2.13676358, CMake 3.22 이상)가 필요하
 ## 문서
 
 - [docs/HANDOFF.md](docs/HANDOFF.md): 인수인계. 현재 상태, 다음 할 일, 워크플로, 함정. 새 세션은 이 파일부터 읽습니다.
+- [docs/DESIGN_V4.md](docs/DESIGN_V4.md): 지금 설계 기준(v3.1~v3.4, 진행 상태와 근거). 그 전은 [docs/DESIGN_V3.md](docs/DESIGN_V3.md).
+- [docs/OPERATIONS.md](docs/OPERATIONS.md): 예약 작업, 우편함, 워치독 운영. 지시문 원본은 `docs/routines/`.
+- [docs/REAL_DEVICE_CHECKLIST.md](docs/REAL_DEVICE_CHECKLIST.md): 아내 폰(S26) 10분 확인표.
 - [docs/PRODUCT.md](docs/PRODUCT.md): 앱 목적, 기능, UX 설계.
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md): 작업 방식과 변경 경계.
-- [docs/REVIEW_20261104_B.md](docs/REVIEW_20261104_B.md): 11/4 종합 검토(문제, 개선안, 삭제 목록).
+- `docs/reviews/`: 검토 원문(11/4 종합 검토, 11/5 화면·파이프라인·데이터, v3.3 자막 협의안, v3.4 설계 검토). 작업자 지시문과 보고서는 `docs/orchestration/`.
 - [docs/ASSETS.md](docs/ASSETS.md), [docs/FIXTURES.md](docs/FIXTURES.md), [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md): 모델·시험 자료 출처와 라이선스.
 
-비공개 개발용 저장소이며 공개 라이선스는 부여하지 않았습니다.
+개발용 저장소이며(11/5부터 Actions 때문에 공개, 비밀은 들어 있지 않음) 공개 라이선스는 부여하지 않았습니다.
