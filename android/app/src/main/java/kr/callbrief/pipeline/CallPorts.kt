@@ -148,6 +148,9 @@ object PipelineSettingsKeys {
     /** v3.2 (r12-6): today's call story the hourly task writes to story/today.json, kept as that file's JSON string
      * {"day":"YYYY-MM-DD" (KST),"text","calls","atMs"} for the top of home. */
     const val STORY="story"
+    /** r12-8 (DESIGN_V4 2-3-5 A1): transcription runs of the day (KST), a JSON string {"day":yyyymmdd,"runs","minutes",
+     * "ends":{pass end code: count},"prev":{the same for the day before}} ([TranscriptionRuns.add]); the heartbeat's transcription.runs. */
+    const val TRANSCRIPTION_RUNS="transcriptionRuns"
 }
 
 /** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets

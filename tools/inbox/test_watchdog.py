@@ -298,6 +298,29 @@ class V31RulesTest(unittest.TestCase):
         self.assertEqual([], self.run_rules(hb(NOW - H, "김부장"), history=[hb(NOW - 60 * H, "김부장")]))
         self.assertEqual([], self.run_rules(phone(), history=[phone(atMs=NOW - 60 * H)]))
 
+    # (마) r12-8: long calls (over 100 s) of the last 48 hours finished under 80% for 24 hours.
+    def test_long_calls_under_eighty_percent_for_a_day(self):
+        def hb(at, total, done, **extra):
+            lg = {"total": total, "done": done}
+            if total:
+                lg["ratePct"] = done * 100 // total
+            return phone(atMs=at, transcription=dict({"long48h": lg}, **extra))
+        now_low = hb(NOW - H, 27, 3, oldestWaitMin=125, failReasons={"ANDROID_STT_PCM_SIZE": 5, "STALLED": 3})
+        got = w.evaluate(NOW, now_low, {"processed": 3}, None, 0, history=[hb(NOW - 30 * H, 20, 2), hb(NOW - 12 * H, 25, 3)])
+        self.assertEqual([w.T_LONG_CALLS], [p["title"] for p in got])
+        self.assertIn("27건", got[0]["body"])
+        self.assertIn("11%", got[0]["body"])
+        self.assertIn("2시간 5분", got[0]["body"])
+        self.assertIn("ANDROID_STT_PCM_SIZE 5", got[0]["body"])
+        # Under 80% for only 20 hours, or broken by a good heartbeat: not yet.
+        self.assertEqual([], self.run_rules(now_low, history=[hb(NOW - 20 * H, 20, 2)]))
+        self.assertEqual([], self.run_rules(now_low, history=[hb(NOW - 40 * H, 20, 2), hb(NOW - 20 * H, 10, 9)]))
+        # 80% or more, no long call at all, or a heartbeat without the numbers (before v3.2): never.
+        self.assertEqual([], self.run_rules(hb(NOW - H, 10, 8), history=[hb(NOW - 40 * H, 10, 8)]))
+        self.assertEqual([], self.run_rules(hb(NOW - H, 0, 0), history=[hb(NOW - 40 * H, 0, 0)]))
+        self.assertEqual([], self.run_rules(now_low, history=[phone(atMs=NOW - 40 * H)]))
+        self.assertEqual([], self.run_rules(phone(transcription="x"), history=None))
+
     def test_old_v24_heartbeat_with_everything_new(self):
         v = {"versionCode": 1040, "promptVersion": "6", "tidyVersion": "3"}
         self.assertEqual([], self.run_rules(phone(), last_run={"routine": "hourly", "processed": 2, "promptVersion": "6"}, version=v,

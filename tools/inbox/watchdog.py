@@ -64,6 +64,10 @@ OLD_VERSION_MS = 24 * HOUR
 OLD_VERSION_FRESH_MS = 12 * HOUR
 PHONE_STATE_OFF_MS = 24 * HOUR
 GAP_HELD_MS = 48 * HOUR
+# r12-8 (DESIGN_V4 2-3-6): calls over 100 s finished under this share of the last 48 hours, for this long.
+T_LONG_CALLS = "긴 통화의 자막이 끝나지 않아요"
+LONG_CALL_RATE_PCT = 80
+LONG_CALL_LOW_MS = 24 * HOUR
 HISTORY_MS = 50 * HOUR
 HISTORY_MAX = 200
 
@@ -146,6 +150,32 @@ def v31_rules(now_ms, phone, last_run, version, version_ms, history, add):
             gap = phone.get("recordingGap") if isinstance(phone.get("recordingGap"), dict) else {}
             n = {k: (num(gap.get(k)) if num(gap.get(k)) is not None else "?") for k in ("calls", "withFile", "matched")}
             add(T_GAP[verdict], f"녹음 판정({verdict})이 {hours(now_ms - since)} 동안 같아요 (기준 2일).\n" + GAP_BODY[verdict].format(**n))
+    # (마) r12-8 (DESIGN_V4 2-3-6): calls over 100 s of the last 48 hours finished under 80% for 24 hours (v3.2 heartbeats on).
+    def long_low(h):
+        r = long_rate(h)
+        return r is not None and r < LONG_CALL_RATE_PCT
+    since = held_since(phone, history, long_low)
+    if since is not None and now_ms - since > LONG_CALL_LOW_MS:
+        t = phone.get("transcription") if isinstance(phone.get("transcription"), dict) else {}
+        lg = t.get("long48h") if isinstance(t.get("long48h"), dict) else {}
+        wait = num(t.get("oldestWaitMin"))
+        fails = t.get("failReasons") if isinstance(t.get("failReasons"), dict) else {}
+        top = sorted(((w_code(k), num(v)) for k, v in fails.items() if w_code(k) and num(v)), key=lambda kv: -kv[1])[:3]
+        add(T_LONG_CALLS, f"최근 48시간 100초 넘는 통화 {num(lg.get('total'))}건 중 자막이 끝난 것이 {num(lg.get('done'))}건"
+            f"({long_rate(phone)}%)이에요. {hours(now_ms - since)} 동안 80% 아래예요 (기준 24시간).\n"
+            + (f"가장 오래 기다린 녹음: {wait // 60}시간 {wait % 60}분.\n" if wait is not None else "")
+            + (("자막 실패 사유: " + ", ".join(f"{k} {v}" for k, v in top) + ".\n") if top else "")
+            + "\n추정 원인: 긴 녹음이 실행 시간 한도(10분)에 계속 잘리거나, 새 통화에 밀려 차례가 오지 않아요.")
+
+
+def long_rate(h):
+    """The heartbeat's transcription.long48h.ratePct (0..100), or None when it has no long call or no such numbers."""
+    t = h.get("transcription") if isinstance(h, dict) else None
+    lg = t.get("long48h") if isinstance(t, dict) else None
+    if not isinstance(lg, dict) or not num(lg.get("total")):
+        return None
+    r = num(lg.get("ratePct"))
+    return r if r is not None and 0 <= r <= 100 else None
 
 
 

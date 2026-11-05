@@ -53,7 +53,10 @@ internal object PhoneStatus {
     data class V31(val permissions:Permissions?=null,val recordingGap:JSONObject?=null,val recordingGapVerdict:String?=null,
         val followupNoRecording:Long=0,val storeOpenError:String?=null,
         val resultsApplyFailed:Long=0,val resultsBad:Long=0,val resultsReceivedNotApplied:Long=0,
-        val transcriptionFailed:Long=0,val droppedItems:Long=0,val duplicateSkipped:Long=0,val latency:JSONObject?=null)
+        val transcriptionFailed:Long=0,val droppedItems:Long=0,val duplicateSkipped:Long=0,val latency:JSONObject?=null,
+        /** r12-8 (DESIGN_V4 2-3-5,6): {failReasons{code:n},queuedByLen{lt1m,m1to3,m3to10,m10plus,unknown},doneByLen48h{..},
+         * long48h{total,done,ratePct},oldestWaitMin,runs{day,runs,minutes,ends{..},prev{..}}} ([TranscriptionStats], [TranscriptionRuns]). */
+        val transcription:JSONObject?=null)
     /** Counts, times and short codes; null where the phone does not know (yet). [callLogMatch] is counts only (see [counts]). */
     data class Watch(val newQueuedCount:Int=0,val newOldestQueuedMs:Long?=null,val oldQueuedCount:Int=0,
         val lastDiscoveryAttemptMs:Long?=null,val lastDiscoveryOutcome:String?=null,val inventoryTruncated:Boolean?=null,val heldUnsupported:Int?=null,
@@ -131,6 +134,8 @@ internal object PhoneStatus {
         o.put("results",JSONObject().put("applyFailed",v.resultsApplyFailed).put("bad",v.resultsBad).put("receivedNotApplied",v.resultsReceivedNotApplied))
         o.put("transcriptionFailed",v.transcriptionFailed).put("droppedItems",v.droppedItems).put("duplicateSkipped",v.duplicateSkipped)
         o.put("latency",v.latency?.let(::counts) ?: JSONObject.NULL)
+        // r12-8: numbers only (failure reasons are code-like keys, the counts() filter keeps them).
+        o.put("transcription",v.transcription?.let(::counts) ?: JSONObject.NULL)
     }
     private fun windowJson(w:CallLogWindow)=JSONObject().put("total",w.total).put("incoming",w.incoming).put("outgoing",w.outgoing)
         .put("missed",w.missed).put("rejected",w.rejected).put("other",w.other).put("recorded",w.recorded)
@@ -243,7 +248,14 @@ internal object PhoneStatus {
             s.optLong(PipelineSettingsKeys.RESULTS_APPLY_FAILED,0),s.optLong(PipelineSettingsKeys.RESULTS_BAD,0),
             s.optLong(PipelineSettingsKeys.RESULTS_RECEIVED_NOT_APPLIED,0),s.optLong(PipelineSettingsKeys.TRANSCRIPTION_FAILED,0),
             s.optLong(PipelineSettingsKeys.DROPPED_ITEMS,0),s.optLong(PipelineSettingsKeys.DUPLICATE_SKIPPED,0),
-            jsonOf(s,PipelineSettingsKeys.LATENCY))
+            jsonOf(s,PipelineSettingsKeys.LATENCY),transcription(app,s))
+    }
+    /** r12-8: the queue's numbers from the job ledger plus the day's runs from settings; null when neither could be read. */
+    private fun transcription(app:Context,s:JSONObject):JSONObject? {
+        val o=runCatching { CallTranscriptionStore(app).use { it.heartbeat() } }.onFailure { Log.w(TAG,"transcription not read: ${it.javaClass.simpleName}") }.getOrNull()
+        val runs=jsonOf(s,PipelineSettingsKeys.TRANSCRIPTION_RUNS)
+        if(o==null && runs==null) return null
+        return (o ?: JSONObject()).apply { runs?.let { put("runs",it) } }
     }
     /** What is actually granted now (r12-2, design 2.2-1): phone state, drawing over apps, the call redirection role, installs. */
     internal fun permissions(app:Context):Permissions? = runCatching {
