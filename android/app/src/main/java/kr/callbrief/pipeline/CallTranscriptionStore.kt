@@ -39,6 +39,10 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
                     db.execute("ALTER TABLE call_transcription_jobs ADD COLUMN queued_ms INTEGER")
                     db.execute("UPDATE call_transcription_jobs SET queued_ms=updated_ms WHERE state IN('QUEUED','RUNNING')")
                 }
+                // r12-8 (DESIGN_V4 2-3): the decoded length once a recording went through to the end (A1 length buckets, A8 long calls).
+                if(db.query("PRAGMA table_info(call_transcription_jobs)").none { it["name"]=="audio_ms" }) db.execute("ALTER TABLE call_transcription_jobs ADD COLUMN audio_ms INTEGER")
+                // r12-8 A4: pieces whose native run hit its own deadline; such a piece is done as two halves from the next run on.
+                db.execute("CREATE TABLE IF NOT EXISTS call_transcription_splits(recording_id TEXT NOT NULL,source_version INTEGER NOT NULL,audio_sha TEXT NOT NULL,chunk INTEGER NOT NULL,PRIMARY KEY(recording_id,source_version,audio_sha,chunk))")
                 // Encrypted originals deleted by GeneralLocalStore.pruneVault (#39); a recording whose blob is gone is not offered again.
                 db.execute("CREATE TABLE IF NOT EXISTS vault_pruned(ciphertext_sha256 TEXT PRIMARY KEY,at_ms INTEGER NOT NULL)")
                 // Recordings from before 10/1 left queued by an older build (r7-1): one statement, whatever the offer pass does.
@@ -113,14 +117,29 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         if(n>0) failed(n)
     }
 
-    /** Newest first; with [oldBefore] (처음 정리) recordings before it come after all newer ones, oldest first, so the
-     * old ones reach the analysis in time order. */
-    fun nextQueued(oldBefore:Long?=null):Job? = db.query("""SELECT j.state,j.reason,j.attempts,x.* FROM call_transcription_jobs j JOIN ($select WHERE r.owner_key=? AND gone.ciphertext_sha256 IS NULL) x
-        ON x.recording_id=j.recording_id AND x.source_version=j.source_version AND x.audio_sha256=j.audio_sha
-        WHERE j.state='QUEUED' ORDER BY CASE WHEN coalesce(x.original_started_at_ms,x.modified_at_ms,0)<CAST(? AS INTEGER) THEN 1 ELSE 0 END,
-        CASE WHEN coalesce(x.original_started_at_ms,x.modified_at_ms,0)<CAST(? AS INTEGER) THEN coalesce(x.original_started_at_ms,x.modified_at_ms,0) ELSE -coalesce(x.original_started_at_ms,0) END,
-        j.updated_ms LIMIT 1""".trimIndent(),GeneralLocalStore.OWNER,oldBefore ?: Long.MIN_VALUE,oldBefore ?: Long.MIN_VALUE)
-        .singleOrNull()?.let{Job(candidate(it),it["state"].toString(),it["reason"].toString(),(it["attempts"] as Number).toInt())}
+    /** r12-8 A2 (DESIGN_V4 2-3-1): which recording goes next.
+     * 1. a recording already under way (a finished piece saved, or its last run was stopped or ran into the native deadline),
+     *    longest in the queue first, so a long call is finished before new ones are begun;
+     * 2. a recording that has waited more than [WAITED_MS] (24 hours) in the queue, longest wait first;
+     * 3. new calls, newest first.
+     * With [oldBefore] (처음 정리) recordings before it come after all newer ones, in the same steps, except that old ones
+     * not under way go oldest call first, so they reach the analysis in time order. */
+    fun nextQueued(oldBefore:Long?=null):Job? {
+        val at="coalesce(x.original_started_at_ms,x.modified_at_ms,0)"
+        val queued="coalesce(j.queued_ms,j.updated_ms)"
+        val started="(EXISTS(SELECT 1 FROM call_transcription_parts p WHERE p.recording_id=j.recording_id AND p.source_version=j.source_version AND p.audio_sha=j.audio_sha) OR j.reason IN('STOPPED','$DEADLINE'))"
+        // step: 0 under way, 1 waited a day (new calls only), 2 the rest; key: queue entry for steps 0 and 1, else the call time.
+        return db.query("""SELECT * FROM (SELECT j.state,j.reason,j.attempts,j.updated_ms AS job_updated_ms,x.*,
+                CASE WHEN $at<CAST(? AS INTEGER) THEN 1 ELSE 0 END AS q_old,CASE WHEN $started THEN 1 ELSE 0 END AS q_started,
+                CASE WHEN $queued<CAST(? AS INTEGER) THEN 1 ELSE 0 END AS q_waited,$queued AS q_entered,$at AS q_at
+            FROM call_transcription_jobs j JOIN ($select WHERE r.owner_key=? AND gone.ciphertext_sha256 IS NULL) x
+            ON x.recording_id=j.recording_id AND x.source_version=j.source_version AND x.audio_sha256=j.audio_sha
+            WHERE j.state='QUEUED') ORDER BY q_old,
+            CASE WHEN q_started=1 THEN 0 WHEN q_old=0 AND q_waited=1 THEN 1 ELSE 2 END,
+            CASE WHEN q_started=1 OR q_old=0 AND q_waited=1 THEN q_entered WHEN q_old=1 THEN q_at ELSE -coalesce(original_started_at_ms,0) END,
+            job_updated_ms LIMIT 1""".trimIndent(),oldBefore ?: Long.MIN_VALUE,now()-WAITED_MS,GeneralLocalStore.OWNER)
+            .singleOrNull()?.let{Job(candidate(it),it["state"].toString(),it["reason"].toString(),(it["attempts"] as Number).toInt())}
+    }
 
     /** Finished pieces made with piece length [chunkMs]. Rows of any other length (or unknown, NULL) are deleted, with the stop counters
      * that were counted against those piece numbers: the same id then means a different stretch of audio. */
@@ -129,7 +148,8 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
             k.recordingId,k.sourceVersion,k.audioSha,chunkMs).isNotEmpty()
         if(stale)db.transaction {
             db.execute("DELETE FROM call_transcription_parts WHERE recording_id=? AND source_version=? AND audio_sha=? AND (chunk_ms IS NULL OR chunk_ms!=?)",k.recordingId,k.sourceVersion,k.audioSha,chunkMs)
-            db.execute("DELETE FROM call_transcription_stalls WHERE recording_id=? AND source_version=? AND audio_sha=?",k.recordingId,k.sourceVersion,k.audioSha);null
+            db.execute("DELETE FROM call_transcription_stalls WHERE recording_id=? AND source_version=? AND audio_sha=?",k.recordingId,k.sourceVersion,k.audioSha)
+            db.execute("DELETE FROM call_transcription_splits WHERE recording_id=? AND source_version=? AND audio_sha=?",k.recordingId,k.sourceVersion,k.audioSha);null
         }
         return db.query("SELECT chunk,segments_json FROM call_transcription_parts WHERE recording_id=? AND source_version=? AND audio_sha=? AND chunk_ms=?",
             k.recordingId,k.sourceVersion,k.audioSha,chunkMs).associate { r -> (r["chunk"] as Number).toInt() to org.json.JSONArray(r["segments_json"].toString()).let { a ->
@@ -140,8 +160,16 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         k.recordingId,k.sourceVersion,k.audioSha,chunk,org.json.JSONArray().apply { segments.forEach { put(org.json.JSONArray().put(it.startMs).put(it.endMs).put(it.text)) } }.toString(),chunkMs)
     fun clearParts(k:Key)=db.transaction {
         db.execute("DELETE FROM call_transcription_parts WHERE recording_id=? AND source_version=? AND audio_sha=?",k.recordingId,k.sourceVersion,k.audioSha)
-        db.execute("DELETE FROM call_transcription_stalls WHERE recording_id=? AND source_version=? AND audio_sha=?",k.recordingId,k.sourceVersion,k.audioSha);null
+        db.execute("DELETE FROM call_transcription_stalls WHERE recording_id=? AND source_version=? AND audio_sha=?",k.recordingId,k.sourceVersion,k.audioSha)
+        db.execute("DELETE FROM call_transcription_splits WHERE recording_id=? AND source_version=? AND audio_sha=?",k.recordingId,k.sourceVersion,k.audioSha);null
     }
+    /** r12-8 A4: the native run on piece [chunk] ran into its own deadline; the piece is done as two halves from now on. */
+    fun askSplit(k:Key,chunk:Int)=db.execute("INSERT OR IGNORE INTO call_transcription_splits VALUES(?,?,?,?)",k.recordingId,k.sourceVersion,k.audioSha,chunk)
+    fun splitAsked(k:Key,chunk:Int):Boolean = db.query("SELECT 1 FROM call_transcription_splits WHERE recording_id=? AND source_version=? AND audio_sha=? AND chunk=?",
+        k.recordingId,k.sourceVersion,k.audioSha,chunk).isNotEmpty()
+    /** r12-8 A1: the recording's decoded length, once it went through to the end. */
+    fun noteLength(k:Key,ms:Long)=db.execute("UPDATE call_transcription_jobs SET audio_ms=? WHERE recording_id=? AND source_version=? AND audio_sha=?",
+        ms,k.recordingId,k.sourceVersion,k.audioSha)
     fun stalls(k:Key,chunk:Int):Int = db.query("SELECT stops FROM call_transcription_stalls WHERE recording_id=? AND source_version=? AND audio_sha=? AND chunk=?",
         k.recordingId,k.sourceVersion,k.audioSha,chunk).singleOrNull()?.let { (it["stops"] as Number).toInt() } ?: 0
     /** Stops counted against any piece of this recording (the halves use the whole piece's number). */
@@ -174,8 +202,24 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
             it["reason"].toString() to (it["attempts"] as Number).toInt())
     }
 
+    /** r12-8 A1/A8 (DESIGN_V4 2-3-5,6): the heartbeat's `transcription` numbers ([TranscriptionStats]). Counts and minutes only. */
+    fun heartbeat(nowMs:Long=now()):org.json.JSONObject {
+        val records=db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='call_records'").isNotEmpty()
+        val recordLen=if(records) "(SELECT MAX(c.duration_ms) FROM call_records c WHERE c.recording_id=j.recording_id AND c.duration_ms>0)" else "NULL"
+        fun n(v:Any?)=(v as? Number)?.toLong()
+        val rows=db.query("""SELECT j.state,j.reason,j.updated_ms,coalesce(j.queued_ms,j.updated_ms) AS q,coalesce(j.audio_ms,$recordLen) AS len,r.byte_count AS b,
+            coalesce(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms) AS at
+            FROM call_transcription_jobs j LEFT JOIN recordings r ON r.recording_id=j.recording_id LEFT JOIN local_files l ON l.recording_id=j.recording_id""")
+            .map { TranscriptionStats.Row(it["state"].toString(),it["reason"].toString(),n(it["q"]),n(it["updated_ms"]) ?: 0,n(it["len"]),n(it["b"]),n(it["at"])) }
+        return TranscriptionStats.of(rows,nowMs)
+    }
+
     override fun close()=db.close()
     companion object {
+        /** r12-8 A2: a recording that has waited this long in the queue goes before new calls. */
+        const val WAITED_MS=24*3_600_000L
+        /** r12-8 A4: the reason of a job whose piece ran into the native deadline (the piece is halved, the attempt given back). */
+        const val DEADLINE="ANDROID_STT_DEADLINE"
         const val STALE_RUNNING_MS=11*60_000L
         /** Queued recordings whose time (start or filename time, else the file's modified time) is before 10/1 become
          * SKIPPED with BEFORE_START, the reason the offer pass gives them. Arguments: updated_ms, [FirstPass.FROM_MS]. */
@@ -183,5 +227,55 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
             SELECT r.recording_id FROM recordings r LEFT JOIN local_files l ON l.recording_id=r.recording_id
             WHERE COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)>0
             AND COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)<CAST(? AS INTEGER))"""
+    }
+}
+
+/** r12-8 A1 (DESIGN_V4 2-3-5): the day's transcription runs kept under [PipelineSettingsKeys.TRANSCRIPTION_RUNS]. */
+internal object TranscriptionRuns {
+    /** How a run ended: its pass state, a stop split into the work time limit (TIMEOUT) and anything else (OTHER), or ERROR. */
+    fun endCode(state:String,timeLimited:Boolean)=if(state=="STOPPED") (if(timeLimited) "STOPPED_TIMEOUT" else "STOPPED_OTHER") else PhoneStatus.code(state).ifEmpty { "NONE" }
+    /** [old] with one more run of [ms] ending as [end] on KST day [day] (yyyymmdd); a new day moves today's numbers to prev. */
+    fun add(old:org.json.JSONObject?,day:Int,ms:Long,end:String):org.json.JSONObject {
+        val same=old!=null && old.optInt("day")==day
+        val o=if(same) org.json.JSONObject(old.toString()) else org.json.JSONObject().put("day",day).put("runs",0).put("ms",0L).put("ends",org.json.JSONObject())
+        if(!same && old!=null && old.optInt("day")>0) o.put("prev",org.json.JSONObject().put("day",old.optInt("day")).put("runs",old.optInt("runs"))
+            .put("minutes",old.optLong("minutes")).put("ends",old.optJSONObject("ends") ?: org.json.JSONObject()))
+        val total=o.optLong("ms")+ms.coerceAtLeast(0)
+        val ends=o.optJSONObject("ends") ?: org.json.JSONObject()
+        ends.put(end,ends.optInt(end)+1)
+        return o.put("runs",o.optInt("runs")+1).put("ms",total).put("minutes",total/60_000).put("ends",ends)
+    }
+    fun day(now:Long)=java.time.Instant.ofEpochMilli(now).atZone(java.time.ZoneId.of("Asia/Seoul")).toLocalDate().let { it.year*10000+it.monthValue*100+it.dayOfMonth }
+}
+
+/** r12-8 A1/A8 (DESIGN_V4 2-3-5,6): numbers about the transcription queue for the heartbeat's `transcription` object.
+ * Pure (JVM-testable). A recording's length is its decoded length where known, else estimated from its size with the
+ * bytes per millisecond of the recordings whose length is known; without any, it stays unknown. */
+internal object TranscriptionStats {
+    /** Calls longer than this are the "long calls" of A8 (DESIGN_V4 2-3: none over 100 s had ever reached the analysis). */
+    const val LONG_CALL_MS=100_000L
+    const val WINDOW_MS=48*3_600_000L
+    data class Row(val state:String,val reason:String,val queuedMs:Long?,val updatedMs:Long,val lengthMs:Long?,val bytes:Long?,val callMs:Long?)
+    /** Length bucket: lt1m, m1to3, m3to10, m10plus, unknown. */
+    fun bucket(ms:Long?)=when { ms==null || ms<=0 -> "unknown";ms<60_000 -> "lt1m";ms<180_000 -> "m1to3";ms<600_000 -> "m3to10";else -> "m10plus" }
+    private val BUCKETS=listOf("lt1m","m1to3","m3to10","m10plus","unknown")
+    /** Went through to the end: a transcript, or found to hold no speech. */
+    fun finished(r:Row)=r.state=="DONE" || r.state=="SKIPPED" && r.reason=="NO_SPEECH"
+    fun of(rows:List<Row>,now:Long):org.json.JSONObject {
+        val known=rows.filter { (it.lengthMs ?: 0)>0 && (it.bytes ?: 0)>0 }
+        val knownMs=known.sumOf { it.lengthMs!! };val knownBytes=known.sumOf { it.bytes!! }
+        val bytesPerMs=if(knownMs>0 && knownBytes>0) knownBytes.toDouble()/knownMs else null
+        fun length(r:Row):Long? = r.lengthMs?.takeIf { it>0 } ?: if(bytesPerMs==null) null else r.bytes?.takeIf { it>0 }?.let { (it/bytesPerMs).toLong() }
+        fun buckets(of:List<Row>)=org.json.JSONObject().apply { BUCKETS.forEach { put(it,0) };of.forEach { r -> val b=bucket(length(r));put(b,optInt(b)+1) } }
+        val waiting=rows.filter { it.state=="QUEUED" || it.state=="RUNNING" }
+        val done48=rows.filter { finished(it) && it.updatedMs>=now-WINDOW_MS }
+        val fails=org.json.JSONObject().apply { rows.filter { it.state=="FAILED" }.groupingBy { PhoneStatus.code(it.reason).ifEmpty { "NONE" } }.eachCount().forEach { (k,v) -> put(k,v) } }
+        // A8: calls of the last 48 hours over 100 s that are to be transcribed (skipped ones aside; "no speech" counts as finished).
+        val long=rows.filter { r -> (r.callMs ?: 0) in (now-WINDOW_MS)..now && (r.state!="SKIPPED" || r.reason=="NO_SPEECH") && (length(r) ?: 0)>LONG_CALL_MS }
+        val longDone=long.count(::finished)
+        val o=org.json.JSONObject().put("failReasons",fails).put("queuedByLen",buckets(waiting)).put("doneByLen48h",buckets(done48))
+            .put("long48h",org.json.JSONObject().put("total",long.size).put("done",longDone).apply { if(long.isNotEmpty()) put("ratePct",longDone*100/long.size) })
+        waiting.mapNotNull { it.queuedMs }.minOrNull()?.let { o.put("oldestWaitMin",((now-it)/60_000).coerceAtLeast(0)) }
+        return o
     }
 }

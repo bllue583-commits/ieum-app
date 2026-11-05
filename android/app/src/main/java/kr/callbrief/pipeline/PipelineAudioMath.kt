@@ -102,6 +102,9 @@ internal object PipelineAudioMath {
     const val CUT_WINDOW_MS=100L
     /** Candidate cut positions are evaluated on this grid. */
     const val CUT_STEP_MS=10L
+    /** r12-8 A5: the shortest last piece; a shorter one is joined to the piece before it (native minimum 1600 samples at 16 kHz). */
+    const val MIN_TAIL_MS=100L
+    fun minTail(rate:Int):Long=maxOf(1L,rate*MIN_TAIL_MS/1000)
 
     /** Average all channels of interleaved PCM into one. A trailing partial frame is dropped. */
     fun downmix(interleaved:FloatArray,channels:Int):FloatArray {
@@ -169,6 +172,9 @@ internal object PipelineAudioMath {
             check(best>start&&best<=start+maxLen){"PIPELINE_AUDIO_CUT"}
             cuts.add(best.toInt());start=best
         }
+        // r12-8 A5: a last piece under 0.1 s is joined to the one before it (the native runtime refuses under 1600 samples,
+        // ANDROID_STT_PCM_SIZE, which failed the whole recording). That piece may then run 0.1 s over the maximum.
+        if(cuts.size>1 && n-cuts.last()<minTail(rate)) cuts.removeAt(cuts.size-1)
         return cuts
     }
 
@@ -291,8 +297,9 @@ internal fun interface PipelineAudioView { fun chunk(offsetMs:Long,data:FloatArr
  * first sample index and a view), so there is no new array per chunk unless the receiver copies. */
 internal class PipelineChunker(private val rate:Int=PipelineAudioMath.TARGET_RATE,private val maxChunkMs:Long=PipelineAudioMath.MAX_CHUNK_MS,
                                /** (first sample index, data, from, to): valid during the call only */ private val emit:(Long,FloatArray,Int,Int)->Unit) {
-    /** Samples needed past a chunk start before its cut is final (max length + half window + 1). */
-    private val ready=rate*maxChunkMs/1000+maxOf(1L,rate*PipelineAudioMath.CUT_WINDOW_MS/2000)+1
+    /** Samples needed past a chunk start before its cut is final (max length + the larger of half a window and the shortest
+     * last piece (r12-8 A5: a cut made here then always leaves at least that much after it, so it is never the one joined) + 1). */
+    private val ready=rate*maxChunkMs/1000+maxOf(maxOf(1L,rate*PipelineAudioMath.CUT_WINDOW_MS/2000),PipelineAudioMath.minTail(rate))+1
     private val current=PipelineAudioFloats(1 shl 16,limit=ready.toInt())
     private var start=0L
     private var finished=false

@@ -89,14 +89,20 @@ internal class CallTranscriptionRunner(
     private val oldBefore:()->Long?={null},
     /** True when the stop is the system's work time limit (about 10 minutes), not a cancel or a constraint (review #12). */
     private val timeLimited:()->Boolean={false},
+    /** r12-8 A3: past this much of the run (by [now]) no new recording is begun; the one under way is finished. */
+    private val newWorkMs:Long=NEW_WORK_MS,
 ) {
     data class Pass(val state:String,val done:Int,val failed:Int,val pieces:Int=0)
     /** The worker was told to stop; finished pieces are kept for the next run. */
     internal class Stopped:RuntimeException("ANDROID_STT_STOPPED")
+    /** r12-8 A4: a piece ran into the native deadline; it is marked to be done as two halves and the attempt is given back. */
+    internal class Deadline:RuntimeException(CallTranscriptionStore.DEADLINE)
     /** Pieces finished in this run (also when it ends stopped). */
     private var pieces=0
     /** Pieces of the current recording finished in this run: a time-limit stop after progress is no stall (review #12). */
     private var recordingPieces=0
+    /** r12-8 A3: the current recording is not the first one this run took up. */
+    private var laterInRun=false
     /** The last stop of [transcribeRecording] came after progress at the time limit (an hour-long call needs ~10 runs). */
     internal var lastStopHarmless=false;private set
 
@@ -108,18 +114,28 @@ internal class CallTranscriptionRunner(
         val finished=store.parts(key) // pieces finished before the worker was stopped last time
         var session:CallTranscriber.Session?=null // the model is loaded on the first piece that needs it and closed below, whatever happens
         recordingPieces=0;lastStopHarmless=false
+        // r12-8 A3: a recording that was not the first of its run and is stopped by the time limit had no fair chance: no stall
+        // either. The first one of a run that cannot finish a piece still counts (else it could loop for ever).
+        val startedLate=laterInRun
         // A stop is counted against the piece only when it is no time-limit stop after progress (review #12).
         fun stop(stallId:Int):Nothing {
-            lastStopHarmless=harmlessStop(timeLimited(),recordingPieces)
+            lastStopHarmless=harmlessStop(timeLimited(),recordingPieces,startedLate)
             if(!lastStopHarmless)store.noteStall(key,stallId)
             throw Stopped()
         }
         // One piece: skipped when finished earlier; a stop while it runs is counted against [stallId] (the whole chunk).
         fun piece(partId:Int,stallId:Int,offset:Long,pcm:FloatArray):List<CallTranscript.Segment> {
             finished[partId]?.let { return it }
-            if(stopped()){lastStopHarmless=harmlessStop(timeLimited(),recordingPieces);throw Stopped()} // not started: no stall
+            // r12-8 A5: under 0.1 s there is nothing to hear and the runtime would refuse it (ANDROID_STT_PCM_SIZE).
+            if(pcm.size<MIN_PIECE_SAMPLES)return emptyList()
+            if(stopped()){lastStopHarmless=harmlessStop(timeLimited(),recordingPieces,startedLate);throw Stopped()} // not started: no stall
             val raw=try { (session ?: transcriber.open(file,stopped).also{session=it}).transcribe(pcm,stopped) }
-                catch(e:Exception) { if(stopped())stop(stallId);throw e } // cancel() ends the native run with an error
+                catch(e:Exception) {
+                    if(stopped())stop(stallId) // cancel() ends the native run with an error
+                    // r12-8 A4: the native run ended by its own deadline (not a stop): a whole piece is halved next time.
+                    if(deadline(e) && partId>=0 && pcm.size>=MIN_SPLIT_SAMPLES){store.askSplit(key,stallId);throw Deadline()}
+                    throw e
+                }
             if(stopped())stop(stallId) // a piece cut short is not kept
             val shifted=raw.map { CallTranscript.Segment(it.startMs+offset,it.endMs+offset,it.text) }
             store.savePart(key,partId,shifted);pieces++;recordingPieces++;return shifted
@@ -128,8 +144,9 @@ internal class CallTranscriptionRunner(
             val info=audio.decode(input,mime) { index,offset,pcm ->
                 val kept=finished[index]
                 if(kept!=null) segments+=kept
-                else if(pcm.size>=MIN_SPLIT_SAMPLES && store.stalls(key,index)>=SPLIT_AFTER_STOPS) {
-                    // Stopped three times in a row on this piece: do it as two halves (saved separately, ids -1,-2,-3...).
+                else if(pcm.size>=MIN_SPLIT_SAMPLES && (store.splitAsked(key,index) || store.stalls(key,index)>=SPLIT_AFTER_STOPS)) {
+                    // Ran into the native deadline (r12-8 A4), or stopped three times in a row on this piece: do it as two
+                    // halves (saved separately, ids -1,-2,-3...).
                     val mid=PipelineAudioMath.halfPoint(pcm)
                     segments+=piece(-(2*index+1),index,offset,pcm.copyOfRange(0,mid))
                     segments+=piece(-(2*index+2),index,offset+mid*1000L/PipelineAudioMath.TARGET_RATE,pcm.copyOfRange(mid,pcm.size))
@@ -153,17 +170,21 @@ internal class CallTranscriptionRunner(
         val target=sink() ?: return Pass("NO_SINK",0,0)
         val file=model.verifiedModelFile() ?: return Pass("NO_MODEL",0,0)
         var done=0;var failed=0;pieces=0
+        val runStarted=now();var taken=0
         repeat(maxJobs) {
             if(stopped())return Pass("STOPPED",done,failed,pieces)
+            // r12-8 A3: late in the run no new recording is begun (it would only be cut off by the time limit); the next run takes it.
+            if(taken>0 && now()-runStarted>=newWorkMs)return Pass("MORE",done,failed,pieces)
             val job=store.nextQueued(oldBefore()) ?: return Pass("IDLE",done,failed)
             val c=job.candidate
             if(holdOld(c))return Pass("WAIT_POWER",done,failed) // new ones come first: everything after this is old too
             if(!store.claim(c.key))return@repeat
-            lastStopHarmless=false
+            lastStopHarmless=false;laterInRun=taken++>0
             try {
                 val started=now()
                 val (decoded,segments)=read(c).use { input -> transcribeRecording(c.key,input,c.mime,file) }
                 store.clearParts(c.key)
+                if(decoded.durationMs>0)store.noteLength(c.key,decoded.durationMs)
                 val cleaned=TranscriptClean.clean(segments) // A9: just before saving; the pieces kept in the store stay raw
                 if(cleaned.removed>0)cleanedCount(cleaned.removed)
                 // One line per recognised piece (prompt rule 2); quotes are checked on bare text, so the line ends change nothing there.
@@ -176,6 +197,8 @@ internal class CallTranscriptionRunner(
                 if(decoded.durationMs>0)speed((now()-started)*60000/decoded.durationMs)
                 done++
             } catch(e:Stopped) { endStopped(c.key);return Pass("STOPPED",done,failed,pieces) }
+            // r12-8 A4: not a used-up attempt; the piece is halved next time. The rest of the run goes on.
+            catch(e:Deadline) { store.finish(c.key,"QUEUED",CallTranscriptionStore.DEADLINE,refundAttempt=true) }
             catch(e:Exception) {
                 if(stopped()){endStopped(c.key);return Pass("STOPPED",done,failed,pieces)}
                 val code=e.message?.takeIf{it.matches(Regex("[A-Z0-9_]{1,80}"))} ?: e.javaClass.simpleName
@@ -193,7 +216,12 @@ internal class CallTranscriptionRunner(
         const val MAX_REFUNDED_STALLS=6
         fun refundStop(totalStalls:Int)=totalStalls<MAX_REFUNDED_STALLS
         /** A stop at the work time limit after at least one piece of the recording was finished in this run. */
-        fun harmlessStop(timeLimited:Boolean,piecesThisRun:Int)=timeLimited && piecesThisRun>0
+        fun harmlessStop(timeLimited:Boolean,piecesThisRun:Int,laterInRun:Boolean=false)=timeLimited && (piecesThisRun>0 || laterInRun)
+        /** r12-8 A3: no new recording is begun after this much of a run (WorkManager stops the run at about 10 minutes). */
+        const val NEW_WORK_MS=6*60_000L
+        /** r12-8 A4: the native run ended by its own [NATIVE_DEADLINE_SECONDS] (ieum_whisper.cpp ends it with
+         * ANDROID_STT_NOT_COMPLETED); a stop signal is told apart by the caller before this is asked. */
+        fun deadline(e:Exception)=e.message=="ANDROID_STT_NOT_COMPLETED"
         /** Without a stop reason (before Android 12): a stop this long after the start is taken as the 10 minute limit. */
         const val TIME_LIMIT_NEAR_MS=9*60_000L
         /** Queue the next pass at once only when this one made progress; otherwise the hourly job takes over. */
@@ -201,6 +229,8 @@ internal class CallTranscriptionRunner(
         /** The same piece stopped this many times in a row is halved; not worth halving under ten seconds. */
         const val SPLIT_AFTER_STOPS=3
         const val MIN_SPLIT_SAMPLES=PipelineAudioMath.TARGET_RATE*10
+        /** The native runtime's smallest piece (ieum_whisper.cpp: 1600 samples, 0.1 s at 16 kHz). */
+        const val MIN_PIECE_SAMPLES=1600
         private val PREFIXES=listOf("통화 녹음","통화녹음","Call recording","Call Recording")
         /** "통화 녹음 홍길동_251029_101500.m4a" -> "홍길동"; "01012345678_20251029101500.m4a" -> "010-1234-5678"; else null. */
         fun counterpart(displayName:String):String? {
@@ -255,11 +285,21 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                     oldBefore={ FirstPass.liveFrom(settings.snapshot(),System.currentTimeMillis()) },
                     timeLimited={ timeLimitStop(began) }
                 ).run()
+                noteRun(settings,began,pass.state)
                 // Stopped part way: queue the next pass at once (the finished pieces are kept) instead of waiting for the hourly one.
                 if(CallTranscriptionRunner.requeueNow(pass.state,pass.pieces))enqueue(applicationContext)
                 Result.success()
             } }
-        } catch(_:Exception) { if(runAttemptCount<3)Result.retry() else Result.failure() }
+        } catch(_:Exception) { noteRun(settings,began,"ERROR");if(runAttemptCount<3)Result.retry() else Result.failure() }
+    }
+
+    /** r12-8 A1: one more run of the day for the heartbeat (runs, minutes, how it ended). A failure loses only the count. */
+    private fun noteRun(settings:SecureSettings,beganElapsed:Long,state:String) = runCatching {
+        val ms=android.os.SystemClock.elapsedRealtime()-beganElapsed
+        val end=TranscriptionRuns.endCode(state,state=="STOPPED" && timeLimitStop(beganElapsed))
+        val day=TranscriptionRuns.day(System.currentTimeMillis())
+        settings.update { s -> s.put(PipelineSettingsKeys.TRANSCRIPTION_RUNS,TranscriptionRuns.add(
+            runCatching { org.json.JSONObject(s.optString(PipelineSettingsKeys.TRANSCRIPTION_RUNS)) }.getOrNull(),day,ms,end).toString()) }
     }
 
     /** The system's time limit stopped the work: its own reason on Android 12 and later, else a run near the 10 minute limit. */
