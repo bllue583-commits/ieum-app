@@ -36,6 +36,8 @@ object CallSession {
     const val SETTINGS_KEY="callSession"
     /** A state that is not IDLE but older than this when it is read back was lost (the IDLE broadcast never came). */
     const val STALE_MS=6*3_600_000L
+    /** v3.0 (r11-1): an OFFHOOK within this time after [pendingOutgoing] is that call going out, with that number. */
+    const val OUTGOING_WINDOW_MS=20_000L
 
     private class Live(val state:State,val phoneKey:String?,val direction:Direction?,val sinceMs:Long,
                        val startedMs:Long,val answered:Boolean,val ignored:Boolean) {
@@ -46,6 +48,18 @@ object CallSession {
     private val IDLE_AT_START=Live(State.IDLE,null,null,0L,0L,false,false)
     private val lock=Any()
     @Volatile private var live:Live?=null
+    /** The number the call redirection service saw last (v3.0, r11-1): its key and when. Memory only (the call follows within
+     * seconds); used by the next OFFHOOK within [OUTGOING_WINDOW_MS], then dropped. */
+    private class Pending(val phoneKey:String,val atMs:Long)
+    private var pending:Pending?=null
+
+    /** v3.0 (r11-1): a call is about to go out to [number] ([OutgoingCallService.onPlaceCall], at [atMs]). Only its [PhoneKey]
+     * is kept, in memory, until the OFFHOOK that follows within [OUTGOING_WINDOW_MS]; that OFFHOOK then makes a call that goes
+     * out with this number (or an ignored one, when the number is personal or excluded). Quick: no file, no settings. */
+    fun pendingOutgoing(number:String?,atMs:Long) {
+        val key=PhoneKey.of(number)
+        synchronized(lock) { pending=key?.let { Pending(it,atMs) } }
+    }
 
     /** Replaceable in host tests. */
     @Volatile internal var clock:()->Long={ System.currentTimeMillis() }
@@ -85,7 +99,7 @@ object CallSession {
     internal fun forgetMemory() = synchronized(lock) { live=null }
     /** Host tests: back to the start, nothing kept. */
     internal fun resetForHost() = synchronized(lock) {
-        live=null;listeners.clear();clock={ System.currentTimeMillis() };isPrivate=::privateNumber
+        live=null;pending=null;listeners.clear();clock={ System.currentTimeMillis() };isPrivate=::privateNumber
         afterCall={ c -> AutomaticRecordingDiscovery.scheduleAfterCall(c) }
     }
 
@@ -116,10 +130,14 @@ object CallSession {
                     save(app,if(key!=null) withNumber(app,ring,key) else ring)
                 }
                 to==State.OFFHOOK -> {
-                    // Off hook without ringing first: a call that goes out (design: the number may be unknown, null).
+                    // Off hook without ringing first: a call that goes out (design: the number may be unknown, null). v3.0:
+                    // the number the call redirection service saw just before, when it is fresh enough.
+                    val out=pending?.takeIf { was.state!=State.RINGING && now-it.atMs in 0..OUTGOING_WINDOW_MS }?.phoneKey
+                    pending=null
                     val next=if(was.state==State.RINGING) Live(State.OFFHOOK,was.phoneKey,Direction.IN,now,was.startedMs,true,was.ignored)
                         else Live(State.OFFHOOK,null,Direction.OUT,now,now,true,false)
-                    save(app,if(next.phoneKey==null && !next.ignored && key!=null) withNumber(app,next,key) else next)
+                    val known=out ?: key
+                    save(app,if(next.phoneKey==null && !next.ignored && known!=null) withNumber(app,next,known) else next)
                 }
                 else -> { // IDLE after RINGING (missed or rejected) or after OFFHOOK (the call ended)
                     ended=CallEnd(was.phoneKey,was.direction,was.startedMs,now,was.state==State.OFFHOOK)
