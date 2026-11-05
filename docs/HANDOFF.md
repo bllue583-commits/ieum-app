@@ -2,7 +2,7 @@
 
 > 다음 세션은 이 파일부터 읽고 "4-3. v2.0"과 "6. 다음 할 일"부터 진행하세요. 설계도(Claude Docs)가 기준이며, 모든 변경은 설계도를 먼저 고친 뒤 개발합니다(11/4 사용자: "모든 과정에서 설계도를 철저히 반영").
 > 앱의 목적·기능·UX 설계 상세는 [PRODUCT.md](PRODUCT.md)에 있습니다.
-> **11/5 오전 (Opus): v2.9 lean-calls에 합쳐 배포(4-8).** v3.0은 `feature/r11-v30`(= v2.9) 위에서 r11-1·r11-2 작업자 개발 중.
+> **11/5 오후 (Opus): v3.0 lean-calls에 합쳐 배포(4-9).** v2.6~v3.0 모두 배포. 다음은 아내 폰 권한 확인과 저장소 비공개 복귀(6절).
 > **11/5 09시 (Opus 오케스트레이션 세션):** 저장소를 공개로 바꾼 뒤 **v2.6(빌드 1034)·v2.7(1035) 배포, v2.8은 lean-calls에 합쳐 배포 중.** v2.8 통합 기록은 "4-7", 다르게 정한 것은 설계 [DESIGN_V3.md](DESIGN_V3.md) 5.5절. v2.9 묶음 셋(r10-1~3)은 `feature/r10-v29` 위에서 작업자가 개발 중. 로컬 빌드는 메이븐 429 때문에 `$GRADLE_USER_HOME/init.d/mirror.gradle`(구글 미러, 저장소 밖)을 둠 — "7. 알아 둘 함정" 참고. 설계도는 개발하면서 같이 검증하고 다르게 정한 것을 설계 쪽에 적는다(사용자 11/5).
 > **11/5 08시 (Fable 오케스트레이션 세션 종료 → Opus가 이어받음):** v2.6은 lean-calls에 합쳐 배포 대기(ca9acf2), v2.7은 코드 완성(`feature/r8-v27` 964fd1b, 기기 시험 대기), v2.8은 묶음 셋이 브랜치에 올라와 통합 대기. **"4-6"·"4-7"과 "6. 다음 할 일"부터 읽으세요.** 작업자 지시문·보고서·통합 기록은 `docs/orchestration/`에 있습니다(사용자: "handoff 만들어주고 오케스트레이션 종료, 오푸스에게 이어가게").
 > **11/5 새벽 (v2.2~v2.5 마무리):** "4-4"에 v2.4 배포, v2.5 완성(배포는 GitHub Actions 결제 차단으로 대기), 예약 작업 세 개, 워치독 설치를 적었습니다. 6절 0번(v2.5 배포)부터 하세요.
@@ -211,6 +211,12 @@ $HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu 
 - **사용자 할 일:** 예약 작업 "이음 통화 분석 (매시간)" 실행 일정 `30 * * * *` → `CRON_TZ=Asia/Seoul */30 7-22 * * *`(프롬프트 본문은 그대로). 바꾸면 이 파일·OPERATIONS의 "매시 30분"을 "30분마다(07:00~22:30)"로. 워치독 새 규칙(`tools/inbox/watchdog.py`)은 ieum-inbox `tools/watchdog.py`에 다시 복사해야 반영.
 - 기기 확인 못 한 것: 실제 PHONE_STATE 흐름, RemoteInput 메모 — v3.0 device-test `call-card` 단계에서 같이 본다.
 
+## 4-9. v3.0 (11/5 오후, Opus 통합 — lean-calls 배포, 기준 DESIGN_V3.md 7절, 다르게 정한 것은 7.5)
+- 통합 `feature/r11-v30` d48a9d4: r11-1(cf4edb1 OutgoingCallService·CallCardService·처음 설정 10단계·설정 "통화 카드") + r11-2(6ebe4ad CallCardOverlay·CallCardView) → 임시 정의 삭제·설정 키 통일(77b544b, 522건) → r11-3(f413488 CardStats·신호등·watchdog·`tools/device/call_card_test.sh`·`CallCardSeedTest`, 533건). 보고서 `docs/orchestration/reports/feature-r11-v30-r*.md`.
+- device-test에 "Call card on emulator" 단계(오케스트레이터가 추가, `CARD_WINDOW_MS=3000`)와 화면 7_call_detail·8_person·9_home_large(글자 1.3배). 결과(run 41973214685): 화면 9장 모두 그려짐, `evidence/call-card.json` 일곱 항목 모두 true(벨 → 창 1158ms, 받으면 3초 뒤 띠, 끊으면 창·서비스 없음, 발신 placeCallUnmodified+카드, 모르는 번호 꺼짐이면 조용·켜면 카드, 개인 번호 아무것도 없음).
+- 알려진 것: `evidence/shots/card_*.png`는 0바이트(창이 FLAG_SECURE라 원래 검게 찍힘, `adb exec-out screencap`도 실패) — 판정에는 쓰지 않음. 사람 화면 시험 데이터(PreviewSeed)에 걸 수 있는 번호가 없어 [전화 걸기][문자 보내기]가 안 보임(실제 번호가 있는 사람에게는 보임, PersonScreenTest가 확인).
+- 아내 폰에서 한 번씩 허용할 것: 처음 설정 카드의 "통화가 끝난 걸 바로 알아차리기"(전화 상태), "통화 화면 위에 이음 카드 보기"(다른 앱 위에 표시), 선택 "거는 전화에도 카드 보기"(통화 연결 앱 역할). 하트비트 `callCard`로 실제 카드가 뜨는지(shown·noPermission) 확인.
+
 ## 5. 현재 UI 상태와 문제점 (S26 스크린샷 기준, 다음 작업의 출발점)
 사용자 평가(10/30): "미관상 너무 엉망", "**깔끔하긴 한데 세련되지 않았다**". 목표는 깔끔함을 넘어 세련됨. 개편 방향은 [PRODUCT.md 4.5](PRODUCT.md). Claude가 본 구체적 문제:
 1. **모든 버튼이 같은 연청색 큰 덩어리** — 전날/다음날, 할 일 전체 보기, 이름 고치기, 완료했어요, 업체 목록으로가 모두 같은 크기·색. 주요 동작과 보조 동작의 구분이 없음.
@@ -255,7 +261,7 @@ $HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu 
 0. ~~저장소 공개와 배포 재개~~ 끝(11/5 08:07 사용자가 공개 전환). **v3.0 배포 뒤 다시 비공개로**(사용자가 직접). 아내 폰은 v2.4에서 v2.6을 한 번 손으로 설치해야 하고(사용자에게 안내함), 그 뒤는 무인 설치. 하트비트 `version`·`updateReadySinceMs`로 무인 설치가 되는지 확인할 것.
 1. ~~v2.7 배포~~ 끝(1035). ~~v2.8 통합~~ 끝 — 배포 결과 확인.
 2. ~~v2.9~~ 배포(4-8). 루틴 cron 30분 변경은 사용자가.
-3. **v3.0** (`feature/r11-v30` = v2.9 완성본, 지시문 r11-1~r11-3 — r11-1·r11-2 병렬 뒤 r11-3): device-test에 `tools/device/call_card_test.sh` 단계를 **오케스트레이터가** 넣고(통화 상세·1.3배 홈 스크린샷도 같이) **결과를 기다린 뒤** 배포. 배포 뒤 아내 폰 권한 안내(DESIGN_V3.md 9절). 그다음 저장소 비공개 복귀.
+3. ~~v3.0~~ 배포(4-9). 남은 것: 아내 폰 권한 세 가지 안내(4-9), **저장소 비공개 복귀(사용자가 Settings → Danger Zone → Change to private)**, 하트비트 `callCard`·`resultChain`·`version`으로 실제 동작 확인.
 4. 워크플로 절약(제안): 묶음 브랜치 push마다 ci·device-test가 다 돈다. 공개 저장소에서는 무료라 급하지 않음.
 5. 남은 사용자 할 일: 루틴 지시문 교체 확인(v2.6 r7-5), 비밀 `IEUM_SIGNING_SEED` 복사, "병합 후 브랜치 자동 삭제" 켜기, 옛 시험 브랜치 삭제.
 6. 그대로 남는 것: 문자·메일 실제 확인(MMS, RCS), inbox-e2e 정기 점검, 우편함 이력 압축(J3), 골든 셋 실험(F3, F4).
