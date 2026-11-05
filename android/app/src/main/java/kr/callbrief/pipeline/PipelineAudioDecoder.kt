@@ -24,13 +24,15 @@ internal class PipelineAudioDecoder(
     private val speechFloor:Float=PipelineAudioMath.SPEECH_FLOOR,
     /** F1: channel count and left/right numbers of each decoded recording (first pass only). */
     private val channels:(PipelineChannelStats.Result)->Unit={},
+    /** v3.3 B7 (golden variant only): [PipelineAudioMath.LOUD_SHARE] unless measured otherwise. */
+    private val loudShare:Float=PipelineAudioMath.LOUD_SHARE,
 ):PipelineAudioSource {
     override fun decode(input:PipelineAudioInput,mime:String,sink:PipelineChunkSink):PipelineAudioInfo {
         check(input.size>0){"PIPELINE_AUDIO_EMPTY"}
         val wav=PipelineAudioMath.isWav(input)
         if(!wav)check(!mime.lowercase().let{it=="audio/wav"||it=="audio/x-wav"||it=="audio/wave"}){"PIPELINE_AUDIO_WAV_HEADER"}
         fun pass(onChunk:PipelineAudioView):PipelineAudioStream = decodeRaw(input,wav,onChunk)
-        val plan=PipelineSpeechPlan(floor=speechFloor)
+        val plan=PipelineSpeechPlan(floor=speechFloor,loudShare=loudShare)
         val first=pass{ms,x,from,to->plan.add(ms,x,from,to)} // nothing is copied in the first pass
         runCatching{channels(first.channelStats.result())}
         val vad=plan.applies()

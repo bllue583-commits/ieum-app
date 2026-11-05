@@ -74,5 +74,27 @@ class ScoreTest(unittest.TestCase):
         self.assertTrue(any("floor0025" in h and "충족" in h for h in r["hints"]))
 
 
+class RealGoldenTest(unittest.TestCase):
+    """v3.3 (DESIGN_V4 3.2-4): golden_parity.json pins score_real; the app's GoldenScore test reads the same file."""
+    PARITY = os.path.join(HERE, "golden_parity.json")
+
+    def test_parity_fixture_is_what_this_scorer_gives(self):
+        p = json.load(open(self.PARITY, encoding="utf-8"))
+        for c in p["cases"]:
+            self.assertEqual(c["normalizedReference"], g.normalize(c["reference"]))
+            self.assertEqual(c["numbers"], g.number_entities(c["reference"]))
+            self.assertEqual(c["expected"], g.score_real(c["reference"], c["hypothesis"], p["names"]))
+
+    def test_numbers_keep_their_unit_and_names_count_only_when_said(self):
+        s = g.score_real("탄탄이엔씨 3개월 뒤 7시", "탄탄이엔씨 삼 개월 뒤 일곱 시", {"company": ["탄탄이엔씨", "대한철강"]})
+        self.assertEqual({"total": 1, "hit": 1}, s["company"])
+        self.assertEqual(["삼개월", "일곱시"], g.number_entities("3개월 뒤 7시"))
+        self.assertEqual({"total": 2, "hit": 2}, s["number"])
+        self.assertEqual(0, s["distance"])
+
+    def test_huge_numbers_are_read_digit_by_digit(self):
+        self.assertEqual("일공", g.sino(10 ** 16)[:2])
+
+
 if __name__ == "__main__":
     unittest.main()

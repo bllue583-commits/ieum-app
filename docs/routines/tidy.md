@@ -30,7 +30,7 @@ v2.6(11/5): state의 tasks에 rev, state에 mergeCandidates가 실린다. 6번�
    - {"op":"done_suggested","id","rev"}: 나중 기록에서 끝난 것으로 보이면 "끝났는지 확인"만 표시한다.
    - {"op":"create","title","due","company","basis"}: 5번의 팔로업.
    create가 아닌 각 제안 항목에는 state의 rev를 그대로 적는다(그 항목의 state tasks에 있는 rev 값, 바꾸거나 계산하지 않는다). 폰은 rev가 지금 값과 다르면(state를 올린 뒤 통화로 바뀐 일) 그 제안을 건너뛴다. create에는 rev가 없다.
-   state에 mergeCandidates가 있으면 폰이 서로 비슷해 중복일 수 있다고 본 체크할 일의 id 쌍 목록이다. merge를 판단할 때 이 쌍부터 대조하되, 대상(문서, 공정, 회차)이 다르면 합치지 않는다.
+   state에 mergeCandidates가 있으면 폰이 서로 비슷해 중복일 수 있다고 본 쌍의 목록이고, 한 쌍은 [남겨 둔 체크할 일 id, 비슷한 일을 냈다가 빠진 기록 key]이다(체크할 일 id 둘이 아니다). merge를 판단할 때 그 체크할 일과 그 기록(records의 key)부터 대조하되, 대상(문서, 공정, 회차)이 다르면 합치지 않는다.
    완료 처리는 하지 않는다(사용자가 누른다). locked가 true인 항목은 바꾸지 않는다. 제목에 가운데 점, 말줄임표, 영어를 쓰지 않는다.
 7. 장부 정리: 같은 업체의 다른 표기는 하나로 합치고 없어지는 쪽에 mergedInto를 적는다. 번호 없이 이름으로만 있는 중복 사람도 mergedInto로 합친다(번호가 다른 두 사람은 폰이 합치지 않으므로 합치지 않는다). 없어지는 쪽 업체와 사람 항목은 지우지 말고 mergedInto만 적어 둔다(폰은 그 항목의 mergedInto를 보고 합친다). 다음 새벽 정리에서 폰 state에 그 이름이 더 이상 보이지 않으면 지운다. siteMemo는 600자, 업체 memo는 400자 안으로 짧게 다시 쓴다. locked 항목은 바꾸지 않는다. 끝나면 tidiedOnce를 true로 쓴다. 단 state의 firstPassDone이 false인 날(3번)에는 tidiedOnce를 쓰지 않고 장부에 있던 값을 그대로 둔다. state에 personCandidates(사람 id 쌍)가 있으면 폰이 같은 번호인데 이름이 조금 다르거나 같은 업체에 같은 이름이라 자동으로 합치지 않은 쌍이다. 자막과 기록으로 같은 사람이 확실할 때만 mergedInto로 합치고, 애매하면 그대로 둔다.
 8. 원칙: 근거 없는 내용을 만들지 않는다. 파일은 Read 도구로 읽고 직접 판단하며, 결과를 스크립트로 일괄 생성하지 않고 파일 내용을 터미널에 출력하지 않는다. 장부와 기억 파일에 전화번호, 녹음, 자막과 문자 원문을 넣지 않는다. JSON은 `python3 -c 'import json;json.load(open("파일"))'`로 형식만 확인한다.

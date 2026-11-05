@@ -28,13 +28,24 @@ class RoutineDocTest {
 
     @Test fun hourlyDocCarriesTheCodeRulesAndFormat() {
         val f=doc()
-        if(System.getenv("IEUM_WRITE_ROUTINE_DOC")=="1")
+        if(System.getenv("IEUM_WRITE_ROUTINE_DOC")=="1" && codeAtDocVersion)
             f.writeText(replaceBlock(replaceBlock(f.readText(),"SYSTEM","text",ClaudeCallAnalyzer.SYSTEM),"SCHEMA","json",ClaudeCallAnalyzer.SCHEMA.toString(2)))
         val text=f.readText()
-        assertEquals("[분석 규칙] must be ClaudeCallAnalyzer.SYSTEM",ClaudeCallAnalyzer.SYSTEM,block(text,"SYSTEM","text"))
-        assertEquals("[결과 형식] must be ClaudeCallAnalyzer.SCHEMA",ClaudeCallAnalyzer.SCHEMA.toString(),JSONObject(block(text,"SCHEMA","json")).toString())
-        assertTrue("version in the doc",text.contains("지시문 버전 ${ClaudeCallAnalyzer.PROMPT_VERSION}."))
-        assertTrue(text.contains("\"promptVersion\":\"${ClaudeCallAnalyzer.PROMPT_VERSION}\""))
+        if(codeAtDocVersion) {
+            assertEquals("[분석 규칙] must be ClaudeCallAnalyzer.SYSTEM",ClaudeCallAnalyzer.SYSTEM,block(text,"SYSTEM","text"))
+            assertEquals("[결과 형식] must be ClaudeCallAnalyzer.SCHEMA",ClaudeCallAnalyzer.SCHEMA.toString(),JSONObject(block(text,"SCHEMA","json")).toString())
+        } else {
+            // v7 hand-over (r13-2 wrote the doc; ClaudeCallAnalyzer is r13-1's): the doc's format is the code's plus "corrected".
+            // The orchestrator copies [분석 규칙] and [결과 형식] into SYSTEM and SCHEMA with PROMPT_VERSION=7; then the strict check above holds.
+            assertEquals("the code is one version behind the doc",DOC_VERSION-1,ClaudeCallAnalyzer.PROMPT_VERSION)
+            val docSchema=JSONObject(block(text,"SCHEMA","json"))
+            docSchema.getJSONObject("properties").remove("corrected")
+            val required=docSchema.getJSONArray("required")
+            docSchema.put("required",org.json.JSONArray((0 until required.length()).map { required.getString(it) }.filter { it!="corrected" }))
+            assertEquals("[결과 형식] is the code's plus corrected",ClaudeCallAnalyzer.SCHEMA.toString(),docSchema.toString())
+        }
+        assertTrue("version in the doc",text.contains("지시문 버전 $DOC_VERSION."))
+        assertTrue(text.contains("\"promptVersion\":\"$DOC_VERSION\""))
         // The routine's steps that must not get lost when the prompt is replaced.
         listOf("\"새 기록 없음\"","ledger/edits","b- 파일을 이름순으로 최대 2개","Read 도구","스크립트로 일괄 생성하지 않는다","\"format\": 3이 있으면(새 형식) 이 문서의 [분석 규칙]을 따르고",
             "promptMismatch","rev를 1 올리고","pull --rebase","bad/","status/last-run.json","처리 건수만").forEach { assertTrue(it,text.contains(it)) }
@@ -75,8 +86,17 @@ class RoutineDocTest {
             "명절 인사, 경조사 안내는 업무 관계이므로 business true").forEach { assertTrue(it,rules.contains(it)) }
         // The time label rule 8 names is the one the message uses.
         assertEquals("시각 미상",CallRecordStore.kstTime(null))
-        // Rule 10 (no names in titles) waits for v2.7, when the check item row shows the person.
-        assertTrue(rules.contains("\"김민수 과장 견적서 회신 확인\"처럼"))
+        // v7 (DESIGN_V4 3.2-3): no names or titles in check item titles (the screen shows the person); numbers that may be
+        // misheard stay as heard and tentative; names misheard are written as in [이름 목록] and listed in corrected, never a number.
+        assertFalse(rules.contains("김민수 과장 견적서 회신 확인"));assertFalse(rules.contains("김민수 과장 수정 견적서"))
+        listOf("title에 사람 이름이나 호칭(김민수 과장, 소장님)을 넣지 마세요","들린 대로 적되 그 일의 certainty를 \"tentative\"로",
+            "숫자를 짐작해 바꾸지 마세요","corrected에 {\"heard\": 자막에 들린 표기, \"written\": 고쳐 쓴 표기}",
+            "숫자, 날짜, 시각, 금액, 규격(철근 규격, 강도, 수량)은 비슷하게 들려도 절대 고치지 말고 corrected에도 넣지 마세요",
+            "quote는 고치지 말고 자막 그대로","메일의 \"보낸 사람\"에는 이름만 있고 주소는 없습니다").forEach { assertTrue(it,rules.contains(it)) }
+        val corrected=JSONObject(block(text,"SCHEMA","json")).getJSONObject("properties").getJSONObject("corrected")
+        assertEquals(listOf("heard","written"),corrected.getJSONObject("items").getJSONObject("properties").keys().asSequence().toList())
+        assertTrue(corrected.getString("description").contains("숫자, 날짜, 규격은 고치지 않음"))
+        assertTrue(text.contains("\"promptVersion\": 6도 폰이 업데이트되기 전의 과도기 요청"))
         // The routine never logs a transcript.
         assertTrue(text.contains("\"loggedTranscript\":false"));assertTrue(text.contains("`loggedTranscript`: 자막이나 문자 원문을 출력하거나 로그에 남기지 않았으므로 항상 `false`"))
     }
@@ -97,6 +117,8 @@ class RoutineDocTest {
         listOf("locked, rev}","mergeCandidates[]","{\"op\":\"rewrite\",\"id\",\"rev\",","{\"op\":\"merge\",\"id\",\"rev\",","{\"op\":\"done_suggested\",\"id\",\"rev\"}",
             "각 제안 항목에는 state의 rev를 그대로 적는다","create에는 rev가 없다","state에 mergeCandidates가 있으면",
             "없어지는 쪽 업체와 사람 항목은 지우지 말고 mergedInto만 적어 둔다").forEach { assertTrue(it,text.contains(it)) }
+        // v3.3 (review r3 D9): a pair is what the phone sends, [kept item id, record key] (PipelineSettingsKeys.MERGE_CANDIDATES).
+        assertTrue(text.contains("한 쌍은 [남겨 둔 체크할 일 id, 비슷한 일을 냈다가 빠진 기록 key]이다"));assertFalse(text.contains("체크할 일의 id 쌍 목록"))
         assertTrue(text.contains(REPO))
         // v3.1 (r12-3, DESIGN_V4 2.3-1): the first pass no longer stops the tidy; until it ends only the last 14 days, no tidiedOnce.
         assertFalse("firstPassDone no longer stops step 1",text.contains("firstPassDone이 false이거나"))
@@ -107,6 +129,10 @@ class RoutineDocTest {
     }
 
     private companion object {
+        /** The version docs/routines/hourly.md is at (v7: DESIGN_V4 3.2-3, r13-2). */
+        const val DOC_VERSION=7
+        /** True once ClaudeCallAnalyzer (r13-1's file) carries the doc's version (the orchestrator's integration step). */
+        val codeAtDocVersion get()=ClaudeCallAnalyzer.PROMPT_VERSION>=DOC_VERSION
         /** Both routines find the inbox repository the same way. */
         const val REPO="저장소는 bllue583-commits/ieum-inbox 이다. 작업 폴더에 없으면 ls /home/claude 로 찾고, 그래도 없으면 gh repo clone bllue583-commits/ieum-inbox 로 받는다."
     }

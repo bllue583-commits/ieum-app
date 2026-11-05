@@ -43,6 +43,8 @@ def sino_under_10000(n):
 def sino(n):
     if n == 0:
         return "영"
+    if n >= 10 ** 16:  # beyond 조 units: read digit by digit (the app's Kotlin copy does the same)
+        return "".join(SINO[int(c)] if c != "0" else "공" for c in str(n))
     out = ""
     for unit, value in (("조", 10 ** 12), ("억", 10 ** 8), ("만", 10 ** 4)):
         d = n // value
@@ -93,6 +95,45 @@ def distance(a, b):
             cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (x != y)))
         prev = cur
     return prev[-1]
+
+
+# ---- v3.3 real-recording golden (DESIGN_V4 3.2-4). The app's GoldenScore (GoldenMeasureActivity.kt) is a copy of
+# normalize, distance and score_real; tools/audio/golden_parity.json pins both to the same numbers. ----
+# Units a written number may carry; longer ones first so "개월" is not read as "개".
+NUMBER_UNITS = ("개월", "시간", "루베", "미리", "밀리", "센티", "킬로", "키로", "퍼센트", "층", "톤", "일", "월", "원", "만", "천",
+                "분", "시", "개", "대", "명", "장", "호", "동", "번", "차", "회", "%", "㎥", "m3", "mm", "kg", "m")
+
+
+def number_entities(reference_text):
+    """The numbers written in a reference (digits, with the unit right after them), normalized, without repeats."""
+    text = re.sub(r"(?<=\d),(?=\d{3})", "", reference_text.lower())
+    out = []
+    for m in re.finditer(r"\d+(?:\.\d+)?", text):
+        rest = text[m.end():].lstrip()
+        unit = next((u for u in NUMBER_UNITS if rest.startswith(u)), "")
+        form = normalize(m.group(0) + unit)
+        if form and form not in out:
+            out.append(form)
+    return out
+
+
+def score_real(reference_text, hypothesis, names):
+    """One real recording: edit distance on the normalized texts, and for each kind of name (company, person: the
+    ledger's names) and for the numbers written in the reference, how many of those that occur in the reference the
+    hypothesis has too. names: {kind: [name, ...]}. Counts only, so the phone can send them."""
+    ref, hyp = normalize(reference_text), normalize(hypothesis)
+    d = distance(ref, hyp)
+    out = {"distance": d, "refChars": len(ref), "hypChars": len(hyp), "cer": d / max(1, len(ref))}
+    for kind in sorted(names):
+        forms = []
+        for n in names[kind]:
+            f = normalize(n)
+            if len(f) >= 2 and f in ref and f not in forms:
+                forms.append(f)
+        out[kind] = {"total": len(forms), "hit": sum(1 for f in forms if f in hyp)}
+    numbers = number_entities(reference_text)
+    out["number"] = {"total": len(numbers), "hit": sum(1 for f in numbers if f in hyp)}
+    return out
 
 
 def reference(call):
