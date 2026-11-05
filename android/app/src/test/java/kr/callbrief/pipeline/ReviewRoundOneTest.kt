@@ -19,7 +19,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.SQLiteMode
 import java.time.LocalDate
 
-/** Review round 1 (11/4, docs/REVIEW_20261104.md): call times, personal number, quotes, cross-check, broken results. */
+/** Review round 1 (11/4, docs/reviews/20261104_round1.md): call times, personal number, quotes, cross-check, broken results. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[35],shadows=[ShadowTextKeys::class,ShadowTextAtomicFile::class])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)

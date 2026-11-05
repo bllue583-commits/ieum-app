@@ -128,10 +128,6 @@ class SafSelectedRecordingSource(private val context: Context, private val setti
         checkReadable(document)
         return resolver.openInputStream(Uri.parse(document.uri)) ?: error("SOURCE_READ_FAILED")
     }
-    internal fun openDeclaredSynthetic(document:SourceDocument):InputStream {
-        checkSelected();check(!excluded(document)) { "EXCLUDED_BEFORE_READ" }
-        return resolver.openInputStream(Uri.parse(document.uri)) ?: error("SOURCE_READ_FAILED")
-    }
     override fun checkReadable(document:SourceDocument) {
         checkDocument(document)
         LocalPrivacy.requireCollectionAllowed(RecordingRef(Uri.parse(document.uri),document.name,document.size,document.mime,null,document.modified),state())

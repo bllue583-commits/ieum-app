@@ -140,8 +140,6 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
             if(value.contains('@') && !value.contains(' ')) return value.lowercase()
             return if(value.matches(Regex("^[0-9+\\-(). ]+$"))) kr.callbrief.core.PhoneKey.of(value) ?: value.filter { it.isDigit() }.ifEmpty { null } else value
         }
-        /** The one key every name is compared by (spaces, honorifics, company-form marks and punctuation out, lower case). */
-        fun canonName(name:String?):String=NameKey.canon(name)
         fun canonCompany(name:String?):String=NameKey.canonCompany(name)
         /** Bump when the key rules or the stored data need one more pass in [migrate]. */
         const val MIGRATION_VERSION=4
@@ -442,9 +440,6 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         return insert(CallTranscript(id,1,sha,atMs,0,counterpart,text,emptyList(),"text","0".repeat(64),false)) // text once, not twice (16 MB store)
             .also { if(it) ContactCards.touch(this) { listOf(counterpartKey(counterpart)) } }
     }
-    /** Phone numbers (digits only) of business contacts: everyone the ledger has a number for, and every caller. */
-    fun knownPhones():Set<String> =(rows("SELECT phone_key AS k FROM people_phones")+rows("SELECT DISTINCT counterpart_key AS k FROM call_records WHERE counterpart_key IS NOT NULL"))
-        .mapNotNull { it.str("k") }.filter { k -> k.length>=8 && k.all { it.isDigit() } }.toSet()
 
     private fun map(r:Map<String,Any?>):CallRecord {
         val json=r.str("analysis_json")?.let { JSONObject(it) }

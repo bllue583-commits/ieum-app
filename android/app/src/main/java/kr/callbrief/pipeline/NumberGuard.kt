@@ -168,8 +168,6 @@ internal object NumberGuard {
     }
 
     // ---- the guard of one item ----------------------------------------------------------------------------------
-    /** Where a quote was found: lines [first]..[last] of the call transcript ([inCall]) or of the texts. */
-    data class Place(val inCall:Boolean,val first:Int,val last:Int)
     /** The lines of [lines] holding [quote] (bare, letters and digits), exactly or, failing that, the stretch that holds most of its 3-letter pieces. */
     fun locate(quote:String,lines:List<String>):IntRange? {
         val b=NameKey.bare(quote);if(b.isEmpty() || lines.isEmpty()) return null

@@ -63,19 +63,6 @@ internal object TaskActions {
         }
     }
 
-    /** Opens the call a to-do came from (found through the to-do ids each call recorded). Nothing happens for a to-do no call made.
-     * The row that calls this already counts a press once ([CallUi.once]); SINGLE_TOP keeps a late second start from stacking. */
-    fun openSource(a:ComponentActivity,item:OpenItem) {
-        a.lifecycleScope.launch {
-            val found=withContext(Dispatchers.IO) { runCatching {
-                kr.callbrief.IeumApplication.store(a).let { s ->
-                    val day=CallRecordStore.kstDay(item.createdMs)
-                    listOf(day,day.minusDays(1)).firstNotNullOfOrNull { d -> s.day(d).firstOrNull { c -> c.applied.any { it.itemId==item.id } } } } }.getOrNull() }
-            if(a.isFinishing||a.isDestroyed)return@launch
-            if(found==null) { Toast.makeText(a,"이 체크할 일을 만든 통화를 찾지 못했어요.",Toast.LENGTH_SHORT).show();return@launch }
-            (a as? MainActivity)?.openCall(found.recordId,found.dayMs)
-        }
-    }
 
     /** Priority for the short list on home: ones to check first, then the newest. */
     fun ordered(all:List<OpenItem>)=all.sortedWith(compareByDescending<OpenItem> { it.status=="needs_confirmation" }.thenByDescending { it.createdMs })

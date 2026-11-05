@@ -729,13 +729,6 @@ internal object CallUi {
         addView(head)
         addView(StackBar(a,listOf(n to ACCENT,(max-n).coerceAtLeast(0) to ACCENT_SOFT),split=false),LinearLayout.LayoutParams(-1,dp(a,10)).apply { topMargin=dp(a,8) })
     }
-    /** Legend line: colour dot, label, count on the right. */
-    fun legend(a:Context,label:String,n:Int,color:Int)=LinearLayout(a).apply {
-        orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;setPadding(0,dp(a,4),0,dp(a,4))
-        addView(View(a).apply { background=GradientDrawable().apply { shape=GradientDrawable.OVAL;setColor(color) } },LinearLayout.LayoutParams(dp(a,12),dp(a,12)).apply { marginEnd=dp(a,10) })
-        addView(text(a,label,BODY,color=INK).apply { setPadding(0,0,0,0) },LinearLayout.LayoutParams(0,-2,1f))
-        addView(text(a,"${n}개",BODY,true,INK).apply { setPadding(0,0,0,0);fontFeatureSettings="tnum" })
-    }
     /** A traffic light for a status line: the [label] as a grey aside on top, then the [value] in SemiBold with a round dot
      * in front of it (green when [good], amber otherwise). The same shape at every width, so the lights of one sheet line up. */
     fun signalRow(a:Context,label:String,value:String,good:Boolean,onPress:(()->Unit)?=null)=LinearLayout(a).apply {

@@ -66,35 +66,7 @@ class SecureSettings(context: Context, private val keyAccess: KeyAccess = Androi
         val sealed = Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(ciphertext, Base64.NO_WRAP)
         check(prefs.edit().putString("state", sealed).commit()) { "설정을 안전하게 저장하지 못했어요." }
     }
-    /** Intake only: approval payload and its required-journal marker in an existing store.
-     * prepare must durably quarantine the attempt before preferences can expose new bytes.
-     * A false/throwing preference commit is uncertain, not a rollback. Its journal stays held. */
-    internal fun commitExistingProcessingSetup(value: JSONObject, requiredJournal: JSONObject,
-        validate: (JSONObject) -> Unit,
-        prepare: (JSONObject, String) -> Boolean,
-        committed: () -> Unit): Boolean = synchronized(lock) {
-        val original = prefs.getString("state", null) ?: error("APPROVED_PROCESSING_EXISTING_SETTINGS_REQUIRED")
-        val state = snapshot() // Authenticates with the existing key before any journal or settings write.
-        validate(state)
-        if (!prepare(state, original)) return@synchronized false
-        validate(state)
-        val updated = JSONObject(state.toString()).put("approvedAutomationProcessingSetup", JSONObject(value.toString()))
-            .put("approvedAutomationProcessingSetupIntakeRequired",JSONObject(requiredJournal.toString()))
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, key()) }
-        val bytes = cipher.doFinal(updated.toString().toByteArray(Charsets.UTF_8))
-        val sealed = Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(bytes, Base64.NO_WRAP)
-        validate(state)
-        check(prefs.edit().putString("state", sealed).commit()) { "APPROVED_PROCESSING_SETTINGS_COMMIT_UNCERTAIN" }
-        validate(state)
-        committed() // Only a durable journal completion allows the existing reader to use the field.
-        true
-    }
     fun message(value: String) = update { it.put("statusMessage", value); it.put("statusAt", java.time.Instant.now().toString()) }
-    fun uploadedId(fingerprint: String): String? = snapshot().optJSONObject("uploaded")?.optString(fingerprint)?.takeIf { it.isNotBlank() }
-    fun recordUpload(fingerprint: String, id: String) = update {
-        val ledger = it.optJSONObject("uploaded") ?: JSONObject()
-        ledger.put(fingerprint, id); it.put("uploaded", ledger)
-    }
     fun counterpartKey(phone: String): String = synchronized(lock) {
         val keys=snapshot().optJSONObject("counterpartKeys") ?: JSONObject()
         keys.optString(phone).takeIf { it.isNotBlank() }?.let { return@synchronized it }
@@ -103,8 +75,4 @@ class SecureSettings(context: Context, private val keyAccess: KeyAccess = Androi
         key
     }
     fun assignment(uri: String): String? = snapshot().optJSONObject("assignments")?.optString(uri)?.takeIf { it.isNotBlank() }
-    fun assign(uri: String, topicId: String) = update {
-        val assignments = it.optJSONObject("assignments") ?: JSONObject()
-        assignments.put(uri, topicId); it.put("assignments", assignments)
-    }
 }

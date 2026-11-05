@@ -105,9 +105,6 @@ internal class AndroidWhisperEngine(private val context:Context,private val api:
         val handle=api.open(model.canonicalPath,threads.coerceIn(1,8));active.set(handle)
         return Session(handle,model,stillVerified)
     }
-    /** One piece with its own model load (settings screen, device tests). */
-    fun transcribeVerifiedModel(model:File,stillVerified:()->Boolean,pcm:FloatArray,language:String,threads:Int,timeoutSeconds:Int,stopped:()->Boolean):ByteArray =
-        openVerifiedModel(model,stillVerified,threads,stopped).use { it.transcribe(pcm,language,timeoutSeconds,stopped=stopped) }
     companion object {
         private val LOAD_LOCK=Any();private val EXECUTION_LOCK=Any();private var loadedSha:String?=null
         /** CPU features the arm64 runtime needs (dotprod = asimddp, fp16 vector = asimdhp), missing on any core of [cpuinfo].

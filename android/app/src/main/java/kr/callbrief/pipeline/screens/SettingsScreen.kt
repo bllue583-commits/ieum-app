@@ -236,7 +236,6 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
     /** Actions running now, by the tag of their button, with the words it shows meanwhile; a page drawn again meanwhile shows
      * the new button busy too, and the same action is never started twice. Other buttons stay usable. */
     private val running=HashMap<String,String>()
-    internal fun isRunning(tag:String)=tag in running
     /** A button for an action that takes a while: pressed, it goes off with [busyWords] at once and [work] runs; [work] calls the
      * function it is given when it is done, and the button comes back. */
     private fun act(label:String,tag:String,busyWords:String,big:Boolean=false,work:(done:()->Unit)->Unit):Button {
