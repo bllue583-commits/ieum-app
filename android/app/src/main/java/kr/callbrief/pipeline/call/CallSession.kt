@@ -133,8 +133,8 @@ object CallSession {
         // Only a call that went off hook can have left a recording.
         if(ranOffHook) runCatching { afterCall(app) }
         for(l in listeners) runCatching { l(end) }
-        // r10-2 (pipeline/CallFollowupNotice.kt) is being written at the same time; the orchestrator turns this on when merging.
-        // runCatching { kr.callbrief.pipeline.CallFollowupNotice.onCallEnded(app,end) }
+        // r10-2: the call's own notice ("…와 통화를 정리하고 있어요"); this thread is not the main one, as it needs.
+        runCatching { kr.callbrief.pipeline.CallFollowupNotice.onCallEnded(app,end) }
         return end
     }
     /** [l] with the number known: kept as its key, or the whole call marked ignored when the number is private. */
