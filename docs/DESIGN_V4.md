@@ -178,9 +178,9 @@ UPDATE_NOTE: `v3.2: 홈 맨 위에 오늘 통화가 이야기처럼 2~3줄로 �
 
 ## 3. v3.3 「믿을 수 있는 숫자」
 
-**큰 변화:** 잘못 들렸을 수 있는 숫자·날짜는 체크할 일·아침 보고·카드에서 "확인 필요"로 보인다. 체크 제목에서 이름이 빠져 짧아진다. 사람 합치기는 되돌릴 수 있다. 자막 정확도를 실제 모델로 재고, 장부의 이름·용어를 자막기에 미리 준다. 정리된 통화가 없는 상대에게도 통화기록으로 만든 작은 카드가 보이고, 잠긴 폰의 알림에도 이름과 한 줄이 보인다. 1.3절 #7, #8(되돌리기), #17, #18, #19, #10(noCard), #9(공개 알림 내용)를 닫는다.
+**큰 변화:** 잘못 들렸을 수 있는 숫자·날짜는 체크할 일·아침 보고·카드에서 "확인 필요"로 보인다. 체크 제목에서 이름이 빠져 짧아진다. 사람 합치기는 되돌릴 수 있다. 자막 정확도는 실녹음 골든으로 재고(긴 통화 완주는 2-3절 r12-8이 먼저 한다), 장부의 이름·용어를 자막기에 미리 준다. 정리된 통화가 없는 상대에게도 통화기록으로 만든 작은 카드가 보이고, 잠긴 폰의 알림에도 이름과 한 줄이 보인다. 1.3절 #7, #8(되돌리기), #17, #18, #19, #10(noCard), #9(공개 알림 내용)를 닫는다.
 
-통합 브랜치 `feature/r13-v33`(= v3.1 완성본). **순서**: r13-1이 `CallRecordStore`·`TasksScreen`을 먼저 하고 r13-3은 r13-1 브랜치에서 시작; r13-2는 병렬. **파일 소유**: r13-1: `ClaudeCallAnalyzer.kt`, `CallRecordStore.kt`, `screens/TasksScreen.kt`(CheckRows), `CallDigestWork.kt`, `ContactCards.kt`, `pipeline/call/CallCardView.kt`·`CallCardOverlay.kt`(publicVersion 내용) · r13-2: `AndroidWhisperEngine.kt`, `CallTranscriptionRunner.kt`, 골든 도구, `docs/routines/hourly.md`(v7), `MessageWork.kt` · r13-3: `screens/SettingsScreen.kt`, `screens/CallsScreen.kt`, `screens/CompaniesScreen.kt`, `CallUi.kt`, `CallUiSeniorTest`, `tools/check_ui_rules.py`, 기기 시험 하네스.
+통합 브랜치 `feature/r13-v33`(= v3.1 완성본). **순서**: r13-1이 `CallRecordStore`·`TasksScreen`을 먼저 하고 r13-3은 r13-1 브랜치에서 시작; r13-2는 병렬. **파일 소유**: r13-1: `ClaudeCallAnalyzer.kt`, `CallRecordStore.kt`, `screens/TasksScreen.kt`(CheckRows), `CallDigestWork.kt`, `ContactCards.kt`, `pipeline/call/CallCardView.kt`·`CallCardOverlay.kt`(publicVersion 내용) · r13-2: `AndroidWhisperEngine.kt`, `CallTranscriptionRunner.kt`, `cpp/ieum_whisper.cpp`(토큰 확률·A8·디코딩 상수), `PipelineAudioMath.kt`(VAD 상수), `PhoneStatus.kt`(`golden` 블록만), 골든 도구, 골든 측정 Activity(새 파일, `screens/SettingsScreen.kt`는 r13-3 소유), `docs/routines/hourly.md`(v7), `MessageWork.kt` · r13-3: `screens/SettingsScreen.kt`, `screens/CallsScreen.kt`, `screens/CompaniesScreen.kt`, `CallUi.kt`, `CallUiSeniorTest`, `tools/check_ui_rules.py`, 기기 시험 하네스.
 
 ### 3.1 묶음 r13-1 숫자 가드, 확실성 표시, thin 카드
 1. **숫자 가드**(`ClaudeCallAnalyzer.filter`): (1) 대상은 체크할 일·약속의 `title`과 `due`만(요약 제외). (2) 정규화: 한글 수사(일~구, 십·백·천·만, 하나~열, 한·두·세·네)를 아라비아 숫자로, 쉼표·공백·하이픈 제거, 단위·문자 동의어 통일(미리=mm, 키로=kg, 디=D, 에이치=H, 프로=%). (3) title의 숫자 토큰(값+붙은 단위)이 정규화한 quote에 있거나, quote가 맞은 자막 구간 앞뒤 30초 안에 있으면 통과, 아니면 `tentative`(`number`). 자막 전체는 찾지 않는다. (4) due는 quote 또는 그 30초 구간에 날짜 표현(요일, 내일·모레·글피, 이번·다음 주, n일, n월)이 없으면 `tentative`(`date`); 통화일보다 앞이면 null, 60일 넘게 뒤면 `tentative`. (5) 네이티브 자막 출력에 토큰 확률(`whisper_full_get_token_p`, r13-2가 제공)을 실어 숫자 토큰의 최소 확률이 0.5 미만이면 `tentative`(`asr`). (6) 인용 3-gram 일치율이 0.7~0.9인 일은 버리지 않고 `tentative`(`quote`)로 남긴다.
@@ -190,12 +190,25 @@ UPDATE_NOTE: `v3.2: 홈 맨 위에 오늘 통화가 이야기처럼 2~3줄로 �
 5. **thin 카드**: 상대 카드가 없어도 통화기록에 있는 번호면 "지난 통화 n일 전, 30일간 n번, 정리된 통화 없음"(ContactCards `thin`, 통화기록에서 계산, 개인 번호 제외). "전화부에 없는 번호예요"는 "아직 정리된 통화가 없는 번호예요"로, 스위치 이름도 맞춘다. 잠금 폴백 알림의 publicVersion: 설정 "잠금 화면에서도 이름과 한 줄 보기"(기본 켬)이면 이름·업체·체크 1줄(번호·금액·자막 없음), 꺼져 있으면 지금처럼.
 - 시험: "삼 층"(자막)과 "3층"(제목)은 배지 없음, 자막 다른 곳에만 "30"이 있으면 배지, 과거 기한 null, 혼동 쌍 메모, thin 카드, publicVersion 내용.
 
-### 3.2 묶음 r13-2 자막 정확도, 이름 힌트, 지시문 v7
-1. 골든 셋을 실제 폰 모델(`ggml-large-v3-turbo-q5_0`)로 측정하는 수동 device-test(`golden=turbo`, 90분)를 1회 돌려 기준선을 `docs/reviews/golden_turbo_<날짜>.md`에 적는다(업체명·규격·숫자 적중률).
-2. Whisper 초기 프롬프트에 장부의 업체 이름·사람 이름·공종 용어(최대 200자, 최근 30일 상대 우선)를 넣는 A/B(골든 `prompt` 변형). 네이티브 출력에 토큰 확률을 싣는다(r13-1이 씀). 이상 세그먼트는 설계 A8대로 보정하고 버린 수를 계수.
-3. [이름 목록]은 전화부 이름(CACHED_NAME)과 최근 30일 상대를 먼저, 그다음 updated_ms 순. 사람 이름·카드 이름에 `noNumber`.
-4. 지시문 **v7**: 규칙 10을 "제목에 사람 이름을 넣지 않는다(META가 보여 줌)"로, mergeCandidates 형식을 폰이 보내는 `[item id, 기록 key]`로, 메일 "보낸 사람"은 이름만(주소는 상대 id로, `MessageWork.kt:179`), 숫자 확실성 규칙(들린 대로 적되 확신이 없으면 `tentative`). `PROMPT_VERSION=7`, `RoutineDocTest`. 루틴 교체 전문은 배포 보고 맨 위에.
-- 시험: 요청 본문에 '@' 없음, 이름 목록 순서, 초기 프롬프트 200자 한도.
+### 3.2 묶음 r13-2 자막 정확도, 이름 힌트, 지시문 v7 (11/6 00:50 협의 반영)
+
+> 근거: 프로젝트 문서 `claude/v33-자막-정확도-협의안.md` = `docs/reviews/stt_v33_20261106.md`(Fable 초안 + Opus 검토). 협의안의 "지금 바로" 중 A1~A5·A8은 2-3절(r12-8)로 옮겨 v3.2 수정판에서 먼저 한다. 여기는 A6·A7과 측정·A/B만. **순서: 1단계(바로) → 2단계(실녹음 골든) → 3단계(A/B, 상수만 바꿈). 1단계는 r13-1과 함께 배포하고, 3단계는 골든 결과가 나온 뒤 별도 커밋.**
+
+**1단계 — 바로(실측 없이 안전)**
+1. 네이티브 출력에 **토큰 확률과 토큰 타임스탬프**(`whisper_full_get_token_p`, `token_timestamps=true`; r13-1 숫자 가드가 씀). 이상 세그먼트는 설계 A8대로 보정(end=start+1, start=last)하고 버린 수를 계수. 폴백 횟수(`n_fail_p/h`)는 공개 API에 없으므로 `whisper_print_timings` 로그를 `quiet_log` 콜백에서 파싱해 조각당 encode·decode ms와 함께 하트비트 `golden`/자막 블록에 숫자만.
+2. [이름 목록]은 전화부 이름(CACHED_NAME)과 최근 30일 상대를 먼저, 그다음 updated_ms 순. 사람 이름·카드 이름에 `noNumber`.
+3. 지시문 **v7**(`hourly.md`만, `ClaudeCallAnalyzer.kt`는 r13-1 소유): 규칙 10을 "제목에 사람 이름을 넣지 않는다(META가 보여 줌)"로, mergeCandidates 형식을 폰이 보내는 `[item id, 기록 key]`로, 메일 "보낸 사람"은 이름만(주소는 상대 id로, `MessageWork.kt:179`), 숫자 확실성 규칙(들린 대로 적되 확신이 없으면 `tentative`), **자막 오인 교정 규칙**(A7): 호칭·업체명·사람 이름이 [이름 목록]의 것과 비슷하게 들렸으면 그 이름으로 적되 `corrected`로 표시하고, **숫자·날짜·규격은 교정하지 않는다**. `PROMPT_VERSION=7`, `RoutineDocTest`. 루틴 교체 전문은 배포 보고 맨 위에.
+
+**2단계 — 실녹음 골든(B0, 모든 A/B의 전제)**
+4. 지금 골든 셋(`androidTest/assets/golden/`)은 piper TTS 합성음(한 목소리, 깨끗한 음질)이라 전화 음질 대표성이 없다. 사용자가 실제 통화 3~5건(1분·3분·5분 이상, 상대 목소리가 작은 통화 하나 포함)의 정답을 받아쓰고, 설정 "상태와 도움" 아래 숨김 [골든 측정](별도 Activity)에서 녹음을 고르고 정답을 붙여넣는다. 앱이 그 녹음을 변형(기본 / 폴백 제한 / 문맥 연결 / 문장체 프롬프트 / beam 2 / suppress_nst / VAD 하한)별로 돌려 **CER·업체명·숫자 적중률·조각당 ms만** 하트비트 `golden` 블록으로 올린다(`golden_score.py`의 정규화를 Kotlin으로 옮기고 같은 값이 나오는 시험). 음성·정답은 폰 밖으로 나가지 않는다. 기존 합성 골든의 turbo 1회 측정(`golden=turbo`, 90분)은 참고값으로만 `docs/reviews/golden_turbo_<날짜>.md`에.
+
+**3단계 — A/B(실녹음 골든으로 측정한 뒤 채택, 상수만)**
+5. **B1** 디코딩 폴백 제한: `temperature_inc` 0.4(3단계) + `best_of` 2, 또는 inc 0. 지금은 기본값(온도 0.2씩 6단계, 폴백 온도에서 best_of 5). turbo는 디코더가 4층이라 시간 절감은 작을 수 있다(추정).
+6. **B2** 조각 간 문맥: 앞 조각 마지막 1~2문장(≤40토큰)을 다음 조각 initial_prompt 앞에 붙인다. whisper.cpp 1.7.6은 호출(2분 조각)마다 문맥을 비우고, 조각 안의 30초 창은 최근 224토큰을 문맥으로 쓰며, 온도 ≥0.5 폴백이면 문맥을 안 쓴다. 반복 환각은 `TranscriptClean`이 잡는다.
+7. **B3** 초기 프롬프트는 **문장체**("현장 소장과 철근 업체 통화. 탄탄이엔씨 김호중 과장, …"), 최근 30일 상대 우선, 한도는 글자 수가 아니라 **토큰 수(≤120토큰, `whisper_tokenize`)**. `PROMPT_ENABLED` 채택 조건(`AndroidWhisperEngine.kt:86-89`)도 실녹음 골든 기준으로("업체명·호칭 적중률 오르고 CER 2p 이상 나빠지지 않음").
+8. **B4~B7** `beam_size` 2~3, `suppress_nst=true`(비음성 토큰 억제), 양자화 q5_0/q8_0/q4_0과 i8mm 빌드(조각당 ms, `CMakeLists.txt:15`), VAD 하한 0.0025와 상대 계수 0.3→0.15.
+9. **기각**: 조각 5분(540초 초과 위험, 저장된 조각 무효화), `audio_ctx` 축소(정확도 하락), `max_len`. **다음 버전(3-3)**: 포그라운드 장기 실행(안드로이드 15+ dataSync는 24시간에 6시간 한도, 16 쿼터 확인 필요, 매니페스트 권한 없음, 알림 증가 — 충전 중 야간 전용으로 설계한 뒤), 게인/AGC 정규화, 한국어 파인튜닝 Whisper(ggml 변환)·다른 엔진 비교.
+- 시험: 요청 본문에 '@' 없음, 이름 목록 순서, 초기 프롬프트 토큰 상한(글자 수 아님), 토큰 확률·타임스탬프 JSON, A8 보정 계수, 골든 점수 Kotlin이 `golden_score.py`와 같은 값, `corrected` 표시가 숫자에는 붙지 않음.
 
 ### 3.3 묶음 r13-3 되돌리기, 화면 규칙, 다듬기
 1. 설정 "상태와 도움"에 [합친 사람 되돌리기](mergeLog의 원래 행 복원, 연결 수가 같아짐). 합치기는 ledger edit `{"type":"mergePeople",...}`로 올려 저장소 장부와 맞춘다.
@@ -205,8 +218,8 @@ UPDATE_NOTE: `v3.2: 홈 맨 위에 오늘 통화가 이야기처럼 2~3줄로 �
 - 시험: 합치고 되돌린 뒤 연결 수 동일, 16sp 캡션이 시험 실패, 1.3배 샷 제목 폭 ≥ 1.2배.
 
 ### 3.4 확인 기준
-- 단위 전체 + `RoutineDocTest`(v7). 골든 셋 turbo 1회 수동 실행 결과 문서.
-- 배포 뒤: 아침 알림에 "확인 필요" 배지가 실제 결과에서 보이는지, 하트비트 `droppedItems` 비율, `callCard.noCard` 비율이 떨어지는지.
+- 단위 전체 + `RoutineDocTest`(v7). 실녹음 골든 1회(폰, 하트비트 `golden` 블록, 사용자 받아쓰기 3~5건 필요) + 합성 골든 turbo 1회(참고). 3단계 상수는 골든 결과 없이는 바꾸지 않는다.
+- 배포 뒤: 2-3절 지표(100초 넘는 통화 완료율, 가장 오래 기다린 녹음의 나이)가 유지되는지, `corrected` 표시 비율. 아침 알림에 "확인 필요" 배지가 실제 결과에서 보이는지, 하트비트 `droppedItems` 비율, `callCard.noCard` 비율이 떨어지는지.
 
 UPDATE_NOTE: `v3.3: 잘못 들렸을 수 있는 숫자와 날짜는 확인 필요로 표시돼요. 체크할 일 제목이 짧아지고, 합쳐진 사람을 되돌릴 수 있어요`
 
