@@ -82,13 +82,14 @@ class UpdateFetchTest:ProtectedTextHostTestBase() {
         assertTrue(reached.await(10,TimeUnit.SECONDS))
         val a=launchMain(Screen.SETTINGS)
         settle { tag(a,"update_state")!=null }
-        assertEquals("새 버전 v2.5 받는 중 42%",state(a))
+        // v3.1 (DESIGN_V4 2.2-5): the words come from CallUpdate.state, with the sizes.
+        assertTrue(state(a),state(a).startsWith("새 버전을 받는 중이에요. 42%"))
         assertEquals(42,(tag(a,"update_progress") as ProgressBar).progress)
         assertNull("no install before the file is here",tag(a,"update_install"))
         hold.countDown();work.join(10_000)
         tickOnce()
-        assertEquals("새 버전이 준비됐어요",state(a))
-        assertEquals("지금 설치",(tag(a,"update_install") as Button).text.toString())
+        assertTrue(state(a),state(a).startsWith("새 버전(v2.5)이 준비됐어요"))
+        assertEquals("지금 업데이트",(tag(a,"update_install") as TextView).text.toString())
         assertNull(tag(a,"update_progress"))
         assertTrue(views(a.window.decorView).filterIsInstance<TextView>().none { it.text.contains("·") || it.text.contains("DOWNLOADING") })
     }
@@ -100,7 +101,7 @@ class UpdateFetchTest:ProtectedTextHostTestBase() {
         assertNull(CallUpdate.ready(app));assertNotNull(CallUpdate.available(app))
         val home=launchMain(Screen.HOME)
         settle { tag(home,"home_update_button")!=null }
-        assertEquals("새 버전 v2.5 받을 수 있어요",(tag(home,"home_update_state") as TextView).text.toString())
+        assertEquals("새 버전(v2.5)이 나왔어요. 지금 업데이트를 누르면 받아서 설치해요.",(tag(home,"home_update_state") as TextView).text.toString())
         tag(home,"home_update_button").performClick()
         // The check runs off the main thread (r8-4); the button says so meanwhile.
         settle { home.screen==Screen.SETTINGS }
@@ -111,7 +112,7 @@ class UpdateFetchTest:ProtectedTextHostTestBase() {
         // The download finishes while settings is open: it goes straight on to the install (first the allow-installs page here).
         val a=launchMain(Screen.SETTINGS)
         settle { tag(a,"update_state")!=null }
-        assertTrue(state(a),state(a).startsWith("새 버전 v2.5 받을 준비 중"))
+        assertTrue(state(a),state(a).startsWith("새 버전(v2.5)을 받을 준비 중"))
         assertTrue(CallUpdate.check(app,Store()))
         tickOnce()
         assertEquals(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,shadowOf(a).nextStartedActivity?.action)
@@ -125,10 +126,10 @@ class UpdateFetchTest:ProtectedTextHostTestBase() {
         val a=launchMain(Screen.SETTINGS)
         settle { tag(a,"update_state")!=null }
         assertEquals(CallUpdate.NET_WORDS,state(a))
-        assertEquals("다시 받기",(tag(a,"update_fetch") as Button).text.toString())
-        tag(a,"update_fetch").performClick();assertEquals(1,starts)
-        assertFalse("[지금 받기] alone does not install",CallUpdate.wantsInstall(app))
-        tickOnce();assertTrue(state(a).startsWith("새 버전 v2.5 받을 준비 중"))
+        // v3.1: a failed download of a known version offers [지금 업데이트], which gets it again (and installs when it is here).
+        assertEquals("지금 업데이트",(tag(a,"update_install") as TextView).text.toString())
+        tag(a,"update_install").performClick();settle { starts==1 }
+        assertEquals(1,starts)
     }
 
     @Test fun aFileThatDoesNotMatchIsDeletedAndGotAgain() {

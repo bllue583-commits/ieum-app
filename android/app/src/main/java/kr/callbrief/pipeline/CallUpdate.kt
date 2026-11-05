@@ -53,7 +53,7 @@ internal object CallUpdate {
             if(code==USER_ACTION_REQUIRED || phase==P_WAITING_CONFIRM) return UpdateState(P_WAITING_CONFIRM,CONFIRM_WORDS,100,true)
             if(sessionId(app)!=0) return UpdateState(P_WAITING_CONFIRM,INSTALLING_WORDS,100,false)
             errorWords(err)?.takeIf { code!=INSTALL_SOURCE_NOT_ALLOWED }?.let { return UpdateState(P_FAILED,it.sentence,100,true) }
-            return UpdateState(P_READY,"새 버전 ${shownName(ready)}이 준비됐어요. 지금 업데이트를 누르면 설치돼요.",100,true)
+            return UpdateState(P_READY,"새 버전(${shownName(ready)})이 준비됐어요. 지금 업데이트를 누르면 설치돼요.",100,true)
         }
         val f=fetchState(app,now);val avail=available(app)
         when(f.stage) {
@@ -63,13 +63,15 @@ internal object CallUpdate {
                 return UpdateState(P_DOWNLOADING,"새 버전을 받는 중이에요. "+progressWords(f.percent,done,total),f.percent,false)
             }
             Stage.FAILED -> return UpdateState(P_FAILED,f.reason.ifBlank { OTHER_WORDS },-1,avail!=null)
-            Stage.WAITING -> return if(online(app)) UpdateState(P_CHECKING,CHECKING_WORDS) else UpdateState(P_OFFLINE,OFFLINE_WORDS)
+            // A known version waiting to come says which one (integration: clearer than "확인하는 중" for a 50대 reader).
+            Stage.WAITING -> return if(!online(app)) UpdateState(P_OFFLINE,OFFLINE_WORDS)
+                else if(avail!=null) UpdateState(P_CHECKING,"새 버전(${shownName(avail)})을 받을 준비 중이에요.") else UpdateState(P_CHECKING,CHECKING_WORDS)
             else -> {}
         }
         val fresh=pr!=null && now-pr.optLong("atMs",0)<CHECKING_MS
         if(fresh && phase==P_CHECKING) return UpdateState(P_CHECKING,CHECKING_WORDS)
         if(phase==P_OFFLINE && !online(app)) return UpdateState(P_OFFLINE,OFFLINE_WORDS)
-        if(avail!=null) return UpdateState(P_READY,"새 버전 ${shownName(avail)}이 나왔어요. 지금 업데이트를 누르면 받아서 설치해요.",-1,true)
+        if(avail!=null) return UpdateState(P_READY,"새 버전(${shownName(avail)})이 나왔어요. 지금 업데이트를 누르면 받아서 설치해요.",-1,true)
         if(phase==P_FAILED && fresh) return UpdateState(P_FAILED,CHECK_FAILED_WORDS)
         errorWords(err)?.takeIf { code!=INSTALL_SOURCE_NOT_ALLOWED && code!=USER_ACTION_REQUIRED }?.let { return UpdateState(P_FAILED,it.sentence) }
         return UpdateState()

@@ -375,6 +375,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     fun lastSentMs():Long?=rows("SELECT MAX(sent_ms) AS m FROM call_inbox_sent").firstOrNull()?.long("m")
     /** When the task's answer for this record was received (null: not yet, or set aside as broken). A received record is not sent again. */
     fun receivedMs(id:String):Long?=rows("SELECT result_ms FROM call_inbox_sent WHERE record_id=?",id).singleOrNull()?.long("result_ms")
+    /** [다시 정리하기] (DESIGN_V4 2.5-4): forget that the record was sent, so the next pass sends it at once. */
+    fun forgetSent(id:String)=port.execute("DELETE FROM call_inbox_sent WHERE record_id=?",id)
     fun setReceived(id:String,ms:Long?)=port.execute("UPDATE call_inbox_sent SET result_ms=? WHERE record_id=?",ms,id)
     /** When the oldest waiting record (TRANSCRIBED or WAITING_CONSENT) that went up and has no answer yet was sent, or null:
      * the first-pass stall test in one query (pending JOIN call_inbox_sent) instead of two lookups per record (r8-1). */

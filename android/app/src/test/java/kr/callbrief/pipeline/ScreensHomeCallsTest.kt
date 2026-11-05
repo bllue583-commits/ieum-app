@@ -124,9 +124,15 @@ class ScreensHomeCallsTest:ProtectedTextHostTestBase() {
         PreviewSeed.ensure(app)
         CallsScreen.clock={ at(13,45)+3_600_000L }
         val a=launchMain(Screen.CALLS)
-        settle { tag(a,"log_transcribing_900002")!=null }
-        assertTrue(views(tag(a,"log_transcribing_900002")).filterIsInstance<TextView>().any { it.text.toString()==CallsScreen.TRANSCRIBING })
-        assertTrue(texts(a).none { it.contains("녹음 없음") })
+        // v3.1 (DESIGN_V4 2.1-4): an hour later with no transcription job in the call's window it says so, not "being turned into text".
+        settle { tag(a,"log_no_recording_900002")!=null }
+        assertTrue(views(tag(a,"log_no_recording_900002")).filterIsInstance<TextView>().any { it.text.toString().endsWith(CallsScreen.NO_RECORDING) })
+        assertTrue(texts(a).none { it==CallsScreen.TRANSCRIBING })
+        // The words: a job in the window, then being looked for up to 10 minutes after the end, then none.
+        assertEquals(CallsScreen.TRANSCRIBING,CallsScreen.stateWords(answered,now,listOf(answered.startMs+60_000L)))
+        val end=answered.startMs+answered.durationMs
+        assertEquals(CallsScreen.SEARCHING,CallsScreen.stateWords(answered,end+5*60_000L,emptyList()))
+        assertEquals(CallsScreen.NO_RECORDING,CallsScreen.stateWords(answered,end+11*60_000L,emptyList()))
     }
 
     @Test fun aRecordingWithNoSpeechSaysSoAndHasNoRetryButton() {

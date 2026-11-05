@@ -66,8 +66,8 @@ internal object StatusLights {
             i.now-i.lastDiscoveryMs<=DISCOVERY_LATE_MS) RecordingGap.lightTarget(i.gap) else GROUP_CONNECT
         val transcribe=when {
             i.modelState=="UNSUPPORTED" -> "이 휴대폰에서는 통화를 글자로 바꿀 수 없어요."
-            i.modelState=="FAILED" -> "음성 인식 모델을 받지 못했어요. Wi-Fi에서 아래 모델 받기를 눌러 주세요."
-            i.modelState!="READY" -> "음성 인식 모델을 아직 받지 않았어요. Wi-Fi에서 아래 모델 받기를 눌러 주세요."
+            i.modelState=="FAILED" -> "음성 인식 모델을 받지 못했어요. 아래 [모델 받기]를 눌러 주세요. 어떤 연결에서든 받아요."
+            i.modelState!="READY" -> "음성 인식 모델을 아직 받지 않았어요. 아래 [모델 받기]를 눌러 주세요. 어떤 연결에서든 받아요."
             i.transcribeBacklog>0 && (i.oldestQueuedMs?.let { i.now-it>TRANSCRIBE_LATE_MS } ?: true) && i.now-i.lastTranscribedMs>TRANSCRIBE_LATE_MS ->
                 "녹음 ${i.transcribeBacklog}개가 밀려 있어요. 충전기에 꽂아 두면 밤에 끝나요."
             else -> null }

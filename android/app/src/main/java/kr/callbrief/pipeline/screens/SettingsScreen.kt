@@ -117,10 +117,12 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
      * version is known and not yet here. Rebuilt only when what it shows changes. */
     internal fun fillUpdate() {
         val block=updateBlock?.takeIf { live() } ?: return
+        val ready=CallUpdate.ready(a)
+        // Asked for from [지금 업데이트] before the file was here: on to the install as soon as it is (before the state row, which
+        // would otherwise only show "준비됐어요" and wait for a second tap).
+        if(ready!=null && CallUpdate.takeInstallWish(a)) { CallUpdate.install(a,metered()) }
         val u=HomeScreen.updateState(a)
         if(u.phase!="none" && u.words.isNotBlank()) { fillState(block,u);return }
-        val ready=CallUpdate.ready(a)
-        if(ready!=null && CallUpdate.takeInstallWish(a)) { CallUpdate.install(a,metered()) } // asked for from [지금 업데이트]: on to the install
         val f=CallUpdate.fetchState(a);val avail=CallUpdate.available(a)
         val key="$f|${avail?.versionCode}|${ready?.versionCode}"
         if(key==updateKey) return

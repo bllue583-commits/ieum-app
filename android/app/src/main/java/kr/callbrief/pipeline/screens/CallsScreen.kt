@@ -226,7 +226,9 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
     private fun logRow(e:LoggedCall,now:Long):View {
         val who=e.name ?: e.numberKey?.let(CallUi::who) ?: "모르는 번호"
         val time=CallUi.time(e.startMs)
-        val pending=transcribing(e,now,folder,jobStarts)
+        // v3.1 (DESIGN_V4 2.1-4): being turned into text only with a job in the call's window, else looked for, then none.
+        val words=stateWords(e,now,jobStarts)
+        val pending=words==TRANSCRIBING
         val row=when {
             e.personal -> CallUi.logRow(a,time,who,"개인 통화",CallUi.SUBTLE)
             pending -> CallUi.logRow(a,time,who,TRANSCRIBING,CallUi.SUBTLE)
@@ -235,7 +237,7 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
                 FirstPass.LogKind.NOT_CONNECTED -> CallUi.logRow(a,time,who,"건 전화, 연결 안 됨",CallUi.SUBTLE,trailing=CallUi.redialButton(a,e.numberKey,e.name ?: who))
                 FirstPass.LogKind.BLOCKED -> CallUi.logRow(a,time,who,"차단한 번호의 전화",CallUi.SUBTLE)
                 FirstPass.LogKind.NO_RECORDING -> CallUi.logRow(a,time,who,
-                    "${if(e.type==android.provider.CallLog.Calls.OUTGOING_TYPE) "건 전화" else "받은 전화"} ${CallUi.duration(e.durationMs)}, 녹음 없음",CallUi.SUBTLE)
+                    "${if(e.type==android.provider.CallLog.Calls.OUTGOING_TYPE) "건 전화" else "받은 전화"} ${CallUi.duration(e.durationMs)}, ${words ?: NO_RECORDING}",CallUi.SUBTLE)
             }
         }
         return row.apply { tag="log_${when { e.personal -> "personal";pending -> "transcribing";else -> e.kind.name.lowercase() }}_${e.logId}" }
@@ -401,11 +403,10 @@ internal object CallRetry {
     /** Test hook in place of [resend] (null: the real one). */
     @androidx.annotation.VisibleForTesting @Volatile internal var hook:((android.content.Context,String)->Unit)?=null
     /** The call goes back to the queue: state TRANSCRIBED and the "result received" mark cleared, so the hourly work sends it
-     * again (at once when it was sent more than [RESEND_MS] ago, else when that time is up). Only existing store functions;
-     * r12-3 may give the store one function that also sends at once (see the r12-5 report). */
+     * again at the next pass: the sent row is forgotten, so the resend wait does not hold it (integration of r12-3/r12-5). */
     fun resend(c:android.content.Context,id:String) {
         hook?.let { it(c,id);return }
         val db=kr.callbrief.IeumApplication.store(c)
-        db.inTransaction { db.setState(id,CallRecordStore.TRANSCRIBED);if(db.sentMs(id)!=null) db.setReceived(id,null) }
+        db.inTransaction { db.setState(id,CallRecordStore.TRANSCRIBED);db.forgetSent(id) }
     }
 }
