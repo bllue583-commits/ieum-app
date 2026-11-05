@@ -19,6 +19,10 @@
     <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- v3.1 (DESIGN_V4 2.2-4): with this, Android 12+ installs our own update without a tap (session with
+         USER_ACTION_NOT_REQUIRED, installs from this app allowed, targetSdk at the device's floor, no store owns updates).
+         Missing any of these, Android asks once (STATUS_PENDING_USER_ACTION, kept as USER_ACTION_REQUIRED). -->
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
     <!-- Registers the call pipeline again after a restart of the phone, without opening the app. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <application android:name=".IeumApplication" android:allowBackup="false" android:fullBackupContent="@xml/vault_full_backup_rules"

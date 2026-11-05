@@ -21,26 +21,138 @@ import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 /** Self-update: CI publishes app/version.json + the APK into the private inbox repo on every push.
- * The phone checks every few hours on Wi-Fi, downloads a newer APK, verifies its SHA-256 and shows
- * "새 버전" (home banner + notification). With [PipelineSettingsKeys.AUTO_INSTALL] on (default) it then installs in the background
- * (design 3.3); when Android still wants a tap, the notification and the home banner lead to it. */
+ * The phone checks when the app opens and every 6 hours on any connection (v3.1, user's decision 11/5: mobile data too),
+ * downloads a newer APK, verifies its SHA-256 and installs it in the background (design 3.3). When Android still wants a tap,
+ * the notification and the home banner lead to it. [state] says where it stands for the settings row and the home banner.
+ *
+ * Installing without a tap (DESIGN_V4 2.2-4) needs all of these; when one is missing Android answers
+ * STATUS_PENDING_USER_ACTION and one tap on the notification finishes it ([PipelineSettingsKeys.LAST_UPDATE_ERROR] =
+ * [USER_ACTION_REQUIRED] for the watchdog):
+ *  - Android 12 (API 31) or later ([installInBackground] does not try below that);
+ *  - the manifest asks for android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION (from v3.1; so v3.0 to v3.1 still needs a tap);
+ *  - the session updates this app itself (setAppPackageName = our package) with setRequireUserAction(USER_ACTION_NOT_REQUIRED);
+ *  - installs from this app are allowed (canRequestPackageInstalls(); otherwise [INSTALL_SOURCE_NOT_ALLOWED] and the optional
+ *    setup step [setupStep]);
+ *  - the new APK's targetSdk is at least the device's floor for silent updates (Android 15: 33, Android 16: 34; ours is 36);
+ *  - no other store holds update ownership of the app (installed by adb or by ourselves, never by a store). */
 internal object CallUpdate {
     // ---- v3.1 contract (DESIGN_V4 2.2-4, 2.2-5; key commit). r12-2 fills the bodies, r12-5 puts them on screen. ----
     /** What the settings "앱 버전" row and the home banner say about a new version. [phase]: none | checking | offline |
      * downloading | ready | waitingConfirm | failed. [words]: the Korean sentence to show (empty for none). [percent]: -1 unknown.
      * [canInstall]: show [지금 업데이트]. */
     data class UpdateState(val phase:String="none",val words:String="",val percent:Int=-1,val canInstall:Boolean=false)
-    /** r12-2: the state now, from [fetchState], the download progress and the last error. */
-    fun state(c:Context):UpdateState = UpdateState()
+    /** r12-2: the state now, from [fetchState], the download progress and the last error. Cheap enough for the screen's
+     * one-second ticker: plain preferences, one settings read for the last install error. */
+    fun state(c:Context):UpdateState {
+        val app=c.applicationContext;val now=System.currentTimeMillis()
+        val pr=progress(app);val phase=pr?.optString("phase").orEmpty()
+        val err=storedErrorText(app)
+        val code=errorCode(err)
+        val ready=ready(app)
+        if(ready!=null) {
+            if(code==USER_ACTION_REQUIRED || phase==P_WAITING_CONFIRM) return UpdateState(P_WAITING_CONFIRM,CONFIRM_WORDS,100,true)
+            if(sessionId(app)!=0) return UpdateState(P_WAITING_CONFIRM,INSTALLING_WORDS,100,false)
+            errorWords(err)?.takeIf { code!=INSTALL_SOURCE_NOT_ALLOWED }?.let { return UpdateState(P_FAILED,it.sentence,100,true) }
+            return UpdateState(P_READY,"새 버전 ${shownName(ready)}이 준비됐어요. 지금 업데이트를 누르면 설치돼요.",100,true)
+        }
+        val f=fetchState(app,now);val avail=available(app)
+        when(f.stage) {
+            Stage.DOWNLOADING -> {
+                val done=pr?.optLong("doneBytes",-1) ?: -1L
+                val total=(pr?.optLong("totalBytes",0) ?: 0L).takeIf { it>0 } ?: (avail?.size ?: 0L)
+                return UpdateState(P_DOWNLOADING,"새 버전을 받는 중이에요. "+progressWords(f.percent,done,total),f.percent,false)
+            }
+            Stage.FAILED -> return UpdateState(P_FAILED,f.reason.ifBlank { OTHER_WORDS },-1,avail!=null)
+            Stage.WAITING -> return if(online(app)) UpdateState(P_CHECKING,CHECKING_WORDS) else UpdateState(P_OFFLINE,OFFLINE_WORDS)
+            else -> {}
+        }
+        val fresh=pr!=null && now-pr.optLong("atMs",0)<CHECKING_MS
+        if(fresh && phase==P_CHECKING) return UpdateState(P_CHECKING,CHECKING_WORDS)
+        if(phase==P_OFFLINE && !online(app)) return UpdateState(P_OFFLINE,OFFLINE_WORDS)
+        if(avail!=null) return UpdateState(P_READY,"새 버전 ${shownName(avail)}이 나왔어요. 지금 업데이트를 누르면 받아서 설치해요.",-1,true)
+        if(phase==P_FAILED && fresh) return UpdateState(P_FAILED,CHECK_FAILED_WORDS)
+        errorWords(err)?.takeIf { code!=INSTALL_SOURCE_NOT_ALLOWED && code!=USER_ACTION_REQUIRED }?.let { return UpdateState(P_FAILED,it.sentence) }
+        return UpdateState()
+    }
     /** r12-2: true while this app may not install updates by itself (canRequestPackageInstalls() false) — the optional
      * first-setup step "새 버전을 저절로 설치하기". */
-    fun setupStep(c:Context):Boolean = false
+    fun setupStep(c:Context):Boolean = runCatching { !c.packageManager.canRequestPackageInstalls() }.getOrDefault(false)
     /** r12-2: opens ACTION_MANAGE_UNKNOWN_APP_SOURCES for this app (the setup step's button). */
-    fun openInstallSourceSettings(a:Activity) {}
-    /** r12-2: [지금 확인] — checks for a new version now, off the main thread; [done] runs on the main thread with the new state. */
-    fun checkNow(c:Context,done:(UpdateState)->Unit={}) {}
+    fun openInstallSourceSettings(a:Activity) {
+        runCatching { a.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:${a.packageName}"))) }
+            .onFailure { runCatching { a.startActivity(Intent(Settings.ACTION_SETTINGS)) } }
+    }
+    /** r12-2: [지금 확인] — checks for a new version now, off the main thread; [done] runs on the main thread with the new state.
+     * A newer version is downloaded (and installed in the background) in the same go; offline, a check waits for the connection.
+     * Also what the app runs when it opens (v3.1, design 2.2-5). */
+    fun checkNow(c:Context,done:(UpdateState)->Unit={}) {
+        val app=c.applicationContext
+        val main=android.os.Handler(android.os.Looper.getMainLooper())
+        fun finish() { val s=runCatching { state(app) }.getOrDefault(UpdateState());main.post { done(s) } }
+        val hook=storeHook
+        if(hook==null && !CallInboxConfig.enabled) { finish();return }
+        progress(app,P_CHECKING)
+        Thread({
+            try {
+                val store=if(hook!=null) hook() else CallInboxConfig.store()
+                when {
+                    store==null -> { noStore(app);progress(app,P_NONE) }
+                    !online(app) -> { progress(app,P_OFFLINE);checkSoon(app) }
+                    else -> { settleIfInstalled(app);check(app,store) }
+                }
+            } catch(e:java.io.IOException) {
+                checkSoon(app) // once more when the connection is there
+            } catch(e:Exception) { progress(app,P_FAILED) }
+            finish()
+        },"ieum-update-check").start()
+    }
     /** r12-2 for r12-1's self-check notice: a verified new version has waited more than a day to be installed. */
-    fun notInstalledForADay(c:Context,now:Long=System.currentTimeMillis()):Boolean = false
+    fun notInstalledForADay(c:Context,now:Long=System.currentTimeMillis()):Boolean = runCatching {
+        val s=settings(c.applicationContext).snapshot()
+        val code=s.optInt(PipelineSettingsKeys.UPDATE_AVAILABLE_CODE,0);val since=s.optLong(PipelineSettingsKeys.UPDATE_READY_SINCE_MS,0)
+        code>BuildConfig.VERSION_CODE && since>0 && now-since>DAY_MS
+    }.getOrDefault(false)
+
+    // ---- v3.1 update progress ([PipelineSettingsKeys.UPDATE_PROGRESS]) ----
+    const val P_NONE="none";const val P_CHECKING="checking";const val P_OFFLINE="offline";const val P_DOWNLOADING="downloading"
+    const val P_READY="ready";const val P_WAITING_CONFIRM="waitingConfirm";const val P_FAILED="failed"
+    /** [PipelineSettingsKeys.LAST_UPDATE_ERROR] codes of v3.1: Android wants a tap / installs from this app are not allowed. */
+    const val USER_ACTION_REQUIRED="USER_ACTION_REQUIRED";const val INSTALL_SOURCE_NOT_ALLOWED="INSTALL_SOURCE_NOT_ALLOWED"
+    const val CHECKING_WORDS="새 버전이 있는지 확인하는 중이에요.";const val OFFLINE_WORDS="인터넷 연결을 기다리는 중이에요. 연결되면 바로 확인해요."
+    const val CONFIRM_WORDS="설치 확인을 기다리는 중이에요. 알림이나 지금 업데이트를 눌러 설치를 마쳐 주세요."
+    const val INSTALLING_WORDS="새 버전을 설치하는 중이에요."
+    const val CHECK_FAILED_WORDS="새 버전을 확인하지 못했어요. 잠시 뒤 다시 확인해 주세요."
+    private const val DAY_MS=24*3_600_000L
+    /** A "checking" older than this is over (the process died in the middle). */
+    private const val CHECKING_MS=2*60_000L
+    /** How often the download writes its progress (design 2.2-5: every second). */
+    const val PROGRESS_EVERY_MS=1_000L
+    /** For tests: the clock of the progress writes, and the inbox store of [checkNow]. */
+    @Volatile internal var clock:()->Long={ System.currentTimeMillis() }
+    @Volatile internal var storeHook:(()->CallInboxStore?)?=null
+    private const val PROGRESS="progress"
+    /** The last progress written, or null. */
+    internal fun progress(c:Context):JSONObject? = prefs(c).getString(PROGRESS,null)?.let { runCatching { JSONObject(it) }.getOrNull() }
+    /** Writes the progress to the plain preferences (the screen reads it every second) and to settings [PipelineSettingsKeys.UPDATE_PROGRESS]. */
+    internal fun progress(c:Context,phase:String,code:Int=0,done:Long=-1,total:Long=-1) {
+        val o=JSONObject().put("phase",phase).put("code",code).put("doneBytes",done).put("totalBytes",total).put("atMs",clock())
+        prefs(c).edit().putString(PROGRESS,o.toString()).apply()
+        runCatching { settings(c).update { it.put(PipelineSettingsKeys.UPDATE_PROGRESS,o.toString()) } }
+    }
+    /** "42% (3.1MB / 7.0MB)"; only the percent while the sizes are unknown. Also for the speech model ("21% (123MB / 574MB)"). */
+    fun progressWords(percent:Int,done:Long,total:Long):String {
+        val pct=if(percent>=0) percent else if(total>0 && done>=0) percent(done,total) else -1
+        val head=if(pct>=0) "$pct%" else ""
+        if(total<=0 || done<0) return head
+        return (if(head.isEmpty()) "" else "$head ")+"(${mb(done)} / ${mb(total)})"
+    }
+    /** "3.1MB" under 10 MB, "123MB" above (decimal megabytes, like [sizeWords]). */
+    fun mb(bytes:Long):String { val m=bytes/1_000_000.0;return if(m<10) "%.1fMB".format(java.util.Locale.ROOT,m) else "${Math.round(m)}MB" }
+    @Suppress("DEPRECATION")
+    internal fun online(c:Context):Boolean = runCatching {
+        c.getSystemService(android.net.ConnectivityManager::class.java)?.activeNetworkInfo?.isConnected==true }.getOrDefault(true)
+    private fun storedErrorText(c:Context)=runCatching { settings(c).snapshot().optString(PipelineSettingsKeys.LAST_UPDATE_ERROR) }.getOrDefault("")
+    private fun errorCode(text:String)=text.trim().substringBefore(' ').substringBefore(':')
 
     /** "앱 버전 v2.0 (빌드 1050)", plus the downloaded next version: the name from docs/VERSION, the build number to tell builds apart. */
     fun versionLine(name:String,code:Int,next:Info?):String {
@@ -50,13 +162,15 @@ internal object CallUpdate {
     }
     data class Info(val versionCode:Int,val versionName:String,val apk:String,val sha256:String,val notes:String,val size:Long=0)
     private const val PREFS="ieum.update";private const val CHANNEL="ieum.update"
-    /** When the update file was last read (ms); after this long without a read, the next check may use mobile data too (design H3). */
+    /** When the update file was last read (ms). Before v3.1 the check waited this long for Wi-Fi; kept for the old work's input. */
     const val STALE_MS=6*3_600_000L
     private const val CHECKED="checked_ms"
     fun lastChecked(c:Context):Long=prefs(c).getLong(CHECKED,0)
     fun stale(now:Long,last:Long)=now-last>=STALE_MS
-    /** Wi-Fi only (the APK is about 5 MB) until the last check is [STALE_MS] old, then any connection. */
-    fun networkFor(now:Long,last:Long)=if(stale(now,last)) NetworkType.CONNECTED else NetworkType.UNMETERED
+    /** v3.1 (user's decision 11/5 18:26, "무조건 모바일 데이터"): any connection, whatever the last check. */
+    @Suppress("UNUSED_PARAMETER") fun networkFor(now:Long,last:Long)=NetworkType.CONNECTED
+    /** The constraints of every update work: a connection of any kind (Wi-Fi or mobile data). */
+    fun constraints():Constraints=Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
     /** "STATUS_FAILURE_STORAGE (6): not enough space": the installer's result as it is kept in [PipelineSettingsKeys.LAST_UPDATE_ERROR]. */
     fun errorText(status:Int,message:String?):String {
         val name=when(status) {
@@ -77,6 +191,8 @@ internal object CallUpdate {
         val code=stored?.trim()?.substringBefore(' ')?.substringBefore(':')?.takeIf { it.isNotEmpty() } ?: return null
         return when(code) {
             "STATUS_FAILURE_ABORTED" -> null
+            USER_ACTION_REQUIRED -> ErrorWords("새 버전 설치에 확인이 한 번 필요해요.","알림이나 홈의 지금 업데이트를 눌러 주세요.")
+            INSTALL_SOURCE_NOT_ALLOWED -> ErrorWords("새 버전을 저절로 설치하도록 아직 허용되지 않았어요.","설정에서 이음의 앱 설치 허용을 켜 주세요.")
             "STATUS_FAILURE_STORAGE" -> ErrorWords("저장 공간이 부족해 설치하지 못했어요.","사진이나 쓰지 않는 앱을 조금 지운 뒤 $AGAIN")
             "STATUS_FAILURE_BLOCKED" -> ErrorWords("휴대폰이 설치를 막았어요.","관리하는 분께 알려 주세요.")
             "STATUS_FAILURE_CONFLICT","STATUS_FAILURE_INCOMPATIBLE","STATUS_FAILURE_INVALID" -> ErrorWords("새 버전이 이 휴대폰에 맞지 않아 설치하지 못했어요.","관리하는 분께 알려 주세요.")
@@ -149,34 +265,44 @@ internal object CallUpdate {
 
     /** Returns true when a newer verified APK is ready. One at a time: the background check and [지금 받기] share the file. */
     fun check(c:Context,store:CallInboxStore):Boolean = synchronized(lock) {
+        if(progress(c)?.optString("phase")!=P_CHECKING) progress(c,P_CHECKING)
         val info=try { parse(store.get("app/version.json")) }
-            catch(e:Exception) { if(fetchState(c).stage==Stage.WAITING) stage(c,Stage.FAILED,reason=failWords(e));throw e } // only when the user is watching
+            catch(e:Exception) {
+                if(fetchState(c).stage==Stage.WAITING) stage(c,Stage.FAILED,reason=failWords(e)) // only when the user is watching
+                progress(c,if(e is java.io.IOException && !online(c)) P_OFFLINE else P_FAILED);throw e }
         val p=prefs(c)
         p.edit().putLong(CHECKED,System.currentTimeMillis()).apply()
-        if(info.versionCode<=BuildConfig.VERSION_CODE) { saveError(c,null);settleInstalled(c);p.edit().remove(A_CODE).apply();stage(c,Stage.IDLE);return false } // up to date: an old install failure is over
+        if(info.versionCode<=BuildConfig.VERSION_CODE) { saveError(c,null);settleInstalled(c);p.edit().remove(A_CODE).apply();stage(c,Stage.IDLE);progress(c,P_NONE);return false } // up to date: an old install failure is over
         p.edit().putInt(A_CODE,info.versionCode).putString(A_NAME,info.versionName).putString(A_SHA,info.sha256).putString(A_NOTES,info.notes)
             .apply { if(info.size>0) putLong(A_SIZE,info.size) else if(p.getInt(A_CODE,0)!=info.versionCode) remove(A_SIZE) }.apply()
         if(ready(c)?.versionCode==info.versionCode) {
             stage(c,Stage.DONE,100);markReady(c,info.versionCode)
+            if(progress(c)?.optString("phase")!=P_WAITING_CONFIRM) progress(c,P_READY,info.versionCode)
             if(!wantsInstall(c) && autoInstall(c)) installInBackground(c) // an earlier try failed or was lost: once more (never a second session)
             return true
         }
         val f=file(c);f.parentFile?.mkdirs();val tmp=File(f.parentFile,"download.tmp")
         stage(c,Stage.DOWNLOADING,0)
+        progress(c,P_DOWNLOADING,info.versionCode,0,info.size.takeIf { it>0 } ?: -1)
         try {
-            var shown=0
+            var shown=0;var written=clock()
             store.download(info.apk,tmp) { got,total ->
                 val whole=if(info.size>0) info.size else total
                 if(total>0 && info.size<=0 && p.getLong(A_SIZE,0)!=total) p.edit().putLong(A_SIZE,total).apply()
                 val pct=percent(got,whole).coerceAtMost(99)
                 if(pct>shown) { shown=pct;stage(c,Stage.DOWNLOADING,pct) } // a write per whole percent, not per block
+                val now=clock()
+                if(now-written>=PROGRESS_EVERY_MS) { written=now;progress(c,P_DOWNLOADING,info.versionCode,got,whole) } // bytes, every second
             }
             check(info.size<=0 || tmp.length()==info.size){"UPDATE_SIZE"}
             check(sha256(tmp)==info.sha256){"UPDATE_SHA"}
             check(tmp.renameTo(f) || run { tmp.copyTo(f,true);tmp.delete() }){"UPDATE_MOVE"}
-        } catch(e:Exception) { tmp.delete();stage(c,Stage.FAILED,reason=failWords(e));throw e }
+        } catch(e:Exception) {
+            tmp.delete();stage(c,Stage.FAILED,reason=failWords(e))
+            progress(c,if(e is java.io.IOException && !online(c)) P_OFFLINE else P_FAILED,info.versionCode);throw e }
         p.edit().putInt("code",info.versionCode).putString("name",info.versionName).putString("sha",info.sha256).putString("notes",info.notes).putLong("size",f.length()).apply()
         stage(c,Stage.DONE,100)
+        progress(c,P_READY,info.versionCode,f.length(),f.length())
         markReady(c,info.versionCode)
         // Design 3.3: straight on to a background install. Asked for on the screen ([지금 업데이트]): the screen installs it.
         if(wantsInstall(c) || !autoInstall(c) || !installInBackground(c)) notifyReady(c,info)
@@ -200,7 +326,8 @@ internal object CallUpdate {
     }
     /** Installed (or nothing newer): nothing waits any more; the session and the "새 버전" notification are over. */
     internal fun settleInstalled(c:Context) {
-        prefs(c).edit().remove(SESSION).remove(SESSION_CODE).apply()
+        prefs(c).edit().remove(SESSION).remove(SESSION_CODE).remove(PROGRESS).apply()
+        runCatching { if(settings(c).snapshot().has(PipelineSettingsKeys.UPDATE_PROGRESS)) settings(c).update { it.remove(PipelineSettingsKeys.UPDATE_PROGRESS) } }
         runCatching { c.getSystemService(NotificationManager::class.java)?.cancel(NOTIFY_TAG,NOTIFY_ID) }
         fun clear(s:JSONObject)=s.optInt(PipelineSettingsKeys.UPDATE_AVAILABLE_CODE,0)==0 && s.optLong(PipelineSettingsKeys.UPDATE_READY_SINCE_MS,0)==0L
         runCatching { if(!clear(settings(c).snapshot())) settings(c).update {
@@ -232,11 +359,14 @@ internal object CallUpdate {
             if(prefs(c).getInt(SESSION_CODE,0)==r.versionCode) return true // one at a time: its result is still coming
             runCatching { c.packageManager.packageInstaller.abandonSession(old) };sessionDone(c,old) // an older version's session gives way
         }
-        if(!c.packageManager.canRequestPackageInstalls()) return false
+        if(!c.packageManager.canRequestPackageInstalls()) { saveError(c,INSTALL_SOURCE_NOT_ALLOWED);return false } // setup step, notification
+        if(errorCode(storedErrorText(c)) in setOf(INSTALL_SOURCE_NOT_ALLOWED,USER_ACTION_REQUIRED)) saveError(c,null) // a new try: that is over
         if(!verified(c)) return false
         return try { commit(c,file(c),background=true);true }
         catch(e:Exception) { saveError(c,errorText(PackageInstaller.STATUS_FAILURE,e.javaClass.simpleName+" "+(e.message ?: "")));false }
     }
+    /** Android asked for a tap on a background install: kept for the heartbeat (watchdog) and the screens' "설치 확인을 기다리는 중". */
+    internal fun pendingUserAction(c:Context) { progress(c,P_WAITING_CONFIRM,ready(c)?.versionCode ?: 0);saveError(c,USER_ACTION_REQUIRED) }
     /** Writes [f] into a new session and commits it; the result comes to [UpdateStatusReceiver]. The id is kept until it ends. */
     private fun commit(c:Context,f:File,background:Boolean):Int {
         val app=c.applicationContext
@@ -279,7 +409,8 @@ internal object CallUpdate {
     internal fun noStore(c:Context) { if(fetchState(c).stage==Stage.WAITING) stage(c,Stage.IDLE) }
     /** For tests: replaces the WorkManager start of [fetchNow]. */
     @Volatile internal var startHook:((Context)->Unit)?=null
-    /** [지금 받기]: starts getting the newer version now, on any connection (the user asked). [installAfter]: go on to install when done. */
+    /** [지금 받기]: starts getting the newer version now, on any connection. [installAfter]: go on to install when done.
+     * [metered] only says how the user is connected (the settings note); since v3.1 every connection is used anyway. */
     fun fetchNow(c:Context,installAfter:Boolean,metered:Boolean=false) {
         val running=fetchState(c).stage==Stage.DOWNLOADING
         prefs(c).edit().putBoolean(F_INSTALL,installAfter || wantsInstall(c)).putBoolean(F_METERED,metered).apply()
@@ -288,7 +419,7 @@ internal object CallUpdate {
         startHook?.let { it(c);return }
         runCatching {
             WorkManager.getInstance(c.applicationContext).enqueueUniqueWork("ieum.update.now",ExistingWorkPolicy.REPLACE,
-                OneTimeWorkRequestBuilder<CallUpdateWork>().setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                OneTimeWorkRequestBuilder<CallUpdateWork>().setConstraints(constraints())
                     .setBackoffCriteria(BackoffPolicy.LINEAR,30,TimeUnit.SECONDS).build())
         }.onFailure { stage(c,Stage.FAILED,reason=OTHER_WORDS) }
     }
@@ -324,24 +455,25 @@ internal object CallUpdate {
         return true
     }
 
-    /** Every 6 hours on Wi-Fi; a second 6-hourly work on any connection checks only when the last check is 6 hours old. */
+    /** Every 6 hours on any connection (v3.1: one work instead of a Wi-Fi one plus a stale-only mobile one). UPDATE replaces the
+     * Wi-Fi constraint of a work registered by an older version; the old any-connection work is cancelled. */
     fun schedule(c:Context) {
         if(!CallInboxConfig.enabled)return
         val wm=WorkManager.getInstance(c.applicationContext)
-        wm.enqueueUniquePeriodicWork("ieum.update",ExistingPeriodicWorkPolicy.KEEP,
-            PeriodicWorkRequestBuilder<CallUpdateWork>(6,TimeUnit.HOURS)
-                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).build()).build())
-        wm.enqueueUniquePeriodicWork("ieum.update.any",ExistingPeriodicWorkPolicy.KEEP,
-            PeriodicWorkRequestBuilder<CallUpdateWork>(6,TimeUnit.HOURS)
-                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).setInputData(workDataOf(CallUpdateWork.ONLY_IF_STALE to true)).build())
+        wm.enqueueUniquePeriodicWork(PERIODIC,ExistingPeriodicWorkPolicy.UPDATE,periodicRequest())
+        wm.cancelUniqueWork(OLD_ANY)
     }
-    /** One more check 30 seconds after the app starts (design H3), on mobile data too when the last check is 6 hours old. */
+    internal fun periodicRequest()=PeriodicWorkRequestBuilder<CallUpdateWork>(6,TimeUnit.HOURS).setConstraints(constraints()).build()
+    internal fun openRequest()=OneTimeWorkRequestBuilder<CallUpdateWork>().setConstraints(constraints())
+        .setBackoffCriteria(BackoffPolicy.LINEAR,30,TimeUnit.SECONDS).build()
+    const val PERIODIC="ieum.update";private const val OLD_ANY="ieum.update.any";const val OPEN="ieum.update.open"
+    /** A check right when the app process starts (v3.1, design 2.2-5: no 30-second wait), on any connection; offline it waits
+     * for one. The screen's [checkNow] at launch shows the same check as it happens. */
+    @Suppress("UNUSED_PARAMETER")
     fun checkSoon(c:Context,now:Long=System.currentTimeMillis()) {
         if(!CallInboxConfig.enabled)return
         runCatching {
-            WorkManager.getInstance(c.applicationContext).enqueueUniqueWork("ieum.update.open",ExistingWorkPolicy.KEEP,
-                OneTimeWorkRequestBuilder<CallUpdateWork>().setInitialDelay(30,TimeUnit.SECONDS)
-                    .setConstraints(Constraints.Builder().setRequiredNetworkType(networkFor(now,lastChecked(c))).build()).build())
+            WorkManager.getInstance(c.applicationContext).enqueueUniqueWork(OPEN,ExistingWorkPolicy.KEEP,openRequest())
         }
     }
 }
@@ -349,7 +481,7 @@ internal object CallUpdate {
 internal class CallUpdateWork(context:Context,params:WorkerParameters):Worker(context,params) {
     companion object { const val ONLY_IF_STALE="onlyIfStale" }
     override fun doWork():Result {
-        // The any-connection work stays out of the way while the Wi-Fi one keeps the check fresh.
+        // ONLY_IF_STALE: the any-connection work of v3.0 and earlier, until schedule() cancels it.
         CallUpdate.settleIfInstalled(applicationContext) // the version that was waiting is on: heartbeat keys and notification follow
         if(inputData.getBoolean(ONLY_IF_STALE,false) && !CallUpdate.stale(System.currentTimeMillis(),CallUpdate.lastChecked(applicationContext))) return Result.success()
         val store=CallInboxConfig.store() ?: return Result.success().also { CallUpdate.noStore(applicationContext) }
@@ -371,6 +503,8 @@ class UpdateStatusReceiver:BroadcastReceiver() {
         fun later(block:()->Unit) { val pending:PendingResult? =goAsync();Thread { try { runCatching(block) } finally { pending?.finish() } }.start() }
         when {
             status==PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                // A background install that Android will not do without a tap (DESIGN_V4 2.2-4): a code for the watchdog.
+                if(background) later { CallUpdate.pendingUserAction(app) }
                 @Suppress("DEPRECATION") val confirm=intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT) ?: return
                 if(background) CallUpdate.notifyConfirm(app,confirm) // UPDATE_READY_SINCE_MS stays: still not installed
                 else context.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))

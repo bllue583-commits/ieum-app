@@ -360,9 +360,9 @@ class UiV2Test:ProtectedTextHostTestBase() {
     }
 
     // ---- 9. update ----
-    @Test fun updateUsesMobileDataOnlyAfterSixStaleHours() {
+    @Test fun updateUsesAnyConnection() { // v3.1 (DESIGN_V4 2.2-5): mobile data too, whenever
         val now=100L*3_600_000
-        assertEquals(NetworkType.UNMETERED,CallUpdate.networkFor(now,now-5*3_600_000L))
+        assertEquals(NetworkType.CONNECTED,CallUpdate.networkFor(now,now-5*3_600_000L))
         assertEquals(NetworkType.CONNECTED,CallUpdate.networkFor(now,now-6*3_600_000L))
         assertEquals(NetworkType.CONNECTED,CallUpdate.networkFor(now,0))
         assertEquals("lastUpdateError",PipelineSettingsKeys.LAST_UPDATE_ERROR);assertEquals("lastDigestMs",PipelineSettingsKeys.LAST_DIGEST_MS)
