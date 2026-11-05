@@ -55,12 +55,11 @@ class CallCardSettingsTest:ProtectedTextHostTestBase() {
         settle { tag<View>(a,"home_calls_button")!=null }
         a.home.render(HomeScreen.Snapshot(folder=true,consent=true,model="READY",calls=0,working=0,newTasks=0,due=0,overdue=0,lastAnalyzedMs=0,overlay=false,callRole=false))
         val all=views(a.window.decorView).filterIsInstance<TextView>().joinToString("\n") { it.text }
-        assertTrue(all,all.contains("통화 화면 위에 이음 카드 보기") && all.contains("8/10"))
+        assertTrue(all,all.contains("통화 화면 위에 이음 카드 보기") && all.contains("처음 설정 남은 1단계"))
         tag<View>(a,"home_setup_next")!!.performClick()
         assertEquals(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,shadowOf(a).nextStartedActivity?.action)
-        // The overlay allowed: next the optional step for calls that go out.
+        // The overlay allowed: v3.1 (DESIGN_V4 2.5-1) asks for the call redirection role in settings only, not in first setup.
         a.home.render(HomeScreen.Snapshot(folder=true,consent=true,model="READY",calls=0,working=0,newTasks=0,due=0,overdue=0,lastAnalyzedMs=0,callRole=false))
-        val next=views(a.window.decorView).filterIsInstance<TextView>().joinToString("\n") { it.text }
-        assertTrue(next,next.contains("거는 전화에도 카드 보기") && next.contains("9/10"))
+        assertNull(tag<View>(a,"home_setup"))
     }
 }

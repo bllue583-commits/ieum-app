@@ -33,6 +33,8 @@ internal object UpdateViews {
  * busy on its own ("연결하는 중이에요") and leaves the others alone. */
 internal class SettingsScreen(a:MainActivity):AppScreen(a) {
     companion object { const val TICK_MS=1000L
+        /** [지금 확인] says "확인하는 중이에요" at most this long. */
+        const val CHECK_WAIT_MS=30_000L
         /** A slider is saved this long after it last moved (also when moved with TalkBack, review #31). */
         const val HOUR_SAVE_MS=700L }
     private val page:LinearLayout get()=a.column
@@ -64,6 +66,11 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
     private fun settings()=SecureSettings(CallPipelineStartup.storage(a))
     private fun store()=kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(a))
 
+    /** A row to scroll to once the page is drawn (a home banner opens settings at that row, DESIGN_V4 2.5-2). */
+    private var focusTag:String?=null
+    /** The next drawing scrolls to the view tagged [tag] (or to the group [group] when that row is not there). */
+    internal fun show(group:String,tag:String?=null) { focusTag=tag ?: group;focusGroup=group }
+    private var focusGroup:String?=null
     /** Settings comes to the front (or the app comes back): read, draw, and follow a download every second. */
     override fun enter() {
         body=page
@@ -81,7 +88,22 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
     // ---- 앱 버전: getting the next version, with a bar while it comes (round 6 v2.5) ----
     private val ticker=android.os.Handler(android.os.Looper.getMainLooper())
     /** While the screen is open, the update part follows the download every second. */
-    private val tick=object:Runnable { override fun run() { if(!live()) return;fillUpdate();ticker.postDelayed(this,TICK_MS) } }
+    private val tick=object:Runnable { override fun run() { if(!live()) return;fillUpdate();fillModel();ticker.postDelayed(this,TICK_MS) } }
+    /** The model's part file and the state drawn, so the line follows the download every second without a read. */
+    private var modelPart:java.io.File?=null
+    private var modelShown=""
+    /** The part file was there at the last tick (its going away means the download ended). */
+    private var modelSeen=false
+    private fun modelWords(state:String,part:java.io.File?)=HomeScreen.modelLine(state,part?.takeIf { it.isFile }?.length() ?: -1L,
+        runCatching { a.getSystemService(android.net.ConnectivityManager::class.java)?.activeNetwork==null }.getOrDefault(false))
+    private fun fillModel() {
+        if(modelShown!="DOWNLOADING") return
+        // The part file gone: the download ended (ready or failed); the page reads again.
+        val here=modelPart?.isFile==true
+        if(!here && modelSeen) { modelShown="";modelSeen=false;refresh();return }
+        modelSeen=here
+        page.findViewWithTag<TextView>("model_state")?.text=modelWords(modelShown,modelPart)
+    }
     private var updateBlock:LinearLayout?=null
     private var updateKey:String?=null
     private fun metered()=runCatching { a.getSystemService(android.net.ConnectivityManager::class.java)?.let { it.activeNetwork!=null && it.isActiveNetworkMetered } }.getOrNull()==true
@@ -95,6 +117,8 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
      * version is known and not yet here. Rebuilt only when what it shows changes. */
     internal fun fillUpdate() {
         val block=updateBlock?.takeIf { live() } ?: return
+        val u=HomeScreen.updateState(a)
+        if(u.phase!="none" && u.words.isNotBlank()) { fillState(block,u);return }
         val ready=CallUpdate.ready(a)
         if(ready!=null && CallUpdate.takeInstallWish(a)) { CallUpdate.install(a,metered()) } // asked for from [지금 업데이트]: on to the install
         val f=CallUpdate.fetchState(a);val avail=CallUpdate.available(a)
@@ -132,10 +156,42 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
             }
             else -> {
                 block.addView(note("마지막 확인 "+CallUi.dateTime(CallUpdate.lastChecked(a))).apply { setPadding(0,CallUi.dp(a,6),0,0) })
-                block.addView(CallUi.linkButton(a,"새 버전 확인하기 ›") { startFetch() }.apply { tag="update_check" },
-                    LinearLayout.LayoutParams(-2,-2).apply { marginStart=-CallUi.dp(a,6) })
+                block.addView(checkLink())
             }
         }
+    }
+    /** v3.1 (DESIGN_V4 2.2-5 라): [지금 확인] — checks now and shows the answer in place ("확인하는 중이에요" meanwhile). */
+    private var checking=false
+    /** No answer this long after [지금 확인]: the link comes back (the check goes on in the background). */
+    private val checkGiveUp=Runnable { if(checking) { checking=false;updateKey=null;if(live()) fillUpdate() } }
+    private fun checkLink()=CallUi.linkButton(a,if(checking) "확인하는 중이에요" else "지금 확인 ›") {
+        if(checking) return@linkButton
+        checking=true;updateKey=null;fillUpdate()
+        ticker.removeCallbacks(checkGiveUp);ticker.postDelayed(checkGiveUp,CHECK_WAIT_MS)
+        HomeScreen.checkNow(a) { checking=false;ticker.removeCallbacks(checkGiveUp);updateKey=null;if(live()) fillUpdate() }
+    }.apply { tag="update_check" }.also { it.layoutParams=LinearLayout.LayoutParams(-2,-2).apply { marginStart=-CallUi.dp(a,6) } }
+    /** r12-2's state under the version line: the words as a heading, a bar while it comes, [지금 업데이트] when it can be installed,
+     * and [지금 확인] while nothing is happening or after a failure. Rebuilt only when the phase changes; the words and the bar follow
+     * every second. */
+    private fun fillState(block:LinearLayout,u:CallUpdate.UpdateState) {
+        val key="state|${u.phase}|${u.canInstall}|$checking"
+        if(key==updateKey) {
+            block.findViewWithTag<TextView>("update_state")?.text=u.words
+            if(u.percent>=0) block.findViewWithTag<ProgressBar>("update_progress")?.progress=u.percent
+            return
+        }
+        updateKey=key;block.removeAllViews()
+        val failed=u.phase=="failed"
+        block.addView(CallUi.text(a,u.words,CallUi.HEADING,true,if(failed) CallUi.AMBER else CallUi.INK).apply { tag="update_state";fontFeatureSettings="tnum";setPadding(0,CallUi.dp(a,12),0,0) })
+        if(u.phase=="downloading" && u.percent>=0) block.addView(UpdateViews.bar(a,u.percent))
+        if(u.canInstall) block.addView(CallUi.bigButton(a,"","지금 업데이트","확인하는 중이에요") {
+            a.lifecycleScope.launch {
+                val r=withContext(Dispatchers.IO) { runCatching { CallUpdate.install(a,metered()) } }
+                (page.findViewWithTag<TextView>("update_install"))?.let(CallUi::idle)
+                r.onFailure { Toast.makeText(a,"업데이트를 시작하지 못했어요. 잠시 후 다시 눌러 주세요.",Toast.LENGTH_LONG).show() }
+                updateKey=null;if(live()) fillUpdate()
+            } }.apply { tag="update_install" })
+        if(!u.canInstall && u.phase !in HomeScreen.MOVING) block.addView(checkLink())
     }
 
     /** Starts a settings group: its name above, a white sheet below that the following views go into. */
@@ -266,6 +322,10 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         // Design 3.3 (r7-3): a verified new version installs by itself; off, a notification only.
         body.addView(CallUi.divider(a))
         body.addView(switchRow("auto_install_switch",s.optBoolean(PipelineSettingsKeys.AUTO_INSTALL,true),PipelineSettingsKeys.AUTO_INSTALL) { "새 버전은 자동으로 설치" })
+        if(HomeScreen.installStep(a)) {
+            body.addView(CallUi.text(a,"새 버전을 누르지 않고 설치하려면 이음의 설치를 한 번 허용해 주세요. 열리는 화면에서 '이 출처 허용'을 켜 주세요.",CallUi.BODY).apply { tag="install_source_state" })
+            body.addView(button("설치 허용") { CallUpdate.openInstallSourceSettings(a) }.apply { tag="install_source_allow" })
+        }
         myInfo(s)
         personalNumbers()
 
@@ -282,13 +342,12 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
 
         val modelState=s.optString(PipelineSettingsKeys.MODEL_STATE)
         sub("음성 인식 모델")
-        body.addView(CallUi.text(a,when(modelState) {
-            "READY" -> "준비됨 ✓";"DOWNLOADING" -> "받는 중이에요 (Wi-Fi 연결 필요, 약 570MB)";"FAILED" -> "받지 못했어요. 다시 받아주세요."
-            "UNSUPPORTED" -> "이 휴대폰에서는 사용할 수 없어요.";else -> "아직 받지 않았어요 (Wi-Fi에서 약 570MB)"
-        },CallUi.BODY,true,if(modelState=="READY") CallUi.OK else CallUi.INK))
-        if(modelState!="READY"&&modelState!="UNSUPPORTED") body.addView(button(if(modelState=="DOWNLOADING") "다시 확인하기" else "모델 받기") {
-            PipelineModelDownloadWork.enqueue(a);Toast.makeText(a,"Wi-Fi에 연결되면 받기 시작해요.",Toast.LENGTH_LONG).show()
-        })
+        val part=PipelineModelManager(CallPipelineStartup.storage(a)).partFile
+        body.addView(CallUi.text(a,modelWords(modelState,part),CallUi.BODY,true,if(modelState=="READY") CallUi.OK else CallUi.INK).apply { tag="model_state";fontFeatureSettings="tnum" })
+        modelPart=part;modelShown=modelState
+        if(modelState!="READY"&&modelState!="UNSUPPORTED"&&modelState!="DOWNLOADING") body.addView(button(if(modelState=="FAILED") "다시 받기" else "모델 받기") {
+            runCatching { HomeScreen.modelStart(a) };Toast.makeText(a,"음성 인식 모델을 받기 시작해요.",Toast.LENGTH_SHORT).show();refresh()
+        }.apply { tag="model_get" })
         if(kr.callbrief.BuildConfig.SYNTHETIC_TOOLS_ENABLED&&!CallInboxConfig.enabled&&modelState=="READY") body.addView(act("속도 측정 (시험용)","benchmark","재는 중이에요") { done -> benchmark(done) })
 
         sub("현장 상황 메모")
@@ -330,6 +389,8 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
             }
         })
         a.putBack(keep)
+        val want=focusTag;val group=focusGroup;focusTag=null;focusGroup=null
+        if(want!=null) page.post { if(live()) { if(page.findViewWithTag<View>(want)!=null) goTo(want) else group?.let(::goTo) } }
     }
 
     /** A switch that shows its own state: changed, it saves [key] and changes only its words (and the status lights), no redraw. */

@@ -76,13 +76,13 @@ class ScreensHomeCallsTest:ProtectedTextHostTestBase() {
         assertTrue(texts(a).contains("외 ${more}개 보기 ›"))
     }
 
-    @Test fun modelStepKeepsSayingItWaitsForWifi() {
-        val a=home(HomeScreen.Snapshot(folder=true,consent=true,model="",calls=0,working=0,newTasks=0,due=0,overdue=0,lastAnalyzedMs=0,modelWanted=true))
-        assertEquals("Wi-Fi에 연결되면 받기 시작해요. (약 570MB)",(tag(a,"home_model_detail") as TextView).text.toString())
-        val coming=home(HomeScreen.Snapshot(folder=true,consent=true,model="DOWNLOADING",calls=0,working=0,newTasks=0,due=0,overdue=0,lastAnalyzedMs=0,modelPercent=42,modelWanted=true))
-        assertTrue((tag(coming,"home_model_detail") as TextView).text.toString().startsWith("받는 중이에요 42%"))
-        // Pressing it is remembered until the model is ready.
-        assertFalse(ModelWish.wanted(app));ModelWish.mark(app);assertTrue(ModelWish.wanted(app));ModelWish.clear(app);assertFalse(ModelWish.wanted(app))
+    @Test fun modelLineNeverWaitsForWifi() {
+        // v3.1 (user 11/5 18:27): the model comes on any connection; the line shows the percent and the sizes, never "Wi-Fi".
+        val a=home(HomeScreen.Snapshot(folder=true,consent=true,model="",calls=0,working=0,newTasks=0,due=0,overdue=0,lastAnalyzedMs=0))
+        assertEquals("음성 인식 모델을 받기 시작해요 (574MB)",(tag(a,"home_model_detail") as TextView).text.toString())
+        val coming=home(HomeScreen.Snapshot(folder=true,consent=true,model="DOWNLOADING",calls=0,working=0,newTasks=0,due=0,overdue=0,lastAnalyzedMs=0,modelPercent=42,modelBytes=241_100_000L))
+        assertEquals("음성 인식 모델 받는 중 42% (241MB / 574MB)",(tag(coming,"home_model_detail") as TextView).text.toString())
+        assertTrue(texts(coming).none { it.contains("Wi-Fi") })
     }
 
     @Test fun notificationsRefusedTwiceOpenTheNotificationSettings() {
