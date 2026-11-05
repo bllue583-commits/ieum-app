@@ -6,7 +6,10 @@ import kr.co.callsummary.core.android.AndroidSqlPort
 
 /** Job ledger for on-device transcription, in the same protected (Keystore-sealed) local database as the
  * recordings it points at. One row per recording version; states QUEUED|RUNNING|DONE|FAILED|SKIPPED. */
-internal class CallTranscriptionStore(context:Context,private val now:()->Long=System::currentTimeMillis):AutoCloseable {
+internal class CallTranscriptionStore(context:Context,private val now:()->Long=System::currentTimeMillis,
+    /** Called with how many jobs just ended FAILED (r12-3: the heartbeat's `transcriptionFailed`); a failure to count loses only the count. */
+    private val failed:(Int)->Unit={ n -> runCatching { kr.callbrief.SecureSettings(context).update {
+        it.put(PipelineSettingsKeys.TRANSCRIPTION_FAILED,it.optLong(PipelineSettingsKeys.TRANSCRIPTION_FAILED,0)+n) } } }):AutoCloseable {
     data class Key(val recordingId:String,val sourceVersion:Long,val audioSha:String)
     /** A current recording version with encrypted audio in the vault. */
     data class Candidate(val key:Key,val displayName:String,val uri:String,val mime:String,val startedAtMs:Long?,
@@ -30,6 +33,12 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
                     audio_sha TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN('QUEUED','RUNNING','DONE','FAILED','SKIPPED')),
                     reason TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,updated_ms INTEGER NOT NULL,
                     PRIMARY KEY(recording_id,source_version,audio_sha))""")
+                // r12-3 (DESIGN_V4 2.3-4): when the row entered the queue; claim and finish leave it, so a retried job keeps
+                // its age (updated_ms moved on every try). Rows from before: their updated_ms is the best guess there is.
+                if(db.query("PRAGMA table_info(call_transcription_jobs)").none { it["name"]=="queued_ms" }) {
+                    db.execute("ALTER TABLE call_transcription_jobs ADD COLUMN queued_ms INTEGER")
+                    db.execute("UPDATE call_transcription_jobs SET queued_ms=updated_ms WHERE state IN('QUEUED','RUNNING')")
+                }
                 // Encrypted originals deleted by GeneralLocalStore.pruneVault (#39); a recording whose blob is gone is not offered again.
                 db.execute("CREATE TABLE IF NOT EXISTS vault_pruned(ciphertext_sha256 TEXT PRIMARY KEY,at_ms INTEGER NOT NULL)")
                 // Recordings from before 10/1 left queued by an older build (r7-1): one statement, whatever the offer pass does.
@@ -52,10 +61,11 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         (r["archived"] as Number).toInt()==1,(r["grant_active"] as Number).toInt()==1,
         (r["byte_count"] as Number?)?.toLong() ?: 0,(r["modified_at_ms"] as Number?)?.toLong() ?: 0)
 
+    /** r12-3 (DESIGN_V4 2.3-4): when the oldest job still waiting for its text (QUEUED, or RUNNING now) entered the queue
+     * (queued_ms; null: none waits). Jobs of recordings before 10/1 are skipped at open, so they never count. */
+    fun oldestQueuedMs():Long? = db.query("SELECT MIN(coalesce(queued_ms,updated_ms)) AS m FROM call_transcription_jobs WHERE state IN('QUEUED','RUNNING')")
+        .singleOrNull()?.get("m")?.let { (it as? Number)?.toLong() }
     /** The owner's current recording versions with encrypted audio, newest first. */
-    /** r12-3 (DESIGN_V4 2.3-4): when the oldest still-queued job entered the queue (queued_ms; null: none). Key-commit
-     * stub until r12-3 adds the column — r12-1's status light reads it. */
-    fun oldestQueuedMs():Long? = null
     fun candidates():List<Candidate> = db.query("$select WHERE r.owner_key=? AND r.presence='PRESENT' AND gone.ciphertext_sha256 IS NULL ORDER BY coalesce(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0) DESC",
         GeneralLocalStore.OWNER).map(::candidate)
 
@@ -63,10 +73,11 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
      * "No speech" was found by transcribing, not by eligibility, so it stays (it was queued again on every pass before). */
     fun offer(c:Candidate,eligible:Boolean,reason:String)=tx {
         val state=if(eligible)"QUEUED" else "SKIPPED"
-        db.execute("INSERT OR IGNORE INTO call_transcription_jobs(recording_id,source_version,audio_sha,state,reason,updated_ms) VALUES(?,?,?,?,?,?)",
-            c.key.recordingId,c.key.sourceVersion,c.key.audioSha,state,reason,now())
-        db.execute("UPDATE call_transcription_jobs SET state=?,reason=?,updated_ms=? WHERE recording_id=? AND source_version=? AND audio_sha=? AND state IN('QUEUED','SKIPPED') AND (state!=? OR reason!=?) AND NOT (state='SKIPPED' AND reason='NO_SPEECH')",
-            state,reason,now(),c.key.recordingId,c.key.sourceVersion,c.key.audioSha,state,reason);null
+        db.execute("INSERT OR IGNORE INTO call_transcription_jobs(recording_id,source_version,audio_sha,state,reason,updated_ms,queued_ms) VALUES(?,?,?,?,?,?,?)",
+            c.key.recordingId,c.key.sourceVersion,c.key.audioSha,state,reason,now(),if(eligible) now() else null)
+        // A skipped row that becomes eligible enters the queue now; a queued one keeps its entry time.
+        db.execute("UPDATE call_transcription_jobs SET queued_ms=CASE WHEN ?='QUEUED' AND state!='QUEUED' THEN ? ELSE queued_ms END,state=?,reason=?,updated_ms=? WHERE recording_id=? AND source_version=? AND audio_sha=? AND state IN('QUEUED','SKIPPED') AND (state!=? OR reason!=?) AND NOT (state='SKIPPED' AND reason='NO_SPEECH')",
+            state,now(),state,reason,now(),c.key.recordingId,c.key.sourceVersion,c.key.audioSha,state,reason);null
     }
 
     /** Every candidate through [offer] inside one transaction (r7-1, review #2): the protected store snapshots the whole
@@ -92,10 +103,14 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
 
     /** Rows left RUNNING by a process that died. The attempt stays counted, so a crash loop ends in FAILED.
      * Only rows untouched for [staleMs] (a bit over the 10 minute work limit): a RUNNING row younger than that may belong to a worker that is still going. */
-    fun recoverRunning(maxAttempts:Int,staleMs:Long=STALE_RUNNING_MS)=db.transaction {
-        val limit=now()-staleMs
-        db.execute("UPDATE call_transcription_jobs SET state='FAILED',reason='INTERRUPTED',updated_ms=? WHERE state='RUNNING' AND attempts>=? AND updated_ms<?",now(),maxAttempts,limit)
-        db.execute("UPDATE call_transcription_jobs SET state='QUEUED',reason='INTERRUPTED',updated_ms=? WHERE state='RUNNING' AND updated_ms<?",now(),limit);null
+    fun recoverRunning(maxAttempts:Int,staleMs:Long=STALE_RUNNING_MS) {
+        val n=db.transaction {
+            val limit=now()-staleMs
+            val n=db.query("SELECT count(*) AS n FROM call_transcription_jobs WHERE state='RUNNING' AND attempts>=? AND updated_ms<?",maxAttempts,limit).single()["n"].let { (it as Number).toInt() }
+            db.execute("UPDATE call_transcription_jobs SET state='FAILED',reason='INTERRUPTED',updated_ms=? WHERE state='RUNNING' AND attempts>=? AND updated_ms<?",now(),maxAttempts,limit)
+            db.execute("UPDATE call_transcription_jobs SET state='QUEUED',reason='INTERRUPTED',updated_ms=? WHERE state='RUNNING' AND updated_ms<?",now(),limit);n
+        }
+        if(n>0) failed(n)
     }
 
     /** Newest first; with [oldBefore] (처음 정리) recordings before it come after all newer ones, oldest first, so the
@@ -144,9 +159,11 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         queued
     }
 
-    fun finish(k:Key,state:String,reason:String,refundAttempt:Boolean=false)=db.execute(
-        "UPDATE call_transcription_jobs SET state=?,reason=?,attempts=attempts-?,updated_ms=? WHERE recording_id=? AND source_version=? AND audio_sha=?",
-        state,reason,if(refundAttempt)1 else 0,now(),k.recordingId,k.sourceVersion,k.audioSha)
+    fun finish(k:Key,state:String,reason:String,refundAttempt:Boolean=false) {
+        db.execute("UPDATE call_transcription_jobs SET state=?,reason=?,attempts=attempts-?,updated_ms=? WHERE recording_id=? AND source_version=? AND audio_sha=?",
+            state,reason,if(refundAttempt)1 else 0,now(),k.recordingId,k.sourceVersion,k.audioSha)
+        if(state=="FAILED") failed(1)
+    }
 
     fun attempts(k:Key):Int = db.query("SELECT attempts FROM call_transcription_jobs WHERE recording_id=? AND source_version=? AND audio_sha=?",k.recordingId,k.sourceVersion,k.audioSha)
         .singleOrNull()?.let{(it["attempts"] as Number).toInt()} ?: 0

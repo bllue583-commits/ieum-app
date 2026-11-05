@@ -26,6 +26,8 @@ internal class CallRecordAnalysisRunner(
     private val smsAllowed:()->Boolean={ context.checkSelfPermission(android.Manifest.permission.READ_SMS)==android.content.pm.PackageManager.PERMISSION_GRANTED },
     /** Runs after a pass that sent something: the result chain starts again, its first round 10 minutes on (r10-3). */
     private val afterSend:()->Unit={ ResultChain.start(context) },
+    /** Applies one result to its record (tests put a failing one here to reach the bad/ path, DESIGN_V4 2.3-2). */
+    private val apply:(CallRecordStore,String,ClaudeCallAnalysis)->List<CallRecordStore.Applied> ={ db,id,a -> db.applyAnalysis(id,a) },
 ) {
     /** Requests this runner put in the inbox (one batch counts once). */
     var sent=0;private set
@@ -79,7 +81,9 @@ internal class CallRecordAnalysisRunner(
             val files=store.list(CallInbox.RESULTS).filterNot { it.first.startsWith("selftest-") } // CI end-to-end check, not a call of this phone
             class Got(val name:String,val sha:String,val text:String,val results:List<Pair<String,ClaudeCallAnalysis>>?)
             val got=files.map { (name,sha) -> val t=store.get(CallInbox.RESULTS+"/"+name);Got(name,sha,t,runCatching { CallInbox.parseResults(t) }.getOrNull()) }
-            for(g in got.filter { it.results==null }) { store.put(CallInbox.BAD+"/"+g.name,g.text);store.delete(CallInbox.RESULTS+"/"+g.name,g.sha) } // broken: kept aside
+            val broken=got.filter { it.results==null }
+            for(g in broken) { store.put(CallInbox.BAD+"/"+g.name,g.text);store.delete(CallInbox.RESULTS+"/"+g.name,g.sha) } // broken: kept aside
+            if(broken.isNotEmpty()) count(PipelineSettingsKeys.RESULTS_BAD,broken.size.toLong())
             val failedFiles=mutableSetOf<String>()
             // The answer is here: from now on the record is not sent again, whatever the clock says (B17).
             val recordsOf={ g:Got -> g.results!!.mapNotNull { (id,_) -> byKey[id] ?: db.record(id) } }
@@ -95,20 +99,27 @@ internal class CallRecordAnalysisRunner(
                 // Memos come from the repository ledger, which the task keeps in time order.
                 val a=analyzer.filter(analysis,request,db.openTaskIds()).copy(siteMemo=null,companyMemo=null,companyTrade=null)
                 val dropped=analysis.tasks.size+analysis.promises.size-a.tasks.size-a.promises.size
-                val applied=db.applyAnalysis(record.recordId,if(FirstPass.stale(record.dayMs,clock())) FirstPass.restrict(a,record.dayMs,clock()) else a)
+                val applied=apply(db,record.recordId,if(FirstPass.stale(record.dayMs,clock())) FirstPass.restrict(a,record.dayMs,clock()) else a)
                 CallFollowupNotice.onResult(context,record.recordId,db) // r10-2: the call's notice says "정리됐어요"
                 duplicates+=applied.count { it.duplicate }
                 save { it.put(PipelineSettingsKeys.LAST_ANALYZED_MS,clock()).put(PipelineSettingsKeys.DROPPED_ITEMS,it.optLong(PipelineSettingsKeys.DROPPED_ITEMS,0)+dropped) }
             }.onFailure { failedFiles+=name }
             if(duplicates>0) save { it.put(PipelineSettingsKeys.DUPLICATE_SKIPPED,it.optLong(PipelineSettingsKeys.DUPLICATE_SKIPPED,0)+duplicates) }
+            if(failedFiles.isNotEmpty()) count(PipelineSettingsKeys.RESULTS_APPLY_FAILED,failedFiles.size.toLong())
             for(g in got.filter { it.results!=null }) {
                 val path=CallInbox.RESULTS+"/"+g.name
                 if(g.name !in failedFiles) { store.delete(path,g.sha);continue }
                 // Kept for the next run; after three failed runs it is set aside.
                 val tries=JSONObject(settings().optString(PipelineSettingsKeys.RESULT_FAILS,"{}")).optInt(g.name,0)+1
-                if(tries>=3) { store.put(CallInbox.BAD+"/"+g.name,g.text);store.delete(path,g.sha);db.inTransaction { recordsOf(g).forEach { r -> db.setReceived(r.recordId,null) } } } // set aside: may be sent again
-                save { it.put(PipelineSettingsKeys.RESULT_FAILS,JSONObject(it.optString(PipelineSettingsKeys.RESULT_FAILS,"{}")).put(g.name,tries).toString()) }
+                if(tries>=3) {
+                    store.put(CallInbox.BAD+"/"+g.name,g.text);store.delete(path,g.sha);count(PipelineSettingsKeys.RESULTS_BAD,1)
+                    setAside(db,recordsOf(g).filter { it.state!=CallRecordStore.ANALYZED })
+                    // The count starts again: the same file name coming back after a resend gets its three tries (r12-3).
+                    save { it.put(PipelineSettingsKeys.RESULT_FAILS,JSONObject(it.optString(PipelineSettingsKeys.RESULT_FAILS,"{}")).apply { remove(g.name) }.toString()) }
+                } else save { it.put(PipelineSettingsKeys.RESULT_FAILS,JSONObject(it.optString(PipelineSettingsKeys.RESULT_FAILS,"{}")).put(g.name,tries).toString()) }
             }
+            runCatching { releaseStuck(db) }
+            runCatching { noteLatency(db) }
             runCatching { takeTidy(store,db,consent) }
 
             fun due(r:CallRecord):Boolean {
@@ -258,8 +269,11 @@ internal class CallRecordAnalysisRunner(
         }
         val s=settings();val now=clock()
         val hour=java.time.Instant.ofEpochMilli(now).atZone(CallRecordStore.KST).hour
-        if(!consent || !FirstPass.done(s) || hour in 5..20 || now-s.optLong(PipelineSettingsKeys.TIDY_SENT_MS,0)<12*3_600_000L) return
-        val state=db.tidyState(true,now,all=!s.optBoolean(PipelineSettingsKeys.TIDIED_ONCE,false),mergeCandidates=mergeCandidates(s))
+        if(!consent || hour in 5..20 || now-s.optLong(PipelineSettingsKeys.TIDY_SENT_MS,0)<12*3_600_000L) return
+        // r12-3 (DESIGN_V4 2.3-1): the nightly state goes up whether or not the first pass is over, so "진행 중인 일" is
+        // there from the first nights. Until it is over only the last 14 days go up; the one full read follows it.
+        val done=FirstPass.done(s)
+        val state=db.tidyState(done,now,all=tidyAll(s),mergeCandidates=mergeCandidates(s))
         // The same content as last time is not sent again (round 6): the state on the inbox then gets older than a day and
         // the morning tidy rests by its own rule. The next run tries again, so a change later in the night still goes up.
         val hash=tidyHash(state)
@@ -267,6 +281,45 @@ internal class CallRecordAnalysisRunner(
         store.replace(CallInbox.TIDY_STATE,state.toString())
         save { it.put(PipelineSettingsKeys.TIDY_SENT_MS,now).put(TIDY_STATE_HASH,hash) }
     }
+    /** Adds [n] to the running count under [key] (the heartbeat's results and transcription counts). */
+    private fun count(key:String,n:Long)=save { it.put(key,it.optLong(key,0)+n) }
+
+    /** A result file set aside after its third failed try (DESIGN_V4 2.3-2). The first time its records keep the received
+     * mark, so they go again once, when [releaseStuck] takes it off 24 hours after the answer came (a fault in the answer
+     * would only come back at once). The second time a record is FAILED with [PipelineSettingsKeys.RESULT_NOT_APPLIED] and
+     * loses the mark, so [다시 정리하기] (r12-5, back to TRANSCRIBED) sends it in the next pass. */
+    private fun setAside(db:CallRecordStore,records:List<CallRecord>) {
+        if(records.isEmpty()) return
+        val counts=JSONObject(settings().optString(RESULT_BAD_RECORDS,"{}"))
+        db.inTransaction { for(r in records) {
+            val key=CallInbox.recordKey(r.recordId);val n=counts.optInt(key,0)+1
+            counts.put(key,n)
+            if(n>=2) { db.setState(r.recordId,CallRecordStore.FAILED,PipelineSettingsKeys.RESULT_NOT_APPLIED);db.setReceived(r.recordId,null) }
+            else if(db.receivedMs(r.recordId)==null) db.setReceived(r.recordId,clock())
+        } }
+        val kept=keepNewest(counts,RESULT_BAD_KEEP)
+        save { it.put(RESULT_BAD_RECORDS,kept.toString()) }
+    }
+    /** Records marked as answered whose answer has not been applied for [STUCK_MS] (DESIGN_V4 2.3-2): the mark is taken
+     * off, so the record goes again (its last sending is far over [RESEND_MS] old). */
+    private fun releaseStuck(db:CallRecordStore) {
+        val now=clock()
+        val stuck=db.pending().filter { r -> db.receivedMs(r.recordId)?.let { now-it>=STUCK_MS }==true }
+        if(stuck.isEmpty()) return
+        db.inTransaction { stuck.forEach { db.setReceived(it.recordId,null) } }
+        count(PipelineSettingsKeys.RESULTS_RECEIVED_NOT_APPLIED,stuck.size.toLong())
+    }
+    /** Call end to result, the last 7 days (DESIGN_V4 2.3-3), kept in settings for the heartbeat's `latency`. Written when
+     * the numbers changed, or an hour after the last write (so atMs says it is still being measured). */
+    private fun noteLatency(db:CallRecordStore) {
+        val now=clock()
+        val o=latency(db.resultLatencyMinutes(now-LATENCY_DAYS*86_400_000L),now)
+        val old=runCatching { JSONObject(settings().optString(PipelineSettingsKeys.LATENCY,"{}")) }.getOrDefault(JSONObject())
+        val same=listOf("p50Min","p90Min","n").all { old.opt(it)?.toString()==o.opt(it)?.toString() }
+        if(same && now-old.optLong("atMs",0)<3_600_000L) return
+        save { it.put(PipelineSettingsKeys.LATENCY,o.toString()) }
+    }
+
     /** From when old texts or mail may still come in (their first-pass reading goes forward from 10/1), or null when
      * both are read to the end or cannot be read (no permission, no mailbox, a mailbox that refuses the password). */
     private fun messagesBound(s:JSONObject):Long? {
@@ -294,6 +347,29 @@ internal object CallInboxConfig {
     val enabled get()=kr.callbrief.BuildConfig.IEUM_INBOX_TOKEN.isNotBlank()||kr.callbrief.BuildConfig.LOCAL_PREVIEW
 }
 internal const val RESEND_MS=6*3_600_000L
+/** A received mark this old on a record still not analysed is taken off (r12-3). */
+internal const val STUCK_MS=24*3_600_000L
+/** Settings key (r12-3): record key -> how many times its result went to bad/, a JSON object (keys are hashes). */
+internal const val RESULT_BAD_RECORDS="resultBadRecords"
+internal const val RESULT_BAD_KEEP=200
+internal const val LATENCY_DAYS=7L
+/** The tidy state's [all] (DESIGN_V4 2.3-1): every record since 10/1 only once the first pass is over and the tidy has
+ * not yet read everything; otherwise the last 14 days. */
+internal fun tidyAll(s:JSONObject)=FirstPass.done(s) && !s.optBoolean(PipelineSettingsKeys.TIDIED_ONCE,false)
+/** {"p50Min","p90Min","n","atMs"} from minutes (nearest rank); with no sample only n=0 and atMs. */
+internal fun latency(minutes:List<Long>,now:Long):JSONObject {
+    val o=JSONObject().put("n",minutes.size).put("atMs",now)
+    if(minutes.isEmpty()) return o
+    val sorted=minutes.sorted()
+    fun rank(p:Int)=sorted[((p*sorted.size+99)/100-1).coerceIn(0,sorted.size-1)]
+    return o.put("p50Min",rank(50)).put("p90Min",rank(90))
+}
+/** The last [max] entries of [o] in insertion order (org.json keeps it on Android). */
+internal fun keepNewest(o:JSONObject,max:Int):JSONObject {
+    val keys=o.keys().asSequence().toList()
+    if(keys.size<=max) return o
+    return JSONObject().apply { keys.drop(keys.size-max).forEach { put(it,o.get(it)) } }
+}
 /** Settings key (r7-4 fills it): id pairs the phone skipped as near duplicates, for the morning tidy's merge judgement. */
 internal const val MERGE_CANDIDATES="mergeCandidates"
 /** The [MERGE_CANDIDATES] list as kept in settings (a JSON array, or its text), or null when there is none. */

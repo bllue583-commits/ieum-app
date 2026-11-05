@@ -1324,6 +1324,14 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         rows("SELECT record_id,person_id FROM call_links WHERE person_id IS NOT NULL AND record_id IN (${marks(part.size)})",*part.toTypedArray())
             .mapNotNull { r -> r.str("record_id")?.let { id -> r.str("person_id")?.let { id to it } } } }.toMap()
 
+    // ---- r12-3 ----
+    /** DESIGN_V4 2.3-3: minutes from each call's end (started_ms + duration_ms) to its result (analyzed_ms), for calls
+     * (not texts or mail, not personal) analysed since [sinceMs]. A negative gap (a clock change) counts as 0. */
+    fun resultLatencyMinutes(sinceMs:Long):List<Long> =rows("""SELECT started_ms+duration_ms AS end_ms,analyzed_ms FROM call_records
+        WHERE state='ANALYZED' AND analyzed_ms IS NOT NULL AND analyzed_ms>=CAST(? AS INTEGER) AND started_ms IS NOT NULL
+        AND recording_id NOT LIKE 'sms:%' AND recording_id NOT LIKE 'mail:%' AND summary IS NOT NULL""",sinceMs)
+        .mapNotNull { r -> val e=r.long("end_ms");val a=r.long("analyzed_ms");if(e==null || a==null) null else maxOf(0L,a-e)/60_000L }
+    // ---- r12-3 end ----
 }
 
 /** A call-log entry the call list shows as its own line (no record to open): a missed or rejected call, an answered one

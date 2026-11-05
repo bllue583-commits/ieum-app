@@ -28,6 +28,9 @@ class FirstPassTest:ProtectedTextHostTestBase() {
     private class FakeInbox:CallInboxStore {
         val files=LinkedHashMap<String,String>()
         override fun put(path:String,json:String){ files[path]=json }
+        /** The nightly tidy state (r12-3: it goes up during the first pass too, and this clock is 03:53 KST), kept apart. */
+        val tidy=LinkedHashMap<String,String>()
+        override fun replace(path:String,json:String){ tidy[path]=json }
         override fun list(dir:String)=files.keys.filter{it.startsWith("$dir/")}.map{it.removePrefix("$dir/") to "sha-$it"}
         override fun get(path:String)=files.getValue(path)
         override fun delete(path:String,sha:String){ files.remove(path) }
