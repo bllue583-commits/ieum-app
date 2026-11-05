@@ -97,6 +97,17 @@ class CallCardScriptTest(unittest.TestCase):
         self.assertFalse(notice_words(NO_TEXT), "a title alone")
         self.assertFalse(notice_words(""))
 
+    def test_locked_notice_reads_both_dump_spellings(self):
+        # API 34 writes the redacted lengths in square brackets.
+        square = CARD.replace("String (length=3)", "String [length=3]").replace("String (length=14)", "String [length=14]")
+        self.assertTrue(notice_words(square))
+        self.assertFalse(notice_words(square.replace("android.text=String [length=14]", "")))
+
+    def test_null_is_not_a_failure_but_false_is(self):
+        text = source()
+        self.assertIn('[ "${!c}" = false ] && exit 1', text)
+        self.assertIn("callWaiting=null", text)
+
 
 if __name__ == "__main__":
     unittest.main()
