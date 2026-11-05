@@ -165,6 +165,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         const val MERGE_CANDIDATES_MAX=50
         /** Entries kept in [PipelineSettingsKeys.MERGE_LOG] (each carries the merged person's rows, r12-4). */
         const val MERGE_LOG_MAX=100
+        /** Ledger edits of a merge of two people and of its undo (ledger/edits, v3.3): {"type",from,into,atMs} by ledger id. */
+        const val MERGE_EDIT="mergePeople";const val UNMERGE_EDIT="unmergePeople"
         /** Where the open of this thread's store got to (r12-4, DESIGN_V4 2.4-2): the "stage" of [PipelineSettingsKeys.STORE_OPEN_ERROR]. */
         const val STAGE_OPEN="open";const val STAGE_SCHEMA="schema";const val STAGE_MIGRATE="migrate";const val STAGE_REPAIR="repair"
         const val STAGE_SEAL="seal";const val STAGE_DONE="done"
@@ -272,11 +274,15 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     /** Merges person [from] into [into] for the migration and keeps, in [migrationMerges], ids plus the rows [from] had
      * (people, people_phones, call_links, person_aliases) so the merge can be undone (screen in v3.2). */
     private fun logMerge(from:Map<String,Any?>,into:Map<String,Any?>) {
-        val id=from.str("id")!!;val lid=from.str("ledger_id")
+        val id=from.str("id")!!;val lid=from.str("ledger_id");val intoLid=into.str("ledger_id")
         fun json(rs:List<Map<String,Any?>>)=JSONArray().apply { rs.forEach { r -> put(JSONObject().apply { r.forEach { (k,v) -> put(k,v ?: JSONObject.NULL) } }) } }
-        migrationMerges+=JSONObject().put("from",lid ?: id).put("into",into.str("ledger_id") ?: into.str("id")!!).put("atMs",clock())
+        migrationMerges+=JSONObject().put("from",lid ?: id).put("into",intoLid ?: into.str("id")!!).put("atMs",clock())
             .put("rows",JSONObject().put("people",json(rows("SELECT * FROM people WHERE id=?",id))).put("people_phones",json(rows("SELECT * FROM people_phones WHERE person_id=?",id)))
                 .put("call_links",json(rows("SELECT * FROM call_links WHERE person_id=?",id))).put("person_aliases",json(rows("SELECT * FROM person_aliases WHERE person_id=?",id))))
+            // v3.3 (DESIGN_V4 3.3-1): the kept one's own numbers, so an undo takes back only the numbers the merge gave it.
+            .put("intoPhones",JSONArray(numbersOf(into).sorted()))
+        // The repository ledger is told when it knows both people (ledger/edits, like a rename).
+        if(lid!=null && intoLid!=null) ledgerEdit(JSONObject().put("type",MERGE_EDIT).put("from",lid).put("into",intoLid).put("atMs",clock()))
         mergePerson(from,into)
         // The ledger knows the person by the merged one's id when the kept one has none.
         if(lid!=null) port.execute("UPDATE people SET ledger_id=? WHERE id=? AND ledger_id IS NULL",lid,into.str("id"))
@@ -297,6 +303,83 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
             if(alive(a) && alive(b) && out.length()<MERGE_CANDIDATES_MAX) out.put(JSONArray().put(a).put(b)) }
         return out
     }
+    /** A user correction for the repository ledger (ledger/edits/), sent by the hourly work. */
+    private fun ledgerEdit(o:JSONObject)=port.execute("INSERT INTO ledger_edits VALUES(?,?,?)","e_"+UUID.randomUUID().toString().replace("-",""),o.toString(),clock())
+
+    // ---- v3.3 (DESIGN_V4 3.3-1): undo of a merge of people ---------------------------------------------------------------
+    /** One merge of two people as the settings screen lists it: [name] was made part of [intoName]; [links] calls go back. */
+    data class MergeEntry(val from:String,val into:String,val name:String,val intoName:String?,val atMs:Long,val links:Int,val json:JSONObject)
+    /** The merges of [log] (the settings value [PipelineSettingsKeys.MERGE_LOG]) that can still be undone, the latest first:
+     * the merged person is not back yet and the entry still carries their rows. */
+    fun mergeEntries(log:String?):List<MergeEntry> {
+        val list=runCatching { JSONArray(log ?: "[]") }.getOrNull() ?: return emptyList()
+        return (0 until list.length()).mapNotNull { list.optJSONObject(it) }.mapNotNull { e ->
+            val person=e.optJSONObject("rows")?.optJSONArray("people")?.optJSONObject(0) ?: return@mapNotNull null
+            val id=person.optString("id").takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            if(personById(id)!=null) return@mapNotNull null
+            val into=e.optString("into");val kept=rows("SELECT name FROM people WHERE ledger_id=? OR id=?",into,into).firstOrNull()?.str("name")
+            MergeEntry(e.optString("from"),into,person.optString("name"),kept,e.optLong("atMs"),e.optJSONObject("rows")?.optJSONArray("call_links")?.length() ?: 0,e)
+        }.sortedByDescending { it.atMs }
+    }
+    /** Puts the merged person of [entry] back as they were before the merge: their row (ledger id included), numbers, calls and
+     * spellings; the kept person gives back the numbers and the spelling the merge gave it. The entry leaves the merge log, and
+     * the repository ledger is told (a merge not sent yet is simply not sent). False when there is nothing to put back. */
+    fun undoMerge(entry:MergeEntry):Boolean {
+        val e=entry.json;val saved=e.optJSONObject("rows") ?: return false
+        val person=saved.optJSONArray("people")?.optJSONObject(0) ?: return false
+        val id=person.optString("id").takeIf { it.isNotEmpty() } ?: return false
+        val done=port.transaction {
+            if(personById(id)!=null) return@transaction false
+            val into=rows("SELECT * FROM people WHERE ledger_id=? OR id=?",entry.into,entry.into).firstOrNull()
+            val lid=person.optString("ledger_id").takeIf { !person.isNull("ledger_id") && it.isNotEmpty() }
+            val phones=saved.optJSONArray("people_phones").strings("phone_key")+listOfNotNull(person.optString("phone_key").takeIf { !person.isNull("phone_key") && it.isNotEmpty() })
+            if(into!=null) {
+                val intoId=into.str("id")!!
+                // The numbers the merge gave the kept person go back (when the entry knows which were its own, r13-3 and later).
+                e.optJSONArray("intoPhones")?.let { own -> val keep=(0 until own.length()).map { own.optString(it) }.toSet()
+                    phones.filter { it !in keep }.forEach { ph -> port.execute("DELETE FROM people_phones WHERE phone_key=? AND person_id=?",ph,intoId)
+                        port.execute("UPDATE people SET phone_key=NULL WHERE id=? AND phone_key=?",intoId,ph) }
+                    port.execute("UPDATE people SET phone_key=(SELECT x.phone_key FROM people_phones x WHERE x.person_id=? AND x.phone_key NOT IN (SELECT phone_key FROM people WHERE phone_key IS NOT NULL) LIMIT 1) WHERE id=? AND phone_key IS NULL",intoId,intoId) }
+                // The merged one's name stayed as a spelling of the kept one.
+                personKey(person.optString("name")).takeIf { it.isNotEmpty() && it!=personKey(into.str("name")) }?.let { port.execute("DELETE FROM person_aliases WHERE name_key=? AND person_id=?",it,intoId) }
+            }
+            // The ledger id went to the kept one when it had none: it comes back.
+            if(lid!=null) port.execute("UPDATE people SET ledger_id=NULL WHERE ledger_id=?",lid)
+            restoreRow("people",person) { col,v -> if(col=="phone_key" && v!=null && rows("SELECT 1 FROM people WHERE phone_key=?",v).isNotEmpty()) null else v }
+            saved.optJSONArray("people_phones").objects().forEach { restoreRow("people_phones",it,replace=false) }
+            saved.optJSONArray("call_links").objects().forEach { restoreRow("call_links",it) }
+            saved.optJSONArray("person_aliases").objects().forEach { restoreRow("person_aliases",it) }
+            // The ledger: a merge still waiting to be sent is dropped; one already sent is answered by its undo.
+            val intoLid=into?.str("ledger_id")
+            if(lid!=null) {
+                val waiting=rows("SELECT id,json FROM ledger_edits").filter { r -> runCatching { JSONObject(r.str("json")!!) }.getOrNull()?.let { it.optString("type")==MERGE_EDIT && it.optString("from")==lid }==true }
+                waiting.forEach { port.execute("DELETE FROM ledger_edits WHERE id=?",it.str("id")) }
+                if(waiting.isEmpty() && intoLid!=null) ledgerEdit(JSONObject().put("type",UNMERGE_EDIT).put("from",lid).put("into",intoLid).put("atMs",clock()))
+            }
+            port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER)
+            true
+        }
+        if(!done) return false
+        settingsEdit { s ->
+            val list=runCatching { JSONArray(s.optString(PipelineSettingsKeys.MERGE_LOG,"[]")) }.getOrNull() ?: JSONArray()
+            val keep=JSONArray();for(i in 0 until list.length()) { val o=list.optJSONObject(i)
+                if(o!=null && o.optString("from")==entry.from && o.optLong("atMs")==entry.atMs) continue;keep.put(list.get(i)) }
+            s.put(PipelineSettingsKeys.MERGE_LOG,keep.toString())
+        }
+        ContactCards.touchAll(this)
+        return true
+    }
+    private fun JSONArray?.objects():List<JSONObject> =if(this==null) emptyList() else (0 until length()).mapNotNull { optJSONObject(it) }
+    private fun JSONArray?.strings(key:String):List<String> =objects().mapNotNull { o -> o.optString(key).takeIf { !o.isNull(key) && it.isNotEmpty() } }
+    /** Writes a row kept in the merge log back into [table], with the columns the table has today; [fix] may change a value. */
+    private fun restoreRow(table:String,o:JSONObject,replace:Boolean=true,fix:(String,Any?)->Any?={ _,v -> v }) {
+        val have=rows("PRAGMA table_info($table)").mapNotNull { it.str("name") }.toSet()
+        val cols=o.keys().asSequence().filter { it in have }.toList();if(cols.isEmpty()) return
+        val values=cols.map { c -> val v=if(o.isNull(c)) null else o.get(c)
+            fix(c,when(v) { is Int -> v.toLong();is Long,is String,null -> v;is Number -> v.toDouble();else -> v.toString() }) }
+        port.execute("INSERT OR ${if(replace) "REPLACE" else "IGNORE"} INTO $table(${cols.joinToString(",")}) VALUES(${cols.joinToString(",") { "?" }})",*values.toTypedArray())
+    }
+
     private fun flushMigrationMerges() {
         if(migrationMerges.isEmpty()) return
         val add=migrationMerges.toList();migrationMerges.clear()

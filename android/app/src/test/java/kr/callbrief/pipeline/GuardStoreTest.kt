@@ -117,14 +117,14 @@ class GuardStoreTest:ProtectedTextHostTestBase() {
     }
 
     @Test fun titlesLoseTheNameTheMetaLineShows() {
-        assertEquals("견적서 회신 확인",CheckRows.shortTitle("김민수 님께 견적서 회신 확인","김민수"))
-        assertEquals("견적서 회신 확인",CheckRows.shortTitle("김민수 과장에게 견적서 회신 확인","김민수"))
-        assertEquals("견적서 회신 확인",CheckRows.shortTitle("김민수께 견적서 회신 확인","김민수 과장"))
-        assertEquals("박영희 님께 견적서 회신 확인",CheckRows.shortTitle("박영희 님께 견적서 회신 확인","김민수"))
-        assertEquals("김민수 과장 견적서 회신 확인",CheckRows.shortTitle("김민수 과장 견적서 회신 확인","김민수"))
-        assertEquals("김민수 님께",CheckRows.shortTitle("김민수 님께","김민수"))
-        assertEquals("견적서 보내기",CheckRows.shortTitle("견적서 보내기","010-1234-5678"))
-        val badge=CheckRows.unsureBadge(context)
+        assertEquals("견적서 회신 확인",CallUi.shortTitle("김민수 님께 견적서 회신 확인","김민수"))
+        assertEquals("견적서 회신 확인",CallUi.shortTitle("김민수 과장에게 견적서 회신 확인","김민수"))
+        assertEquals("견적서 회신 확인",CallUi.shortTitle("김민수께 견적서 회신 확인","김민수 과장"))
+        assertEquals("박영희 님께 견적서 회신 확인",CallUi.shortTitle("박영희 님께 견적서 회신 확인","김민수"))
+        assertEquals("김민수 과장 견적서 회신 확인",CallUi.shortTitle("김민수 과장 견적서 회신 확인","김민수"))
+        assertEquals("김민수 님께",CallUi.shortTitle("김민수 님께","김민수"))
+        assertEquals("견적서 보내기",CallUi.shortTitle("견적서 보내기","010-1234-5678"))
+        val badge=CallUi.unsureBadge(context)
         assertEquals("확인 필요",badge.text.toString());assertEquals(18f,badge.textSize/context.resources.displayMetrics.scaledDensity,0.1f)
     }
 
@@ -132,7 +132,7 @@ class GuardStoreTest:ProtectedTextHostTestBase() {
         val today=LocalDate.of(2026,11,5)
         val m=CallDigestText.morning(listOf(CallTodoItem("i1","30층 타설 확인","","open",1,"탄탄이엔씨",started,null,true),
             CallTodoItem("i2","견적서 받기","","open",1,null,started+1,null,false)),today)
-        assertTrue(m.lines[0],m.lines[0].startsWith("[탄탄이엔씨] 30층 타설 확인") && m.lines[0].endsWith(", 확인 필요"))
+        assertTrue(m.lines[0],m.lines[0].startsWith(CallDigestText.NOW_PREFIX+"[탄탄이엔씨] 30층 타설 확인") && m.lines[0].endsWith(", 확인 필요"))
         assertFalse(m.lines[1],m.lines[1].contains("확인 필요"))
     }
 }

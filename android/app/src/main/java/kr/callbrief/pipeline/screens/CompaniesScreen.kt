@@ -52,7 +52,8 @@ internal class CompaniesScreen(a:MainActivity):AppScreen(a) {
     fun showByName(name:String) { detailId=null;info=null;wantedName=name;listY=0;pendingY=0 }
     private fun openDetail(id:String) {
         if(!a.once("company:$id")) return
-        listY=CallUi.scrollY(body);detailId=id;query=""
+        // v3.3 (DESIGN_V4 3.3-4): what was typed in the search line stays, so back from the page the same companies show.
+        listY=CallUi.scrollY(body);detailId=id
         // The page goes at once: its name from the row while the rest is read.
         if(info?.id!=id) { body.removeAllViews();shown=null;CallUi.band(body,rows.firstOrNull { it.id==id }?.name ?: "업체와 사람",back={ closeDetail() });CallUi.loading(body) }
         else render()
@@ -157,7 +158,7 @@ internal class CompaniesScreen(a:MainActivity):AppScreen(a) {
             d.issues.forEachIndexed { i,x ->
                 if(i>0) c.addView(CallUi.divider(a))
                 c.addView(CallUi.text(a,x.title,CallUi.BODY,true))
-                if(x.status.isNotBlank()) c.addView(CallUi.caption(a,x.status))
+                if(x.status.isNotBlank()) c.addView(CallUi.text(a,x.status,CallUi.ASIDE,color=CallUi.SUBTLE))
             }
             body.addView(c)
         }
