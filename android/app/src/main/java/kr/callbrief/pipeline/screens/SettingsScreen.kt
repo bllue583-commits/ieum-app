@@ -47,6 +47,8 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         /** v3.3: the card switch for numbers nothing was sorted out for yet (was "전화부에 없는 번호도"). */
         const val UNKNOWN_SWITCH="아직 정리된 통화가 없는 번호도"
         const val LOCK_SWITCH="잠금 화면에서도 이름과 한 줄 보기"
+        /** v3.4 (DESIGN_V4 4.1-1): the optional outgoing-call role. */
+        const val ROLE_OFFER="거는 전화에 번호를 더 빨리 알기"
         /** The golden measurement screen (r13-2, DESIGN_V4 3.2-4), found by name: no line when the build has no such screen.
          * r13-2 names it GoldenMeasureActivity ("골든 측정"). */
         const val GOLDEN_ACTIVITY="kr.callbrief.pipeline.GoldenMeasureActivity"
@@ -631,9 +633,13 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         body.addView(switchRow("card_incoming_switch",s.optBoolean(PipelineSettingsKeys.CARD_INCOMING,true),PipelineSettingsKeys.CARD_INCOMING) { "전화 올 때" })
         body.addView(CallUi.divider(a))
         body.addView(switchRow("card_outgoing_switch",s.optBoolean(PipelineSettingsKeys.CARD_OUTGOING,true),PipelineSettingsKeys.CARD_OUTGOING) { "전화 걸 때" })
-        if(CallCardAsk.roleAvailable(a) && !CallCardAsk.roleHeld(a)) {
-            body.addView(CallUi.text(a,"거는 전화에 카드를 보려면 한 번 허용해 주세요. 전화는 그대로 걸려요.",CallUi.ASIDE,color=CallUi.SUBTLE).apply { tag="card_role_state" })
-            body.addView(button("거는 전화도 허용") { CallCardAsk.askRole(a,askCallRole) }.apply { tag="card_role_allow" })
+        // v3.4 (DESIGN_V4 4.1-1): calls going out show the card without the role; the role is an option that brings the number
+        // sooner, offered until it is held or the person says no ([PipelineSettingsKeys.ROLE_OFFER_SEEN]).
+        if(CallCardAsk.roleAvailable(a) && !CallCardAsk.roleHeld(a) && !s.optBoolean(PipelineSettingsKeys.ROLE_OFFER_SEEN,false)) {
+            body.addView(CallUi.text(a,ROLE_OFFER,CallUi.BODY,true).apply { tag="card_role_offer" })
+            body.addView(aside("거는 전화에도 카드는 떠요. 허용하면 번호를 조금 더 빨리 알아요. 전화는 그대로 걸려요.").apply { tag="card_role_state" })
+            body.addView(button("허용하기") { CallCardAsk.askRole(a,askCallRole) }.apply { tag="card_role_allow" })
+            body.addView(button("괜찮아요") { save { it.put(PipelineSettingsKeys.ROLE_OFFER_SEEN,true) } }.apply { tag="card_role_skip" })
         }
         body.addView(CallUi.divider(a))
         body.addView(switchRow("card_unknown_switch",s.optBoolean(PipelineSettingsKeys.CARD_UNKNOWN,false),PipelineSettingsKeys.CARD_UNKNOWN) { UNKNOWN_SWITCH })
@@ -669,10 +675,13 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
             oldestQueuedMs=w?.queue?.oldestMs,updateReadySinceMs=s.optLong(PhoneStatus.UPDATE_READY_SINCE_MS,0L),
             cardOverlay=CallCardAsk.overlayAllowed(a),
             phoneState=a.checkSelfPermission(android.Manifest.permission.READ_PHONE_STATE)==android.content.pm.PackageManager.PERMISSION_GRANTED,
-            cardRole=!CallCardAsk.roleAvailable(a) || CallCardAsk.roleHeld(a),
+            // v3.4 (4.1-1): the role is suggested only when calls going out came without their number.
+            cardRole=!CallCardAsk.roleAvailable(a) || CallCardAsk.roleHeld(a) || !outgoingWithoutNumber(s),
             cardOn=s.optBoolean(PipelineSettingsKeys.CARD_INCOMING,true) || s.optBoolean(PipelineSettingsKeys.CARD_OUTGOING,true),
             gap=RecordingGap.confirmed(s,now)) // r12-1 (DESIGN_V4 2.1-2)
     }
+    /** v3.4: calls going out ended without their number ([kr.callbrief.pipeline.call.CardStats] noNumberOut). */
+    private fun outgoingWithoutNumber(s:JSONObject)=runCatching { kr.callbrief.pipeline.call.CardStats.read(s).optInt(kr.callbrief.pipeline.call.CardStats.NO_NUMBER_OUT,0)>0 }.getOrDefault(false)
     private fun fillLights(card:LinearLayout,s:JSONObject,counts:Map<String,Int>) {
         val input=lightsInput(s,counts)
         card.removeAllViews()

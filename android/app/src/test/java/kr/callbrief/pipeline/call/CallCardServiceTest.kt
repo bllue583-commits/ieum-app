@@ -115,7 +115,6 @@ class CallCardServiceTest:ProtectedTextHostTestBase() {
         assertNull(CallSession.current().phoneKey)
     }
     @Test fun aPersonalNumberGoingOutIsIgnoredAndStartsNothing() {
-        role=true
         placeCall("010-0000-9999")
         phone(offhook)
         CallSession.current().let { assertTrue(it.ignored);assertNull(it.phoneKey) }
@@ -123,15 +122,19 @@ class CallCardServiceTest:ProtectedTextHostTestBase() {
     }
 
     // ---- when a card is wanted ----
-    @Test fun noCardForACallThatGoesOutWithoutTheRole() {
+    @Test fun aCallThatGoesOutShowsTheCardWithoutTheRole() {
+        // v3.4 (DESIGN_V4 4.1-1): the number comes with the OFFHOOK broadcast (its repeat); the role is not asked for.
         role=false
-        placeCall(number);phone(offhook)
-        assertFalse(CallCardService.wanted(app,CallSession.current()))
-        assertTrue(starts.isEmpty());assertTrue(calls.isEmpty())
-        role=true
+        phone(offhook);phone(offhook,number,advance=100)
+        CallSession.current().let { assertEquals(Direction.OUT,it.direction);assertEquals(key,it.phoneKey) }
         assertTrue(CallCardService.wanted(app,CallSession.current()))
+        assertEquals(1,starts.size)
+        phone(idle)
+        // The switch for calls going out still decides (read once per call: the next call sees it).
         settings { it.put(PipelineSettingsKeys.CARD_OUTGOING,false) }
-        assertFalse(CallCardService.wanted(app,CallSession.current()))
+        phone(offhook,number)
+        assertEquals(CallCardService.OFF,CallCardService.verdict(app,CallSession.current()))
+        assertFalse(starts.last().getBooleanExtra(CallCardService.EXTRA_SHOW,true))
     }
     @Test fun switchesAndNumbersWithoutACard() {
         val ring=CallSession.Snapshot(State.RINGING,key,Direction.IN,now)
@@ -146,6 +149,10 @@ class CallCardServiceTest:ProtectedTextHostTestBase() {
         assertFalse(CallCardService.wanted(app,CallSession.Snapshot(State.RINGING,null,Direction.IN,now)))
         assertFalse(CallCardService.wanted(app,CallSession.Snapshot(State.RINGING,null,Direction.IN,now,ignored=true)))
         assertFalse(CallCardService.wanted(app,CallSession.Snapshot(State.IDLE,key,Direction.IN,now)))
+        assertFalse("call waiting",CallCardService.wanted(app,CallSession.Snapshot(State.OFFHOOK,key,Direction.IN,now,waiting=true)))
+        assertEquals(CallCardService.IGNORED,CallCardService.verdict(app,CallSession.Snapshot(State.RINGING,null,Direction.IN,now,ignored=true)))
+        assertEquals(CallCardService.WAITING,CallCardService.verdict(app,CallSession.Snapshot(State.OFFHOOK,key,Direction.IN,now,waiting=true)))
+        assertNull(CallCardService.verdict(app,CallSession.Snapshot(State.IDLE,key,Direction.IN,now)))
     }
     @Test fun aPersonalNumberRingingStartsNothing() {
         phone(ringing,"010-0000-9999")
@@ -164,15 +171,14 @@ class CallCardServiceTest:ProtectedTextHostTestBase() {
         val service=controller.get()
         assertNotNull("foreground",shadowOf(service).lastForegroundNotification)
         assertEquals(listOf("show:$key:RINGING"),calls)
-        // Answered: shown as off hook, folded 3 s later.
+        // Answered: shown as off hook, folded 3 s later. v3.4 (4.1-4): the running service hears it directly, no new start.
         phone(offhook)
-        controller.withIntent(starts.last()).startCommand(0,2)
+        assertEquals(1,starts.size)
         assertEquals("show:$key:OFFHOOK",calls.last())
         shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(CallCardService.COLLAPSE_AFTER_MS))
         assertEquals("collapse",calls.last())
         // Ended: hidden at once, stopped 3 s later.
         phone(idle)
-        controller.withIntent(starts.last()).startCommand(0,3)
         assertEquals("hide",calls.last())
         assertFalse(shadowOf(service).isStoppedBySelf)
         shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(CallCardService.STOP_AFTER_IDLE_MS-100))
@@ -184,9 +190,10 @@ class CallCardServiceTest:ProtectedTextHostTestBase() {
     @Test fun aCallAgainWithinThreeSecondsKeepsTheService() {
         phone(ringing,number)
         val controller=Robolectric.buildService(CallCardService::class.java,starts[0]).create().startCommand(0,1)
-        phone(idle);controller.withIntent(starts.last()).startCommand(0,2)
+        phone(idle)
         shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(1_000))
-        phone(ringing,number);controller.withIntent(starts.last()).startCommand(0,3)
+        phone(ringing,number)
+        assertEquals("one start for both calls",1,starts.size)
         shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(CallCardService.STOP_AFTER_IDLE_MS*2))
         assertFalse(shadowOf(controller.get()).isStoppedBySelf)
         assertEquals("show:$key:RINGING",calls.last())
@@ -226,6 +233,7 @@ class CallCardServiceTest:ProtectedTextHostTestBase() {
         assertEquals(1,starts.size)
     }
     @Test fun outgoingWithTheRoleStartsTheService() {
+        // The optional role still brings the number at the first OFFHOOK.
         role=true
         placeCall(number);phone(offhook)
         assertEquals(1,starts.size)

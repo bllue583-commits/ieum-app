@@ -50,7 +50,13 @@ internal object PhoneStatus {
         /** DESIGN_V4 2절 (v3.1): permissions, the recording gap, follow-ups, store open, results, counts and latency. */
         val v31:V31=V31(),
         /** DESIGN_V4 3절 (v3.3): the golden measurement and the number guard, numbers only. */
-        val v33:V33=V33())
+        val v33:V33=V33(),
+        /** DESIGN_V4 4절 (v3.4, r14-1 makes the places, r14-3 writes the values): update, messages and record time. */
+        val v34:V34=V34())
+    /** v3.4 (DESIGN_V4 4.1-5, 4.3-4, 4.3-5, 4.3-8): [updateError] = [PipelineSettingsKeys.UPDATE_ERROR_CODE] (a code, heartbeat
+     * `update.error`); [mailError] = [PipelineSettingsKeys.MAIL_ERROR_CODES] ({code: count}, `messages.mailError`); [recordTime] =
+     * [PipelineSettingsKeys.RECORD_TIME] ({bucket: count}, `recordTime.fileVsRecordMin`). The two objects go through [counts]. */
+    data class V34(val updateError:String?=null,val mailError:JSONObject?=null,val recordTime:JSONObject?=null)
     /** v3.3: [golden] = [PipelineSettingsKeys.GOLDEN] (r13-2, [kr.callbrief.pipeline.GoldenMeasure]), [guard] =
      * [PipelineSettingsKeys.GUARD_STATS] (r13-1). Both go through [counts]: no text, no names, only numbers and yes/no. */
     data class V33(val golden:JSONObject?=null,val guard:JSONObject?=null)
@@ -74,8 +80,9 @@ internal object PhoneStatus {
         val dbOpenMs:Long?=null,val homeReadMs:Long?=null,
         /** r10-3: the result chain's round now set (0 = ended) and when it runs next; null before the first chain. */
         val resultChainRound:Int?=null,val resultChainNextMs:Long?=null,
-        /** r11-3 (design 7.3): the call card's counts, {shown,noPermission,noNumber,noCard,day,today:{the four}}
-         * ([kr.callbrief.pipeline.call.CardStats.heartbeat]); null before any call was counted. */
+        /** r11-3 (design 7.3), v3.4 (DESIGN_V4 4.1-5): the call card's counts, {calls,shown,shownOutgoing,eligibleOutgoing,...,
+         * day,today:{the counts},ringToCardMs:{p50,max,n},ringToCardMsCold:{..},cardOpenMs}
+         * ([kr.callbrief.pipeline.call.CardStats.heartbeat]); null before this version saw any call. */
         val callCard:JSONObject?=null)
     /** One window (since 10/1, or today KST) of the phone's call log by type, with what the app made of it. */
     data class CallLogWindow(val total:Int=0,val incoming:Int=0,val outgoing:Int=0,val missed:Int=0,val rejected:Int=0,val other:Int=0,
@@ -132,7 +139,14 @@ internal object PhoneStatus {
         // v3.3: absent (null) until measured or counted; numbers only.
         o.put("golden",i.v33.golden?.let(::counts) ?: JSONObject.NULL)
         o.put("guard",i.v33.guard?.let(::counts) ?: JSONObject.NULL)
+        putV34(o,i.v34)
         return o
+    }
+    /** v3.4: always the three objects, so the watchdog reads a key test; inside, a code or counts only (null: nothing yet). */
+    private fun putV34(o:JSONObject,v:V34) {
+        o.put("update",JSONObject().put("error",v.updateError?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL))
+        o.put("messages",JSONObject().put("mailError",v.mailError?.let(::counts) ?: JSONObject.NULL))
+        o.put("recordTime",JSONObject().put("fileVsRecordMin",v.recordTime?.let(::counts) ?: JSONObject.NULL))
     }
     private fun putV31(o:JSONObject,v:V31) {
         o.put("permissions",v.permissions?.let { p -> JSONObject().put("phoneState",p.phoneState).put("overlay",p.overlay)
@@ -247,8 +261,12 @@ internal object PhoneStatus {
                 (s.opt(ResultChain.ROUND_KEY) as? Number)?.toInt(),(s.opt(ResultChain.NEXT_MS_KEY) as? Number)?.toLong()?.takeIf { it>0 },
                 runCatching { kr.callbrief.pipeline.call.CardStats.heartbeat(s,now) }.getOrNull()),
             v31 = v31(app,s),
-            v33 = V33(jsonOf(s,PipelineSettingsKeys.GOLDEN),jsonOf(s,PipelineSettingsKeys.GUARD_STATS)))
+            v33 = V33(jsonOf(s,PipelineSettingsKeys.GOLDEN),jsonOf(s,PipelineSettingsKeys.GUARD_STATS)),
+            v34 = v34(s))
     }
+    /** The v3.4 keys r14-3 writes (read by name; absent until written). */
+    internal fun v34(s:JSONObject):V34 = V34(s.optString(PipelineSettingsKeys.UPDATE_ERROR_CODE).takeIf { it.isNotBlank() },
+        jsonOf(s,PipelineSettingsKeys.MAIL_ERROR_CODES),jsonOf(s,PipelineSettingsKeys.RECORD_TIME))
     private fun jsonOf(s:JSONObject,key:String):JSONObject? = when(val v=s.opt(key)) {
         is JSONObject -> v
         is String -> runCatching { JSONObject(v) }.getOrNull()
