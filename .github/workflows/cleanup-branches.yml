@@ -1,0 +1,35 @@
+# Deletes feature branches whose every commit is already in feature/lean-calls (nothing is lost: the commits stay in
+# lean-calls). Run by hand from the Actions tab: "cleanup-branches" → Run workflow. With dry_run on it only lists them.
+# Branches with commits that are not in lean-calls (for example feature/r4-v2-ui) are left alone and listed.
+name: cleanup-branches
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run: {description: 'Only list what would be deleted', type: boolean, default: false}
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete merged feature branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY: ${{ inputs.dry_run }}
+        run: |
+          base=feature/lean-calls
+          deleted=0; kept=0
+          for b in $(gh api --paginate "repos/$GITHUB_REPOSITORY/branches?per_page=100" --jq '.[].name' | grep '^feature/' | grep -vx "$base"); do
+            status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$base...$b" --jq .status)
+            ahead=$(gh api "repos/$GITHUB_REPOSITORY/compare/$base...$b" --jq .ahead_by)
+            if [ "$ahead" = "0" ]; then
+              if [ "$DRY" = "true" ]; then echo "would delete $b ($status)"; else gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$b" && echo "deleted $b"; fi
+              deleted=$((deleted+1))
+            else
+              echo "kept $b: $ahead commit(s) not in $base"; kept=$((kept+1))
+            fi
+          done
+          echo "::notice title=cleanup-branches::$deleted merged branch(es) $([ "$DRY" = "true" ] && echo 'to delete' || echo 'deleted'), $kept kept"
