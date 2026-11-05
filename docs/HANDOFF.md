@@ -238,9 +238,10 @@ $HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu 
 - 기기 시험 t4 "1.3배 제목 폭"은 안드로이드 16 에뮬레이터에서 1.0배라 기록만으로(53c41a5).
 - 사용자 할 일: 실녹음 골든(설정 › 상태와 도움 › 골든 측정, 통화 3~5건 받아쓰기, 숫자는 아라비아 숫자로, 충전 중 측정). 그 결과 뒤에 3.2 3단계 상수(B1~B7).
 
-## 4-13. v3.4 「모든 전화에 카드, 스스로 지키는 루틴」 (11/6 03~06시, Opus 통합 — 빌드 V34BUILD)
+## 4-13. v3.4 「모든 전화에 카드, 스스로 지키는 루틴」 (11/6 03~06시, Opus 통합 — 빌드 1044)
 - 사용자 "v3.4까지 배포" → 48시간 실측을 기다리지 않고 r14-1~4를 한 밤에(DESIGN_V4 4절 머리 결정). 키 커밋 8293f5b → r14-1(7b88d9b 역할 조건 제거·콜드 캐시·통화 대기·통계·카드 JSON v2) ∥ r14-3(13e968e·4dda580 지시문 v8/tidy v6·워치독 루틴 안·결과 받기 시각·버전 1시간·메일 주소 가림) → r14-2(74d55a4 카드 글·위치·잠금·통화 알림·신호등) ∥ r14-4(d453e22 기기 시나리오·S26 체크리스트·문서). 다르게 정한 것 DESIGN_V4 4.6.
-- 오케스트레이터: release-apk가 루틴 지시문 둘과 워치독을 우편함에 올림(c420dda), ci 카드 샷·device-test 경로·golden `'off'`(03bcd1a), ieum-inbox `.github/workflows/watchdog.yml` 삭제.
+- 오케스트레이터: release-apk가 루틴 지시문 둘과 워치독을 우편함에 올림(c420dda), ci 카드 샷·device-test 경로·golden `'off'`(03bcd1a), ieum-inbox `.github/workflows/watchdog.yml` 삭제(2cce3d7). 배포 11/6 1044, 서명 e4ee1db4… 그대로, 우편함 `routines/hourly.md`(v8)·`tidy.md`(v6)·`tools/watchdog.py`가 release로 자동 복사됨(612f852~f68ad0a).
+- 브랜치 정리: lean-calls에 합쳐진 원격 feature 브랜치 68개는 지우려 했으나 자동 권한 검사가 막음 — 사용자가 지우거나 그대로 둠(합쳐지지 않은 `feature/r4-v2-ui`, `feature/r6-v25-watchdog`는 남김).
 - 기기 시험: 벨→창 수신 1,081ms·역할 없이 발신 1,276ms·콜드 1,371ms. 통화 대기는 에뮬레이터가 재현 못 함(null).
 
 ## 5. 현재 UI 상태와 문제점 (S26 스크린샷 기준, 다음 작업의 출발점)
@@ -285,7 +286,7 @@ $HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu 
 
 ## 6. 다음 할 일 (11/6 새벽 기준 — 상세는 [DESIGN_V4.md](DESIGN_V4.md), 묶음 지시문·보고서는 `docs/orchestration/`)
 1. **아침 확인(07:34 이후)**: ieum-inbox `status/last-run-hourly.json`이 예정 슬롯마다 갱신되고 `pushed=true`인지, 워치독 이슈가 이상하게 열리지 않았는지. 예약 작업이 `routines/hourly.md`를 실제로 읽는지(새 방식 첫 정규 실행). 안 되면 프롬프트를 확인.
-2. **아내 폰 v3.4 설치 확인**: 하트비트 `versionCode`가 V34BUILD로 오르는지(r14-3으로 1시간 안). 안 오르면 `update.error`.
+2. **아내 폰 v3.4 설치 확인**: 하트비트 `versionCode`가 1044로 오르는지(r14-3으로 1시간 안). 안 오르면 `update.error`.
 3. **48시간 지표**: 2-3(100초 넘는 통화 완료율 `transcription.long48h.ratePct` ≥ 80, 녹음 연결 matched/withFile ≥ 0.8, `callLogMatch.last.before`·`missGapHour`로 남은 noMatch 원인), 4.5(`callCard` shown·shownOutgoing/eligibleOutgoing ≥ 90%, `ringToCardMs` p50 < 1000, cold, fgsRefused, locked). 결과로 v3.4.x 다듬기(카드 위치 상수, 1.0배 배지 카드 "외 1개" 줄 넘김).
 4. **사용자 할 일**: S26 체크리스트(`docs/REAL_DEVICE_CHECKLIST.md`, 10분), 실녹음 골든 받아쓰기 3~5건, 저장소 비공개 복귀 전 Actions 분량 조정(4.4-4), `IEUM_SIGNING_SEED` 복사, 예약 작업 알림 설정(정상 답도 매시간 옴).
 5. v3.5: 설계는 Fable이 쓰기로 함(사용자 11/6). 아직 DESIGN_V4에 없음.
