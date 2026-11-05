@@ -196,12 +196,28 @@ jobs:
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: IEUM_MODEL=${{ steps.mode.outputs.model }} IEUM_MODEL_FILE=model-cache/${{ steps.mode.outputs.name }}.bin IEUM_REPEAT=1 IEUM_THREADS=6 IEUM_CALL_LIKE=false IEUM_GOLDEN=${{ inputs.golden || 'base' }} IEUM_TESTS=${{ inputs.only }} bash tools/run_device_test.sh
+      - name: Call card on emulator
+        # v3.0 (design 7.4): the in-call card on the emulator: incoming, answered strip, hang-up, outgoing, unknown and personal numbers.
+        if: always()
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          cores: 4
+          ram-size: 4096M
+          disk-size: 4G
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: CARD_WINDOW_MS=3000 bash tools/device/call_card_test.sh
       - name: Summarize
         if: always()
         run: |
           echo "::notice title=device::model=${{ steps.mode.outputs.model }}"
           [ -f device-results/results.txt ] && grep -v ' golden_text ' device-results/results.txt | sed 's/^/::notice title=device::/' | cut -c1-900 || true
           [ -f device-results/golden-score.txt ] && sed 's/^/::notice title=golden::/' device-results/golden-score.txt | cut -c1-900 || true
+          [ -f evidence/call-card.json ] && echo "::notice title=call-card::$(cat evidence/call-card.json)" || true
           grep -E 'FAILURES|Error in|^OK|AssertionError|Exception' device-results/instrument.txt 2>/dev/null | head -20 | sed 's/^/::warning title=instrument::/' || true
       - uses: actions/upload-artifact@v4
         if: always()
@@ -211,3 +227,6 @@ jobs:
           path: |
             device-results/
             evidence/device-build.log
+            evidence/call-card.json
+            evidence/call-card.log
+            evidence/shots/
