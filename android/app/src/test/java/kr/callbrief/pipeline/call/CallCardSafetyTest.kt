@@ -211,7 +211,7 @@ class CallCardSafetyTest:ProtectedTextHostTestBase() {
         a.home.render(all);assertNull(a.window.decorView.findViewWithTag<View>("home_setup"))
         a.home.render(all.copy(overlay=false))
         val one=texts(a.window.decorView.findViewWithTag<View>("home_setup")).joinToString("\n")
-        assertTrue(one,one.contains(step) && one.contains("9/10"))
+        assertTrue(one,one.contains(step) && one.contains("처음 설정 남은 1단계"))
     }
 
     private fun views(v:View):List<View> =listOf(v)+if(v is ViewGroup)(0 until v.childCount).flatMap { views(v.getChildAt(it)) } else emptyList()

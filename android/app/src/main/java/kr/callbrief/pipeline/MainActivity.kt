@@ -111,6 +111,8 @@ class MainActivity:ComponentActivity() {
         CallUi.markTab(this,window.decorView.findViewWithTag("bottom_bar"),barTab())
         // The pipeline is registered by IeumApplication (app start), the boot and update receivers, and the hourly tick.
         if(LaunchIntro.claim(this,intent?.action==Intent.ACTION_MAIN,savedInstanceState!=null)) LaunchIntro.show(this)
+        // v3.1 (DESIGN_V4 2.2-5 가): a new version is looked for as the app opens, right after the intro, on any connection.
+        if(savedInstanceState==null) HomeScreen.checkNow(this) { if(!isFinishing && !isDestroyed && resumed && (screen==Screen.HOME || screen==Screen.SETTINGS)) current.enter() }
     }
     override fun onResume() {
         super.onResume();resumed=true

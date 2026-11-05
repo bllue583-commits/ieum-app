@@ -329,7 +329,10 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
             // in it says so and has no button: sorting it out again gives the same (review #10).
             val failed=c.state==CallRecordStore.FAILED
             val s=CallUi.card(a,warn=failed).apply { tag="call_state" }
-            s.addView(CallUi.text(a,stateWords(c),CallUi.SUMMARY,true,if(failed) CallUi.AMBER else CallUi.INK).apply { tag="call_state_text" })
+            // v3.1 (DESIGN_V4 2.3-2, 2.5-4): a result that came back but could not be applied, twice, says so in its own words.
+            val notApplied=failed && c.error==PipelineSettingsKeys.RESULT_NOT_APPLIED
+            s.addView(CallUi.text(a,if(notApplied) CallRetry.NOT_APPLIED else stateWords(c),CallUi.SUMMARY,true,if(failed) CallUi.AMBER else CallUi.INK).apply { tag="call_state_text" })
+            if(notApplied) s.addView(CallUi.text(a,"다시 정리하기를 누르면 이 통화를 처음부터 다시 정리해요.",CallUi.BODY).apply { tag="call_state_help" })
             when {
                 canRetry(c) -> s.addView(CallUi.button(a,"다시 정리하기","다시 정리하는 중이에요") { retry(c.recordId) }.apply { tag="call_retry" })
                 c.state==CallRecordStore.WAITING_CONSENT -> s.addView(CallUi.button(a,"설정 열기") { a.switchTo(Screen.SETTINGS) })
@@ -365,11 +368,27 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
     private fun retry(id:String) {
         a.lifecycleScope.launch {
             withContext(Dispatchers.IO) {
-                runCatching { kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(a)).setState(id,CallRecordStore.TRANSCRIBED) }
+                runCatching { CallRetry.resend(CallPipelineStartup.storage(a),id) }
                 runCatching { CallPipelineStartup.enqueueAnalysis(a) }
             }
             if(!live()) return@launch
             Toast.makeText(a,"다시 정리할게요. 잠시만 기다려 주세요.",Toast.LENGTH_SHORT).show();load()
         }
+    }
+}
+
+/** v3.1 (r12-5, DESIGN_V4 2.3-2 and 2.5-4): [다시 정리하기] on a call's detail page. */
+internal object CallRetry {
+    /** FAILED with [PipelineSettingsKeys.RESULT_NOT_APPLIED]: the words of the call's detail page. */
+    const val NOT_APPLIED="정리 결과를 적용하지 못했어요"
+    /** Test hook in place of [resend] (null: the real one). */
+    @androidx.annotation.VisibleForTesting @Volatile internal var hook:((android.content.Context,String)->Unit)?=null
+    /** The call goes back to the queue: state TRANSCRIBED and the "result received" mark cleared, so the hourly work sends it
+     * again (at once when it was sent more than [RESEND_MS] ago, else when that time is up). Only existing store functions;
+     * r12-3 may give the store one function that also sends at once (see the r12-5 report). */
+    fun resend(c:android.content.Context,id:String) {
+        hook?.let { it(c,id);return }
+        val db=kr.callbrief.IeumApplication.store(c)
+        db.inTransaction { db.setState(id,CallRecordStore.TRANSCRIBED);if(db.sentMs(id)!=null) db.setReceived(id,null) }
     }
 }
