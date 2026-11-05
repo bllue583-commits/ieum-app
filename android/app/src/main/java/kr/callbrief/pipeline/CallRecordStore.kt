@@ -1107,13 +1107,32 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
             if(e.excluded) { port.execute("DELETE FROM call_record_log WHERE log_id=?",e.id);port.execute("DELETE FROM call_log WHERE log_id=?",e.id) }
             else port.execute("INSERT OR REPLACE INTO call_log VALUES(?,?,?,?,?,?)",e.id,e.numberKey,e.name,e.startMs,e.durationMs,e.type)
         }
-        val open=rows("""SELECT record_id,started_ms,duration_ms,counterpart,counterpart_key FROM call_records WHERE started_ms IS NOT NULL AND recording_id NOT LIKE 'sms:%' AND recording_id NOT LIKE 'mail:%'
-            AND record_id NOT IN (SELECT record_id FROM call_record_log)""").map { FirstPass.RecordForMatch(it.str("record_id")!!,it.long("started_ms")!!,it.str("counterpart"),it.str("counterpart_key"),it.long("duration_ms") ?: 0) }
+        // r12-7 (DESIGN_V4 2-2): the time held against the log is the recording's own (the recorder's file name), not what the
+        // record kept: COALESCE(original_started_at_ms, filename_time_candidate_ms, modified_at_ms), the record's started_ms
+        // only where the recording row is gone. A record without a start time gets it here too. Every record not yet tied
+        // to an entry is held again every pass (nothing is marked "tried"), so the ones stored before this fix pair now.
+        val open=matchRecords()
         val free=rows("SELECT * FROM call_log WHERE log_id NOT IN (SELECT log_id FROM call_record_log)")
             .map { FirstPass.LogEntry(it.long("log_id")!!,it.str("number_key"),it.str("name"),it.long("start_ms")!!,it.long("duration_ms")!!,(it.long("type") ?: 0).toInt()) }+log.filter { it.excluded }
         val noTime=(rows("""SELECT COUNT(*) AS n FROM call_records WHERE started_ms IS NULL AND recording_id NOT LIKE 'sms:%' AND recording_id NOT LIKE 'mail:%'
-            AND record_id NOT IN (SELECT record_id FROM call_record_log)""").single().long("n") ?: 0).toInt()
-        for((recordId,e) in FirstPass.match(open,free) { onStats(it.copy(noTime=noTime)) }) {
+            AND record_id NOT IN (SELECT record_id FROM call_record_log)""").single().long("n") ?: 0).toInt() // after [matchRecords] filled what it could
+        val day=clock()-86_400_000L
+        var stats:FirstPass.MatchStats?=null
+        val paired=FirstPass.match(open.map { it.r },free) { stats=it }
+        // r12-7 (user 11/5): a record whose file name gave only a phone-book name and that found no entry still gets that
+        // person's number when the stored call log knows exactly one number under that name; then the ledger can hold it.
+        var byPhoneBook=0
+        val names=rows("SELECT DISTINCT name,number_key FROM call_log WHERE name IS NOT NULL AND number_key IS NOT NULL")
+            .mapNotNull { r -> r.str("name")?.let { n -> r.str("number_key")?.let { n to it } } }
+        for(m in open) { val r=m.r;if(r.recordId in paired) continue
+            val key=r.counterpartKey ?: continue;if(isContact(key)) continue
+            val numbers=names.filter { (n,_) -> NameKey.sameName(n,r.counterpart ?: key) }.map { it.second }.distinct()
+            if(numbers.size!=1 || numbers[0] in excludedKeys(log)) continue
+            port.execute("UPDATE call_records SET counterpart_key=? WHERE record_id=? AND (counterpart_key IS NULL OR counterpart_key GLOB '*[^0-9]*')",numbers[0],r.recordId)
+            byPhoneBook++ }
+        stats?.let { st -> onStats(st.copy(noTime=noTime,records24h=open.count { it.r.startedMs>=day }+linkedSince(day),
+            open24h=open.count { it.r.startedMs>=day && it.r.recordId !in paired },byPhoneBook=byPhoneBook)) }
+        for((recordId,e) in paired) {
             // A call with an excluded number: its words are wiped here and nothing about it goes anywhere.
             if(e.excluded) { forgetCall(recordId);continue }
             port.execute("INSERT OR IGNORE INTO call_record_log VALUES(?,?,?)",recordId,e.id,e.direction)
@@ -1124,6 +1143,35 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
                 rows("SELECT p.id FROM call_links l JOIN people p ON p.id=l.person_id WHERE l.record_id=? AND p.phone_key IS NULL",recordId).firstOrNull()?.str("id")?.let { addNumber(it,number) }
         };null
     }
+    /** One record to hold against the call log (r12-7): [filledTime] when the record had no start time and got the
+     * recording's here (it is stored on the record too). */
+    private class MatchRecord(val r:FirstPass.RecordForMatch,val filledTime:Boolean)
+    /** Calls (not texts or mail) not yet tied to an entry, each at its recording's time (see [reconcileCallLog]); the
+     * counterpart from the record, else from the recording's file name. */
+    private fun matchRecords():List<MatchRecord> {
+        val tables=rows("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('recordings','local_files')").mapNotNull { it.str("name") }.toSet()
+        val rec="recordings" in tables;val files=rec && "local_files" in tables
+        val at=listOfNotNull(if(rec) "r.original_started_at_ms" else null,if(files) "l.filename_time_candidate_ms" else null,"c.started_ms",
+            if(rec) "r.modified_at_ms" else null).joinToString(",")
+        val join=(if(rec) " LEFT JOIN recordings r ON r.recording_id=c.recording_id" else "")+(if(files) " LEFT JOIN local_files l ON l.recording_id=c.recording_id" else "")
+        return rows("""SELECT c.record_id,c.started_ms,c.duration_ms,c.counterpart,c.counterpart_key,${if(rec) "r.display_name" else "NULL"} AS display_name,
+            COALESCE($at) AS at_ms FROM call_records c$join WHERE c.recording_id NOT LIKE 'sms:%' AND c.recording_id NOT LIKE 'mail:%'
+            AND c.record_id NOT IN (SELECT record_id FROM call_record_log)""").mapNotNull { row ->
+            val atMs=row.long("at_ms")?.takeIf { it>0 } ?: return@mapNotNull null
+            val id=row.str("record_id")!!
+            val filled=row.long("started_ms")==null
+            if(filled) port.execute("UPDATE call_records SET started_ms=? WHERE record_id=? AND started_ms IS NULL",atMs,id)
+            var counterpart=row.str("counterpart");var key=row.str("counterpart_key")
+            if(counterpart==null && key==null) row.str("display_name")?.let { CallTranscriptionRunner.counterpart(it) }?.let { cp ->
+                counterpart=cp;key=counterpartKey(cp)
+                port.execute("UPDATE call_records SET counterpart=?,counterpart_key=? WHERE record_id=? AND counterpart IS NULL AND counterpart_key IS NULL",cp,key,id) }
+            MatchRecord(FirstPass.RecordForMatch(id,atMs,counterpart,key,row.long("duration_ms") ?: 0),filled)
+        }
+    }
+    /** Calls tied to an entry whose entry started after [fromMs] (for the 24-hour share in the match statistics). */
+    private fun linkedSince(fromMs:Long):Int=(rows("SELECT COUNT(*) AS n FROM call_record_log x JOIN call_log l ON l.log_id=x.log_id WHERE l.start_ms>=CAST(? AS INTEGER)",fromMs)
+        .single().long("n") ?: 0).toInt()
+    private fun excludedKeys(log:List<FirstPass.LogEntry>):Set<String> =log.filter { it.excluded }.mapNotNull { it.numberKey }.toSet()
     /** Time of the oldest recording before [old] (the start of the live window) still waiting for its transcript, or null
      * when none is left. Old records earlier than this are complete and can go to the task in time order. Skipped rows,
      * recordings before 10/1 ([FirstPass.FROM_MS]) and ones with no known time never count (r7-1): one such row held

@@ -165,13 +165,14 @@ class StoreSafetyTest:ProtectedTextHostTestBase() {
         assertTrue(st!!.gapSec.isEmpty())
     }
     @Test fun theEndTimeReadingIsNotUsedWhenTheUsualWindowHasAnEntry() {
-        // An entry in the usual window that fails the length keeps the record "length", even if the end reading would fit.
+        // r12-7 (user 11/5): the person in the file name comes first. An entry of that number in the usual window that fails
+        // the length no longer keeps the record from the one call of that number whose length fits (the file named by its end).
         val start=t0;val len=600_000L
         val log=listOf(entry(1,"01012340000",null,start,len),entry(2,"01012340000",null,start+len+10_000L,30_000L))
         val r=FirstPass.RecordForMatch("r",start+len+20_000L,"01012340000","01012340000",len)
         var st:FirstPass.MatchStats?=null
-        assertTrue(FirstPass.match(listOf(r),log) { st=it }.isEmpty())
-        assertEquals(1,st!!.length);assertEquals(0,st!!.byEnd)
+        assertEquals(1L,FirstPass.match(listOf(r),log) { st=it }["r"]?.id)
+        assertEquals(0,st!!.length);assertEquals(1,st!!.byEnd)
         // Two recordings: one in its usual window takes the entry first, the other's end-time reading does not take it away.
         val e=entry(3,"01055550000",null,t0+10*3_600_000L,300_000L)
         val usual=FirstPass.RecordForMatch("usual",e.startMs+10_000L,"01055550000","01055550000",300_000L)

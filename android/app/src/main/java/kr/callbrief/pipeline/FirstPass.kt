@@ -84,14 +84,23 @@ internal object FirstPass {
     data class MatchStats(val noTime:Int=0,val noCandidate:Int=0,val length:Int=0,val nameNull:Int=0,val nameDiffers:Int=0,val numberDiffers:Int=0,
                           val several:Int=0,val matched:Int=0,val gapSec:Map<Int,Int> =emptyMap(),
                           /** r12-4 (DESIGN_V4 2.4-4): for each record left noCandidate, the recording's start minus the nearest
-                           * answered entry's start in minutes, in 10-minute bins from -60 to 50 ("-10" = -10..-1 min); [MISS_FAR]
-                           * when no answered entry is within 60 minutes. */
+                           * answered entry's start in minutes, in signed 10-minute bins from -60 to 60 ("-10" = -10..-1 min);
+                           * [MISS_FAR] when no answered entry is within 60 minutes, [MISS_BEFORE] for a record before 10/1 (r12-7). */
                           val missGapMin:Map<String,Int> =emptyMap(),
                           /** Pairs made by the end-time reading (the file name's time is the end of the call), r12-4. */
-                          val byEnd:Int=0) {
+                          val byEnd:Int=0,
+                          /** r12-7: for each [MISS_FAR] record, the signed hour to the nearest entry ([missHour]). */
+                          val missGapHour:Map<String,Int> =emptyMap(),
+                          /** r12-7: pairs made by the person in the file name outside the usual window (byEnd among them). */
+                          val byParty:Int=0,
+                          /** r12-7, set by the store: call records of the last 24 hours, those of them still without an entry,
+                           * and records named by a phone-book name that got the one number of that name without an entry. */
+                          val records24h:Int=0,val open24h:Int=0,val byPhoneBook:Int=0) {
         fun reasons()=JSONObject().put("noTime",noTime).put("noCandidate",noCandidate).put("length",length).put("nameNull",nameNull)
             .put("nameDiffers",nameDiffers).put("numberDiffers",numberDiffers).put("several",several).put("matched",matched).put("byEnd",byEnd)
             .put("missGapMin",JSONObject().apply { missGapMin.forEach { (k,v) -> put(k,v) } })
+            .put("missGapHour",JSONObject().apply { missGapHour.forEach { (k,v) -> put(k,v) } }).put("byParty",byParty)
+            .put("records24h",records24h).put("open24h",open24h).put("byPhoneBook",byPhoneBook)
         /** The stored JSON with this pass added: "last" is this pass's reasons (the records still waiting are counted again
          * every pass, so they are not summed), "matched", "byEnd" and "gapSec" add up over all passes, "runs" counts passes.
          * "missGapMin" is this pass's distribution (the same waiting records come back every pass, like "last"). */
@@ -100,90 +109,93 @@ internal object FirstPass {
             val gaps=o.optJSONObject("gapSec") ?: JSONObject()
             for((bin,n) in gapSec) gaps.put(bin.toString(),gaps.optInt(bin.toString(),0)+n)
             return o.put("runs",o.optInt("runs",0)+1).put("lastMs",now).put("last",reasons()).put("matched",o.optInt("matched",0)+matched).put("gapSec",gaps)
-                .put("byEnd",o.optInt("byEnd",0)+byEnd).put("missGapMin",JSONObject().apply { missGapMin.forEach { (k,v) -> put(k,v) } }).toString()
+                .put("byEnd",o.optInt("byEnd",0)+byEnd).put("byParty",o.optInt("byParty",0)+byParty).put("byPhoneBook",o.optInt("byPhoneBook",0)+byPhoneBook)
+                .put("missGapMin",JSONObject().apply { missGapMin.forEach { (k,v) -> put(k,v) } }).toString()
         }
     }
     /** [MatchStats.missGapMin] key of a noCandidate record with no answered entry within [MISS_RANGE_MS]. */
     const val MISS_FAR="far"
+    /** r12-7: [MatchStats.missGapMin] key of a record from before [FROM_MS]: the call log is read from 10/1 only, so such a
+     * record can never find its entry. */
+    const val MISS_BEFORE="before"
     const val MISS_RANGE_MS=60*60_000L
-    /** The bin of a start difference in ms: 10-minute bins, [MISS_FAR] beyond an hour either way. */
+    /** The bin of a start difference in ms (recording minus entry): signed 10-minute bins from -60 to 60 ("-10" = -10..-1
+     * min, "0" = 0..9 min), [MISS_FAR] beyond an hour either way. */
     fun missBin(diffMs:Long):String = if(kotlin.math.abs(diffMs)>MISS_RANGE_MS) MISS_FAR
-        else (Math.floorDiv(diffMs,600_000L)*10).coerceIn(-60,50).toString()
+        else (Math.floorDiv(diffMs,600_000L)*10).coerceIn(-60,60).toString()
+    /** r12-7: for a [MISS_FAR] record, the signed hour of the difference ("1" = 1..2 h after the entry, "-2" = 2..1 h before),
+     * capped at [MISS_HOURS_MAX] either way: is the recording's time hours off, or is there no call at all? */
+    const val MISS_HOURS_MAX=24L
+    fun missHour(diffMs:Long):String = Math.floorDiv(diffMs,3_600_000L).coerceIn(-MISS_HOURS_MAX,MISS_HOURS_MAX).toString()
     /** Answered calls only: missed and rejected calls have no recording. */
     fun answered(e:LogEntry)=e.durationMs>0 && e.type in setOf(CallLog.Calls.INCOMING_TYPE,CallLog.Calls.OUTGOING_TYPE)
+    /** r12-7 (user 11/5 "녹음 파일명에 정보가 있잖아"): how far from the file name's time a call of the person the file name
+     * names (number or phone-book name) is still taken. Covers a recorder that names the file by the end of the call. */
+    const val PARTY_RANGE_MS=30*60_000L
+    /** A pair by the person outside the usual window comes after every pair inside it (another recording may own it). */
+    private const val OUTSIDE_WINDOW=500.0
+    /** The usual window: the entry placed from 2 minutes before to 1 minute after the recording started. */
+    fun inWindow(recordingMs:Long,entryMs:Long)=entryMs>=recordingMs-120_000L && entryMs<=recordingMs+60_000L
+    /** The lengths agree within 20% or 15 s (an unknown recording length agrees with any). */
+    fun lengthFits(recordingMs:Long,entryMs:Long):Boolean { if(recordingMs<=0) return true
+        return kotlin.math.abs(recordingMs-entryMs)<=maxOf(15_000L,maxOf(recordingMs,entryMs)/5) }
+    /** The entry is the person the file name names: the same number, or the phone-book name by [NameKey.sameName]. */
+    fun sameParty(r:RecordForMatch,e:LogEntry):Boolean {
+        val key=r.counterpartKey ?: return false
+        return if(key.all { it.isDigit() }) e.numberKey==key else e.name!=null && NameKey.sameName(e.name,r.counterpart ?: key)
+    }
 
-    /** Each recording to its call-log entry (design: 처음 정리, 대조). The log time is when the call was placed and the
-     * recording starts once connected, so the recording may be up to 1 minute early or 2 minutes late; the lengths must
-     * agree within 20% or 15 s. A number in the filename must match the entry's number. A name matches the entry's
-     * phone-book name by [NameKey.sameName] (one key, or one inside the other); when no entry has that name (the phone
-     * book was changed, CACHED_NAME is empty, the file name lost a character), time and length alone pair it when exactly
-     * one entry fits, as for a recording with neither number nor name (design 3.4). When several pairs fit (a call placed
-     * again within a minute or two), every fitting pair gets a score, the start gap in 30 s units plus the length gap in
-     * 5% units (a pair by time alone after the named ones), and the best pairs are taken first across all recordings and
-     * entries, each recording and each entry once (review B14). [stats] gets why each recording did or did not pair. */
+    /** Each recording to its call-log entry (design: 처음 정리, 대조; r12-7).
+     * 1. The file name says who (a number, or a phone-book name): that person's answered calls within [PARTY_RANGE_MS] of the
+     *    file name's time, on the same KST day (or in the usual window), whose length agrees (20% or 15 s) are the candidates,
+     *    outside the usual window too. One is taken; of several, those in the usual window go on to the scoring below; several
+     *    and none in the window: left unpaired ("several": time and length cannot pick one).
+     * 2. Otherwise the usual window (the recording may start up to 1 minute early or 2 minutes late against the log time) and
+     *    the length: a number in the file name that is not the entry's never pairs; a name not in the log pairs by time and
+     *    length alone when exactly one entry fits (design 3.4); a recording with neither pairs only when exactly one entry
+     *    fits (review M4).
+     * When several pairs fit, every fitting pair gets a score, the start gap in 30 s units plus the length gap in 5% units (a
+     * pair by time alone after the named ones, a pair outside the window after both), and the best pairs are taken first
+     * across all recordings and entries, each recording and each entry once (review B14). [stats] gets why each recording did
+     * or did not pair. */
     fun match(records:List<RecordForMatch>,log:List<LogEntry>,stats:((MatchStats)->Unit)?=null):Map<String,LogEntry> {
         class Fit(val r:RecordForMatch,val e:LogEntry,val score:Double)
         val answeredLog=log.filter { answered(it) }.sortedBy { it.startMs }
         val starts=LongArray(answeredLog.size) { answeredLog[it].startMs }
         val fits=ArrayList<Fit>()
         val why=HashMap<String,String>() // recordId -> reason when it has no fit at all
-        val byEnd=HashSet<String>() // records whose only fits came from the end-time reading
-        fun lengthFits(r:RecordForMatch,e:LogEntry):Boolean { val longer=maxOf(r.durationMs,e.durationMs)
-            return kotlin.math.abs(r.durationMs-e.durationMs)<=maxOf(15_000L,longer/5) }
         fun firstFrom(from:Long)=java.util.Arrays.binarySearch(starts,from).let { if(it>=0) { var k=it;while(k>0 && starts[k-1]==starts[it]) k--;k } else -it-1 }
-        fun endFit(r:RecordForMatch,entries:List<LogEntry>,at:LongArray):List<Fit>? {
-            val key=r.counterpartKey ?: return null
-            if(r.durationMs<=0) return null
-            val start=r.startedMs-r.durationMs
-            val out=ArrayList<Fit>();var i=firstFrom(start-120_000L)
-            while(i<at.size && at[i]<=start+60_000L) { val e=entries[i++]
-                if(!lengthFits(r,e)) continue
-                val same=if(key.all { it.isDigit() }) e.numberKey==key else e.name!=null && NameKey.sameName(e.name,r.counterpart ?: key)
-                if(!same) continue
-                val longer=maxOf(r.durationMs,e.durationMs)
-                // After every pair by the usual reading: an entry another recording fits in its own window goes to that one.
-                out+=Fit(r,e,500.0+kotlin.math.abs(start-e.startMs)/30_000.0+kotlin.math.abs(r.durationMs-e.durationMs).toDouble()/longer/0.05) }
-            return out.ifEmpty { null }
-        }
+        fun between(from:Long,to:Long):List<LogEntry> { val out=ArrayList<LogEntry>();var i=firstFrom(from)
+            while(i<starts.size && starts[i]<=to) out+=answeredLog[i++];return out }
+        fun score(r:RecordForMatch,e:LogEntry):Double { val longer=maxOf(r.durationMs,e.durationMs)
+            val lengthTerm=if(r.durationMs>0 && longer>0) kotlin.math.abs(r.durationMs-e.durationMs).toDouble()/longer/0.05 else 0.0
+            return kotlin.math.abs(r.startedMs-e.startMs)/30_000.0+lengthTerm+if(inWindow(r.startedMs,e.startMs)) 0.0 else OUTSIDE_WINDOW }
         for(r in records) {
             val key=r.counterpartKey
-            val inTime=ArrayList<LogEntry>();val fitting=ArrayList<Fit>()
-            // Entries placed from 2 minutes before to 1 minute after the recording started.
-            var i=firstFrom(r.startedMs-120_000L)
-            while(i<starts.size && starts[i]<=r.startedMs+60_000L) {
-                val e=answeredLog[i++];inTime+=e
-                val longer=maxOf(r.durationMs,e.durationMs)
-                val gap=kotlin.math.abs(r.durationMs-e.durationMs)
-                if(r.durationMs>0 && gap>maxOf(15_000L,longer/5)) continue
-                val lengthTerm=if(r.durationMs>0 && longer>0) gap.toDouble()/longer/0.05 else 0.0
-                fitting+=Fit(r,e,kotlin.math.abs(r.startedMs-e.startMs)/30_000.0+lengthTerm)
+            // 1. The person the file name names, first.
+            if(key!=null) {
+                val day=CallRecordStore.kstDay(r.startedMs)
+                val party=between(r.startedMs-PARTY_RANGE_MS,r.startedMs+PARTY_RANGE_MS).filter { e -> sameParty(r,e) && lengthFits(r.durationMs,e.durationMs) &&
+                    (inWindow(r.startedMs,e.startMs) || CallRecordStore.kstDay(e.startMs)==day) }
+                val pick=if(party.size<=1) party else party.filter { inWindow(r.startedMs,it.startMs) }
+                if(pick.isNotEmpty()) { pick.forEach { fits+=Fit(r,it,score(r,it)) };continue }
+                if(party.size>1) { why[r.recordId]="several";continue }
             }
-            if(inTime.isEmpty()) {
-                // r12-4 (DESIGN_V4 2.4-4): some recorders name the file by the time the call ended. Only when the usual
-                // window has no entry at all, the same window is tried around "file time - length", and a pair is made
-                // only when the length fits and the file name's number or name is the entry's; never for a recording
-                // with neither (time alone would be a guess twice over).
-                endFit(r,answeredLog,starts)?.let { fits+=it;byEnd+=r.recordId } ?: run { why[r.recordId]="noCandidate" }
-                continue
-            }
+            // 2. The usual window.
+            val inTime=between(r.startedMs-120_000L,r.startedMs+60_000L)
+            if(inTime.isEmpty()) { why[r.recordId]="noCandidate";continue }
+            val fitting=inTime.filter { lengthFits(r.durationMs,it.durationMs) }.map { Fit(r,it,score(r,it)) }
             if(fitting.isEmpty()) { why[r.recordId]="length";continue }
             when {
-                key!=null && key.all { it.isDigit() } -> {
-                    val same=fitting.filter { it.e.numberKey==key }
-                    if(same.isEmpty()) why[r.recordId]="numberDiffers" else fits.addAll(same)
+                key!=null && key.all { it.isDigit() } -> why[r.recordId]="numberDiffers" // its own number was looked for above
+                key!=null -> when {
+                    // By time and length alone, after every pair by name. Never to an excluded entry: that would wipe a
+                    // recording whose name says it is someone else.
+                    fitting.size==1 && !fitting[0].e.excluded -> fits+=Fit(r,fitting[0].e,fitting[0].score+1_000.0)
+                    else -> why[r.recordId]=if(fitting.all { it.e.name==null }) "nameNull" else "nameDiffers"
                 }
-                key!=null -> {
-                    val named=fitting.filter { it.e.name!=null && NameKey.sameName(it.e.name,r.counterpart ?: key) }
-                    when {
-                        named.isNotEmpty() -> fits+=named
-                        // By time and length alone, after every pair by name. Never to an excluded entry: that would wipe a
-                        // recording whose name says it is someone else.
-                        fitting.size==1 && !fitting[0].e.excluded -> fits+=Fit(r,fitting[0].e,fitting[0].score+1_000.0)
-                        else -> why[r.recordId]=if(fitting.all { it.e.name==null }) "nameNull" else "nameDiffers"
-                    }
-                }
-                // Nothing in the file name says who it was (no number, no name): only a single fitting entry is certain enough,
-                // excluded ones included; two or more candidates are left unpaired (review M4).
+                // Nothing in the file name says who it was: only a single fitting entry is certain enough, excluded ones
+                // included; two or more candidates are left unpaired (review M4).
                 fitting.size==1 -> fits+=fitting
                 else -> why[r.recordId]="several"
             }
@@ -194,21 +206,28 @@ internal object FirstPass {
             out[f.r.recordId]=f.e;usedEntries+=f.e.id
         }
         if(stats!=null) {
-            // With fits but every entry went to a closer recording; an end-time reading that lost its entry stays noCandidate.
-            val counts=records.filter { it.recordId !in out }.groupingBy { why[it.recordId] ?: if(it.recordId in byEnd) "noCandidate" else "several" }.eachCount()
+            // With fits but every entry went to a closer recording: "several".
+            val counts=records.filter { it.recordId !in out }.groupingBy { why[it.recordId] ?: "several" }.eachCount()
+            // A pair outside the usual window whose "file time - length" is inside it: the file was named by the end of the call (r12-4).
+            fun byEnd(r:RecordForMatch,e:LogEntry)=!inWindow(r.startedMs,e.startMs) && r.durationMs>0 && inWindow(r.startedMs-r.durationMs,e.startMs)
             val gaps=HashMap<Int,Int>()
             for(r in records) { val e=out[r.recordId] ?: continue
-                if(r.recordId in byEnd) continue // the start-gap bins describe the usual reading only
+                if(!inWindow(r.startedMs,e.startMs)) continue // the start-gap bins describe the usual window only
                 val bin=Math.floorDiv(r.startedMs-e.startMs,10_000L).toInt()*10;gaps[bin]=(gaps[bin] ?: 0)+1 }
-            // How far off the nearest answered entry is for each recording left without a candidate (r12-4).
-            val miss=HashMap<String,Int>()
-            for(r in records) { if(r.recordId in out || (why[r.recordId] ?: if(r.recordId in byEnd) "noCandidate" else null)!="noCandidate") continue
+            // How far off the nearest answered entry is for each recording left without a candidate (r12-4), the far ones also
+            // by the signed hour, and records from before 10/1 apart (the call log does not go back that far), r12-7.
+            val miss=HashMap<String,Int>();val hours=HashMap<String,Int>()
+            for(r in records) { if(r.recordId in out || why[r.recordId]!="noCandidate") continue
+                if(beforeRange(r.startedMs)) { miss[MISS_BEFORE]=(miss[MISS_BEFORE] ?: 0)+1;continue }
                 val k=firstFrom(r.startedMs)
                 val near=listOfNotNull(starts.getOrNull(k-1),starts.getOrNull(k)).minByOrNull { kotlin.math.abs(r.startedMs-it) }
                 val bin=near?.let { missBin(r.startedMs-it) } ?: MISS_FAR
-                miss[bin]=(miss[bin] ?: 0)+1 }
+                miss[bin]=(miss[bin] ?: 0)+1
+                if(bin==MISS_FAR && near!=null) missHour(r.startedMs-near).let { h -> hours[h]=(hours[h] ?: 0)+1 } }
             stats(MatchStats(noCandidate=counts["noCandidate"] ?: 0,length=counts["length"] ?: 0,nameNull=counts["nameNull"] ?: 0,nameDiffers=counts["nameDiffers"] ?: 0,
-                numberDiffers=counts["numberDiffers"] ?: 0,several=counts["several"] ?: 0,matched=out.size,gapSec=gaps,missGapMin=miss,byEnd=out.keys.count { it in byEnd }))
+                numberDiffers=counts["numberDiffers"] ?: 0,several=counts["several"] ?: 0,matched=out.size,gapSec=gaps,missGapMin=miss,
+                byEnd=records.count { r -> out[r.recordId]?.let { byEnd(r,it) }==true },missGapHour=hours,
+                byParty=records.count { r -> out[r.recordId]?.let { !inWindow(r.startedMs,it.startMs) }==true }))
         }
         return out
     }
