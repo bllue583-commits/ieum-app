@@ -1,6 +1,6 @@
 # r13-3 보고서 (feature/r13-v33-r3, 기준 feature/r13-v33-r1 24c21d9)
 
-ci: (push 뒤 결과를 아래 "시험"에 적음)
+ci: r13-3 브랜치 실행 42076820524·device-test 42076820579(보고 시점 진행 중). 통합(feature/r13-v33)에서 골든 Activity가 들어와 V33ScreensTest 골든 줄 기대값 2개를 오케스트레이터가 고침(r13-int-test-4 통과); 통합 ci 결과로 판정
 
 ## 바꾼 파일
 - **`CallUi.kt`**

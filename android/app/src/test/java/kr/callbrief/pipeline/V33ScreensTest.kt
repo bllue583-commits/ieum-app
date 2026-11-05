@@ -118,12 +118,16 @@ class V33ScreensTest:ProtectedTextHostTestBase() {
         lock.performClick()
         settle { SecureSettings(app).snapshot().has(PipelineSettingsKeys.LOCK_SCREEN_DETAIL) }
         assertFalse(SecureSettings(app).snapshot().getBoolean(PipelineSettingsKeys.LOCK_SCREEN_DETAIL))
-        // No golden screen in this build: no line.
-        assertNull(tag(a,"golden_link"))
+        // v3.3 integration: the golden screen (r13-2) is in the build, so its line shows.
+        assertNotNull(tag(a,"golden_link"))
     }
 
     @Test fun theGoldenLineShowsOnlyWhenTheScreenIsInTheBuild() {
-        assertFalse(SettingsScreen.goldenInBuild())
+        assertTrue(SettingsScreen.goldenInBuild())
+        SettingsScreen.goldenHook={ false }
+        val b=launchMain(Screen.SETTINGS)
+        settle { tag(b,"settings_status")!=null }
+        assertNull(tag(b,"golden_link"))
         SettingsScreen.goldenHook={ true }
         val a=launchMain(Screen.SETTINGS)
         settle { tag(a,"golden_link")!=null }

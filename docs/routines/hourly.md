@@ -23,7 +23,7 @@ ledger/ledger.json의 형식은 아래와 같다.
 사람은 id로 구분한다(폰이 전화번호마다 만든 id). 장부에는 전화번호, 녹음, 자막 원문, 문자 원문을 절대 넣지 않는다.
 
 1. ledger/ledger.json을 읽는다. 없으면 빈 장부(rev 0)로 시작한다.
-2. ledger/edits/*.json을 가장 먼저 장부에 반영한다. rename이면 그 id의 사람 이름을 바꾸고, 예전 이름은 aliases에 넣고, locked에 "name"을 넣는다. 반영한 파일은 `git rm` 한다.
+2. ledger/edits/*.json을 가장 먼저 장부에 반영한다. rename이면 그 id의 사람 이름을 바꾸고, 예전 이름은 aliases에 넣고, locked에 "name"을 넣는다. mergePeople({"from","into"}, 사용자가 폰에서 두 사람을 합침)이면 from 사람에 mergedInto: into를 적고 from의 이름을 into의 aliases에 더한다. unmergePeople({"from","into"}, 사용자가 합치기를 되돌림)이면 from의 mergedInto를 지우고, 두 사람 모두의 keepApart 목록에 서로의 id를 넣는다. keepApart에 있는 두 사람은 다시 합치거나 합치자고 제안하지 않는다. 반영한 파일은 `git rm` 한다.
 3. 시험 요청: inbox에서 이름이 selftest-로 시작하는 파일(CI의 inbox-e2e가 넣은 종단 시험)은 다른 요청과 똑같이 분석해 results/<같은 파일 이름>에 결과만 쓰고 inbox 파일을 `git rm` 한다. 이 요청으로는 장부(현장 메모, 업체, 사람, issues, issueSuggestions, corrections)를 절대 고치지 않으며 장부의 rev도 이 요청 때문에 올리지 않는다.
    처리 순서: inbox에서 이름이 b-로 시작하지 않는 파일을 atMs(없으면 createdMs) 순으로 모두 처리하고, 그다음 b- 파일을 이름순으로 최대 2개 처리한다. 묶음 파일 안의 items는 적힌 순서대로 처리한다.
 4. 기록마다:
