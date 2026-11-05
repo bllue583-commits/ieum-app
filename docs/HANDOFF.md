@@ -268,6 +268,8 @@ $HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu 
 - 아직: 설정 화면은 제목 띠만 바뀜(카드 묶음 정리 필요), 아침·저녁 알림 문구의 "할 일" → "체크할 일" 통일, 설계도(Claude Docs) "화면 디자인" 절 개정, 앱 아이콘 다듬기, 모모콜에서 본 "전화 올 때 지난 통화 요약 띄우기" 검토.
 
 ## 6. 다음 할 일 (순서대로, 11/5 저녁 기준 — **상세는 [DESIGN_V4.md](DESIGN_V4.md)**, 그 전 버전은 [DESIGN_V3.md](DESIGN_V3.md), 묶음 지시문은 `docs/orchestration/briefs/`)
+**11/5 23시 추가(사용자 결정):** v3.2를 새로 끼워 넣음 — 「홈은 요약, 맨 위에 오늘 이야기」(DESIGN_V4 2-1절, 묶음 r12-6, 작업자 진행 중, 브랜치 `feature/r12-v31-r6`). 원래 v3.2 「믿을 수 있는 숫자」는 v3.3, v3.3 「어디서나 보이는 카드」는 v3.4로 밀림. 매시간 루틴 지시문에 5-1(오늘 통화 이야기 `story/today.json`) 추가. 새벽 정리 예약 작업은 tidy v5로 교체 완료(사용자 "예약작업은 너가 수정하면 돼"). 아내 폰은 22:04부터 v3.1(요청 promptVersion 6).
+
 **다음 세션 (11/5 밤 기준):**
 1. ieum-inbox `status/phone.json`에서 `versionCode`가 1038 이상(v3.0) 또는 v3.1 빌드인지 본다. 아직 1033이면 사용자에게 DESIGN_V4 1.4절 1~3번(Wi-Fi에서 앱 열기 → 알림 눌러 설치 → 권한·배터리·자동 녹음)을 다시 안내한다. "서명이 다르다"면 지우지 말게 하고 release-apk 로그의 서명 비교를 본다.
 2. v3.1이 깔린 뒤 하트비트 24시간: `permissions` 넷, `recordingGapVerdict`, `callLogMatch.missGapMin`·`byEnd`, `latency`, `results`로 녹음 0의 원인을 가려 DESIGN_V4 2절 머리에 적고, `RecordingGap` 임계값(0.3/0.7/0.5)을 실측으로 조정할지 정한다.

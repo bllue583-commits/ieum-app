@@ -228,7 +228,7 @@ class UiV2Test:ProtectedTextHostTestBase() {
         SecureSettings(app).update { it.put(PipelineSettingsKeys.LAST_UPDATE_ERROR,"STATUS_FAILURE_STORAGE (6): 공간 부족") }
         val a=launchMain(Screen.SETTINGS)
         settle { tag(a,"status_update")!=null }
-        assertEquals(listOf("group_연결","group_통화 카드","group_정리","group_상태와 도움"),views(a.window.decorView).mapNotNull { it.tag as? String }.filter { it.startsWith("group_") })
+        assertEquals(listOf(SettingsScreen.GROUP_NOW,"group_연결","group_통화 카드","group_정리","group_상태와 도움"),views(a.window.decorView).mapNotNull { it.tag as? String }.filter { it.startsWith("group_") })
         val update=views(tag(a,"status_update")).filterIsInstance<TextView>().joinToString { it.text }
         assertTrue(update,update.contains("저장 공간이 부족해 설치하지 못했어요") && !update.contains("STATUS") && !update.contains("공간 부족"))
         assertEquals("저장 공간이 부족해 설치하지 못했어요.",(tag(a,"update_error") as TextView).text.toString())
@@ -383,24 +383,30 @@ class UiV2Test:ProtectedTextHostTestBase() {
 
     // ---- v2.5 #20: 처음 정리 rests (battery under half and not charging, or no result for six hours) and says so ----
     @Test fun firstPassRestSaysWhyAndWhatIsLeft() {
-        val home=launchMain(Screen.HOME)
-        settle { tag(home,"home_calls_button")!=null }
-        fun show(f:HomeScreen.FirstPassView):String { home.home.render(HomeScreen.Snapshot(true,true,"READY",2,0,1,0,0,1_793_300_000_000,firstPass=f))
-            return views(tag(home,"home_first_pass")).filterIsInstance<TextView>().joinToString("\n") { it.text.toString() } }
-        val low=show(HomeScreen.FirstPassView(37,9.0,4,2,audioMinutesLeft=190,lowBattery=true))
-        assertTrue(low,low.contains("잠시 쉬고 있어요") && low.contains("충전기에 꽂으면 이어서 정리해요"))
-        assertTrue(low,low.contains("남은 녹음") && low.contains("37개") && low.contains("남은 녹음 시간") && low.contains("3시간"))
-        assertTrue(low,low.contains("요약을 기다리는 기록 4건"))
-        assertFalse("no processing estimate while resting",low.contains("글자로 바꿀 녹음"))
-        val stalled=show(HomeScreen.FirstPassView(0,null,6,0,stalled=true))
-        assertTrue(stalled,stalled.contains("잠시 쉬고 있어요") && stalled.contains("결과가 오면 이어서 정리해요") && !stalled.contains("충전기"))
-        val running=show(HomeScreen.FirstPassView(37,9.0,4,2,audioMinutesLeft=190))
-        assertNull(tag(home,"home_first_pass_rest"));assertTrue(running,running.contains("글자로 바꿀 녹음 37개"))
-        for(t in listOf(low,stalled)) { assertFalse(t,t.contains("·"));assertFalse(t,Regex("[A-Za-z]").containsMatchIn(t)) }
-        // 50대 기준: the rest line is a heading, the reason reading size, the numbers big.
-        show(HomeScreen.FirstPassView(37,9.0,4,2,audioMinutesLeft=190,lowBattery=true))
-        assertTrue((tag(home,"home_first_pass_rest") as TextView).textSize/home.resources.displayMetrics.scaledDensity>=CallUi.HEADING)
-        assertTrue(views(tag(home,"home_first_pass")).filterIsInstance<TextView>().all { it.textSize/it.resources.displayMetrics.scaledDensity>=16f })
+        // v3.1 r12-6: 처음 정리 is shown in settings' first group, not on home.
+        fun show(f:HomeScreen.FirstPassView):Pair<MainActivity,String> {
+            SettingsScreen.firstPassHook={ f }
+            val a=launchMain(Screen.SETTINGS);settle { tag(a,"first_pass_state")!=null }
+            return a to views(tag(a,SettingsScreen.GROUP_NOW)).filterIsInstance<TextView>().joinToString("\n") { it.text.toString() } }
+        try {
+            val (lowPage,low)=show(HomeScreen.FirstPassView(37,9.0,4,2,audioMinutesLeft=190,lowBattery=true))
+            assertTrue(low,low.contains("잠시 쉬고 있어요") && low.contains("충전기에 꽂으면 이어서 정리해요"))
+            assertTrue(low,low.contains("남은 녹음") && low.contains("37") && low.contains("남은 녹음 시간") && low.contains("3"))
+            assertTrue(low,low.contains("요약을 기다리는 통화 4건"))
+            assertFalse("no processing estimate while resting",low.contains("끝나기까지"))
+            val (_,stalled)=show(HomeScreen.FirstPassView(0,null,6,0,stalled=true))
+            assertTrue(stalled,stalled.contains("잠시 쉬고 있어요") && stalled.contains("결과가 오면 이어서 정리해요") && !stalled.contains("충전기"))
+            val (runPage,running)=show(HomeScreen.FirstPassView(37,9.0,4,2,audioMinutesLeft=190))
+            assertNull(tag(runPage,"first_pass_rest"));assertTrue(running,running.contains("녹음 37개 남음") && running.contains("끝나기까지 약 9시간"))
+            for(t in listOf(low,stalled)) { assertFalse(t,t.contains("·")) }
+            // 50대 기준: the rest line is a heading, the reason reading size, the numbers big.
+            assertTrue((tag(lowPage,"first_pass_rest") as TextView).textSize/lowPage.resources.displayMetrics.scaledDensity>=CallUi.HEADING)
+            assertTrue(views(tag(lowPage,SettingsScreen.GROUP_NOW)).filterIsInstance<TextView>().all { it.textSize/it.resources.displayMetrics.scaledDensity>=16f })
+            // Home shows none of it.
+            val home=launchMain(Screen.HOME);settle { tag(home,"home_today")!=null }
+            home.home.render(HomeScreen.Snapshot(true,true,"READY",2,0,1,0,0,1_793_300_000_000,firstPass=HomeScreen.FirstPassView(37,9.0,4,2)))
+            assertNull(tag(home,"home_first_pass"));assertTrue(texts(home).none { it.text.contains("지난 통화 정리") })
+        } finally { SettingsScreen.firstPassHook=null }
         assertEquals("40" to "분",HomeScreen.roughLength(40));assertEquals("3" to "시간",HomeScreen.roughLength(190));assertEquals("1" to "분",HomeScreen.roughLength(0))
     }
 }

@@ -76,6 +76,8 @@ internal class CallRecordAnalysisRunner(
             finally { if(sentEdits.isNotEmpty()) db.inTransaction { sentEdits.forEach { db.editSent(it) } } }
             // The ledger first: results then find the names the task used; a broken ledger or proposal stops nothing else.
             runCatching { takeLedger(store,db) }
+            // v3.2 (r12-6): today's call story for the top of home; missing (404) or broken, nothing happens.
+            runCatching { takeStory(store) }
             // Requests and results name a record by its key (a hash), never by its id, which may hold a phone number.
             val byKey=db.pending().associateBy { CallInbox.recordKey(it.recordId) }
             val files=store.list(CallInbox.RESULTS).filterNot { it.first.startsWith("selftest-") } // CI end-to-end check, not a call of this phone
@@ -253,6 +255,13 @@ internal class CallRecordAnalysisRunner(
     }
 
     /** Takes the repository ledger when its rev changed (a lower rev means it was rebuilt). A missing ledger is fine. */
+    /** v3.2 (r12-6): story/today.json kept in settings ([PipelineSettingsKeys.STORY]) when it changed; a missing file is no
+     * error. Read with an ETag ([InboxETags]), so an unchanged file costs no download. Its words are never logged. */
+    private fun takeStory(store:CallInboxStore) {
+        val o=TodayStory.parse(store.get(CallInbox.STORY)) ?: return
+        val text=o.toString()
+        if(settings().optString(PipelineSettingsKeys.STORY)!=text) save { it.put(PipelineSettingsKeys.STORY,text) }
+    }
     private fun takeLedger(store:CallInboxStore,db:CallRecordStore) {
         val o=runCatching { JSONObject(store.get(CallInbox.LEDGER)) }.getOrNull() ?: return
         val rev=o.optLong("rev",0)
@@ -471,7 +480,7 @@ internal object InboxETags:okhttp3.Interceptor {
     const val RESULTS_ETAG_KEY="resultsListingETag"
     private class Kept(val etag:String,val body:ByteArray,val type:okhttp3.MediaType?)
     private val kept=java.util.concurrent.ConcurrentHashMap<String,Kept>()
-    private val PATHS=listOf(CallInbox.RESULTS,CallInbox.LEDGER,CallInbox.TIDY_PROPOSAL).map { "/contents/$it" }
+    private val PATHS=listOf(CallInbox.RESULTS,CallInbox.LEDGER,CallInbox.TIDY_PROPOSAL,CallInbox.STORY).map { "/contents/$it" }
     internal fun cacheable(path:String)=PATHS.any { path.endsWith(it) }
     /** Where the empty results listing's ETag is kept; set by the runner at the start of each pass. */
     @Volatile internal var results:ETagSlot?=null

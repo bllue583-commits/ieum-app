@@ -96,14 +96,16 @@ class UpdateFetchTest:ProtectedTextHostTestBase() {
 
     @Test fun homeButtonWithoutTheFileStartsGettingItAndGoesToTheBar() {
         CallUpdate.startHook={ starts++ }
-        // A finished download whose file was cleared away (the cache): the home card is still there and its button still works.
+        // A finished download whose file was cleared away (the cache). v3.1 r12-6: home has no update card; its one line says
+        // there is something in settings, and the notification's [지금 업데이트] still works from home.
         assertTrue(CallUpdate.check(app,Store()));CallUpdate.file(app).delete()
         assertNull(CallUpdate.ready(app));assertNotNull(CallUpdate.available(app))
         val home=launchMain(Screen.HOME)
-        settle { tag(home,"home_update_button")!=null }
-        assertEquals("새 버전(v2.5)이 나왔어요. 지금 업데이트를 누르면 받아서 설치해요.",(tag(home,"home_update_state") as TextView).text.toString())
-        tag(home,"home_update_button").performClick()
-        // The check runs off the main thread (r8-4); the button says so meanwhile.
+        settle { tag(home,"home_attention")!=null }
+        assertNull(tag(home,"home_update"))
+        assertEquals("새 버전(v2.5)이 나왔어요. 지금 업데이트를 누르면 받아서 설치해요.",HomeScreen.updateState(app).words)
+        home.home.updateNow()
+        // The check runs off the main thread (r8-4).
         settle { home.screen==Screen.SETTINGS }
         assertEquals(1,starts)
         assertEquals(CallUpdate.Stage.WAITING,CallUpdate.fetchState(app).stage)
@@ -175,7 +177,7 @@ class UpdateFetchTest:ProtectedTextHostTestBase() {
         settle { tag(b,"update_state")!=null }
         shot(b,"3_settings_get_now")
         val home=launchMain(Screen.HOME)
-        settle { tag(home,"home_update_button")!=null }
-        shot(home,"4_home_card","home_update")
+        settle { tag(home,"home_attention")!=null }
+        shot(home,"4_home_line","home_attention")
     }
 }

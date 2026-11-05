@@ -145,6 +145,9 @@ object PipelineSettingsKeys {
     /** r12-2 (2.2-5): the update state the settings row and home banner show, a JSON string
      * {"phase","code","doneBytes","totalBytes","atMs"}; phase is checking | offline | downloading | ready | waitingConfirm | failed | none. */
     const val UPDATE_PROGRESS="updateProgress"
+    /** v3.2 (r12-6): today's call story the hourly task writes to story/today.json, kept as that file's JSON string
+     * {"day":"YYYY-MM-DD" (KST),"text","calls","atMs"} for the top of home. */
+    const val STORY="story"
 }
 
 /** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets

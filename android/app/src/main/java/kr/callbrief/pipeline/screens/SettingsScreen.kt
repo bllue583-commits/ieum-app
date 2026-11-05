@@ -36,7 +36,14 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         /** [지금 확인] says "확인하는 중이에요" at most this long. */
         const val CHECK_WAIT_MS=30_000L
         /** A slider is saved this long after it last moved (also when moved with TalkBack, review #31). */
-        const val HOUR_SAVE_MS=700L }
+        const val HOUR_SAVE_MS=700L
+        /** v3.1 r12-6: the first group, what home used to show (first setup, 처음 정리, the voice model, missing recordings). */
+        const val NOW_NAME="지금 할 일과 진행 상황"
+        const val GROUP_NOW="group_$NOW_NAME"
+        /** First setup's part in that group (home's line opens settings here while a required step is left). */
+        const val SETUP_TAG="setup_card"
+        /** Test hook in place of reading 처음 정리 from the store (null reads it). */
+        @androidx.annotation.VisibleForTesting @Volatile internal var firstPassHook:((android.content.Context)->HomeScreen.FirstPassView?)?=null }
     private val page:LinearLayout get()=a.column
     /** The sheet the current settings group is written into. */
     private lateinit var body:LinearLayout
@@ -103,6 +110,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         if(!here && modelSeen) { modelShown="";modelSeen=false;refresh();return }
         modelSeen=here
         page.findViewWithTag<TextView>("model_state")?.text=modelWords(modelShown,modelPart)
+        if(here) page.findViewWithTag<ProgressBar>("model_bar")?.progress=((modelPart?.length() ?: 0L)*100/HomeScreen.MODEL_BYTES).toInt().coerceIn(0,99)
     }
     private var updateBlock:LinearLayout?=null
     private var updateKey:String?=null
@@ -245,6 +253,9 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
                 folderReadable=StatusLights.folderReadable(a,s)
                 storagePercent=watch?.dbPercent
                 personal=runCatching { db!!.personalNumbers() }.getOrDefault(emptyList())
+                firstPass=firstPassHook?.invoke(a) ?: db?.let { runCatching { HomeScreen.readFirstPass(CallPipelineStartup.storage(a),it,s) }.getOrNull() }
+                gapText=HomeScreen.gapBanner(a)?.text?.takeIf { it.isNotBlank() }
+                installStep=HomeScreen.installStep(a)
                 Triple(s,counts,memo)
             } }
             if(!live())return@launch
@@ -275,6 +286,10 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         val keep=if(drawn) CallUi.scrollY(page) else 0
         page.removeAllViews();body=page;drawn=true
         CallUi.band(page,"설정","처음 설정한 것도 여기서 언제든 바꿀 수 있어요")
+
+        // ---- v3.1 r12-6: 지금 할 일과 진행 상황 (moved from home: first setup, 처음 정리, the voice model, missing recordings) ----
+        val modelState=s.optString(PipelineSettingsKeys.MODEL_STATE)
+        nowGroup(s,modelState)
 
         // ---- 연결: where the calls, texts and mail come from ----
         group("연결")
@@ -342,14 +357,8 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
             body.addView(CallUi.text(a,it.reason,CallUi.CAPTION,color=CallUi.AMBER).apply { tag="update_error" }) }
         storagePercent?.let { body.addView(CallUi.text(a,"저장 공간 ${it}% 사용",CallUi.BODY).apply { tag="storage_use" }) }
 
-        val modelState=s.optString(PipelineSettingsKeys.MODEL_STATE)
-        sub("음성 인식 모델")
-        val part=PipelineModelManager(CallPipelineStartup.storage(a)).partFile
-        body.addView(CallUi.text(a,modelWords(modelState,part),CallUi.BODY,true,if(modelState=="READY") CallUi.OK else CallUi.INK).apply { tag="model_state";fontFeatureSettings="tnum" })
-        modelPart=part;modelShown=modelState
-        if(modelState!="READY"&&modelState!="UNSUPPORTED"&&modelState!="DOWNLOADING") body.addView(button(if(modelState=="FAILED") "다시 받기" else "모델 받기") {
-            runCatching { HomeScreen.modelStart(a) };Toast.makeText(a,"음성 인식 모델을 받기 시작해요.",Toast.LENGTH_SHORT).show();refresh()
-        }.apply { tag="model_get" })
+        // The voice model once it is ready (or cannot be used here) stays in this group; while it is not, it is in the first one.
+        if(!modelNow) { sub("음성 인식 모델");modelRows(modelState) }
         if(kr.callbrief.BuildConfig.SYNTHETIC_TOOLS_ENABLED&&!CallInboxConfig.enabled&&modelState=="READY") body.addView(act("속도 측정 (시험용)","benchmark","재는 중이에요") { done -> benchmark(done) })
 
         sub("현장 상황 메모")
@@ -393,6 +402,160 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         a.putBack(keep)
         val want=focusTag;val group=focusGroup;focusTag=null;focusGroup=null
         if(want!=null) page.post { if(live()) { if(page.findViewWithTag<View>(want)!=null) goTo(want) else group?.let(::goTo) } }
+    }
+
+    // ---- v3.1 r12-6: 지금 할 일과 진행 상황 ----
+    /** 처음 정리 while it runs, the missing-recordings line (r12-1) and whether installing by itself is not allowed yet (r12-2),
+     * read with the rest of the page. */
+    @Volatile private var firstPass:HomeScreen.FirstPassView?=null
+    @Volatile private var gapText:String?=null
+    @Volatile private var installStep=false
+    /** The notification question of the setup step; a refusal is counted so that after two the step opens the notification
+     * settings (review #13). */
+    private val askNotify=a.registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok ->
+        NotifyAsk.noteResult(a,ok);if(live()) enter()
+    }
+    private fun granted(p:String)=a.checkSelfPermission(p)==android.content.pm.PackageManager.PERMISSION_GRANTED
+    /** The voice model is in the first group while it is coming or failed after the consent; ready, unusable or before the
+     * consent (the consent step says it comes next) it is a plain line in 상태와 도움. */
+    private var modelNow=false
+    private fun modelInNow(s:JSONObject,state:String)=state!=PipelineModelState.READY && state!=PipelineModelState.UNSUPPORTED &&
+        (s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false) || state==PipelineModelState.DOWNLOADING || state==PipelineModelState.FAILED)
+
+    /** One step of first setup. [optional] steps have [나중에 할게요] (they stay in their groups below); [reason] is said above the button. */
+    private class Step(val key:String,val done:Boolean,val label:String,val reason:String,val button:String,
+                       val optional:Boolean=false,val strong:Boolean=false,val action:()->Unit)
+    /** First setup (DESIGN_V4 2.5-1), required steps first (folder, consent, call log, call state, notifications, battery), then the
+     * optional ones (texts, the call card over other apps, installing new versions by itself). */
+    private fun steps(s:JSONObject):List<Step> {
+        fun readingStep(key:String,done:Boolean,permission:String,what:String,reason:String,ask:androidx.activity.result.ActivityResultLauncher<String>,optional:Boolean=false)=
+            if(!done && !optional && ReadingPermission.blocked(a,permission)) Step(key,false,"$what 읽기 허용",ReadingPermission.restrictedHelp(what),"앱 정보 열기") { ReadingPermission.openAppInfo(a) }
+            else Step(key,done,"$what 읽기 허용",reason,"$what 읽기 허용",optional=optional) { ReadingPermission.markAsked(a,permission);ask.launch(permission) }
+        val phone=android.Manifest.permission.READ_PHONE_STATE;val sms=android.Manifest.permission.READ_SMS
+        val overlay=CallCardAsk.overlayAllowed(a)
+        val overlayAgain=!overlay && SetupSkip.overlayAsked(a)
+        val notify=NotifyAsk.allowed(a);val notifyBlocked=NotifyAsk.blocked(a)
+        val battery=a.getSystemService(android.os.PowerManager::class.java)?.isIgnoringBatteryOptimizations(a.packageName)==true
+        return listOf(
+            Step("folder",s.optString("treeUri").isNotBlank(),"녹음 폴더 연결","통화 녹음 파일이 있는 폴더를 알려 주면 새 통화를 저절로 가져와요. 폴더가 열리면 보통 Recordings › Call을 고르고 아래 [이 폴더 사용]을 눌러 주세요.",
+                "녹음 폴더 고르기") { pickFolder.launch(CallFolder.pickIntent()) },
+            Step("consent",s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false),"정리 동의","녹음 파일은 휴대폰에 그대로 두고, 글자로 바꾼 통화 내용만 보내 정리해요. 동의하면 음성 인식 모델(574MB)을 바로 받기 시작해요. 아래 정리 묶음에서 언제든 끌 수 있어요.",
+                "동의하고 켜기") { agree() },
+            readingStep("callLog",granted(android.Manifest.permission.READ_CALL_LOG),android.Manifest.permission.READ_CALL_LOG,"통화기록","녹음과 통화기록을 맞춰서 상대 번호를 찾아요. 통화기록은 휴대폰 밖으로 나가지 않아요.",askCallLog),
+            if(!granted(phone) && ReadingPermission.blocked(a,phone))
+                Step("phone",false,"통화가 끝난 걸 바로 알아차리기","허용 창이 다시 뜨지 않아요. 앱 정보의 권한에서 전화 항목을 허용해 주세요.","앱 정보 열기") { ReadingPermission.openAppInfo(a) }
+            else Step("phone",granted(phone),"통화가 끝난 걸 바로 알아차리기","통화가 끝나면 바로 녹음을 찾아 정리를 시작해요. 통화 내용은 듣지 않고, 전화가 끝났는지만 알아요.","전화 상태 허용") {
+                ReadingPermission.markAsked(a,phone);askPhoneState.launch(phone) },
+            // Refused twice the system no longer asks: the step opens the app's notification settings instead (review #13).
+            Step("notify",notify,"알림 허용",if(notifyBlocked) "알림이 꺼져 있어요. 알림 설정에서 이음 알림을 켜 주세요." else "아침 6시에 체크할 일을, 저녁 7시에 통화 정리를 알림으로 보내 드려요.",
+                if(notifyBlocked) "알림 설정 열기" else "알림 허용하기") {
+                if(notifyBlocked || android.os.Build.VERSION.SDK_INT<33) NotifyAsk.openSettings(a) else askNotify.launch(android.Manifest.permission.POST_NOTIFICATIONS) },
+            Step("battery",battery,"배터리 제한 풀기","휴대폰이 쉬는 동안에도 통화를 정리하려면 한 번 허용해 주세요.","제한 풀기") {
+                runCatching { a.startActivity(android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,android.net.Uri.parse("package:${a.packageName}"))) }
+                    .onFailure { a.startActivity(android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } },
+            // Optional: a refusal (or [나중에 할게요]) is an answer, the next step opens (DESIGN_V4 2.5 시험).
+            readingStep("sms",granted(sms) || ReadingPermission.asked(a,sms) || SetupSkip.skipped(a,"sms"),sms,"문자",
+                "업무 문자도 통화와 함께 정리해요. 문자는 휴대폰 안에서 읽어요.",askSms,optional=true),
+            if(overlayAgain) Step("overlay",SetupSkip.skipped(a,"overlay"),"통화 화면 위에 이음 카드 보기","목록에서 '이음'을 찾아 스위치를 켜 주세요.","다시 열기",optional=true,strong=true) {
+                CallCardAsk.openOverlaySettings(a) }
+            else Step("overlay",overlay || SetupSkip.skipped(a,"overlay"),"통화 화면 위에 이음 카드 보기",
+                "전화가 오면 통화 화면 위에 상대와 지난 통화, 체크할 일을 보여 드려요. 열리는 화면에서 이음을 찾아 허용해 주세요.","카드 보기 허용",optional=true) {
+                SetupSkip.markOverlayAsked(a);CallCardAsk.openOverlaySettings(a) },
+            Step("install",!installStep || SetupSkip.skipped(a,"install"),"새 버전을 저절로 설치하기",
+                "새 버전이 나오면 누르지 않아도 저절로 설치돼요. 열리는 화면에서 '이 출처 허용'을 켜 주세요.","설치 허용",optional=true) {
+                CallUpdate.openInstallSourceSettings(a) })
+    }
+    /** The consent step: saved off the main thread, then the voice model starts coming (on any connection, user 11/5 18:27). */
+    private fun agree() {
+        a.lifecycleScope.launch {
+            withContext(Dispatchers.IO) { runCatching { settings().update { it.put(PipelineSettingsKeys.CONSENT_GRANTED,true) } }
+                runCatching { HomeScreen.modelStart(a) } }
+            CallPipelineStartup.settingsChanged(a);if(live()) refresh()
+        }
+    }
+
+    /** The first group (r12-6): what needs doing and what is under way, each part only while it has something to say. */
+    private fun nowGroup(s:JSONObject,modelState:String) {
+        group(NOW_NAME)
+        var first=true
+        fun part(name:String) { sub(name,first);first=false }
+        // Recordings that do not come: the status light below already says it, so one line that goes there (not said twice).
+        gapText?.let {
+            part("녹음")
+            body.addView(CallUi.text(a,"녹음이 들어오지 않고 있어요. 아래 지금 상태에서 볼게요 ›",CallUi.BODY,true,CallUi.AMBER).apply {
+                tag="now_gap";isClickable=true;isFocusable=true;background=CallUi.rowRipple();minHeight=CallUi.dp(a,56);gravity=Gravity.CENTER_VERTICAL
+                contentDescription="녹음이 들어오지 않고 있어요. 눌러서 지금 상태 보기"
+                CallUi.onTap(this) { goTo("status_import") } })
+        }
+        setupPart(s)?.let { part("처음 설정");body.addView(it) }
+        firstPass?.let { f -> part("지난 통화 정리");firstPassRows(f) }
+        modelNow=modelInNow(s,modelState)
+        if(modelNow) { part("음성 인식 모델");modelRows(modelState) }
+        if(first) body.addView(CallUi.text(a,"지금 할 일이 없어요. 모두 잘 되고 있어요 ✓",CallUi.BODY,true,CallUi.OK).apply { tag="now_none" })
+    }
+
+    /** First setup, open: "처음 설정 남은 4단계", the next step with its reason right above its one button ([나중에 할게요] for an
+     * optional one), the rest in grey below. Null when every step is answered. */
+    private fun setupPart(s:JSONObject):LinearLayout? {
+        val left=steps(s).filter { !it.done }
+        if(left.isEmpty()) return null
+        val next=left.first();val required=left.count { !it.optional }
+        val c=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;tag=SETUP_TAG }
+        c.addView(CallUi.text(a,"처음 설정 남은 ${left.size}단계"+(if(required==0) " (모두 선택)" else ""),CallUi.BODY,true,if(required>0) CallUi.AMBER else CallUi.INK).apply { tag="setup_count" })
+        c.addView(CallUi.text(a,"다음 할 일: ${next.label}",CallUi.HEADING,true).apply { tag="setup_next_label";setPadding(0,CallUi.dp(a,6),0,0) })
+        if(next.optional) c.addView(CallUi.caption(a,"선택 단계예요. 하지 않아도 이음은 그대로 돌아가요.").apply { tag="setup_optional";setPadding(0,CallUi.dp(a,6),0,0) })
+        // The reason right above the button, in reading size and ink (bold when the overlay list came back unchanged).
+        c.addView(CallUi.text(a,next.reason,CallUi.BODY,next.strong,CallUi.INK).apply { tag="setup_detail";setPadding(0,CallUi.dp(a,8),0,0) })
+        c.addView(CallUi.bigButton(a,"",next.button,next.action).apply { tag="setup_next" })
+        if(next.optional) c.addView(CallUi.linkButton(a,"나중에 할게요") { SetupSkip.skip(a,next.key);refresh() }.apply { tag="setup_later";minHeight=CallUi.dp(a,56);minimumHeight=minHeight },
+            LinearLayout.LayoutParams(-2,-2).apply { marginStart=-CallUi.dp(a,6) })
+        // What waits after it, in grey: the required first, then the optional ones marked so.
+        left.drop(1).forEach { st -> c.addView(CallUi.text(a,st.label+(if(st.optional) " (선택)" else ""),CallUi.BODY,color=CallUi.SUBTLE).apply { setPadding(0,CallUi.dp(a,10),0,0) }) }
+        return c
+    }
+
+    /** 처음 정리 (moved from home): one line in recordings ("녹음 120개 중 59개 남음"), then why it rests or what is left. The
+     * call log's own counts are not shown (user 11/5 22:19: they mean nothing to the person). */
+    private fun firstPassRows(f:HomeScreen.FirstPassView) {
+        val resting=f.lowBattery || f.stalled
+        body.addView(CallUi.text(a,HomeScreen.firstPassWords(f),CallUi.BODY,true,if(resting) CallUi.AMBER else CallUi.INK).apply { tag="first_pass_state";fontFeatureSettings="tnum" })
+        if(resting) {
+            body.addView(CallUi.text(a,"잠시 쉬고 있어요",CallUi.HEADING,true).apply { tag="first_pass_rest" })
+            body.addView(CallUi.text(a,if(f.lowBattery) "충전기에 꽂으면 이어서 정리해요." else "결과가 오면 이어서 정리해요.",CallUi.BODY,true).apply { tag="first_pass_rest_why" })
+            if(f.toTranscribe>0) {
+                val items=mutableListOf(Triple("${f.toTranscribe}","남은 녹음",CallUi.INK));val units=mutableListOf("개")
+                f.audioMinutesLeft?.takeIf { it>0 }?.let { m -> val (n,u)=HomeScreen.roughLength(m);items+=Triple(n,"남은 녹음 시간 (약)",CallUi.INK);units+=u }
+                body.addView(CallUi.stats(a,items,units).apply { tag="first_pass_left" })
+            }
+            if(f.waiting>0) body.addView(CallUi.text(a,"요약을 기다리는 통화 ${f.waiting}건",CallUi.BODY).apply { setPadding(0,CallUi.dp(a,6),0,0) })
+            if(f.lowBattery) body.addView(CallUi.caption(a,"배터리가 절반 넘게 차도 이어서 해요."))
+        } else {
+            val lines=buildList {
+                if(f.toTranscribe>0) f.hoursLeft?.let { h -> add("끝나기까지 약 ${if(h<1) "1시간 안" else "${Math.round(h)}시간"}") }
+                if(f.waiting>0) add("요약을 기다리는 통화 ${f.waiting}건")
+                if(f.toTranscribe==0 && f.waiting==0) add("지난 문자와 메일을 읽고 있어요")
+            }
+            lines.forEach { body.addView(CallUi.text(a,it,CallUi.BODY).apply { setPadding(0,CallUi.dp(a,4),0,0) }) }
+            body.addView(CallUi.caption(a,"10월 1일부터 밀린 통화를 정리하는 중이에요. 오늘 통화는 지금처럼 바로 정리돼요. 충전해 두면 더 빨리 끝나요.").apply { tag="first_pass_note" })
+        }
+        if(!f.mailConnected) body.addView(CallUi.caption(a,"메일을 연결하면 메일도 함께 정리해요. 아래 연결 묶음의 메일에서 연결할 수 있어요.").apply { tag="first_pass_mail" })
+    }
+
+    /** The voice model: "음성 인식 모델 받는 중 42% (241MB / 574MB)" with a bar, following the download every second; [다시 받기] after
+     * a failure, [모델 받기] before it starts. */
+    private fun modelRows(modelState:String) {
+        val part=PipelineModelManager(CallPipelineStartup.storage(a)).partFile
+        val failed=modelState==PipelineModelState.FAILED
+        body.addView(CallUi.text(a,modelWords(modelState,part),CallUi.BODY,true,when { modelState==PipelineModelState.READY -> CallUi.OK;failed -> CallUi.AMBER;else -> CallUi.INK })
+            .apply { tag="model_state";fontFeatureSettings="tnum" })
+        modelPart=part;modelShown=modelState;modelSeen=part.isFile
+        if(modelState==PipelineModelState.DOWNLOADING && part.isFile)
+            body.addView(UpdateViews.bar(a,(part.length()*100/HomeScreen.MODEL_BYTES).toInt().coerceIn(0,99)).apply { tag="model_bar";contentDescription="음성 인식 모델 받기" })
+        if(modelNow) body.addView(CallUi.caption(a,"통화 녹음을 휴대폰 안에서 글자로 바꾸는 데 써요. 한 번만 받아요."))
+        if(modelState!=PipelineModelState.READY && modelState!=PipelineModelState.UNSUPPORTED && modelState!=PipelineModelState.DOWNLOADING)
+            body.addView(button(if(failed) "다시 받기" else "모델 받기") {
+                runCatching { HomeScreen.modelStart(a) };Toast.makeText(a,"음성 인식 모델을 받기 시작해요.",Toast.LENGTH_SHORT).show();refresh()
+            }.apply { tag="model_get" })
     }
 
     /** A switch that shows its own state: changed, it saves [key] and changes only its words (and the status lights), no redraw. */

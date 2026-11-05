@@ -37,17 +37,19 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
         a.home.render(snapshot);return a
     }
 
-    @Test fun homeShowsTodayCardThreeDoorsAndSetupUntilDone() {
+    @Test fun homeShowsTodayCardThreeDoorsAndTheLineUntilSetupIsDone() {
         val a=home(HomeScreen.Snapshot(folder=true,consent=false,model="DOWNLOADING",calls=3,working=1,newTasks=2,due=4,overdue=1,lastAnalyzedMs=0))
         val root=a.window.decorView
-        for(tag in listOf("home_today","home_calls_button","home_tasks_button","home_settings_button","home_setup"))assertNotNull(tag,root.findViewWithTag<View>(tag))
+        // v3.1 r12-6: setup is in settings; home has one line that says so while a required step is left.
+        for(tag in listOf("home_today","home_calls_button","home_tasks_button","home_settings_button","home_attention"))assertNotNull(tag,root.findViewWithTag<View>(tag))
+        assertNull(root.findViewWithTag<View>("home_setup"))
         val all=texts(a).joinToString("\n"){it.text.toString()}
-        assertTrue(all,all.contains("오늘 통화"));assertTrue(all.contains("정리 중 1건"));assertTrue(all.contains("오늘 생긴 체크") && all.contains("남은 체크할 일"));assertTrue(all,all.contains("처음 설정 남은 ") && all.contains("다음 할 일: 정리 동의")) // v3.1: "남은 n단계" and the next step, not "n/10"
+        assertTrue(all,all.contains("오늘 통화"));assertTrue(all.contains("정리 중 1건"));assertTrue(all.contains("오늘 생긴 체크") && all.contains("남은 체크할 일"));assertTrue(all,all.contains("설정에서 확인할 일이 있어요 ›") && !all.contains("처음 설정"))
         assertFalse(all,english.containsMatchIn(all))
         val buttons=views(root).filterIsInstance<Button>().filter{(it.tag as? String)?.startsWith("home_")==true}
         assertTrue(buttons.all{ it.minHeight>=(56*it.resources.displayMetrics.density).toInt() })
         val done=home(HomeScreen.Snapshot(true,true,"READY",0,0,0,0,0,0))
-        assertNull(done.window.decorView.findViewWithTag<View>("home_setup"))
+        assertNull(done.window.decorView.findViewWithTag<View>("home_attention"))
     }
 
     @Test fun mainScreensUseLargeTextAndPlainWords() {

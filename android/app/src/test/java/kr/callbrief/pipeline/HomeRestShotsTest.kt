@@ -17,7 +17,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.annotation.SQLiteMode
 
-/** Pictures of the home screen while 처음 정리 rests (#20), for a person to look at (not a check): runs only when
+/** Pictures of 처음 정리 in settings (r12-6; it was on home) while it rests (#20), for a person to look at (not a check): runs only when
  * IEUM_SHOTS_DIR is set and writes one PNG per state there. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[35],qualifiers="w393dp-h852dp-xxhdpi",shadows=[ShadowTextKeys::class,ShadowTextKeys.ExistingApprovedSettings::class,ShadowTextAtomicFile::class])
@@ -27,17 +27,19 @@ class HomeRestShotsTest:ProtectedTextHostTestBase() {
     private val out=System.getenv("IEUM_SHOTS_DIR")
     private fun idle() { repeat(30) { shadowOf(Looper.getMainLooper()).idle();Thread.sleep(10) } }
     private fun shoot(name:String,f:HomeScreen.FirstPassView) {
-        val a=launchMain(Screen.HOME)
-        // Let the screen's own first read land (it shows the setup card here) before drawing the state to look at.
-        var tries=0
-        while(tries++<100 && a.window.decorView.findViewWithTag<View>("home_setup")==null) idle()
-        idle()
-        a.home.render(HomeScreen.Snapshot(true,true,"READY",2,0,1,0,0,1_793_300_000_000,firstPass=f));idle()
-        val dm=a.resources.displayMetrics;val w=dm.widthPixels;val h=dm.heightPixels
-        val bmp=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888)
-        val page=a.window.decorView
-        page.measure(View.MeasureSpec.makeMeasureSpec(w,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(h,View.MeasureSpec.EXACTLY));page.layout(0,0,w,h);page.draw(Canvas(bmp))
-        java.io.File(out!!).apply { mkdirs() }.resolve("$name.png").outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG,100,it) }
+        // v3.1 r12-6: 처음 정리 is in settings' first group.
+        SettingsScreen.firstPassHook={ f }
+        try {
+            val a=launchMain(Screen.SETTINGS)
+            var tries=0
+            while(tries++<100 && a.window.decorView.findViewWithTag<View>("first_pass_state")==null) idle()
+            idle()
+            val dm=a.resources.displayMetrics;val w=dm.widthPixels;val h=dm.heightPixels
+            val bmp=Bitmap.createBitmap(w,h,Bitmap.Config.ARGB_8888)
+            val page=a.window.decorView
+            page.measure(View.MeasureSpec.makeMeasureSpec(w,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(h,View.MeasureSpec.EXACTLY));page.layout(0,0,w,h);page.draw(Canvas(bmp))
+            java.io.File(out!!).apply { mkdirs() }.resolve("$name.png").outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG,100,it) }
+        } finally { SettingsScreen.firstPassHook=null }
     }
     @Test fun restingOnBattery() {
         assumeTrue("set IEUM_SHOTS_DIR to take the pictures",!out.isNullOrBlank())
