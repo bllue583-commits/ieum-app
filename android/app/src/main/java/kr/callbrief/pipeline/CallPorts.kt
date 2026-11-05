@@ -162,6 +162,21 @@ object PipelineSettingsKeys {
     const val GUARD_STATS="guardStats"
     /** r13-2: the last golden measurement on real recordings, a JSON string of numbers only (heartbeat golden). */
     const val GOLDEN="golden"
+
+    // ---- v3.4 (DESIGN_V4 4절, key commit): names only, each bundle writes its own value. ----
+    /** r14-3: `endedMs` of the hourly routine's self-report (status/last-run-hourly.json) as last read by the results pass;
+     * r14-2's 분석 light compares it with the cron slots. */
+    const val ROUTINE_ENDED_MS="routineEndedMs"
+    /** r14-3: the routine's cron strings as last read from last-run-hourly.json (JSON array of strings), for result timing. */
+    const val ROUTINE_CRONS="routineCrons"
+    /** r14-3: the last update-check error code (heartbeat update.error); empty once a check goes through. */
+    const val UPDATE_ERROR_CODE="updateErrorCode"
+    /** r14-3: mail intake error codes, a JSON object {code: count} (heartbeat messages.mailError). */
+    const val MAIL_ERROR_CODES="mailErrorCodes"
+    /** r14-3: record time diagnosis, a JSON object {bucket: count} of created_ms − started_ms (heartbeat recordTime.fileVsRecordMin). */
+    const val RECORD_TIME="recordTime"
+    /** r14-1: the optional outgoing-call role offer in settings ("거는 전화에 번호를 더 빨리 알기") was dismissed. */
+    const val ROLE_OFFER_SEEN="roleOfferSeen"
 }
 
 /** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets
