@@ -168,8 +168,10 @@ internal class ClaudeCallAnalyzer {
          * 5: the result no longer has siteMemo, companyMemo, companyTrade (the phone never used them; the task keeps the ledger).
          * 6: rules 7, 8, 11 to 16 and 19 say more (how people address each other, more date words, a surname with a title only);
          * the result format is the same as 5, so a 4 or 5 request is answered by the same rules.
-         * 7 (v3.3): no person name in titles, number certainty, `corrected` (misheard names fixed from [이름 목록]). */
-        const val PROMPT_VERSION=7
+         * 7 (v3.3): no person name in titles, number certainty, `corrected` (misheard names fixed from [이름 목록]).
+         * 8 (v3.4, DESIGN_V4 4.3): the rules and the result format are 7's; the routine's way of running changed (a failed pull or
+         * push says "확인 필요: 저장소 접근", 20 items a run, its own self-report file, the watchdog as its last step). */
+        const val PROMPT_VERSION=8
         const val FORMAT=3
         /** Site words the speech recogniser tends to mishear (design C5 [용어]). */
         val TERMS=listOf("타설","양생","레미콘","슬럼프","거푸집","동바리","배근","D10","D13","D16","D19","D22","D25","샵드로잉","기성","내역서","견적서","도면",
@@ -199,11 +201,17 @@ internal class ClaudeCallAnalyzer {
         private val LANDLINE=Regex("(?<!\\d)0(?:2|[3-6]\\d|70)[- ]?\\d{3,4}[- ]?\\d{4}(?!\\d)")
         private val ACCOUNT=Regex("(?<!\\d)\\d{2,6}-\\d{2,6}-\\d{2,8}(?!\\d)")
         private val ISO_DAY=Regex("^(19|20)\\d{2}-\\d{1,2}-\\d{1,2}$")
-        /** Phone and account numbers in a transcript or text replaced by [NUMBER_MASK] (a date like 2026-11-04 stays). */
+        /** v3.4 (DESIGN_V4 4.3-8, D8): a mail address anywhere in a transcript or text ("kim.ms@steel.co.kr", also without a dot
+         * after '@'). The domain starts with a letter, so a unit price "단가 @15,000" or "개당@1,500" stays as content. */
+        private val MAIL_ADDRESS=Regex("[A-Za-z0-9._%+-]+@[A-Za-z][A-Za-z0-9-]*(?:\\.[A-Za-z0-9-]+)*")
+        /** Phone and account numbers in a transcript or text replaced by [NUMBER_MASK] (a date like 2026-11-04 stays), and since
+         * v3.4 mail addresses by [MessageIntake.ADDRESS_MASK] ("[메일 주소]", the mask rule 17 names), first, so the digits of an
+         * address are not half masked. */
         fun maskNumbers(text:String):String {
+            val noMail=MAIL_ADDRESS.replace(text,MessageIntake.ADDRESS_MASK)
             // Phone numbers of every shape first (a 10-digit landline "031 123 4567" too, review 19), then long digit runs and accounts.
             // The landline shape also when a particle sticks to it ("031 123 4567로"), which the phone rule's word edge misses.
-            val phones=LANDLINE.replace(kr.callbrief.core.PrivacyRules.replacePhoneTokens(text,NUMBER_MASK),NUMBER_MASK)
+            val phones=LANDLINE.replace(kr.callbrief.core.PrivacyRules.replacePhoneTokens(noMail,NUMBER_MASK),NUMBER_MASK)
             return ACCOUNT.replace(LONG_NUMBER.replace(phones,NUMBER_MASK)) { m -> if(ISO_DAY.matches(m.value)) m.value else NUMBER_MASK }
         }
         /** A name as it may leave the phone: number-shaped parts gone, any other long number masked; null when nothing is left. */

@@ -8,6 +8,13 @@ Never reads or prints transcripts, names or numbers. Prints a JSON list of {"tit
 --open-issues the plan {"create": [problems], "close": [issue numbers]} the workflow carries out.
 The mailbox token's expiry comes from the phone (heartbeat tokenExpiresMs): only the phone's replies carry
 the github-authentication-token-expiration header; the workflow's own token has none.
+
+v3.4 (DESIGN_V4 4.3-2): it no longer runs in Actions (billing on the private repository stopped it on 11/5). The hourly and
+the tidy routine run it as their last step with --apply OWNER/REPO: it lists the open ieum-watch issues and opens and closes
+issues itself through the REST API (`gh api`), printing "watchdog: n opened, m closed". The self-reports are per routine
+(status/last-run-hourly.json, status/last-run-tidy.json); the old shared status/last-run.json is read only when the new file
+is missing. New rules: the hourly self-report's status commit is missing for two scheduled slots in a row, and a run whose
+result commit did not go up (pushed=false).
 """
 import argparse, json, os, subprocess, sys, time
 
@@ -71,6 +78,131 @@ LONG_CALL_LOW_MS = 24 * HOUR
 HISTORY_MS = 50 * HOUR
 HISTORY_MAX = 200
 
+# v3.4 (DESIGN_V4 4.3-1, 4.3-2): the routine checks itself.
+T_ROUTINE_MISSED = "매시간 분석이 예정 시각에 돌지 않았어요"
+T_NOT_PUSHED = "루틴이 결과를 저장소에 올리지 못했어요"
+LABEL = "ieum-watch"
+MINUTE = 60_000
+# A slot counts once this long has passed since it (a run takes minutes; the scheduler may start it late).
+SLOT_DUE_MS = 40 * MINUTE
+# A status commit from shortly before the slot (a clock a little fast) up to an hour after it is that slot's.
+SLOT_EARLY_MS = 5 * MINUTE
+SLOT_WINDOW_MS = 60 * MINUTE
+SLOTS_MISSED = 2
+SLOT_LOOKBACK_MS = 30 * HOUR
+DEFAULT_CRON = "CRON_TZ=Asia/Seoul 34 7-22 * * *"
+# Fixed offsets only: the routines run in Korea (no daylight saving) or in UTC.
+ZONES_MS = {"Asia/Seoul": 9 * HOUR, "UTC": 0, "Etc/UTC": 0}
+STATUS_FILES = {"hourly": "status/last-run-hourly.json", "tidy": "status/last-run-tidy.json"}
+OLD_STATUS = "status/last-run.json"
+
+
+def cron_field(text, lo, hi):
+    """One cron field ("*", "34", "7-22", "*/30", "4,34", "8-22/2") as a sorted list, or None when it cannot be read."""
+    out = set()
+    for part in text.split(","):
+        step = 1
+        if "/" in part:
+            part, s = part.split("/", 1)
+            if not s.isdigit() or int(s) == 0:
+                return None
+            step = int(s)
+        if part == "*":
+            a, b = lo, hi
+        elif "-" in part:
+            x, y = part.split("-", 1)
+            if not (x.isdigit() and y.isdigit()):
+                return None
+            a, b = int(x), int(y)
+        elif part.isdigit():
+            a = b = int(part)
+        else:
+            return None
+        if a < lo or b > hi or a > b:
+            return None
+        out.update(range(a, b + 1, step))
+    return sorted(out)
+
+
+def parse_cron(text):
+    """{"offset", "minutes", "hours"} of a daily cron like "CRON_TZ=Asia/Seoul 34 7-22 * * *", or None. Day, month and
+    weekday must be "*" (the routines run every day)."""
+    if not isinstance(text, str):
+        return None
+    parts = text.split()
+    offset = 0
+    if parts and parts[0].startswith("CRON_TZ="):
+        zone = parts[0][len("CRON_TZ="):]
+        if zone not in ZONES_MS:
+            return None
+        offset = ZONES_MS[zone]
+        parts = parts[1:]
+    if len(parts) != 5 or parts[2:] != ["*", "*", "*"]:
+        return None
+    minutes, hours = cron_field(parts[0], 0, 59), cron_field(parts[1], 0, 23)
+    if not minutes or not hours:
+        return None
+    return {"offset": offset, "minutes": minutes, "hours": hours}
+
+
+def report_crons(report):
+    """The cron strings a self-report names ("crons" list or the one "cron"), parsed; unreadable ones are left out."""
+    if not isinstance(report, dict):
+        return []
+    raw = report.get("crons") if isinstance(report.get("crons"), list) else [report.get("cron")]
+    return [c for c in (parse_cron(x) for x in raw) if c]
+
+
+def slots(crons, from_ms, to_ms):
+    """Every scheduled time of the crons with from_ms <= t <= to_ms, sorted, without repeats."""
+    out = set()
+    day = 24 * HOUR
+    for c in crons:
+        first = (from_ms + c["offset"]) // day
+        last = (to_ms + c["offset"]) // day
+        for d in range(first, last + 1):
+            for h in c["hours"]:
+                for m in c["minutes"]:
+                    t = d * day - c["offset"] + h * HOUR + m * MINUTE
+                    if from_ms <= t <= to_ms:
+                        out.add(t)
+    return sorted(out)
+
+
+def missed_slots(now_ms, crons, commit_ms):
+    """The last SLOTS_MISSED scheduled slots that are due (SLOT_DUE_MS past), when none of them has a status commit in its
+    window; else []. commit_ms: times of the commits that changed the hourly self-report."""
+    due = slots(crons, now_ms - SLOT_LOOKBACK_MS, now_ms - SLOT_DUE_MS)[-SLOTS_MISSED:]
+    if len(due) < SLOTS_MISSED:
+        return []
+    def kept(s):
+        return any(s - SLOT_EARLY_MS <= t < s + SLOT_WINDOW_MS for t in commit_ms)
+    return [] if any(kept(s) for s in due) else due
+
+
+def kst(ms_value):
+    t = (ms_value + KST_OFFSET_MS) // MINUTE
+    return f"{(t // 60) % 24:02d}:{t % 60:02d}"
+
+
+def routine_rules(now_ms, hourly, tidy, status_commits, add):
+    """v3.4: (1) the hourly self-report's status commit is missing for two scheduled slots in a row (by the cron the report
+    names; the analyze commit is no measure, a quiet day has none); (2) a routine's last result commit did not go up."""
+    # Without any hourly self-report (a repository the routine never wrote to) there is nothing to miss.
+    if status_commits is not None and isinstance(hourly, dict):
+        crons =report_crons(hourly) or [parse_cron(DEFAULT_CRON)]
+        gone = missed_slots(now_ms, crons, status_commits)
+        if gone:
+            last = max(status_commits) if status_commits else 0
+            add(T_ROUTINE_MISSED, f"예정된 매시간 분석 {len(gone)}번({', '.join(kst(s) for s in gone)}, 한국 시각)에 자가 보고 커밋이 없어요 (기준 연속 2번).\n"
+                + (f"마지막 자가 보고 커밋: {hours(now_ms - last)} 전.\n" if last else "자가 보고 커밋을 찾지 못했어요.\n")
+                + "\n추정 원인: 예약 작업이 멈췄거나 일시 중지됐어요, 예약 작업에 저장소 연결이나 push 권한이 없어요, 구독 사용 한도예요. "
+                  "예약 작업의 실행 기록과 마지막 답(\"확인 필요: 저장소 접근\")을 확인해 주세요.")
+    names = [name for name, report in (("매시간 분석", hourly), ("새벽 정리", tidy)) if isinstance(report, dict) and report.get("pushed") is False]
+    if names:
+        add(T_NOT_PUSHED, f"{', '.join(names)}의 마지막 실행이 결과 커밋을 저장소에 올리지 못했어요 (pushed=false).\n\n"
+            "추정 원인: 저장소 push 권한, 충돌이 풀리지 않음, 네트워크예요. 다음 실행이 다시 올리면 저절로 닫혀요.")
+
 
 def held_since(phone, history, pred):
     """Since when pred has held without a break: the heartbeat time (atMs) of the oldest heartbeat in the unbroken run
@@ -112,7 +244,22 @@ def v31_rules(now_ms, phone, last_run, version, version_ms, history, add):
                 + (f"마지막 업데이트 오류 코드: {err}.\n" if err else "")
                 + "\n추정 원인: 설치에 확인이 필요하거나(USER_ACTION_REQUIRED), 이 앱의 앱 설치 허용이 꺼져 있거나(INSTALL_SOURCE_NOT_ALLOWED), "
                   "새 버전 확인이 인터넷 연결을 기다리고 있어요. v3.0 이하에서 v3.1로는 알림을 한 번 눌러야 설치돼요.")
-    # (나) The routine that wrote last-run.json follows an older prompt than the one the app repository published.
+    # (나) A routine's self-report names an older prompt than the one the app repository published (v3.4: each routine's own
+    # report; several behind make one issue).
+    runs = last_run if isinstance(last_run, list) else [last_run]
+    old_bodies = []
+    for report in runs:
+        old_bodies += routine_old(report, version, version_ms)
+    if old_bodies:
+        add(T_ROUTINE_OLD, "\n\n".join(old_bodies))
+    if phone is None:
+        return
+    v31_phone_rules(now_ms, phone, history, add)
+
+
+def routine_old(last_run, version, version_ms):
+    """The (나) sentence for one self-report, as a list of zero or one body."""
+    out = []
     if isinstance(version, dict) and isinstance(last_run, dict):
         routine = last_run.get("routine")
         field = {"hourly": "promptVersion", "tidy": "tidyVersion"}.get(routine)
@@ -127,11 +274,14 @@ def v31_rules(now_ms, phone, last_run, version, version_ms, history, add):
             got = last_run.get("promptVersion")
             got = "" if got is None or isinstance(got, bool) else str(got).strip()
             if got != want:
-                add(T_ROUTINE_OLD, f"{'매시간 분석' if routine == 'hourly' else '새벽 정리'} 루틴이 보고한 지시문 버전은 "
+                out.append(f"{'매시간 분석' if routine == 'hourly' else '새벽 정리'} 루틴이 보고한 지시문 버전은 "
                     f"{w_code(got) or '없음'}인데 지금 앱 저장소의 지시문은 {w_code(want)}이에요.\n\n"
                     f"해야 할 일: docs/routines/{routine}.md 의 \"---\" 다음 전문을 그 루틴(예약 작업)에 다시 붙여넣어 주세요.")
-    if phone is None:
-        return
+    return out
+
+
+def v31_phone_rules(now_ms, phone, history, add):
+    """(다) to (마): the rules that read the heartbeat (at most 12 hours old)."""
 
     # (다) Phone state permission off for 24 hours (only heartbeats that carry permissions, v3.1 on).
     def phone_state_off(h):
@@ -239,10 +389,13 @@ def with_causes(text, phone, now_ms):
     return text + ("\n\n마지막 하트비트 기준:\n" + "\n".join("- " + x for x in c) if c else "")
 
 
-def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count, version=None, version_ms=None, history=None):
-    """phone / last_run: dict or None (file missing). inbox_oldest_ms: epoch ms of the oldest waiting request or None.
+def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count, version=None, version_ms=None, history=None, tidy_run=None,
+             status_commits=None):
+    """phone / last_run: dict or None (file missing); last_run is the hourly routine's self-report (v3.4), tidy_run the tidy's.
+    inbox_oldest_ms: epoch ms of the oldest waiting request or None.
     version: app/version.json (dict or None), version_ms: when it last changed (commit time). history: earlier heartbeats
-    (dicts) of about the last two days, for the rules that need a value to hold for a while."""
+    (dicts) of about the last two days, for the rules that need a value to hold for a while. status_commits: times (ms) of
+    the commits that changed the hourly self-report in about the last day, or None to skip the missed-slot rule."""
     out = []
 
     def add(title, body):
@@ -327,7 +480,8 @@ def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count, version=None
             add(T_UPDATE, f"앱 업데이트가 실패했어요. 코드: {err}\n앱 버전: {phone.get('appVersion', '?')}\n\n추정 원인: 설치 권한, 저장 공간, 서명 불일치예요.")
 
     fresh = phone if phone is not None and now_ms - ms(phone, "atMs") <= OLD_VERSION_FRESH_MS else None
-    v31_rules(now_ms, fresh, last_run, version, version_ms, history, add)
+    v31_rules(now_ms, fresh, [last_run, tidy_run], version, version_ms, history, add)
+    routine_rules(now_ms, last_run, tidy_run, status_commits, add)
 
     if inbox_oldest_ms is not None:
         # Counted in the routine's hours only (07:00 to 23:00 KST): six missed 30-minute runs and more.
@@ -433,21 +587,91 @@ def phone_history(root, now_ms, rel="status/phone.json"):
     return out
 
 
-def main(argv=None):
+def status_reports(root):
+    """(hourly, tidy) self-reports: each routine's own file (v3.4), else the old shared status/last-run.json when its routine
+    field names that routine (the transition until both routines run prompt v8)."""
+    old = read_json(os.path.join(root, OLD_STATUS))
+    out = []
+    for routine in ("hourly", "tidy"):
+        r = read_json(os.path.join(root, STATUS_FILES[routine]))
+        if r is None and isinstance(old, dict) and old.get("routine") == routine:
+            r = old
+        out.append(r)
+    return out[0], out[1]
+
+
+def commit_times_ms(root, rels, since_ms):
+    """Times (ms) of the commits since since_ms that changed any of rels; None when the history cannot be read."""
+    try:
+        r = subprocess.run(["git", "log", f"--since=@{since_ms // 1000}", "--format=%ct", "--", *rels],
+                           cwd=root, capture_output=True, text=True, check=True)
+        return [int(x) * 1000 for x in r.stdout.split()]
+    except (subprocess.SubprocessError, ValueError, OSError):
+        return None
+
+
+def gh_api(args):
+    """One REST call through the GitHub CLI (`gh api ...`): (exit code, stdout)."""
+    try:
+        r = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=60)
+        return r.returncode, r.stdout
+    except (subprocess.SubprocessError, OSError):
+        return 1, ""
+
+
+def apply_plan(repo, problems, gh=gh_api, label=LABEL):
+    """What watchdog.yml did, through the REST API (v3.4: the routine runs it). Lists the open issues with the label, makes the
+    plan, opens one issue per new problem and closes those whose problem is gone. Returns (plan, opened, closed); raises
+    RuntimeError when the open issues cannot be listed (nothing is opened then: a second copy of every issue would follow)."""
+    code, out = gh(["-X", "GET", f"repos/{repo}/issues", "-f", f"labels={label}", "-f", "state=open", "-f", "per_page=100"])
+    try:
+        listed = json.loads(out) if code == 0 else None
+    except ValueError:
+        listed = None
+    if not isinstance(listed, list):
+        raise RuntimeError("cannot list open issues")
+    open_issues = [{"number": i.get("number"), "title": i.get("title")} for i in listed if isinstance(i, dict) and "pull_request" not in i]
+    p = plan(problems, open_issues)
+    opened = closed = 0
+    if p["create"]:
+        gh(["-X", "POST", f"repos/{repo}/labels", "-f", f"name={label}", "-f", "color=D93F0B", "-f", "description=ieum watchdog"])  # already there: fine
+    for x in p["create"]:
+        c, _ = gh(["-X", "POST", f"repos/{repo}/issues", "-f", f"title={x['title']}", "-f", f"body={x['body']}", "-f", f"labels[]={label}"])
+        opened += c == 0
+    for num in p["close"]:
+        gh(["-X", "POST", f"repos/{repo}/issues/{num}/comments", "-f", "body=정상으로 돌아왔어요."])
+        c, _ = gh(["-X", "PATCH", f"repos/{repo}/issues/{num}", "-f", "state=closed"])
+        closed += c == 0
+    return p, opened, closed
+
+
+def main(argv=None, gh=gh_api):
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=".")
     ap.add_argument("--now-ms", type=int, default=int(time.time() * 1000))
     ap.add_argument("--open-issues", default="", help="JSON file of open watchdog issues ([{number, title}]); output becomes a plan")
+    ap.add_argument("--apply", default="", metavar="OWNER/REPO",
+                    help="list the open issues and open and close issues with `gh api` (v3.4, run by the routines); output is the plan")
     ap.add_argument("--out", default="-")
     a = ap.parse_args(argv)
     files = inbox_files(a.root)
     times = [t for t in (commit_time_ms(a.root, f"inbox/{f}") for f in files) if t]
-    problems = evaluate(a.now_ms, read_json(os.path.join(a.root, "status/phone.json")), read_json(os.path.join(a.root, "status/last-run.json")),
+    hourly, tidy = status_reports(a.root)
+    commits = commit_times_ms(a.root, [STATUS_FILES["hourly"], OLD_STATUS], a.now_ms - SLOT_LOOKBACK_MS - HOUR)
+    problems = evaluate(a.now_ms, read_json(os.path.join(a.root, "status/phone.json")), hourly,
                         min(times) if times else None, len(files),
                         version=read_json(os.path.join(a.root, "app/version.json")), version_ms=last_commit_ms(a.root, "app/version.json"),
-                        history=phone_history(a.root, a.now_ms))
+                        history=phone_history(a.root, a.now_ms), tidy_run=tidy, status_commits=commits)
     result = problems
-    if a.open_issues:
+    summary = None
+    if a.apply:
+        try:
+            result, opened, closed = apply_plan(a.apply, problems, gh)
+        except RuntimeError:
+            print("watchdog: cannot list open issues (gh api); nothing opened")
+            return 1
+        summary = f"watchdog: {opened} opened, {closed} closed"
+    elif a.open_issues:
         with open(a.open_issues, encoding="utf-8") as f:
             result = plan(problems, json.load(f))
     text = json.dumps(result, ensure_ascii=False)
@@ -456,6 +680,8 @@ def main(argv=None):
     else:
         with open(a.out, "w", encoding="utf-8") as f:
             f.write(text)
+    if summary:
+        print(summary)
     return 0
 
 

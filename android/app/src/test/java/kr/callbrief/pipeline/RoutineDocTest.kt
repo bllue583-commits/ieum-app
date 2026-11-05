@@ -99,6 +99,27 @@ class RoutineDocTest {
         assertTrue(text.contains("\"promptVersion\": 6도 폰이 업데이트되기 전의 과도기 요청"))
         // The routine never logs a transcript.
         assertTrue(text.contains("\"loggedTranscript\":false"));assertTrue(text.contains("`loggedTranscript`: 자막이나 문자 원문을 출력하거나 로그에 남기지 않았으므로 항상 `false`"))
+        // v8 (DESIGN_V4 4.3-1, 4.3-2, 4.3-7): the failure path, 20 items a run, its own self-report with repoOk and pushed, the
+        // watchdog as the last step through gh api, the company rename edit; request version 7 is a hand-over one.
+        val prompt=text.substringAfter("\n---\n")
+        listOf("\"확인 필요: 저장소 접근\"","`git pull`이 실패하면","결과를 만드는 항목은 20건까지","status/last-run-hourly.json","\"repoOk\":true","\"pushed\":true",
+            "python3 tools/watchdog.py --root . --apply bllue583-commits/ieum-inbox","\"확인 필요: 감시 이슈 n건\"","renameCompany({\"from\",\"to\"}",
+            "\"promptVersion\": 7도 과도기 요청","과도기 버전 4, 5, 6, 7은 제외").forEach { assertTrue(it,prompt.contains(it)) }
+        assertFalse("hourly no longer writes the shared file",prompt.contains("`status/last-run.json`을 새로 써서"))
+        // v3.3's rules for the merge edits stay.
+        listOf("mergePeople({\"from\",\"into\"}","unmergePeople({\"from\",\"into\"}","keepApart").forEach { assertTrue(it,prompt.contains(it)) }
+    }
+
+    /** v8 (DESIGN_V4 4.3): the tidy routine's own self-report, the failure path, the number rule for rewrites and the watchdog. */
+    @Test fun tidyV6KeepsItsOwnReportAndTheNumbers() {
+        val text=File(doc().parentFile,"tidy.md").readText()
+        val prompt=text.substringAfter("\n---\n")
+        listOf("status/last-run-tidy.json","\"repoOk\":true","\"pushed\":true","\"확인 필요: 저장소 접근\"","renameCompany({\"from\",\"to\"}",
+            "원래 제목의 숫자(금액, 수량, 규격, 회차, 날짜)를 하나도 바꾸거나 빼거나 더하지 않고","폰은 제목의 숫자가 달라진 다시 쓰기를 거부한다",
+            "python3 tools/watchdog.py --root . --apply bllue583-commits/ieum-inbox",
+            "mergePeople({\"from\",\"into\"}","unmergePeople({\"from\",\"into\"}","keepApart","한 쌍은 [남겨 둔 체크할 일 id, 비슷한 일을 냈다가 빠진 기록 key]이다").forEach { assertTrue(it,prompt.contains(it)) }
+        assertFalse("tidy no longer writes the shared file",prompt.contains("`status/last-run.json`을 새로 써서"))
+        assertTrue(text.contains("지시문 버전 6\n"))
     }
 
     /** v3.1: the watchdog compares the routine's self-reported promptVersion with version.json's tidyVersion (the head line), so the
@@ -129,8 +150,8 @@ class RoutineDocTest {
     }
 
     private companion object {
-        /** The version docs/routines/hourly.md is at (v7: DESIGN_V4 3.2-3, r13-2). */
-        const val DOC_VERSION=7
+        /** The version docs/routines/hourly.md is at (v7: DESIGN_V4 3.2-3, r13-2; v8: DESIGN_V4 4.3, r14-3, same rules and format). */
+        const val DOC_VERSION=8
         /** True once ClaudeCallAnalyzer (r13-1's file) carries the doc's version (the orchestrator's integration step). */
         val codeAtDocVersion get()=ClaudeCallAnalyzer.PROMPT_VERSION>=DOC_VERSION
         /** Both routines find the inbox repository the same way. */

@@ -355,5 +355,169 @@ class V31RulesTest(unittest.TestCase):
             self.assertEqual(3, len(w.phone_history(root, NOW)))
 
 
+M = w.MINUTE
+# NOW is 17:00 KST; the day's 00:00 KST:
+KST_MIDNIGHT = NOW - 17 * H
+
+
+def at(hh, mm, day=0):
+    return KST_MIDNIGHT + day * DAY + hh * H + mm * M
+
+
+class V34RoutineTest(unittest.TestCase):
+    """DESIGN_V4 4.3-1, 4.3-2: per-routine self-reports, the missed-slot rule, pushed=false, and --apply through `gh api`."""
+
+    def test_now_is_five_in_the_afternoon_kst(self):
+        self.assertEqual("17:00", w.kst(NOW))
+
+    def test_parse_cron(self):
+        c = w.parse_cron("CRON_TZ=Asia/Seoul 34 7-22 * * *")
+        self.assertEqual({"offset": 9 * H, "minutes": [34], "hours": list(range(7, 23))}, c)
+        self.assertEqual([4, 34], w.parse_cron("CRON_TZ=Asia/Seoul 4,34 8-22 * * *")["minutes"])
+        self.assertEqual([0, 30], w.parse_cron("*/30 7-22 * * *")["minutes"])
+        self.assertEqual(0, w.parse_cron("*/30 7-22 * * *")["offset"])
+        for bad in (None, "", "x", "34 7-22 * * 1-5", "CRON_TZ=Mars/Base 34 7 * * *", "61 7 * * *", "34 25 * * *", "34 9-7 * * *", 34):
+            self.assertIsNone(w.parse_cron(bad), bad)
+
+    def test_slots_follow_the_cron_in_kst(self):
+        crons = [w.parse_cron(w.DEFAULT_CRON)]
+        self.assertEqual([at(14, 34), at(15, 34), at(16, 34)], w.slots(crons, at(14, 0), NOW))
+        # Night: nothing between 22:34 and the next 07:34.
+        self.assertEqual([at(22, 34), at(7, 34, 1)], w.slots(crons, at(22, 0), at(7, 40, 1)))
+        two = [w.parse_cron("CRON_TZ=Asia/Seoul 34 7-22 * * *"), w.parse_cron("CRON_TZ=Asia/Seoul 4 8-22 * * *")]
+        self.assertEqual([at(15, 4), at(15, 34), at(16, 4), at(16, 34)], w.slots(two, at(15, 0), NOW))
+
+    def run_rules(self, commits, hourly=None, now=NOW, tidy=None):
+        hourly = {"routine": "hourly", "processed": 1, "cron": w.DEFAULT_CRON, "pushed": True} if hourly is None else hourly
+        return [p["title"] for p in w.evaluate(now, phone(atMs=now - H, lastDiscoveryMs=now - H), hourly, None, 0, tidy_run=tidy, status_commits=commits)]
+
+    def test_two_slots_in_a_row_without_a_status_commit(self):
+        # At 17:00 the due slots are 14:34 and 15:34 (16:34 is under 40 minutes old).
+        self.assertEqual([], self.run_rules([at(15, 36)]))
+        self.assertEqual([], self.run_rules([at(14, 37)]))  # one of the two kept: not two in a row
+        self.assertEqual([w.T_ROUTINE_MISSED], self.run_rules([at(13, 36)]))
+        self.assertEqual([w.T_ROUTINE_MISSED], self.run_rules([]))
+        body = w.evaluate(NOW, phone(), {"routine": "hourly", "cron": w.DEFAULT_CRON}, None, 0, status_commits=[at(13, 36)])[0]["body"]
+        self.assertIn("14:34, 15:34", body)
+        self.assertIn("저장소 접근", body)
+        # A commit more than an hour after the slot is not that slot's.
+        self.assertEqual([w.T_ROUTINE_MISSED], self.run_rules([at(13, 33), at(16, 40)]))
+        # A commit a little before the slot (a fast clock) counts.
+        self.assertEqual([], self.run_rules([at(15, 31)]))
+
+    def test_the_night_is_no_miss(self):
+        # 07:10 next morning: the last two slots are 21:34 and 22:34 of the evening before.
+        morning = at(7, 10, 1)
+        self.assertEqual([], self.run_rules([at(22, 36)], now=morning))
+        self.assertEqual([w.T_ROUTINE_MISSED], self.run_rules([at(20, 36)], now=morning))
+        body = w.evaluate(morning, phone(atMs=morning - H, lastDiscoveryMs=morning - H),{"routine": "hourly", "cron": w.DEFAULT_CRON}, None, 0,
+                          status_commits=[at(20, 36)])[0]["body"]
+        self.assertIn("21:34, 22:34", body)
+
+    def test_the_report_cron_and_a_second_cron(self):
+        # Every 30 minutes (4.3-6): at 17:00 the due slots are 15:34 and 16:04.
+        two = {"routine": "hourly", "crons": ["CRON_TZ=Asia/Seoul 34 7-22 * * *", "CRON_TZ=Asia/Seoul 4 8-22 * * *"]}
+        self.assertEqual([], self.run_rules([at(16, 6)], hourly=two))
+        self.assertEqual([w.T_ROUTINE_MISSED], self.run_rules([at(15, 0)], hourly=two))
+        # An unreadable cron falls back to minute 34, 07 to 22.
+        self.assertEqual([], self.run_rules([at(15, 36)], hourly={"routine": "hourly", "cron": "매시간"}))
+
+    def test_no_history_or_no_report_says_nothing(self):
+        self.assertEqual([], self.run_rules(None))
+        self.assertEqual([], [p["title"] for p in w.evaluate(NOW, phone(), None, None, 0, status_commits=[])])
+
+    def test_pushed_false(self):
+        self.assertEqual([w.T_NOT_PUSHED], self.run_rules([at(15, 36)], hourly={"routine": "hourly", "cron": w.DEFAULT_CRON, "pushed": False}))
+        got = w.evaluate(NOW, phone(), {"routine": "hourly", "pushed": False}, None, 0, tidy_run={"routine": "tidy", "pushed": False})
+        self.assertEqual([w.T_NOT_PUSHED], [p["title"] for p in got])
+        self.assertIn("매시간 분석, 새벽 정리", got[0]["body"])
+        # Before v8 there is no such field: nothing.
+        self.assertEqual([], self.run_rules([at(15, 36)], hourly={"routine": "hourly", "cron": w.DEFAULT_CRON}))
+
+    def test_both_routines_behind_make_one_issue(self):
+        v = {"versionCode": 1040, "promptVersion": "8", "tidyVersion": "6"}
+        got = w.evaluate(NOW, phone(), {"routine": "hourly", "processed": 1, "promptVersion": "7"}, None, 0, version=v,
+                         tidy_run={"routine": "tidy", "processed": 1, "promptVersion": "5"})
+        self.assertEqual([w.T_ROUTINE_OLD], [p["title"] for p in got])
+        self.assertIn("hourly.md", got[0]["body"])
+        self.assertIn("tidy.md", got[0]["body"])
+        ok = w.evaluate(NOW, phone(), {"routine": "hourly", "processed": 1, "promptVersion": "8"}, None, 0, version=v,
+                        tidy_run={"routine": "tidy", "processed": 1, "promptVersion": "6"})
+        self.assertEqual([], ok)
+
+    def write(self, root, rel, data):
+        os.makedirs(os.path.dirname(os.path.join(root, rel)), exist_ok=True)
+        with open(os.path.join(root, rel), "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
+    def test_each_routine_reads_its_own_file_then_the_old_one(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual((None, None), w.status_reports(root))
+            self.write(root, "status/last-run.json", {"routine": "tidy", "promptVersion": "5"})
+            self.assertEqual((None, {"routine": "tidy", "promptVersion": "5"}), w.status_reports(root))
+            self.write(root, "status/last-run.json", {"routine": "hourly", "promptVersion": "7"})
+            self.assertEqual(({"routine": "hourly", "promptVersion": "7"}, None), w.status_reports(root))
+            self.write(root, "status/last-run-tidy.json", {"routine": "tidy", "promptVersion": "6"})
+            self.write(root, "status/last-run-hourly.json", {"routine": "hourly", "promptVersion": "8"})
+            self.assertEqual(({"routine": "hourly", "promptVersion": "8"}, {"routine": "tidy", "promptVersion": "6"}), w.status_reports(root))
+
+    class FakeGh:
+        def __init__(self, issues, list_ok=True):
+            self.issues, self.list_ok, self.calls = issues, list_ok, []
+
+        def __call__(self, args):
+            self.calls.append(args)
+            if args[:2] == ["-X", "GET"]:
+                return (0, json.dumps(self.issues)) if self.list_ok else (1, "")
+            return 0, "{}"
+
+    def test_apply_opens_and_closes_through_the_rest_api(self):
+        gh = self.FakeGh([{"number": 7, "title": w.T_TOKEN}, {"number": 9, "title": w.T_PHONE, "pull_request": {}}])
+        problems = [{"title": w.T_ROUTINE_MISSED, "body": "b1"}]
+        p, opened, closed = w.apply_plan("o/r", problems, gh)
+        self.assertEqual({"create": problems, "close": [7]}, p)  # a pull request is no issue
+        self.assertEqual((1, 1), (opened, closed))
+        self.assertEqual(["-X", "GET", "repos/o/r/issues", "-f", "labels=ieum-watch", "-f", "state=open", "-f", "per_page=100"], gh.calls[0])
+        self.assertIn(["-X", "POST", "repos/o/r/issues", "-f", f"title={w.T_ROUTINE_MISSED}", "-f", "body=b1", "-f", "labels[]=ieum-watch"], gh.calls)
+        self.assertIn(["-X", "PATCH", "repos/o/r/issues/7", "-f", "state=closed"], gh.calls)
+        # An issue already open for the problem: nothing, not even a comment.
+        gh2 = self.FakeGh([{"number": 3, "title": w.T_ROUTINE_MISSED}])
+        self.assertEqual(({"create": [], "close": []}, 0, 0), w.apply_plan("o/r", problems, gh2))
+        self.assertEqual(1, len(gh2.calls))
+        # The open issues cannot be listed: nothing is opened (it would make a second copy of each).
+        gh3 = self.FakeGh([], list_ok=False)
+        with self.assertRaises(RuntimeError):
+            w.apply_plan("o/r", problems, gh3)
+        self.assertEqual(1, len(gh3.calls))
+
+    def test_cli_apply_in_a_repository(self):
+        with tempfile.TemporaryDirectory() as root:
+            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@e", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@e")
+            subprocess.run(["git", "init", "-q", root], check=True)
+
+            def commit(rel, data, at_ms):
+                self.write(root, rel, data)
+                stamp = f"@{at_ms // 1000} +0000"
+                e = dict(env, GIT_AUTHOR_DATE=stamp, GIT_COMMITTER_DATE=stamp)
+                subprocess.run(["git", "-C", root, "add", rel], check=True, env=e)
+                subprocess.run(["git", "-C", root, "commit", "-q", "-m", "status", "--", rel], check=True, env=e)
+
+            commit("status/phone.json", phone(), NOW - H)
+            commit("status/last-run-hourly.json", {"routine": "hourly", "processed": 0, "cron": w.DEFAULT_CRON, "pushed": True}, at(12, 36))
+            commit("status/last-run-tidy.json", {"routine": "tidy", "processed": 3, "pushed": True}, at(6, 10))
+            gh = self.FakeGh([])
+            out = os.path.join(root, "plan.json")
+            self.assertEqual(0, w.main(["--root", root, "--now-ms", str(NOW), "--apply", "o/r", "--out", out], gh=gh))
+            with open(out, encoding="utf-8") as f:
+                self.assertEqual([w.T_ROUTINE_MISSED], [p["title"] for p in json.load(f)["create"]])
+            # The 15:34 run reports: the issue closes on the next run.
+            commit("status/last-run-hourly.json", {"routine": "hourly", "processed": 1, "cron": w.DEFAULT_CRON, "pushed": True}, at(15, 37))
+            gh = self.FakeGh([{"number": 4, "title": w.T_ROUTINE_MISSED}])
+            self.assertEqual(0, w.main(["--root", root, "--now-ms", str(NOW), "--apply", "o/r", "--out", out], gh=gh))
+            with open(out, encoding="utf-8") as f:
+                self.assertEqual({"create": [], "close": [4]}, json.load(f))
+            self.assertEqual(1, w.main(["--root", root, "--now-ms", str(NOW), "--apply", "o/r", "--out", out], gh=self.FakeGh([], list_ok=False)))
+
+
 if __name__ == "__main__":
     unittest.main()
