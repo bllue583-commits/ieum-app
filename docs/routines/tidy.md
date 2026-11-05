@@ -59,7 +59,7 @@ v2.6(11/5): state의 tasks에 rev, state에 mergeCandidates가 실린다. 6번�
 마지막 단계(자가 보고). 모든 처리가 끝나면 (처리할 것이 없었어도, 일부가 실패했어도 항상) `status/last-run.json`을 새로 써서, 장부와 같은 커밋에 넣어라(정리할 것이 없었으면 이 파일만 커밋 "status"로 push한다). 파일이 이미 있으면 통째로 덮어쓴다. 형식은 아래 한 줄 JSON이다.
 
 ```json
-{"routine":"tidy","startedMs":0,"endedMs":0,"processed":0,"skipped":0,"failed":0,"batches":0,"model":"","limitHit":false,"ledgerRev":0,"promptVersion":"","promptMismatch":false,"loggedTranscript":false}
+{"routine":"tidy","startedMs":0,"endedMs":0,"processed":0,"skipped":0,"failed":0,"batches":0,"model":"","limitHit":false,"ledgerRev":0,"promptVersion":"5","promptMismatch":false,"loggedTranscript":false}
 ```
 
 - `routine`: 이 작업은 `tidy`.
