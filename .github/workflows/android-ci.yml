@@ -79,6 +79,8 @@ jobs:
           python3 tools/prepare_host_tests.py robolectric-jar/android-all.jar
       - name: JVM tests and lint
         id: gradle
+        env:
+          IEUM_SHOTS_DIR: ${{ github.workspace }}/evidence/shots # v3.4 (r14-4): card and home pictures from the host tests
         run: |
           export ANDROID_SDK_ROOT="$ANDROID_HOME"
           python3 run_gradle.py --log ci-gradle.log :core:test :app:testDebugUnitTest :app:lintDebug
@@ -112,5 +114,6 @@ jobs:
           retention-days: 7
           path: |
             evidence/ci-gradle.log
+            evidence/shots/*.png
             android/**/build/test-results/**/*.xml
             android/app/build/reports/lint-results-debug.*
