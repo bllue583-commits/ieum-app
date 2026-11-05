@@ -1220,7 +1220,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     /** Start of the earliest stored text ("sms:") or mail ("mail:") record, or null. */
     fun earliestMessage(prefix:String):Long? =rows("SELECT MIN(started_ms) AS m FROM call_records WHERE recording_id LIKE ?","$prefix%").single().long("m")
 
-    data class FirstPassProgress(val toTranscribe:Int,val bytesLeft:Long,val bytesPerMinute:Long?,val waiting:Int,val unrecorded:Int)
+    data class FirstPassProgress(val toTranscribe:Int,val bytesLeft:Long,val bytesPerMinute:Long?,val waiting:Int,val unrecorded:Int,
+                                 /** v3.1 r12-6: recordings to turn into text in all, done or not (skipped ones aside), for settings' line. */
+                                 val recordings:Int=0)
     /** What is left before the consolidation: recordings since 10/1 without a transcript yet, and old records waiting for
      * their summary. [start] is the first-pass start; "old" is more than [FirstPass.LIVE_DAYS] days before now (r7-1), so a
      * record from before the start that is still in the live window goes one at a time and is not counted here. */
@@ -1232,7 +1234,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         val rate=rows("""SELECT SUM(r.byte_count) AS b,SUM(c.duration_ms) AS d FROM call_records c JOIN recordings r ON r.recording_id=c.recording_id
             WHERE c.duration_ms>0 AND r.byte_count>0""").single().let { val b=it.long("b") ?: 0;val d=it.long("d") ?: 0;if(b>0 && d>=60_000) b*60_000/d else null }
         val waiting=(rows("SELECT COUNT(*) AS n FROM call_records WHERE state IN ('TRANSCRIBED','WAITING_CONSENT') AND COALESCE(started_ms,created_ms)<CAST(? AS INTEGER)",old).single().long("n") ?: 0).toInt()
-        return FirstPassProgress((jobs?.long("n") ?: 0).toInt(),jobs?.long("b") ?: 0,rate,waiting,unrecordedCalls())
+        val all=if(jobs==null) 0 else (rows("SELECT COUNT(*) AS n FROM call_transcription_jobs WHERE state<>'SKIPPED'").single().long("n") ?: 0).toInt()
+        return FirstPassProgress((jobs?.long("n") ?: 0).toInt(),jobs?.long("b") ?: 0,rate,waiting,unrecordedCalls(),all)
     }
 
     // ---- 상대 카드 (r9-2, ContactCards): read only ------------------------------------------------------------------

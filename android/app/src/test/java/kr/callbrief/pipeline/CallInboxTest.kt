@@ -47,6 +47,31 @@ class CallInboxTest:ProtectedTextHostTestBase() {
     private fun runner(inbox:CallInboxStore,consent:Boolean=true)=CallRecordAnalysisRunner(context,ClaudeCallAnalyzer(),
         { JSONObject().put(PipelineSettingsKeys.CONSENT_GRANTED,consent) },{ now },inbox)
 
+    /** v3.2 (DESIGN_V4 2-1): the result pass keeps story/today.json in settings, leaves the file where it is, and a missing
+     * file (GitHub's 404) changes nothing and stops nothing. */
+    @Test fun theResultPassKeepsTodaysStoryAndAMissingOneIsQuiet() {
+        val kept=JSONObject()
+        fun runner(inbox:CallInboxStore)=CallRecordAnalysisRunner(context,ClaudeCallAnalyzer(),
+            { JSONObject(kept.toString()).put(PipelineSettingsKeys.CONSENT_GRANTED,true) },{ now },inbox,save={ edit -> edit(kept) })
+        // No story yet: GitHub answers 404, which the store turns into an exception; the pass still ends well.
+        val missing=object:CallInboxStore by FakeInbox() {
+            override fun get(path:String):String { if(path==CallInbox.STORY) throw ClaudeCallException("INBOX_HTTP_404");return FakeInbox().get(path) }
+        }
+        assertTrue(runner(missing).runPending())
+        assertFalse(kept.has(PipelineSettingsKeys.STORY))
+        val inbox=FakeInbox()
+        inbox.files[CallInbox.STORY]="""{"day":"2026-11-05","text":"아침에 철근 단가를 다시 보기로 했어요.","calls":2,"atMs":1}"""
+        assertTrue(runner(inbox).runPending())
+        val story=JSONObject(kept.getString(PipelineSettingsKeys.STORY))
+        assertEquals("2026-11-05",story.getString("day"));assertEquals(2,story.getInt("calls"))
+        assertEquals("아침에 철근 단가를 다시 보기로 했어요.",story.getString("text"))
+        assertTrue("the task writes over it; the phone never deletes it",inbox.files.containsKey(CallInbox.STORY))
+        // A broken file leaves the kept story alone.
+        inbox.files[CallInbox.STORY]="not json"
+        assertTrue(runner(inbox).runPending())
+        assertEquals(story.toString(),kept.getString(PipelineSettingsKeys.STORY))
+    }
+
     @Test fun sendsOnceThenAppliesResultAndCleansUp() {
         val text=ClaudeCallAnalyzerTest.TRANSCRIPT
         val t=CallTranscript("rec1",1,"a".repeat(64),now,125_000,"김과장",text,listOf(CallTranscript.Segment(0,5000,text)),"m","b".repeat(64),true)

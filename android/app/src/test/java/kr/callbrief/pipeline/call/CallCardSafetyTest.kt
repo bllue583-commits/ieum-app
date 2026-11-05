@@ -186,32 +186,33 @@ class CallCardSafetyTest:ProtectedTextHostTestBase() {
 
     // ---- the setup card again when the permission goes ----
     @Test fun theOverlayPermissionGoneBringsTheSetupStepBack() {
-        // Home reads the permission itself every time it is entered (no remembered "done"): allowed, the step folds away.
+        // Settings reads the permission itself every time it is entered (no remembered "done"): allowed, the step folds away.
+        // v3.1 r12-6: first setup is in settings' first group, not on home.
         ShadowSettings.setCanDrawOverlays(true)
         assertTrue(kr.callbrief.pipeline.CallCardAsk.overlayAllowed(app))
         val step="통화 화면 위에 이음 카드 보기"
         fun setupText(a:android.app.Activity):String? {
             var t:String?=null
             repeat(400) { shadowOf(Looper.getMainLooper()).idle()
-                val c=a.window.decorView.findViewWithTag<View>("home_setup");if(c!=null) { t=texts(c).joinToString("\n");return t };Thread.sleep(10) }
+                val c=a.window.decorView.findViewWithTag<View>(kr.callbrief.pipeline.SettingsScreen.SETUP_TAG);if(c!=null) { t=texts(c).joinToString("\n");return t };Thread.sleep(10) }
             return t
         }
-        val a=launchMain(Screen.HOME)
+        val a=launchMain(Screen.SETTINGS)
         val before=setupText(a)
         assertNotNull("other steps are still open on the host",before)
         assertFalse(before,before!!.contains(step))
-        // Turned off in the phone's settings: back in the app, the step is open again.
+        // Turned off in the phone's settings: back in the app, the step is there again.
         ShadowSettings.setCanDrawOverlays(false)
-        a.home.enter()
+        a.settings.enter()
         var after=""
         repeat(400) { shadowOf(Looper.getMainLooper()).idle();after=setupText(a).orEmpty();if(after.contains(step)) return@repeat;Thread.sleep(10) }
         assertTrue(after,after.contains(step))
-        // The same in the rendered card for a phone with every other step done.
+        // Home never shows the step itself: an optional step left is no line there either.
         val all=HomeScreen.Snapshot(folder=true,consent=true,model="READY",calls=0,working=0,newTasks=0,due=0,overdue=0,lastAnalyzedMs=0)
-        a.home.render(all);assertNull(a.window.decorView.findViewWithTag<View>("home_setup"))
-        a.home.render(all.copy(overlay=false))
-        val one=texts(a.window.decorView.findViewWithTag<View>("home_setup")).joinToString("\n")
-        assertTrue(one,one.contains(step) && one.contains("처음 설정 남은 1단계"))
+        val home=launchMain(Screen.HOME)
+        repeat(100) { shadowOf(Looper.getMainLooper()).idle() }
+        home.home.render(all.copy(overlay=false))
+        assertNull(home.window.decorView.findViewWithTag<View>("home_setup"));assertNull(home.window.decorView.findViewWithTag<View>("home_attention"))
     }
 
     private fun views(v:View):List<View> =listOf(v)+if(v is ViewGroup)(0 until v.childCount).flatMap { views(v.getChildAt(it)) } else emptyList()

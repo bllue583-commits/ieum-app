@@ -8,6 +8,7 @@ import android.widget.EditText
 import android.widget.TextView
 import kr.callbrief.IeumApplication
 import kr.callbrief.ProtectedTextHostTestBase
+import kr.callbrief.SecureSettings
 import kr.callbrief.ShadowTextAtomicFile
 import kr.callbrief.ShadowTextKeys
 import org.junit.After
@@ -50,7 +51,7 @@ class ScreensHomeCallsTest:ProtectedTextHostTestBase() {
         assertFalse(all.contains("새 체크"));assertFalse(all.contains("오늘 체크할 일"))
         assertEquals("오늘 통화 3건을 정리하고 있어요",(tag(a,"home_memos_none") as TextView).text.toString())
         val none=home(HomeScreen.Snapshot(true,true,"READY",0,0,0,0,0,0))
-        assertEquals("오늘은 아직 정리된 통화가 없어요",(tag(none,"home_memos_none") as TextView).text.toString())
+        assertEquals("오늘은 아직 정리된 통화가 없어요",(tag(none,"home_story_none") as TextView).text.toString())
     }
 
     @Test fun homeCountsCallsLikeTheCallListAndShowsTodaysChecksFirst() {
@@ -78,19 +79,26 @@ class ScreensHomeCallsTest:ProtectedTextHostTestBase() {
 
     @Test fun modelLineNeverWaitsForWifi() {
         // v3.1 (user 11/5 18:27): the model comes on any connection; the line shows the percent and the sizes, never "Wi-Fi".
-        val a=home(HomeScreen.Snapshot(folder=true,consent=true,model="",calls=0,working=0,newTasks=0,due=0,overdue=0,lastAnalyzedMs=0))
-        assertEquals("음성 인식 모델을 받기 시작해요 (574MB)",(tag(a,"home_model_detail") as TextView).text.toString())
+        // r12-6: it is in settings, not on home (the model only coming is nothing to do, so home has no line for it).
+        SecureSettings(app).update { it.put(PipelineSettingsKeys.CONSENT_GRANTED,true).put(PipelineSettingsKeys.MODEL_STATE,"") }
+        val a=launchMain(Screen.SETTINGS);settle { tag(a,"model_state")!=null }
+        assertEquals("음성 인식 모델을 받기 시작해요 (574MB)",(tag(a,"model_state") as TextView).text.toString())
+        assertEquals("음성 인식 모델 받는 중 42% (241MB / 574MB)",HomeScreen.modelLine(PipelineModelState.DOWNLOADING,241_100_000L))
         val coming=home(HomeScreen.Snapshot(folder=true,consent=true,model="DOWNLOADING",calls=0,working=0,newTasks=0,due=0,overdue=0,lastAnalyzedMs=0,modelPercent=42,modelBytes=241_100_000L))
-        assertEquals("음성 인식 모델 받는 중 42% (241MB / 574MB)",(tag(coming,"home_model_detail") as TextView).text.toString())
-        assertTrue(texts(coming).none { it.contains("Wi-Fi") })
+        assertNull(tag(coming,"home_model"));assertNull(tag(coming,"home_attention"))
+        assertTrue(texts(coming).none { it.contains("Wi-Fi") || it.contains("음성 인식 모델") })
     }
 
     @Test fun notificationsRefusedTwiceOpenTheNotificationSettings() {
         assertFalse(NotifyAsk.allowed(app))
         NotifyAsk.noteResult(app,false);assertFalse("once refused, Android still asks",NotifyAsk.blocked(app))
         NotifyAsk.noteResult(app,false);assertTrue(NotifyAsk.blocked(app))
-        val a=home(HomeScreen.Snapshot(folder=true,consent=true,model="READY",calls=0,working=0,newTasks=0,due=0,overdue=0,lastAnalyzedMs=0,notify=false,notifyBlocked=true))
-        val button=tag(a,"home_setup_next") as TextView
+        // r12-6: first setup is in settings; with folder, consent, call log, call state and battery done, notifications are next.
+        SecureSettings(app).update { it.put("treeUri","content://host/tree/call").put(PipelineSettingsKeys.CONSENT_GRANTED,true).put(PipelineSettingsKeys.MODEL_STATE,"READY") }
+        shadowOf(app).grantPermissions(android.Manifest.permission.READ_CALL_LOG,android.Manifest.permission.READ_PHONE_STATE)
+        shadowOf(app.getSystemService(android.os.PowerManager::class.java)).setIgnoringBatteryOptimizations(app.packageName,true)
+        val a=launchMain(Screen.SETTINGS);settle { tag(a,"setup_next")!=null }
+        val button=tag(a,"setup_next") as TextView
         assertEquals("알림 설정 열기",button.text.toString())
         button.performClick()
         val opened=shadowOf(a).nextStartedActivity
@@ -98,8 +106,8 @@ class ScreensHomeCallsTest:ProtectedTextHostTestBase() {
         assertEquals(app.packageName,opened.getStringExtra(android.provider.Settings.EXTRA_APP_PACKAGE))
         // Allowed after all: the count starts again.
         NotifyAsk.noteResult(app,true);assertEquals(0,NotifyAsk.refusals(app))
-        val asks=home(HomeScreen.Snapshot(folder=true,consent=true,model="READY",calls=0,working=0,newTasks=0,due=0,overdue=0,lastAnalyzedMs=0,notify=false))
-        assertEquals("알림 허용하기",(tag(asks,"home_setup_next") as TextView).text.toString())
+        val asks=launchMain(Screen.SETTINGS);settle { tag(asks,"setup_next")!=null }
+        assertEquals("알림 허용하기",(tag(asks,"setup_next") as TextView).text.toString())
     }
 
     // ---- calls ----

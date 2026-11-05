@@ -102,6 +102,8 @@ internal object CallInbox {
     const val LEDGER="ledger/ledger.json";const val EDITS="ledger/edits"
     /** The morning tidy (design: 새벽 정리): what the phone sends it once a night, and what it proposes back. */
     const val TIDY_STATE="tidy/state.json";const val TIDY_PROPOSAL="tidy/proposal.json"
+    /** v3.2 (r12-6): today's call story, written over by the hourly task; the phone only reads it, never deletes it. */
+    const val STORY="story/today.json"
     /** A record as the task and the ledger know it: a hash of its id, so no number or name shows. */
     fun recordKey(recordId:String)="r_"+fileName(recordId).take(24)
     fun batchName(firstMs:Long,recordIds:List<String>)=OLD+"%013d-".format(firstMs)+fileName(recordIds.joinToString("|")).removeSuffix(".json").take(16)+".json"
