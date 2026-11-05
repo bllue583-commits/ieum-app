@@ -84,7 +84,7 @@ class PhoneStatusHealthTest {
     /** Design 3.6 item 2: the new heartbeat fields, null when the phone does not know yet; counts and codes only. */
     @Test fun watchFieldsAreThereAndHoldNoContent() {
         val keys=listOf("newQueuedCount","newOldestQueuedMs","oldQueuedCount","lastDiscoveryAttemptMs","lastDiscoveryOutcome","inventoryTruncated",
-            "heldUnsupported","dbPercent","updateAvailableCode","updateReadySinceMs","callLogMatch","dbOpenMs","homeReadMs","resultChain")
+            "heldUnsupported","dbPercent","updateAvailableCode","updateReadySinceMs","callLogMatch","dbOpenMs","homeReadMs","resultChain","callCard")
         val empty=PhoneStatus.build(base())
         for(k in keys) assertTrue(k,empty.has(k))
         for(k in keys.drop(3)) assertTrue(k,empty.isNull(k))
@@ -102,6 +102,14 @@ class PhoneStatusHealthTest {
         assertEquals(45L,o.getLong("dbOpenMs"));assertEquals(320L,o.getLong("homeReadMs"))
         // r10-3: the result chain's round and next run.
         val chain=o.getJSONObject("resultChain");assertEquals(4,chain.getInt("round"));assertEquals(1_234L,chain.getLong("nextMs"))
+        // r11-3: the call card's counts (settings CARD_STATS), numbers only, whatever else was stored there.
+        val stats=org.json.JSONObject().put(PipelineSettingsKeys.CARD_STATS,org.json.JSONObject().put("shown",7).put("noPermission",3).put("noNumber",1)
+            .put("noCard",2).put("day",20261105).put("today",org.json.JSONObject().put("noPermission",3)).put("010-1111-2222","김"))
+        val card=PhoneStatus.build(base().copy(watch=PhoneStatus.Watch(callCard=kr.callbrief.pipeline.call.CardStats.heartbeat(stats)))).getJSONObject("callCard")
+        assertEquals(7,card.getInt("shown"));assertEquals(3,card.getInt("noPermission"));assertEquals(1,card.getInt("noNumber"));assertEquals(2,card.getInt("noCard"))
+        assertEquals(20261105,card.getInt("day"));assertEquals(3,card.getJSONObject("today").getInt("noPermission"));assertEquals(0,card.getJSONObject("today").getInt("shown"))
+        assertFalse(card.toString(),card.toString().contains("010") || Regex("[가-힣]").containsMatchIn(card.toString()))
+        assertNull("nothing counted yet",kr.callbrief.pipeline.call.CardStats.heartbeat(org.json.JSONObject()))
         val ended=PhoneStatus.build(base().copy(watch=PhoneStatus.Watch(resultChainRound=0))).getJSONObject("resultChain")
         assertEquals(0,ended.getInt("round"));assertTrue(ended.isNull("nextMs"))
         val m=o.getJSONObject("callLogMatch")

@@ -161,7 +161,7 @@ class UiV2Test:ProtectedTextHostTestBase() {
     @Test fun statusLightsJudgeEachLine() {
         val ok=StatusLights.Input(now=100L*3_600_000,folderConnected=true,modelState="READY",consent=true)
         assertTrue(StatusLights.lights(ok).all { it.ok && it.words=="정상" })
-        assertEquals(listOf("녹음 가져오기","글자로 바꾸기","통화 정리","알림","업데이트"),StatusLights.lights(ok).map { it.label })
+        assertEquals(listOf("녹음 가져오기","글자로 바꾸기","통화 정리","알림","업데이트","통화 카드"),StatusLights.lights(ok).map { it.label })
         fun bad(i:StatusLights.Input,tag:String)=StatusLights.lights(i).single { !it.ok }.also { assertEquals(tag,it.tag) }.words
         assertTrue(bad(ok.copy(folderConnected=false),"status_import").contains("폴더"))
         assertTrue(bad(ok.copy(modelState="FAILED"),"status_transcribe").contains("모델"))

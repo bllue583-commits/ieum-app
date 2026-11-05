@@ -3,7 +3,7 @@ package kr.callbrief.pipeline
 import android.content.Context
 import org.json.JSONObject
 
-/** The five lights of settings "지금 상태" (design B5): 녹음 가져오기, 글자로 바꾸기, 통화 정리, 알림, 업데이트.
+/** The lights of settings "지금 상태" (design B5): 녹음 가져오기, 글자로 바꾸기, 통화 정리, 알림, 업데이트, and (v3.0) 통화 카드.
  * Each is green ("정상") or amber with the reason and one thing the user can do, in a single sentence. Never red. */
 internal object StatusLights {
     /** [target]: the tag of the settings group the words point to ("group_연결"), so pressing the line can scroll there; null
@@ -13,6 +13,7 @@ internal object StatusLights {
     const val GROUP_CONNECT="group_연결"
     const val GROUP_SUMMARY="group_정리"
     const val GROUP_STATUS="group_상태와 도움"
+    const val GROUP_CARD="group_통화 카드"
     /** Everything the lights are judged from; all of it is read from settings, permissions and the store already on the phone. */
     data class Input(
         val now:Long,
@@ -32,7 +33,11 @@ internal object StatusLights {
         val folderReadable:Boolean=folderConnected,val lastDiscoveryMs:Long=now,
         val oldestQueuedMs:Long?=null,
         /** Since when a downloaded newer version waits to be installed (0: none or unknown). */
-        val updateReadySinceMs:Long=0)
+        val updateReadySinceMs:Long=0,
+        /** v3.0 r11-3 (design 7.2): the call card may be drawn over other apps ([cardOverlay]), the call state may be read
+         * ([phoneState], READ_PHONE_STATE: without it no call is seen), the optional call redirection role is held or this
+         * phone has none ([cardRole]), and either card switch is on ([cardOn]). */
+        val cardOverlay:Boolean=true,val phoneState:Boolean=true,val cardRole:Boolean=true,val cardOn:Boolean=true)
 
     const val TRANSCRIBE_LATE_MS=6*3_600_000L
     const val ANALYZE_LATE_MS=3*3_600_000L
@@ -78,7 +83,21 @@ internal object StatusLights {
         val analyzeTarget=if(!i.consent) GROUP_SUMMARY else GROUP_STATUS
         val transcribeTarget=if(i.modelState=="UNSUPPORTED") null else GROUP_STATUS
         return listOf(light("status_import","녹음 가져오기",import,GROUP_CONNECT),light("status_transcribe","글자로 바꾸기",transcribe,transcribeTarget),
-            light("status_analyze","통화 정리",analyze,analyzeTarget),light("status_notify","알림",notify),light("status_update","업데이트",update,GROUP_STATUS))
+            light("status_analyze","통화 정리",analyze,analyzeTarget),light("status_notify","알림",notify),light("status_update","업데이트",update,GROUP_STATUS),
+            card(i))
+    }
+
+    /** "통화 카드" (v3.0 r11-3): amber without the overlay permission (fixed in the 통화 카드 group) or without the call state
+     * (fixed in 연결, where 전화 상태 허용 is). The role for calls that go out is optional: green, and the words say so. */
+    private fun card(i:Input):Light {
+        val label="통화 카드";val tag="status_card"
+        return when {
+            !i.cardOn -> Light(tag,label,true,"전화 올 때와 걸 때 모두 꺼 두었어요.")
+            !i.cardOverlay -> Light(tag,label,false,"통화 화면 위에 카드를 띄울 수 없어요. 위 통화 카드 묶음에서 카드 보기를 허용해 주세요.",GROUP_CARD)
+            !i.phoneState -> Light(tag,label,false,"전화가 오는 걸 알 수 없어 카드가 뜨지 않아요. 위 연결 묶음에서 전화 상태를 허용해 주세요.",GROUP_CONNECT)
+            !i.cardRole -> Light(tag,label,true,"전화가 오면 카드가 떠요. 거는 전화에도 보려면 위 통화 카드 묶음에서 허용해 주세요.",GROUP_CARD)
+            else -> Light(tag,label,true,OK)
+        }
     }
 
     // ---- what the lights, the heartbeat and the self-check read from the store (one place, so they agree) ----

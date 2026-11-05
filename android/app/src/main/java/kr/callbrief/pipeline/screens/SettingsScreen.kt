@@ -380,7 +380,11 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
             w?.lateLive ?: 0,w?.failed ?: (counts[CallRecordStore.FAILED] ?: 0),w?.oldestLateMs,s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),
             s.optString(PipelineSettingsKeys.LAST_UPDATE_ERROR),CallUpdate.ready(a)!=null,
             folderReadable=folderReadable,lastDiscoveryMs=s.optLong(kr.callbrief.AutomaticRecordingDiscovery.LAST_DISCOVERY_MS,0L),
-            oldestQueuedMs=w?.queue?.oldestMs,updateReadySinceMs=s.optLong(PhoneStatus.UPDATE_READY_SINCE_MS,0L))
+            oldestQueuedMs=w?.queue?.oldestMs,updateReadySinceMs=s.optLong(PhoneStatus.UPDATE_READY_SINCE_MS,0L),
+            cardOverlay=CallCardAsk.overlayAllowed(a),
+            phoneState=a.checkSelfPermission(android.Manifest.permission.READ_PHONE_STATE)==android.content.pm.PackageManager.PERMISSION_GRANTED,
+            cardRole=!CallCardAsk.roleAvailable(a) || CallCardAsk.roleHeld(a),
+            cardOn=s.optBoolean(PipelineSettingsKeys.CARD_INCOMING,true) || s.optBoolean(PipelineSettingsKeys.CARD_OUTGOING,true))
         card.removeAllViews()
         card.addView(CallUi.text(a,"지금 상태",CallUi.HEADING,true).apply { setPadding(0,0,0,CallUi.dp(a,4)) })
         // A light that names a group of this page goes there when it is pressed (review #24).

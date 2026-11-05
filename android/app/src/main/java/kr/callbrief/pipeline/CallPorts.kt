@@ -118,6 +118,9 @@ object PipelineSettingsKeys {
     const val CARD_UNKNOWN="cardUnknown"
     /** Where the user dragged the card (r11-2 writes it); absent: the design's place (38% down the screen). */
     const val CARD_POS_Y="cardPosY"
+    /** r11-3: how often the call card showed and why not, once per call ([kr.callbrief.pipeline.call.CardStats]): a JSON object
+     * {"shown","noPermission","noNumber","noCard","day"(KST yyyymmdd),"today":{the four}}; the heartbeat's callCard. */
+    const val CARD_STATS="cardStats"
 }
 
 /** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets

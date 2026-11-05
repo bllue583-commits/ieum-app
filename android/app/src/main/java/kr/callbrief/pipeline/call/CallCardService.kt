@@ -82,7 +82,10 @@ class CallCardService:Service() {
          * background), the card is shown directly and the start is tried again once it is up. */
         fun follow(context:Context,snap:CallSession.Snapshot) {
             val app=context.applicationContext ?: context
-            val show=runCatching { wanted(app,snap) }.getOrDefault(false)
+            val verdict=runCatching { verdict(app,snap) }.getOrNull()
+            val show=verdict==SHOW
+            // r11-3: calls dropped here never reach the card, so they are counted here (once per call, see CardStats).
+            runCatching { stats(app,snap,verdict.takeIf { it!=SHOW }) }
             if(!active && !show && !driver.shown) return
             val intent=Intent(app,CallCardService::class.java).putExtra(EXTRA_STATE,snap.state.name).putExtra(EXTRA_SHOW,show)
             if(!active && snap.state==CallSession.State.IDLE) {
@@ -101,17 +104,26 @@ class CallCardService:Service() {
 
         /** Whether this call shows a card: not ignored, not IDLE, the number known, the switch for its direction on (calls that
          * go out also need the role), and a card for the number or the switch for numbers without one. */
-        internal fun wanted(context:Context,snap:CallSession.Snapshot):Boolean {
-            if(snap.ignored || snap.state==CallSession.State.IDLE) return false
-            val key=snap.phoneKey ?: return false
-            val s=runCatching { SecureSettings(context).snapshot() }.getOrNull() ?: return false
+        internal fun wanted(context:Context,snap:CallSession.Snapshot):Boolean=verdict(context,snap)==SHOW
+
+        /** [wanted] with the reason when not (r11-3, for [CardStats]): [SHOW]; [CallCardOverlay.NO_NUMBER] (the switch is on but
+         * the number is not known); [CallCardOverlay.NO_CARD] (no card for the number and numbers without one are off); null
+         * when no card is meant to show at all (IDLE, a personal or excluded number, the switch off, going out without the role). */
+        internal fun verdict(context:Context,snap:CallSession.Snapshot):String? {
+            if(snap.ignored || snap.state==CallSession.State.IDLE) return null
+            val s=runCatching { SecureSettings(context).snapshot() }.getOrNull() ?: return null
             val on=when(snap.direction) {
                 CallSession.Direction.OUT -> s.optBoolean(PipelineSettingsKeys.CARD_OUTGOING,true) && runCatching { roleHeld(context) }.getOrDefault(false)
                 else -> s.optBoolean(PipelineSettingsKeys.CARD_INCOMING,true)
             }
-            if(!on) return false
-            return runCatching { hasCard(context,key) }.getOrDefault(false) || s.optBoolean(PipelineSettingsKeys.CARD_UNKNOWN,false)
+            if(!on) return null
+            val key=snap.phoneKey ?: return CallCardOverlay.NO_NUMBER
+            return if(runCatching { hasCard(context,key) }.getOrDefault(false) || s.optBoolean(PipelineSettingsKeys.CARD_UNKNOWN,false)) SHOW
+                else CallCardOverlay.NO_CARD
         }
+        internal const val SHOW="show"
+        /** Counts what the service decided ([CardStats.follow]). Replaceable in host tests. */
+        @Volatile internal var stats:(Context,CallSession.Snapshot,String?)->Unit={ c,snap,reason -> CardStats.follow(c,snap,reason) }
 
         /** Without READ_PHONE_STATE the phone cannot be asked: then the call counts as over (the service ends, no card stays). */
         private fun telecomInCall(context:Context):Boolean {
@@ -129,6 +141,7 @@ class CallCardService:Service() {
             active=false;card=Overlay;inCall=::telecomInCall;roleHeld=::redirectionRoleHeld;clock={ System.currentTimeMillis() }
             hasCard={ c,k -> ContactCards.get(c,k)!=null };mainHandler=null
             startService={ c,i -> c.startForegroundService(i) }
+            stats={ c,snap,reason -> CardStats.follow(c,snap,reason) }
             driver.reset()
         }
     }

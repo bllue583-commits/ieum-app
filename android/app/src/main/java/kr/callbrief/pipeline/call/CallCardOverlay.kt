@@ -60,8 +60,9 @@ internal object CallCardOverlay {
 
     /** Why a card did or did not show, for r11-3's `CARD_STATS` (callCard:{shown,noPermission,noNumber,noCard}). */
     const val SHOWN="shown";const val NO_PERMISSION="noPermission";const val NO_NUMBER="noNumber";const val NO_CARD="noCard"
-    /** Told once per call: [SHOWN], [NO_PERMISSION] (shown as a notice instead), [NO_NUMBER] or [NO_CARD]. r11-3 may set it. */
-    @Volatile var outcome:(Context,String)->Unit={ _,_ -> }
+    /** Told once per call: [SHOWN], [NO_PERMISSION] (shown as a notice instead), [NO_NUMBER] or [NO_CARD]. r11-3: counted in
+     * [CardStats] (settings CARD_STATS, the heartbeat's callCard). */
+    @Volatile var outcome:(Context,String)->Unit={ c,w -> CardStats.record(c,w) }
 
     // Replaceable in host tests.
     @Volatile internal var canDraw:(Context)->Boolean={ Settings.canDrawOverlays(it) }
@@ -293,6 +294,6 @@ internal object CallCardOverlay {
         view=null;params=null;noticeUp=false;forgetCall()
         state=CallSession.State.IDLE;app=null
         canDraw={ Settings.canDrawOverlays(it) };locked={ c -> c.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked==true }
-        latestText=::storeText;outcome={ _,_ -> }
+        latestText=::storeText;outcome={ c,w -> CardStats.record(c,w) }
     }
 }
