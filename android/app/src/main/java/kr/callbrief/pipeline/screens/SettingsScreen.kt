@@ -53,6 +53,10 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
     private val pickFolder get()=a.pickFolder
     private val askSms get()=a.askSms
     private val askCallLog get()=a.askCallLog
+    /** v2.9 r10-1: the call state question from the 연결 group. */
+    private val askPhoneState=a.registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok ->
+        ReadingPermission.noteResult(a,android.Manifest.permission.READ_PHONE_STATE,ok);if(live()) enter()
+    }
     private fun settings()=SecureSettings(CallPipelineStartup.storage(a))
     private fun store()=kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(a))
 
@@ -226,6 +230,17 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         val log=a.checkSelfPermission(android.Manifest.permission.READ_CALL_LOG)==android.content.pm.PackageManager.PERMISSION_GRANTED
         body.addView(CallUi.text(a,if(log) "허용됨 ✓  녹음과 통화기록을 맞춰 상대 번호를 찾아요." else "통화기록을 읽도록 허용하면 녹음과 맞춰 상대 번호와 녹음 없는 통화를 찾아요.",CallUi.BODY,log,if(log) CallUi.OK else CallUi.INK).apply { tag="call_log_state" })
         if(!log) readingButton(android.Manifest.permission.READ_CALL_LOG,"통화기록",askCallLog,"call_log_allow")
+
+        sub("통화 끝 알아차리기")
+        val phone=a.checkSelfPermission(android.Manifest.permission.READ_PHONE_STATE)==android.content.pm.PackageManager.PERMISSION_GRANTED
+        body.addView(CallUi.text(a,if(phone) "허용됨 ✓  통화가 끝나면 바로 정리를 시작해요." else "허용하면 통화가 끝나자마자 녹음을 찾아 정리를 시작해요. 통화 내용은 듣지 않고, 전화가 끝났는지만 알아요.",
+            CallUi.BODY,phone,if(phone) CallUi.OK else CallUi.INK).apply { tag="phone_state_state" })
+        if(!phone) {
+            if(ReadingPermission.blocked(a,android.Manifest.permission.READ_PHONE_STATE)) {
+                body.addView(CallUi.text(a,"허용 창이 다시 뜨지 않아요. 앱 정보의 권한에서 전화 항목을 허용해 주세요.",CallUi.CAPTION,color=CallUi.SUBTLE))
+                body.addView(button("앱 정보 열기") { ReadingPermission.openAppInfo(a) }.apply { tag="phone_state_allow" })
+            } else body.addView(button("전화 상태 허용") { ReadingPermission.markAsked(a,android.Manifest.permission.READ_PHONE_STATE);askPhoneState.launch(android.Manifest.permission.READ_PHONE_STATE) }.apply { tag="phone_state_allow" })
+        }
 
         sub("메일")
         mailGroup(s)
