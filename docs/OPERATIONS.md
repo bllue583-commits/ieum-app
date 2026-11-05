@@ -14,7 +14,7 @@
 
 우편함은 비공개 저장소 `bllue583-commits/ieum-inbox`이다. 앱 저장소는 `bllue583-commits/ieum-app`이다.
 
-## 2. 예약 작업 세 개 (11/4 밤 기준, 소스 ieum-inbox, 알림 켬)
+## 2. 예약 작업 세 개 (11/6 기준, 소스 ieum-app·ieum-inbox, 알림 켬)
 
 | 이름 | 시각(한국) | 모델 | 지시문 원본 | 기억 파일 | 하는 일 |
 |---|---|---|---|---|---|
@@ -22,7 +22,8 @@
 | 이음 새벽 정리 (매일) | 05:16 | Opus 5.5 | `docs/routines/tidy.md`(v6)의 "---" 아래 | `tidy/project.md`, `tidy/history/YYYY-MM.md`, `tidy/briefing.md`, 자가 보고 `status/last-run-tidy.json` | 진행 중인 일 묶기, 팔로업 제안, 중복 합치기, 현황 파일과 다섯 줄 알림. 폰이 처음 정리를 끝낸 뒤 밤에 올리는 `tidy/state.json`이 있어야 일을 한다(그 전에는 "정리할 것 없음"이 정상) |
 | 이음 통화 목록 검증 (매일) | 09:00 | Opus 5.5 | 예약 작업 프롬프트가 원본 | `status/verify-log.md`(숫자만) | 폰 통화기록(`status/calllog.txt`)과 저장·분석 결과 대조, 검증 파일과 다섯 줄 알림 |
 
-- 지시문을 바꿀 때: 이 저장소의 원본 파일을 먼저 고친다 → 예약 작업 프롬프트에 "---" 아래 전문을 붙여 넣는다 → 이름, 시각, 링크를 사용자에게 알린다. 매시간 지시문의 [분석 규칙]과 [결과 형식]은 앱 코드(`ClaudeCallAnalyzer.SYSTEM`, `SCHEMA`)와 같아야 하며 `RoutineDocTest`가 검사한다. 규칙을 바꾸면 `ClaudeCallAnalyzer.PROMPT_VERSION`과 지시문 버전을 함께 올린다.
+- 예약 작업 프롬프트(11/6부터)는 짧은 안내다: ieum-inbox를 pull(실패하면 "확인 필요: 저장소 접근"만 답함) → 우편함의 `routines/hourly.md`(또는 `routines/tidy.md`)를 읽고 첫 "---" 아래를 지시문으로 따른다. ID는 매시간 `trig_016vQxos9z6p1pdPJ28MjrsV`, 새벽 `trig_01Sp6piuvasw52ZR1KPupumB`, 검증 `trig_01KyuDNZWkmrQpJj8e8cr661`.
+- 지시문을 바꿀 때: 이 저장소의 원본 파일(`docs/routines/*.md`)을 고치고 배포한다. release-apk가 version.json보다 먼저 우편함 `routines/`와 `tools/watchdog.py`에 바뀐 것만 올린다. 배포 없이 급히 바꿀 때만 우편함 `routines/`에 직접 커밋한다. 매시간 지시문의 [분석 규칙]과 [결과 형식]은 앱 코드(`ClaudeCallAnalyzer.SYSTEM`, `SCHEMA`)와 같아야 하며 `RoutineDocTest`가 검사한다. 규칙을 바꾸면 `ClaudeCallAnalyzer.PROMPT_VERSION`과 지시문 버전을 함께 올린다.
 - 실행 확인: claude.ai의 예약 작업 화면에서 실행 기록을 본다. 실행 로그에는 통화 내용이 남지 않게 지시돼 있다. 빈 실행은 "새 기록 없음" 한 줄로 끝나는 것이 정상이다.
 - 우편함에서 확인: 매시간 작업이 처리하면 커밋 "analyze N calls", 새벽 정리는 "tidy"가 생기고, 어느 경우든(할 일이 없었어도) 그 뒤에 자가 보고만 담은 "status" 커밋이 따로 생긴다(매시간 `status/last-run-hourly.json`, 새벽 `status/last-run-tidy.json`). 루틴이 저장소에 닿지 못하면 처리하지 않고 "확인 필요: 저장소 접근"으로 답하고 끝난다. 예약 작업 알림은 "확인 필요" 답일 때만 의미가 있다.
 - 종단 시험: 앱 저장소의 `inbox-e2e`를 수동 실행(또는 그 파일 push)하면 `inbox/selftest-<번호>.json`을 넣고, 매시 40분(07:40~23:40)에 결과를 폰과 같은 파서로 검증한 뒤 지운다. 예약 작업은 이 요청으로 장부를 고치지 않고, 폰은 `selftest-` 결과를 무시한다.

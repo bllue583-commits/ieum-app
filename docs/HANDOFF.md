@@ -1,7 +1,8 @@
-# 이음 앱 인수인계 (2026-11-05 밤 기준, v3.1 배포)
+# 이음 앱 인수인계 (2026-11-06 새벽 기준, v3.4 배포)
 
 > 다음 세션은 이 파일부터 읽고 "4-3. v2.0"과 "6. 다음 할 일"부터 진행하세요. 설계도(Claude Docs)가 기준이며, 모든 변경은 설계도를 먼저 고친 뒤 개발합니다(11/4 사용자: "모든 과정에서 설계도를 철저히 반영").
 > 앱의 목적·기능·UX 설계 상세는 [PRODUCT.md](PRODUCT.md)에 있습니다.
+> **11/6 새벽 (Opus 오케스트레이션, 이 세션 마무리): v3.2 수정판·v3.3·v3.4를 lean-calls에 합쳐 배포(4-11~4-13).** 설계는 DESIGN_V4 2-1~2-3(v3.2), 3절(v3.3, 다르게 정한 것 3.5), 4절(v3.4, 다르게 정한 것 4.6). 예약 작업은 짧은 안내 프롬프트가 ieum-inbox `routines/hourly.md`·`tidy.md`를 읽는 방식으로 바꿨고, release-apk가 배포 때마다 `docs/routines/*.md`와 `tools/inbox/watchdog.py`를 우편함에 올린다(3절 표). 다음 세션은 **6절**부터.
 > **11/5 밤 (Opus 오케스트레이션): v3.1 「스스로 말하는 이음」 lean-calls에 합쳐 배포(4-10).** 묶음 r12-1~r12-5 모두 Opus 작업자, 통합 `feature/r12-v31` ad03b16, 전체 단위 시험 582건·lint 통과. 아내 폰은 11/5 18:43 하트비트 기준 아직 v2.4(1033) — 손 설치 안내함(DESIGN_V4 1.4). 다음은 6절.
 > **11/5 저녁 (Fable 평가 세션 종료 → 다음 세션이 v3.1부터 개발):** v3.0을 Opus 검토자 넷 + 설계 검토자로 평가해 **[DESIGN_V4.md](DESIGN_V4.md)**(v3.0 평가, v3.1~v3.3 설계)를 썼다. 다음 세션은 **6절 → DESIGN_V4.md 0절(착수 조건)·1.4절(사용자 할 일)·2절(v3.1 묶음 r12-1~r12-5)** 순으로 읽고 시작한다. 사용자 결정(11/5 18:26): 새 버전 확인·다운로드와 **Whisper 모델(570MB) 다운로드 모두 네트워크 종류 무관**(Wi-Fi 조건·스위치 없음, "무조건"), 앱 열 때 즉시, 진행 상황을 설정·홈에 표시(DESIGN_V4 2.2-5). 아내 폰은 아직 v2.4(1033)이며 "업데이트 눌러도 안 됨"은 v2.4가 Wi-Fi에서만 APK를 받기 때문 — Wi-Fi에서 앱을 열어 두라고 안내함.
 > **11/5 오후 (Opus): v3.0 lean-calls에 합쳐 배포(4-9).** v2.6~v3.0 모두 배포. 다음은 아내 폰 권한 확인과 저장소 비공개 복귀(6절).
@@ -48,7 +49,7 @@
 |---|---|
 | 앱 저장소 | `github.com/bllue583-commits/ieum-app` (비공개), 작업 브랜치 `feature/lean-calls` |
 | 우편함 저장소 | `github.com/bllue583-commits/ieum-inbox` (비공개) — `inbox/`, `results/`, `app/version.json`, 릴리스 APK |
-| 예약 작업(루틴) | 세 개(매시간 분석 `trig_01WhkNFfBvGYvgaraXKuwL5K` 매시 30분 Sonnet 5.5, 새벽 정리 `trig_01BJ7psN5c92FCshDpqF6maz` 05:16 Opus 5.5, 통화 목록 검증 `trig_01KyuDNZWkmrQpJj8e8cr661` 09:00 Opus 5.5), 소스 ieum-inbox. 상세와 기억 파일은 "4-4"의 표와 OPERATIONS.md 2절. 옛 루틴 셋은 지움. 루틴 추가·수정은 사용자 승인됨(11/4), 바꿀 때마다 이름, 실행 시각, 링크를 사용자에게 알리고 이 표와 OPERATIONS.md를 고칠 것 |
+| 예약 작업(루틴) | 세 개(11/6 기준): 매시간 분석 `trig_016vQxos9z6p1pdPJ28MjrsV` 매시 34분 07~22시 Sonnet 5.5, 새벽 정리 `trig_01Sp6piuvasw52ZR1KPupumB` 05:16 Opus 5.5, 통화 목록 검증 `trig_01KyuDNZWkmrQpJj8e8cr661` 09:00 Opus 5.5. 앞의 둘은 11/6 이 세션에서 다시 만듦(옛 것은 ieum-inbox 연결이 빠져 17시부터 분석 0건, 사용자가 옛 것 삭제). **프롬프트는 짧은 안내뿐이고 지시문은 ieum-inbox `routines/hourly.md`·`routines/tidy.md`(원본 `docs/routines/`, release-apk가 배포 때 자동 복사)**. 검증 작업은 프롬프트가 원본. 루틴 추가·수정은 사용자 승인됨(11/4, 11/5 "예약작업은 너가 수정하면 돼") |
 | 안드로이드 코드 | `android/app/src/main/java/kr/callbrief/` (패키지 `kr.callbrief`), 파이프라인은 `pipeline/` |
 | 장부(DB) | `pipeline/CallRecordStore.kt` — `companies`, `people`, `person_aliases`, `call_links`, `task_companies`, `site_memo` |
 | 분석 요청/결과 | `pipeline/ClaudeCallAnalyzer.kt` (요청 구성, 결과 검증·필터) |
@@ -227,6 +228,21 @@ $HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu 
 - 아내 폰(11/5 18:43): v2.4(1033), 통화기록 1,026건 중 녹음 이어짐 0(자막은 돌고 있음, 16:38 마지막) — v2.4 대조 규칙이 원인일 가능성이 가장 큼(v2.6 r7-4가 고침).
 - 배포 뒤 할 일: 워치독 `tools/inbox/watchdog.py`를 ieum-inbox `tools/watchdog.py`로 복사, 사용자에게 tidy.md·hourly.md 전문 다시 붙여넣기 안내.
 
+## 4-11. v3.2와 v3.2 수정판 (11/5 밤~11/6 01시, Opus 통합 — 빌드 1041, 1042)
+- v3.2 「홈은 요약, 맨 위에 오늘 이야기」(DESIGN_V4 2-1, r12-6): 홈은 요약만, 진행 상황·처음 설정·업데이트는 설정으로. 매시간 루틴 5-1이 `story/today.json`을 쓰고 폰이 `STORY`로 받음.
+- 실측(11/5 23시 하트비트): 녹음 25개 중 통화와 이어진 것 1개. **원인은 짝짓기보다 긴 통화 자막이 끝나지 않은 것**(새 통화 우선 대기열, 시간 한도·540초 기한을 실패로 셈). 수정판 1042 = r12-7(파일 이름의 상대 우선 짝짓기, DESIGN_V4 2-2) + r12-8(긴 통화 완주 A1~A5·A8, 2-3). 보고서 `feature-r12-v32-r7/r8.md`. 워치독 규칙 (마) "긴 통화의 자막이 끝나지 않아요".
+- 사용자 결정: 통화기록 총수는 앱 검증용일 뿐, 화면·보고는 "녹음 n개 중 m개"로. 개인 통화가 "개인 내용" 한 줄인 것은 정상.
+
+## 4-12. v3.3 「믿을 수 있는 숫자」 (11/6 02~03시, Opus 통합 — 빌드 1043)
+- 통합 `feature/r13-v33`: 키 커밋 07f4b80(`Segment.uncertainNumbers`, `LOCK_SCREEN_DETAIL`·`GUARD_STATS`·`GOLDEN`) → r13-1(24c21d9 숫자 가드·확인 필요 배지·thin 카드·잠금 한 줄) ∥ r13-2(4053f86·4309977 토큰 확률·A8·골든 측정 `kr.callbrief.pipeline.GoldenMeasureActivity`·지시문 v7) → r13-3(1d2c0f2 합치기 되돌리기·18sp·다듬기). 오케스트레이터: SYSTEM/SCHEMA v7·`PROMPT_VERSION=7`·이름 목록 순서(dca5e1e), 루틴 mergePeople/unmergePeople·keepApart 규칙(1c74eae). 다르게 정한 것 DESIGN_V4 3.5.
+- 기기 시험 t4 "1.3배 제목 폭"은 안드로이드 16 에뮬레이터에서 1.0배라 기록만으로(53c41a5).
+- 사용자 할 일: 실녹음 골든(설정 › 상태와 도움 › 골든 측정, 통화 3~5건 받아쓰기, 숫자는 아라비아 숫자로, 충전 중 측정). 그 결과 뒤에 3.2 3단계 상수(B1~B7).
+
+## 4-13. v3.4 「모든 전화에 카드, 스스로 지키는 루틴」 (11/6 03~06시, Opus 통합 — 빌드 V34BUILD)
+- 사용자 "v3.4까지 배포" → 48시간 실측을 기다리지 않고 r14-1~4를 한 밤에(DESIGN_V4 4절 머리 결정). 키 커밋 8293f5b → r14-1(7b88d9b 역할 조건 제거·콜드 캐시·통화 대기·통계·카드 JSON v2) ∥ r14-3(13e968e·4dda580 지시문 v8/tidy v6·워치독 루틴 안·결과 받기 시각·버전 1시간·메일 주소 가림) → r14-2(74d55a4 카드 글·위치·잠금·통화 알림·신호등) ∥ r14-4(d453e22 기기 시나리오·S26 체크리스트·문서). 다르게 정한 것 DESIGN_V4 4.6.
+- 오케스트레이터: release-apk가 루틴 지시문 둘과 워치독을 우편함에 올림(c420dda), ci 카드 샷·device-test 경로·golden `'off'`(03bcd1a), ieum-inbox `.github/workflows/watchdog.yml` 삭제.
+- 기기 시험: 벨→창 수신 1,081ms·역할 없이 발신 1,276ms·콜드 1,371ms. 통화 대기는 에뮬레이터가 재현 못 함(null).
+
 ## 5. 현재 UI 상태와 문제점 (S26 스크린샷 기준, 다음 작업의 출발점)
 사용자 평가(10/30): "미관상 너무 엉망", "**깔끔하긴 한데 세련되지 않았다**". 목표는 깔끔함을 넘어 세련됨. 개편 방향은 [PRODUCT.md 4.5](PRODUCT.md). Claude가 본 구체적 문제:
 1. **모든 버튼이 같은 연청색 큰 덩어리** — 전날/다음날, 할 일 전체 보기, 이름 고치기, 완료했어요, 업체 목록으로가 모두 같은 크기·색. 주요 동작과 보조 동작의 구분이 없음.
@@ -267,7 +283,14 @@ $HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu 
 - **이 PC 빠른 확인**: `IEUM_LOCAL_PREVIEW=1 IEUM_SKIP_ANDROID_NATIVE=1`로 `assembleDebug` → 에뮬레이터 설치 → `powershell -File tools/preview_shots.ps1 <이름>` (시험 데이터 `PreviewSeed`가 첫 실행 때 채워짐, 아무것도 밖으로 안 나감). 캡처는 `evidence/shots/`.
 - 아직: 설정 화면은 제목 띠만 바뀜(카드 묶음 정리 필요), 아침·저녁 알림 문구의 "할 일" → "체크할 일" 통일, 설계도(Claude Docs) "화면 디자인" 절 개정, 앱 아이콘 다듬기, 모모콜에서 본 "전화 올 때 지난 통화 요약 띄우기" 검토.
 
-## 6. 다음 할 일 (순서대로, 11/5 저녁 기준 — **상세는 [DESIGN_V4.md](DESIGN_V4.md)**, 그 전 버전은 [DESIGN_V3.md](DESIGN_V3.md), 묶음 지시문은 `docs/orchestration/briefs/`)
+## 6. 다음 할 일 (11/6 새벽 기준 — 상세는 [DESIGN_V4.md](DESIGN_V4.md), 묶음 지시문·보고서는 `docs/orchestration/`)
+1. **아침 확인(07:34 이후)**: ieum-inbox `status/last-run-hourly.json`이 예정 슬롯마다 갱신되고 `pushed=true`인지, 워치독 이슈가 이상하게 열리지 않았는지. 예약 작업이 `routines/hourly.md`를 실제로 읽는지(새 방식 첫 정규 실행). 안 되면 프롬프트를 확인.
+2. **아내 폰 v3.4 설치 확인**: 하트비트 `versionCode`가 V34BUILD로 오르는지(r14-3으로 1시간 안). 안 오르면 `update.error`.
+3. **48시간 지표**: 2-3(100초 넘는 통화 완료율 `transcription.long48h.ratePct` ≥ 80, 녹음 연결 matched/withFile ≥ 0.8, `callLogMatch.last.before`·`missGapHour`로 남은 noMatch 원인), 4.5(`callCard` shown·shownOutgoing/eligibleOutgoing ≥ 90%, `ringToCardMs` p50 < 1000, cold, fgsRefused, locked). 결과로 v3.4.x 다듬기(카드 위치 상수, 1.0배 배지 카드 "외 1개" 줄 넘김).
+4. **사용자 할 일**: S26 체크리스트(`docs/REAL_DEVICE_CHECKLIST.md`, 10분), 실녹음 골든 받아쓰기 3~5건, 저장소 비공개 복귀 전 Actions 분량 조정(4.4-4), `IEUM_SIGNING_SEED` 복사, 예약 작업 알림 설정(정상 답도 매시간 옴).
+5. v3.5: 설계는 Fable이 쓰기로 함(사용자 11/6). 아직 DESIGN_V4에 없음.
+
+### 지난 기록 (11/5)
 **11/5 23시 추가(사용자 결정):** v3.2를 새로 끼워 넣음 — 「홈은 요약, 맨 위에 오늘 이야기」(DESIGN_V4 2-1절, 묶음 r12-6, 작업자 진행 중, 브랜치 `feature/r12-v31-r6`). 원래 v3.2 「믿을 수 있는 숫자」는 v3.3, v3.3 「어디서나 보이는 카드」는 v3.4로 밀림. 매시간 루틴 지시문에 5-1(오늘 통화 이야기 `story/today.json`) 추가. 새벽 정리 예약 작업은 tidy v5로 교체 완료(사용자 "예약작업은 너가 수정하면 돼"). 아내 폰은 22:04부터 v3.1(요청 promptVersion 6).
 
 **다음 세션 (11/5 밤 기준):**
@@ -286,6 +309,10 @@ $HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu 
 6. 그대로 남는 것: 문자·메일 실제 확인(MMS, RCS), inbox-e2e 정기 점검, 우편함 이력 압축(J3), 골든 셋 실험(F3, F4).
 
 ## 7. 알아 둘 함정
+- 예약 작업 프롬프트는 저장소 파일을 읽는 짧은 안내다. 지시문을 바꿀 때는 `docs/routines/*.md`를 고치고 배포하면(release-apk) 우편함에 올라간다. 배포 없이 급히 바꾸려면 ieum-inbox `routines/`에 직접 커밋.
+- 예약 작업을 이 세션에서 만들면 이 세션에 붙은 저장소(ieum-app, ieum-inbox)가 소스로 붙는다. 다른 세션에서 만들면 ieum-inbox가 빠져 "성공"인데 아무것도 못 하는 일이 생긴다(11/5 17시). `fire_trigger`(지금 실행)와 끄기·지우기는 자동 권한 검사가 막는 경우가 있어 사용자가 화면에서.
+- 이 세션은 CPU 2개라 작업자 둘이 Gradle을 번갈아 기다린다. 작업자는 컴파일·자기 시험만 로컬, 전체 시험·lint는 GitHub ci로(작업자 지침 11/6).
+- 통합 브랜치에 `[skip ci]` 커밋만 올리면 ci가 돌지 않는다. 합친 뒤에는 코드나 워크플로가 바뀐 커밋을 머리에 두고 push.
 - 이 클라우드 환경에서 repo.maven.apache.org가 429를 자주 낸다(특히 robolectric `nativeruntime-dist-compat`). `$GRADLE_USER_HOME/init.d/mirror.gradle`에 `maven-central.storage-download.googleapis.com/maven2/`를 맨 앞 저장소로 넣으면 풀린다(저장소 설정은 안 바꿈). JDK 17은 `apt-get update` 뒤에 설치된다(`tools/local_toolchain.sh`가 update를 안 하므로 처음 한 번 수동).
 - Actions "The job was not started because recent account payments have failed or your spending limit needs to be increased"는 비공개 저장소의 무료 2,000분/월 소진 + 지출 한도 $0일 때 나온다(11/5 02시~, 실행 323회·device-test 최근 100회 약 400분). 공개 저장소는 무제한.
 - 이 클라우드 세션의 gh는 저장소 설정 변경(`gh repo edit`)과 계정 billing API가 막힘(저장소 범위 REST만). 저장소 공개/비공개는 사용자가.
