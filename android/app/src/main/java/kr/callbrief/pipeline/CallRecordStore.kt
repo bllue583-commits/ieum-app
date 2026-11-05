@@ -163,21 +163,30 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         const val RECENT_TEXT_CHARS=3000
         /** Near-duplicate pairs kept in [PipelineSettingsKeys.MERGE_CANDIDATES]. */
         const val MERGE_CANDIDATES_MAX=50
+        /** Entries kept in [PipelineSettingsKeys.MERGE_LOG] (each carries the merged person's rows, r12-4). */
+        const val MERGE_LOG_MAX=100
+        /** Where the open of this thread's store got to (r12-4, DESIGN_V4 2.4-2): the "stage" of [PipelineSettingsKeys.STORE_OPEN_ERROR]. */
+        const val STAGE_OPEN="open";const val STAGE_SCHEMA="schema";const val STAGE_MIGRATE="migrate";const val STAGE_REPAIR="repair"
+        const val STAGE_SEAL="seal";const val STAGE_DONE="done"
+        internal val OPEN_STAGE=ThreadLocal<String>()
+        /** The stage the last open on this thread reached (null: none on this thread). */
+        fun openStage():String?=OPEN_STAGE.get()
         fun kstDay(ms:Long):LocalDate=Instant.ofEpochMilli(ms).atZone(KST).toLocalDate()
         fun kstTime(ms:Long?):String=ms?.let { DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm (E)",java.util.Locale.KOREAN).format(Instant.ofEpochMilli(it).atZone(KST)) } ?: "시각 미상"
         private fun startOf(day:LocalDate)=day.atStartOfDay(KST).toInstant().toEpochMilli()
     }
-    /** Merges the migration made, (from, into) as ledger ids where known, else row ids; written to settings after the open.
-     * Declared before init, which fills it. */
-    private val migrationMerges=mutableListOf<Pair<String,String>>()
+    /** Merges the migration (or the ledger) made, as {"from","into",...} with ledger ids where known, else row ids, and the
+     * merged person's rows as they were (r12-4); written to settings after the open. Declared before init, which fills it. */
+    private val migrationMerges=mutableListOf<JSONObject>()
     /** Set by [migrate]: the stored data changed, so every contact card is worked out again once the store is open. */
     private var migratedThisOpen=false
-    private val openPort=AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql"))
+    private val openPort=run { OPEN_STAGE.set(STAGE_OPEN);AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql")) }
     /** Every read and write goes through here: never on the main thread (r9-1, see [MAIN_THREAD_CHECK]). */
     private val port:AndroidSqlPort get() { checkThread();return openPort }
     init {
         // The schema check, column additions, migration and repairs run once per loaded store state (r8-1): the state stays
         // in memory while the app holds its store (IeumApplication.store), so a later open skips this transaction.
+        OPEN_STAGE.set(STAGE_SCHEMA)
         if(port.needs(SCHEMA_STEP)) try { port.transaction { SCHEMA.forEach { port.execute(it) };STORE_V4_SCHEMA.forEach { port.execute(it) }
             fun addColumns(table:String,columns:List<Pair<String,String>>) {
                 val have=rows("PRAGMA table_info($table)").mapNotNull { it.str("name") }.toSet()
@@ -189,7 +198,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
             port.execute("CREATE UNIQUE INDEX IF NOT EXISTS people_ledger_id ON people(ledger_id)")
             port.execute("CREATE INDEX IF NOT EXISTS people_name_key ON people(name_key)")
             port.execute("CREATE INDEX IF NOT EXISTS companies_name_key ON companies(name_key)")
+            OPEN_STAGE.set(STAGE_MIGRATE)
             migrate()
+            OPEN_STAGE.set(STAGE_REPAIR)
             // Calls stored before v1026 have no start time although the filename had one: fill it in, first on the
             // file rows automatic discovery left empty, then on the calls.
             if(rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_files'").isNotEmpty()) {
@@ -202,7 +213,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
                 if(rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name='call_transcription_jobs'").isNotEmpty())
                     port.execute(CallTranscriptionStore.SKIP_BEFORE_START_SQL,clock(),FirstPass.FROM_MS)
             }
+            OPEN_STAGE.set(STAGE_SEAL) // the whole store is snapshotted and sealed when this transaction ends
             null };port.markDone(SCHEMA_STEP) } catch(e:Exception) { port.close();throw e }
+        OPEN_STAGE.set(STAGE_DONE)
         flushMigrationMerges()
     }
     /** Brings what older versions stored to the current design (review B9, B10, B20); every step is safe to repeat, and the
@@ -221,8 +234,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         port.execute("INSERT OR IGNORE INTO people_phones(phone_key,person_id) SELECT phone_key,id FROM people WHERE phone_key IS NOT NULL")
         // v4 (r9-1): every stored number gets the one PhoneKey; people split by two spellings of one number become one.
         rekeyPhones();fillIssueCompanies()
-        // v3 (design 3.4): "김민수 씨" and "김민수" now share a key, and "김과장" is "김민수 과장" on the same number. Such people
-        // become one only on the same number or in the same company; every merge is logged (MERGE_LOG, ids only).
+        // v3 (design 3.4): "김민수 씨" and "김민수" now share a key. Since r12-4 (DESIGN_V4 2.4-3) such people become one only
+        // on the same number; "김과장" next to "김민수 과장" and names one jamo apart are left to the morning tidy. Every merge
+        // is logged with the merged person's rows (MERGE_LOG).
         mergeSamePeople()
         // Gone: the API-key route (a record waiting for a key waits for the task like any other) and the unused segment copy (B20).
         port.execute("UPDATE call_records SET state='TRANSCRIBED' WHERE state='WAITING_KEY'")
@@ -236,37 +250,61 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         migratedThisOpen=true
     }
     private fun mergeSamePeople() {
-        fun merge(from:Map<String,Any?>,into:Map<String,Any?>) {
-            val lid=from.str("ledger_id")
-            migrationMerges+=(lid ?: from.str("id")!!) to (into.str("ledger_id") ?: into.str("id")!!)
-            mergePerson(from,into)
-            // The ledger knows the person by the merged one's id when the kept one has none.
-            if(lid!=null) port.execute("UPDATE people SET ledger_id=? WHERE id=? AND ledger_id IS NULL",lid,into.str("id"))
-        }
-        fun together(a:Map<String,Any?>,b:Map<String,Any?>)=numbersOf(a).intersect(numbersOf(b)).isNotEmpty() ||
-            (a.str("company_id")!=null && a.str("company_id")==b.str("company_id"))
         val gone=mutableSetOf<String>()
+        // Same name key and a number in common (DESIGN_V4 2.4-3). A shared company is no longer enough.
         rows("SELECT * FROM people WHERE name!='' ORDER BY updated_ms DESC,id").groupBy { it.str("name_key").orEmpty() }.forEach { (_,same) ->
             for(i in same.indices) { val a=same[i];if(a.str("id") in gone) continue
                 for(j in i+1 until same.size) { val b=same[j];if(b.str("id") in gone || b.long("name_locked")==1L) continue
-                    if(together(a,b)) { merge(b,personById(a.str("id"))!!);gone+=b.str("id")!! } } } }
-        // The surname and title rule, same number only: "김과장" goes into "김민수".
+                    if(numbersOf(a).intersect(numbersOf(b)).isNotEmpty()) { logMerge(b,personById(a.str("id"))!!);gone+=b.str("id")!! }
+                    // Before r12-4 the same company was enough; now it is a proposal for the morning tidy.
+                    else if(a.str("company_id")!=null && a.str("company_id")==b.str("company_id")) proposeSamePerson(b,a) } } }
+        // The surname and title rule ("김과장" and "김민수 과장" on one number) and names one jamo apart: proposals only.
         rows("SELECT phone_key FROM people_phones GROUP BY phone_key HAVING COUNT(*)>1").mapNotNull { it.str("phone_key") }.forEach { phone ->
-            val on=peopleByNumber(phone).filter { it.str("name").orEmpty().isNotBlank() }
-            for(short in on.filter { NameKey.surnameTitle(it.str("name")) && it.long("name_locked")!=1L }) {
-                if(short.str("id") in gone) continue
-                val full=on.filter { it.str("id")!=short.str("id") && it.str("id") !in gone && NameKey.sameBySurname(short.str("name"),it.str("name")) }.singleOrNull() ?: continue
-                merge(short,personById(full.str("id"))!!);gone+=short.str("id")!!
-            }
+            val on=peopleByNumber(phone).filter { it.str("name").orEmpty().isNotBlank() && it.str("id") !in gone }
+            for(i in on.indices) for(j in i+1 until on.size) { val a=on[i];val b=on[j]
+                if(NameKey.sameBySurname(a.str("name"),b.str("name")) || NameKey.similar(a.str("name"),b.str("name"),sameNumber=true)) proposeSamePerson(a,b) }
         }
+    }
+    /** Whether the migration may make two people on one number one person by itself (DESIGN_V4 2.4-3): the same name, or
+     * one of them has none. "김과장" and "김민수 과장", or names one jamo apart, are only proposed (the morning tidy decides). */
+    private fun autoMergeable(a:String?,b:String?)=a.isNullOrBlank() || b.isNullOrBlank() || personKey(a)==personKey(b)
+    /** Merges person [from] into [into] for the migration and keeps, in [migrationMerges], ids plus the rows [from] had
+     * (people, people_phones, call_links, person_aliases) so the merge can be undone (screen in v3.2). */
+    private fun logMerge(from:Map<String,Any?>,into:Map<String,Any?>) {
+        val id=from.str("id")!!;val lid=from.str("ledger_id")
+        fun json(rs:List<Map<String,Any?>>)=JSONArray().apply { rs.forEach { r -> put(JSONObject().apply { r.forEach { (k,v) -> put(k,v ?: JSONObject.NULL) } }) } }
+        migrationMerges+=JSONObject().put("from",lid ?: id).put("into",into.str("ledger_id") ?: into.str("id")!!).put("atMs",clock())
+            .put("rows",JSONObject().put("people",json(rows("SELECT * FROM people WHERE id=?",id))).put("people_phones",json(rows("SELECT * FROM people_phones WHERE person_id=?",id)))
+                .put("call_links",json(rows("SELECT * FROM call_links WHERE person_id=?",id))).put("person_aliases",json(rows("SELECT * FROM person_aliases WHERE person_id=?",id))))
+        mergePerson(from,into)
+        // The ledger knows the person by the merged one's id when the kept one has none.
+        if(lid!=null) port.execute("UPDATE people SET ledger_id=? WHERE id=? AND ledger_id IS NULL",lid,into.str("id"))
+    }
+    /** Two people on one number the migration no longer merges by itself (near names, surname and title): kept as a pair
+     * for the morning tidy (tidyState "personCandidates", ledger ids where known), once per pair. */
+    private fun proposeSamePerson(a:Map<String,Any?>,b:Map<String,Any?>) {
+        val x=a.str("ledger_id") ?: a.str("id")!!;val y=b.str("ledger_id") ?: b.str("id")!!
+        if(a.long("name_locked")==1L && b.long("name_locked")==1L) return // the user named both: two people
+        port.execute("INSERT OR IGNORE INTO person_merge_candidates(a,b,created_ms) VALUES(?,?,?)",minOf(x,y),maxOf(x,y),clock())
+    }
+    /** The pairs [proposeSamePerson] kept whose two people both still exist, oldest first (at most [MERGE_CANDIDATES_MAX]). */
+    fun personCandidates():JSONArray {
+        val out=JSONArray()
+        rows("SELECT a,b FROM person_merge_candidates ORDER BY created_ms,a,b").forEach { r ->
+            val a=r.str("a")!!;val b=r.str("b")!!
+            fun alive(k:String)=rows("SELECT 1 FROM people WHERE ledger_id=? OR id=?",k,k).isNotEmpty()
+            if(alive(a) && alive(b) && out.length()<MERGE_CANDIDATES_MAX) out.put(JSONArray().put(a).put(b)) }
+        return out
     }
     private fun flushMigrationMerges() {
         if(migrationMerges.isEmpty()) return
         val add=migrationMerges.toList();migrationMerges.clear()
         settingsEdit { s ->
             val list=runCatching { JSONArray(s.optString(PipelineSettingsKeys.MERGE_LOG,"[]")) }.getOrNull() ?: JSONArray()
-            add.forEach { (from,into) -> list.put(JSONObject().put("from",from).put("into",into)) }
-            s.put(PipelineSettingsKeys.MERGE_LOG,list.toString())
+            add.forEach { list.put(it) }
+            // The rows make an entry a few hundred bytes: the latest [MERGE_LOG_MAX] are kept.
+            val keep=JSONArray();for(i in maxOf(0,list.length()-MERGE_LOG_MAX) until list.length()) keep.put(list.get(i))
+            s.put(PipelineSettingsKeys.MERGE_LOG,keep.toString())
         }
     }
     override fun close()=openPort.close()
@@ -996,7 +1034,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
                 .put("counterpartId",lid ?: JSONObject.NULL).put("company",c.analysis?.counterpartCompany ?: JSONObject.NULL).put("summary",c.summary)
                 .put("keyPoints",JSONArray(c.analysis?.keyPoints.orEmpty()))) }
         return JSONObject().put("generatedMs",now).put("firstPassDone",firstPassDone).put("tasks",tasks).put("records",records)
-            .put("recentlyDone",JSONArray(recentlyDone(null))).apply { mergeCandidates?.takeIf { it.length()>0 }?.let { put("mergeCandidates",it) } }
+            .put("recentlyDone",JSONArray(recentlyDone(null))).apply { mergeCandidates?.takeIf { it.length()>0 }?.let { put("mergeCandidates",it) }
+                // r12-4: people on one number the migration did not merge by itself, [id, id] pairs (ledger ids where known).
+                personCandidates().takeIf { it.length()>0 }?.let { put("personCandidates",it) } }
     }
     /** Applies the morning tidy's proposal to check items the AI still owns (never one the user changed or finished):
      * clearer wording, duplicates merged away, and "끝났는지 확인" where it looks finished. Returns how many changed.
@@ -1245,13 +1285,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
                 .sortedWith(compareByDescending<Map<String,Any?>> { it.long("name_locked") ?: 0 }.thenByDescending { if(it.str("name").isNullOrBlank()) 0 else 1 }.thenByDescending { it.long("updated_ms") ?: 0 })
             val keep=people.firstOrNull() ?: return@forEach
             for(other in people.drop(1)) {
-                val a=other.str("name").orEmpty();val b=keep.str("name").orEmpty()
-                val one=a.isBlank() || b.isBlank() || personKey(a)==personKey(b) || NameKey.similar(a,b,sameNumber=true) || NameKey.sameBySurname(a,b)
-                if(!one || other.long("name_locked")==1L && keep.long("name_locked")==1L && personKey(a)!=personKey(b)) continue
-                val lid=other.str("ledger_id")
-                migrationMerges+=(lid ?: other.str("id")!!) to (keep.str("ledger_id") ?: keep.str("id")!!)
-                mergePerson(other,personById(keep.str("id"))!!)
-                if(lid!=null) port.execute("UPDATE people SET ledger_id=? WHERE id=? AND ledger_id IS NULL",lid,keep.str("id"))
+                // r12-4 (DESIGN_V4 2.4-3): the same name or one side empty only; near names on one number are proposed.
+                if(!autoMergeable(other.str("name"),keep.str("name"))) { proposeSamePerson(other,keep);continue }
+                logMerge(other,personById(keep.str("id"))!!)
             }
             addNumber(keep.str("id")!!,number)
         }
@@ -1343,4 +1379,6 @@ private val STORE_V4_SCHEMA=listOf(
     "CREATE INDEX IF NOT EXISTS call_log_number_start ON call_log(number_key,start_ms)",
     "CREATE INDEX IF NOT EXISTS call_records_counterpart ON call_records(counterpart_key)",
     "CREATE INDEX IF NOT EXISTS workflow_items_status_kind ON workflow_items(status,kind)",
-    "CREATE INDEX IF NOT EXISTS people_phones_person ON people_phones(person_id)")
+    "CREATE INDEX IF NOT EXISTS people_phones_person ON people_phones(person_id)",
+    // r12-4 (DESIGN_V4 2.4-3): two people on one number the migration leaves for the morning tidy (ledger ids where known).
+    "CREATE TABLE IF NOT EXISTS person_merge_candidates(a TEXT NOT NULL,b TEXT NOT NULL,created_ms INTEGER NOT NULL,PRIMARY KEY(a,b))")

@@ -47,7 +47,13 @@ public final class ProtectedDatabase implements AutoCloseable {
     private static volatile String lastRecovery;
     /** What the last open did with left-over .new/.bak files (r9-1), as codes joined by ':' (PROMOTED_NEW, DROPPED_NEW,
      * PROMOTED_BAK, DROPPED_BAK, FAILED), then forgets it; null when nothing was left over since the last call. No content. */
-    public static String takeRecovery(){synchronized(STORES){String r=lastRecovery;lastRecovery=null;return r;}}
+    public static String takeRecovery(){synchronized(STORES){String r=lastRecovery;lastRecovery=null;RECOVERY_BY_NAME.clear();return r;}}
+    /** The same for one store [name] only (r12-4, DESIGN_V4 2.4-2): the call store's code is not the card file's. Forgets
+     * that store's code; the others stay. */
+    public static String takeRecovery(String name){synchronized(STORES){return RECOVERY_BY_NAME.remove(name);}}
+    private static final Map<String,String> RECOVERY_BY_NAME=new HashMap<>();
+    /** The store name of a sealed file ([file] in reverse). */
+    private static String storeName(File path){String n=path.getName();return n.endsWith(".sealed")?n.substring(0,n.length()-7):n;}
     private final State state;
     private boolean closed;
     private ProtectedDatabase(State state){this.state=state;}
@@ -214,7 +220,7 @@ public final class ProtectedDatabase implements AutoCloseable {
                 }
             }finally{
                 if(main!=null)Arrays.fill(main,(byte)0);
-                synchronized(STORES){lastRecovery=String.join(":",done);}
+                synchronized(STORES){lastRecovery=String.join(":",done);RECOVERY_BY_NAME.put(storeName(path),lastRecovery);}
                 android.util.Log.i(TAG,"recovery "+String.join(":",done));
             }
         }

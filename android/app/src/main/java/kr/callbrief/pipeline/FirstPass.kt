@@ -82,18 +82,33 @@ internal object FirstPass {
      * [PipelineSettingsKeys.CALLLOG_MATCH_STATS], the heartbeat's callLog.match. [gapSec]: for each pair made, the
      * recording's start minus the entry's, in 10 s bins ("-10" = -10..-1 s, "0" = 0..9 s). */
     data class MatchStats(val noTime:Int=0,val noCandidate:Int=0,val length:Int=0,val nameNull:Int=0,val nameDiffers:Int=0,val numberDiffers:Int=0,
-                          val several:Int=0,val matched:Int=0,val gapSec:Map<Int,Int> =emptyMap()) {
+                          val several:Int=0,val matched:Int=0,val gapSec:Map<Int,Int> =emptyMap(),
+                          /** r12-4 (DESIGN_V4 2.4-4): for each record left noCandidate, the recording's start minus the nearest
+                           * answered entry's start in minutes, in 10-minute bins from -60 to 50 ("-10" = -10..-1 min); [MISS_FAR]
+                           * when no answered entry is within 60 minutes. */
+                          val missGapMin:Map<String,Int> =emptyMap(),
+                          /** Pairs made by the end-time reading (the file name's time is the end of the call), r12-4. */
+                          val byEnd:Int=0) {
         fun reasons()=JSONObject().put("noTime",noTime).put("noCandidate",noCandidate).put("length",length).put("nameNull",nameNull)
-            .put("nameDiffers",nameDiffers).put("numberDiffers",numberDiffers).put("several",several).put("matched",matched)
+            .put("nameDiffers",nameDiffers).put("numberDiffers",numberDiffers).put("several",several).put("matched",matched).put("byEnd",byEnd)
+            .put("missGapMin",JSONObject().apply { missGapMin.forEach { (k,v) -> put(k,v) } })
         /** The stored JSON with this pass added: "last" is this pass's reasons (the records still waiting are counted again
-         * every pass, so they are not summed), "matched" and "gapSec" add up over all passes, "runs" counts passes. */
+         * every pass, so they are not summed), "matched", "byEnd" and "gapSec" add up over all passes, "runs" counts passes.
+         * "missGapMin" is this pass's distribution (the same waiting records come back every pass, like "last"). */
         fun mergeInto(previous:String?,now:Long):String {
             val o=runCatching { JSONObject(previous.orEmpty()) }.getOrNull() ?: JSONObject()
             val gaps=o.optJSONObject("gapSec") ?: JSONObject()
             for((bin,n) in gapSec) gaps.put(bin.toString(),gaps.optInt(bin.toString(),0)+n)
-            return o.put("runs",o.optInt("runs",0)+1).put("lastMs",now).put("last",reasons()).put("matched",o.optInt("matched",0)+matched).put("gapSec",gaps).toString()
+            return o.put("runs",o.optInt("runs",0)+1).put("lastMs",now).put("last",reasons()).put("matched",o.optInt("matched",0)+matched).put("gapSec",gaps)
+                .put("byEnd",o.optInt("byEnd",0)+byEnd).put("missGapMin",JSONObject().apply { missGapMin.forEach { (k,v) -> put(k,v) } }).toString()
         }
     }
+    /** [MatchStats.missGapMin] key of a noCandidate record with no answered entry within [MISS_RANGE_MS]. */
+    const val MISS_FAR="far"
+    const val MISS_RANGE_MS=60*60_000L
+    /** The bin of a start difference in ms: 10-minute bins, [MISS_FAR] beyond an hour either way. */
+    fun missBin(diffMs:Long):String = if(kotlin.math.abs(diffMs)>MISS_RANGE_MS) MISS_FAR
+        else (Math.floorDiv(diffMs,600_000L)*10).coerceIn(-60,50).toString()
     /** Answered calls only: missed and rejected calls have no recording. */
     fun answered(e:LogEntry)=e.durationMs>0 && e.type in setOf(CallLog.Calls.INCOMING_TYPE,CallLog.Calls.OUTGOING_TYPE)
 
@@ -112,11 +127,29 @@ internal object FirstPass {
         val starts=LongArray(answeredLog.size) { answeredLog[it].startMs }
         val fits=ArrayList<Fit>()
         val why=HashMap<String,String>() // recordId -> reason when it has no fit at all
+        val byEnd=HashSet<String>() // records whose only fits came from the end-time reading
+        fun lengthFits(r:RecordForMatch,e:LogEntry):Boolean { val longer=maxOf(r.durationMs,e.durationMs)
+            return kotlin.math.abs(r.durationMs-e.durationMs)<=maxOf(15_000L,longer/5) }
+        fun firstFrom(from:Long)=java.util.Arrays.binarySearch(starts,from).let { if(it>=0) { var k=it;while(k>0 && starts[k-1]==starts[it]) k--;k } else -it-1 }
+        fun endFit(r:RecordForMatch,entries:List<LogEntry>,at:LongArray):List<Fit>? {
+            val key=r.counterpartKey ?: return null
+            if(r.durationMs<=0) return null
+            val start=r.startedMs-r.durationMs
+            val out=ArrayList<Fit>();var i=firstFrom(start-120_000L)
+            while(i<at.size && at[i]<=start+60_000L) { val e=entries[i++]
+                if(!lengthFits(r,e)) continue
+                val same=if(key.all { it.isDigit() }) e.numberKey==key else e.name!=null && NameKey.sameName(e.name,r.counterpart ?: key)
+                if(!same) continue
+                val longer=maxOf(r.durationMs,e.durationMs)
+                // After every pair by the usual reading: an entry another recording fits in its own window goes to that one.
+                out+=Fit(r,e,500.0+kotlin.math.abs(start-e.startMs)/30_000.0+kotlin.math.abs(r.durationMs-e.durationMs).toDouble()/longer/0.05) }
+            return out.ifEmpty { null }
+        }
         for(r in records) {
             val key=r.counterpartKey
             val inTime=ArrayList<LogEntry>();val fitting=ArrayList<Fit>()
             // Entries placed from 2 minutes before to 1 minute after the recording started.
-            var i=java.util.Arrays.binarySearch(starts,r.startedMs-120_000L).let { if(it>=0) { var k=it;while(k>0 && starts[k-1]==starts[it]) k--;k } else -it-1 }
+            var i=firstFrom(r.startedMs-120_000L)
             while(i<starts.size && starts[i]<=r.startedMs+60_000L) {
                 val e=answeredLog[i++];inTime+=e
                 val longer=maxOf(r.durationMs,e.durationMs)
@@ -125,7 +158,14 @@ internal object FirstPass {
                 val lengthTerm=if(r.durationMs>0 && longer>0) gap.toDouble()/longer/0.05 else 0.0
                 fitting+=Fit(r,e,kotlin.math.abs(r.startedMs-e.startMs)/30_000.0+lengthTerm)
             }
-            if(inTime.isEmpty()) { why[r.recordId]="noCandidate";continue }
+            if(inTime.isEmpty()) {
+                // r12-4 (DESIGN_V4 2.4-4): some recorders name the file by the time the call ended. Only when the usual
+                // window has no entry at all, the same window is tried around "file time - length", and a pair is made
+                // only when the length fits and the file name's number or name is the entry's; never for a recording
+                // with neither (time alone would be a guess twice over).
+                endFit(r,answeredLog,starts)?.let { fits+=it;byEnd+=r.recordId } ?: run { why[r.recordId]="noCandidate" }
+                continue
+            }
             if(fitting.isEmpty()) { why[r.recordId]="length";continue }
             when {
                 key!=null && key.all { it.isDigit() } -> {
@@ -154,12 +194,21 @@ internal object FirstPass {
             out[f.r.recordId]=f.e;usedEntries+=f.e.id
         }
         if(stats!=null) {
-            val counts=records.filter { it.recordId !in out }.groupingBy { why[it.recordId] ?: "several" }.eachCount() // with fits but every entry went to a closer recording
+            // With fits but every entry went to a closer recording; an end-time reading that lost its entry stays noCandidate.
+            val counts=records.filter { it.recordId !in out }.groupingBy { why[it.recordId] ?: if(it.recordId in byEnd) "noCandidate" else "several" }.eachCount()
             val gaps=HashMap<Int,Int>()
             for(r in records) { val e=out[r.recordId] ?: continue
+                if(r.recordId in byEnd) continue // the start-gap bins describe the usual reading only
                 val bin=Math.floorDiv(r.startedMs-e.startMs,10_000L).toInt()*10;gaps[bin]=(gaps[bin] ?: 0)+1 }
+            // How far off the nearest answered entry is for each recording left without a candidate (r12-4).
+            val miss=HashMap<String,Int>()
+            for(r in records) { if(r.recordId in out || (why[r.recordId] ?: if(r.recordId in byEnd) "noCandidate" else null)!="noCandidate") continue
+                val k=firstFrom(r.startedMs)
+                val near=listOfNotNull(starts.getOrNull(k-1),starts.getOrNull(k)).minByOrNull { kotlin.math.abs(r.startedMs-it) }
+                val bin=near?.let { missBin(r.startedMs-it) } ?: MISS_FAR
+                miss[bin]=(miss[bin] ?: 0)+1 }
             stats(MatchStats(noCandidate=counts["noCandidate"] ?: 0,length=counts["length"] ?: 0,nameNull=counts["nameNull"] ?: 0,nameDiffers=counts["nameDiffers"] ?: 0,
-                numberDiffers=counts["numberDiffers"] ?: 0,several=counts["several"] ?: 0,matched=out.size,gapSec=gaps))
+                numberDiffers=counts["numberDiffers"] ?: 0,several=counts["several"] ?: 0,matched=out.size,gapSec=gaps,missGapMin=miss,byEnd=out.keys.count { it in byEnd }))
         }
         return out
     }

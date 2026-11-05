@@ -225,13 +225,14 @@ class CallRecordStoreTest:ProtectedTextHostTestBase() {
             p.execute("INSERT INTO people_phones VALUES('01077770000','pe_5')")
             p.execute("INSERT INTO call_links VALUES('x','pe_2','co_a')")
             p.execute("DELETE FROM app_migration");null } }
-        CallRecordStore(context,clock,CallRecordStore.SettingsEdit { e -> e(saved) }).use { }
+        val proposed=CallRecordStore(context,clock,CallRecordStore.SettingsEdit { e -> e(saved) }).use { it.personCandidates() }
+        // r12-4 (DESIGN_V4 2.4-3): the same company and the surname-and-title rule no longer merge by themselves; they are
+        // proposals for the morning tidy. Nobody here shares a number with a same-named person, so nobody is merged.
         val left=port().use { it.query("SELECT id,name FROM people ORDER BY id") }.associate { it["id"] to it["name"] }
-        assertEquals(mapOf("pe_1" to "김민수","pe_3" to "김민수 씨","pe_5" to "이영호"),left)
-        assertEquals("pe_1",port().use { it.query("SELECT person_id FROM call_links WHERE record_id='x'").single()["person_id"] })
-        assertEquals("pe_5",port().use { it.query("SELECT person_id FROM person_aliases WHERE name_key='이과장'").single()["person_id"] })
-        val log=JSONArray(saved.getString(PipelineSettingsKeys.MERGE_LOG))
-        assertEquals(listOf("p_2>p_1","pe_4>pe_5"),(0 until log.length()).map { log.getJSONObject(it).let { o -> o.getString("from")+">"+o.getString("into") } })
+        assertEquals(mapOf("pe_1" to "김민수","pe_2" to "김민수 씨","pe_3" to "김민수 씨","pe_4" to "이과장","pe_5" to "이영호"),left)
+        assertEquals("pe_2",port().use { it.query("SELECT person_id FROM call_links WHERE record_id='x'").single()["person_id"] })
+        assertFalse(saved.has(PipelineSettingsKeys.MERGE_LOG))
+        assertEquals(setOf(listOf("p_1","p_2"),listOf("pe_4","pe_5")),(0 until proposed.length()).map { i -> proposed.getJSONArray(i).let { listOf(it.getString(0),it.getString(1)) } }.toSet())
     }
 
     @Test fun titlesThatDifferInANumberAreNewItems() {
