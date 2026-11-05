@@ -1,4 +1,4 @@
-# 이음 v3.0 평가와 v3.1 → v3.4 설계도 (2026-11-05 저녁, 22:59 v3.2 끼워 넣음)
+# 이음 v3.0 평가와 v3.1 → v3.4 설계도 (2026-11-05 저녁, 22:59 v3.2 끼워 넣음, 11/6 01:40 v3.4 개정)
 
 > 기준: 저장소 `feature/lean-calls` 157ffab(v3.0 배포본, 빌드 1038), 실제 폰 상태(우편함 `status/phone.json` 11/5 16:13, `status/verify-log.md` 11/5 09:10), v3.0 기기 시험(run 41973214685). Opus 검토자 넷(화면·UX, 파이프라인·자동화, 데이터·정확도·보안, 통화 카드)의 읽기 전용 검토를 Fable 오케스트레이터가 종합해 초안을 쓰고, Opus 설계 검토자가 초안을 따진 25개 지적을 반영해 고쳤다(2차). 검토 원문 요약은 `docs/orchestration/reports/review-r1~r4-*.md`, 설계 검토는 `review-design-v4.md`.
 >
@@ -13,7 +13,7 @@
 | v3.1 | 스스로 말하는 이음 | 녹음이 안 되거나, 업데이트가 안 되거나, 권한이 빠지면 앱이 먼저 말한다. 처음 설정은 막히지 않고, 홈 첫 화면에 체크할 일이 보인다. 진행 중인 일이 처음 정리를 기다리지 않고 생긴다 | 녹음 공백 판정(원인 코드), 워치독 규칙 4개, 무인 설치 완성, 통화별 알림 "녹음 없음", 새벽 정리 분리, 결과 고착 해제, 지연 실측, v2.4→v3.x 직행 마이그레이션 시험 | ci + update-smoke(앱이 스스로 설치) + 배포 48시간 지표(2.7) |
 | v3.2 | 홈은 요약, 맨 위에 오늘 이야기 | 홈 맨 위에 오늘 통화가 이야기처럼 2~3줄로 보인다. 진행 상황, 처음 설정, 업데이트 안내는 설정으로 가고 홈에는 요약만 남는다(할 일이 있을 때만 "설정에서 확인할 일이 있어요" 한 줄) | 매시간 루틴이 `story/today.json`을 씀, 폰이 결과 받기 때 받아 `STORY`에 저장, 없으면 폰이 첫 문장 셋으로 대체, 설정 "지금 할 일과 진행 상황" 묶음 | ci |
 | v3.3 | 믿을 수 있는 숫자 | 잘못 들렸을 수 있는 숫자·날짜는 "확인 필요"로 보이고, 체크 제목에서 이름이 빠지며, 사람 합치기를 되돌릴 수 있다. 정리된 통화가 없는 상대에게도 통화기록으로 만든 작은 카드가 보이고, 잠긴 폰의 알림에도 이름과 한 줄이 보인다 | 숫자 가드(정규화·자막 구간·토큰 확률), 실제 모델(large-v3-turbo) 골든 재측정과 초기 프롬프트, 이름 힌트, 지시문 v7, 합치기 되돌리기, thin 카드, 18sp 강제, 화면 다듬기 | ci + 실녹음 골든 1회(폰, 사용자 받아쓰기 3~5건) + 합성 골든 turbo 1회(참고), 3.2 3단계 상수는 골든 결과 뒤 |
-| v3.4 | 어디서나 보이는 카드 | 잠긴 폰에 전화가 와도 카드가 뜨고, 앱이 꺼져 있어도 1초 안에 뜨며, 받기·통화 중 버튼을 가리지 않는다 | 잠금 위 오버레이+알림 동시, 안드로이드 15 FGS 순서, 콜드 경로 개인 번호 캐시, 3초용 카드 글, 통화 중 위치, 통화 대기, 통계 보정, S25 실기기 체크리스트 | ci + device-test(call-card 새 시나리오) + **S25 체크리스트** |
+| v3.4 | 모든 전화에 카드, 스스로 지키는 루틴 | 거는 전화(통화의 61%)에도 카드가 뜬다. 잠긴 폰에 전화가 와도 카드와 알림이 함께 뜨고, 앱이 꺼져 있어도 1초 안에 뜨며, 받기·통화 중 버튼을 가리지 않는다. 카드 첫 줄은 이름이 아니라 그 상대와 약속한 일 한 줄. 분석 루틴이 멈추면 폰과 사람이 안다 | 발신 역할 조건 제거, 콜드 캐시(blocked 표), 통화 대기, 통계 키 정비, 잠금 창+알림, 위치·3초용 카드 글 알고리즘, 통화 알림 바로잡기, 루틴 실패 알림 길·워치독을 루틴 안으로·결과 받기 시각 맞춤·ETag 업데이트, 시각 교정 진단, S26 체크리스트, Actions 절약 | ci + device-test(call-card 새 4 시나리오) + **S26 체크리스트** + 하트비트 48시간(발신 카드 ≥ 90%) |
 
 순서의 이유: v3.1 없이는 v3.3·v3.4이 보여 줄 데이터가 생기지 않는다(장부가 빈 원인이 v3.1 항목들이다). v3.3는 결과가 흐르기 시작한 뒤 "틀린 숫자"가 아내 눈에 보이기 전에 막아야 하고, 지금 장부가 작아 카드가 거의 비는 문제(thin 카드)도 실측 없이 할 수 있어 여기로 당겼다. v3.4은 아내 폰(S25) 실측을 받아 고쳐야 하므로 마지막이다.
 
@@ -224,35 +224,62 @@ UPDATE_NOTE: `v3.2: 홈 맨 위에 오늘 통화가 이야기처럼 2~3줄로 �
 
 UPDATE_NOTE: `v3.3: 잘못 들렸을 수 있는 숫자와 날짜는 확인 필요로 표시돼요. 체크할 일 제목이 짧아지고, 합쳐진 사람을 되돌릴 수 있어요`
 
-## 4. v3.4 「어디서나 보이는 카드」
+## 4. v3.4 「모든 전화에 카드, 스스로 지키는 루틴」 (11/6 01:40 개정 — Opus 검토자 넷 + 설계 검토 18개 지적 반영, 원문 `docs/reviews/v34_review_20261106.md`)
 
-**큰 변화:** 잠긴 폰에 전화가 와도 카드가 뜨고(안 보이면 내용 있는 알림), 앱이 꺼져 있어도 1초 안에 뜨며, 받기·통화 중 버튼을 가리지 않는다. 통화 대기·발신·서비스 잔류 같은 가장자리가 정리되고, 통계가 사실을 센다. 1.3절 #9, #10(콜드), #13, #14, #15를 닫는다. **S25 실측(1.4절 설치 뒤 사용자 보고와 하트비트 `callCard`)을 받아 시작한다.**
+**큰 변화:** 거는 전화를 포함한 **모든 업무 통화에 카드가 뜬다**(지금은 아내 통화의 61%인 발신에 카드가 아예 없다). 잠긴 폰에 전화가 와도 창과 내용 있는 알림이 함께 뜨고, 앱이 꺼져 있어도 1초 안에 뜨며, 받기·통화 중 버튼을 가리지 않는다. 카드 첫 줄은 이름이 아니라 **그 상대와의 약속·할 일 한 줄**이다. 그리고 분석 루틴이 멈추거나 저장소에 못 닿으면 폰과 사람이 알게 된다(루틴 실패 알림 길, 워치독을 Actions 밖 루틴 안으로). 1.3절 #9, #10, #13, #14, #15, #18(C12), #2(운영), #6(운영)을 닫는다.
 
-통합 브랜치 `feature/r14-v34`(= v3.3 완성본). **순서**: r14-2(`CallSession`·`CallCardService`)를 먼저, r14-1은 r14-2 브랜치에서 시작, r14-3은 둘이 합쳐진 뒤. **파일 소유**: r14-2: `pipeline/call/CallSession.kt`, `CallStateReceiver.kt`, `CallCardService.kt`, `OutgoingCallService.kt`, `StatusLights.kt` · r14-1: `CallCardOverlay.kt`, `CallCardView.kt`, `CardStats.kt`, `ContactCards.kt`(개인 번호 캐시 쪽은 `LocalPrivacy`/설정) · r14-3: `tools/device/call_card_test.sh`, `docs/REAL_DEVICE_CHECKLIST.md`, `docs/DESIGN_V3.md` 문장 수정, 워크플로는 오케스트레이터.
+**실측 근거(하트비트 11/5 22:58·23:59·11/6 00:59, 폰 S26·안드로이드 16, v3.1 빌드 1040):**
+- `callCard`가 null인 이유는 버그가 아니라 "세지 않는 경우"만 있었기 때문이다. 설치 뒤 통화가 발신 1(역할이 없으면 판정 null, `CallCardService.kt:116`)·부재중 개인 1(`ignored`)이고, 기록이 0이면 하트비트는 null이다(`CardStats.kt:101-103`, KINDS는 4개뿐 `:24`).
+- 역할 없이도 발신 번호가 온다(확률 높음, 추정): `followup.noRecording=1`은 번호 키가 있는 연결 통화에만 생기는데(`CallFollowupNotice.kt:87`) 그 사이 연결 통화는 발신 1건뿐이었다. 통화기록 1,030건 중 발신 631건(61%).
+- 큰 DB(CallRecordStore) 열기 868~1,157ms(`dbOpenMs`, 어느 경로든 열 때마다 기록 `IeumApplication.kt:59-61`). 벨 경로에서 개인 번호 확인이 그 DB를 여는 것은 코드로 확인(`CallSession.kt:160,165-169`), 설정은 신호마다 다시 읽음(`CallCardService.kt:114`).
+- 잠금 상태면 창을 시도하지 않고 "잠금을 풀면 카드가 보여요" 알림만 띄우며 `noPermission`으로 센다(`CallCardOverlay.kt:180,161,272`).
+- 매시간 분석 루틴이 11/5 17시 재생성 뒤 22:34까지 결과 커밋 0건(예약 작업은 6회 "성공" 41초). 01:08 수동 실행으로 회복(`analyze 13 calls`, 지시문 6); **정규 예약 실행은 11/6 07:34에 확인**. 워치독 Actions는 11/5 03:40부터 결제 실패로 8회 연속 시작 못 함. 하트비트 `latency` p50 324,972분(불가능 → 기록 `started_ms` 오염, 2-2와 같은 원인으로 추정; 진단 전까지 판단 근거로 쓰지 않음).
 
-### 4.1 묶음 r14-1 잠금·콜드·위치·카드 글
-1. **잠금 화면**: 잠금 상태에서 벨이 울리면 오버레이 `addView`와 내용 있는 알림(3.1-5의 publicVersion)을 **함께** 띄우고, `ACTION_USER_PRESENT`에서 알림을 지운다. 창이 보이는지 판정에 기대지 않는다(정책으로 가려져도 View에는 알림이 오지 않음). 서비스 알림과 카드 알림은 같은 id 하나. 잠금 위 표시 여부는 S25 체크리스트로만 확인한다.
-2. **콜드 경로**: 개인 번호·제외 번호 키 집합을 설정(작은 파일)에 두고 벨 울림 판정은 그것만 읽는다. 큰 DB는 통화 뒤에. `CardStats`에 `ringToCardMs`(중앙값·최대), `cold`, `locked`, `fgsRefused`를 세고 하트비트 `callCard`에. `noPermission`은 `canDrawOverlays=false`일 때만. 워치독 권한 경보도 그때만.
-3. **위치**: 수신 중 높이 한도 34%, 아래 끝 ≤ 72%(1.3배 포함). OFFHOOK에서 펼친 카드는 화면 위쪽(상대 이름 아래)에 높이 25% 이하. 거는 전화도 3초 뒤 띠. 요약·할 일이 없으면 OFFHOOK에서 띠 대신 숨김.
-4. **카드 글(3초용)**: 첫 줄은 약속이나 할 일 한 줄("지난번: 견적서 금요일까지", 20sp 굵게), 둘째 줄 이름·직책·업체(회색), 셋째 "마지막 통화 어제 오후 3시, 2분", 체크할 일 1줄 + "외 n개", 진행 중인 일 1줄. 줄 수 5 이하.
-- 시험: Robolectric에서 1.3배 꽉 찬 카드 아래 끝 ≤ 72%, 줄 수 ≤ 5, 통계 분리(locked는 noPermission이 아님), 콜드 판정이 큰 DB를 열지 않음(open 카운터).
+**착수 조건과 순서:** r14-3의 지시문·워치독 부분(앱 코드 아님)은 **지금 바로**(v3.3과 무관, 감시 공백을 메움). 앱 코드는 v3.3 배포 뒤, 2-2(r12-7)·2-3(r12-8) 배포로 100초 넘는 통화 완료율 ≥ 80%가 48시간 유지된 뒤. **S26 카드 실측값은 아직 없으므로 r14-1을 먼저 배포하고 48시간 하트비트 `callCard`를 받은 뒤 r14-2의 위치·글을 맞춘다.** 통합 브랜치 `feature/r14-v34`(= v3.3 완성본). 순서: r14-3(지시문·워치독) 즉시 → r14-1 배포 → 48시간 실측 → r14-2 ∥ r14-3(앱 코드) → r14-4.
 
-### 4.2 묶음 r14-2 서비스 순서, 역할, 통화 대기, 신호등
-1. **안드로이드 15 FGS 순서**: 벨이 울리면 ① 오버레이 창을 먼저 붙이고 ② 창이 붙은 뒤 `startForegroundService`를 부른다. 시작이 거부되면 receiver `goAsync()` 안에서 알림만 띄우고, IDLE에 오버레이와 알림을 직접 지운다. `fgsRefused`를 센다. 상태 전달은 이미 도는 서비스에 프로세스 안 정적 참조로; start는 첫 시작에만. 시작을 거부당한 뒤 IDLE이 와도 `hide`·`stop`이 반드시 이어진다.
-2. 통화 대기(OFFHOOK 중 RINGING)면 카드를 숨기고 다음 IDLE까지 없음.
-3. **발신 역할 검증**: 에뮬레이터와 S25에서 역할 없이 걸었을 때 OFFHOOK 브로드캐스트에 번호가 오는지 확인(`am start -a CALL`, 역할 제거 상태). 오면 카드 판정의 role 조건을 지우고 역할은 설정의 선택 항목으로만 남긴다. 안 오면 유지하되 시간 초과 대화상자를 실측(최근 앱에서 밀어 닫은 뒤 걸기).
-4. 신호등 "통화 카드": READ_CALL_LOG 권한, 대기 버킷(EXEMPTED 아니면 주황), 최근 7일 `noNumber`·`noCard` 비율. 오버레이 권한이 없으면 서비스를 시작하지 않는다(설계 8절대로).
-- 시험: Robolectric에서 start 거부 + IDLE → hide·stop, 통화 대기 시나리오, 역할 없이 OFFHOOK 번호(에뮬레이터 call-card 시나리오에 추가).
+**파일 소유(겹치지 않게):** r14-1: `pipeline/call/CallSession.kt`, `CallStateReceiver.kt`, `CallCardService.kt`, `OutgoingCallService.kt`, `CardStats.kt`, `ContactCards.kt`(blocked 표·카드 JSON v2), `PhoneStatus.kt`(`callCard`·`recordTime`·`messages` 블록 자리를 한꺼번에 만듦), `PipelineSettingsKeys.kt`(v3.4의 새 키를 한꺼번에 선언), 처음 설정의 역할 단계(`screens/SettingsScreen.kt`와 `HomeScreen.kt:243,398-423`의 `CallCardAsk.roleDone` 그 줄만) · r14-2: `CallCardOverlay.kt`, `CallCardView.kt`, `CallFollowupNotice.kt`, `StatusLights.kt`, `SelfCheckNotices.kt`, `RecordingGap.kt`(pendingText), `CallDigestWork.kt`(아침 보고 한 줄) · r14-3: `CallRecordWork.kt`(결과 받기), `CallUpdate.kt`(버전 확인), `CallRecordStore.kt`(latency·recordTime 통계, 업체 이름 edit), `ClaudeCallAnalyzer.kt`(`maskNumbers`만), `MessageWork.kt`, `docs/routines/hourly.md`(v8)·`tidy.md`, `tools/inbox/watchdog.py`·`tools/inbox/watchdog.yml`(원본 사본), ieum-inbox 쪽 워크플로 삭제는 오케스트레이터 · r14-4: `tools/device/call_card_test.sh`, `docs/REAL_DEVICE_CHECKLIST.md`, `screens/CallsScreen.kt`와 `ScreensHomeCallsTest.kt:117-123`(죽은 코드 제거), `docs/DESIGN_V3.md`·`docs/PRODUCT.md` 문장, 워크플로 분량 조정은 오케스트레이터.
 
-### 4.3 묶음 r14-3 실기기 체크리스트와 시험
-1. 에뮬레이터 시나리오 추가: 홈으로 보낸 뒤 `am kill kr.callbrief`로 만든 콜드(**`am force-stop`은 쓰지 않는다** — 중지된 앱은 사용자가 열 때까지 PHONE_STATE를 받지 못하는 것이 정상), 잠금(`input keyevent 26` 뒤 벨 → 알림 publicVersion 내용), 통화 대기, 역할 없이 발신. 기준 "벨 → 창" 3초 유지(에뮬레이터), 하트비트 `ringToCardMs`로 실기기 1초 확인.
-2. S25 체크리스트(`docs/REAL_DEVICE_CHECKLIST.md`, 사용자가 10분, 앱이 결과를 하트비트로 올림): 잠긴 채 받기, 다른 앱 쓰는 중 벨(팝업 모드), 최근 앱에서 밀어 닫은 뒤 벨과 걸기(설정 › 강제 중지 뒤에는 카드가 안 뜨는 것이 정상임을 적는다), 받기·거절 터치가 되는지, 통화 중 스피커·키패드 누르기, 1.3배 글자. 결과는 `callCard` 통계와 사용자 보고로.
-3. 설계 문장 바로잡기: DESIGN_V3 7.2·8절의 "SAW가 있으면 백그라운드 FGS 허용"(안드로이드 15는 보이는 창 조건), "번호 2초 대기"(늦게 온 번호로 채움), "시간 초과면 그냥 연결"(실측 뒤), "SAW 없으면 서비스 안 시작"(4.2-4로 구현)을 구현·실측에 맞춘다.
+### 4.1 묶음 r14-1 모든 전화에 카드: 역할 조건 제거, 콜드 캐시, 통화 대기, 통계
+1. **발신 역할 조건 제거**(v3.4 첫 항목): 카드 판정(`CallCardService.kt:116`)에서 `roleHeld` 조건을 뺀다. 번호가 없을 때만 `noNumber`. 발신 역할은 설정의 선택 항목("거는 전화에 번호를 더 빨리 알기")으로만 남기고 처음 설정의 역할 단계(`CallCardAsk.roleDone`)는 지운다. 에뮬레이터 call-card 시나리오에 "역할 없이 발신 → OFFHOOK에 번호 → 카드"를 넣고, S26에서는 배포 48시간 뒤 하트비트 `callCard` 발신 지표(4.5)로 확인한다. 번호가 끝내 안 오는 기기면 역할을 권하는 신호등 문구만(자동으로 묻지 않음).
+2. **콜드 캐시**: 벨 울림 판정은 큰 DB(CallRecordStore)를 열지 않는다. `ContactCards` 파일(별도 ProtectedDatabase, `ContactCards.kt:72`)에 `blocked(phone_key)` 표(개인 번호 + 제외 번호, `refresh`가 이미 계산하는 personal 집합 `:177`)를 두고 그것만 읽는다; 카드 파일 열기는 통화당 1회 이하이고 `cardOpenMs`를 따로 센다. 제외 규칙(번호·이름 규칙)은 통화당 설정 스냅숏에서 직접 확인하고, 규칙이 바뀌면 blocked 표 전체를 다시 쓴다. 읽기가 실패하면 개인으로 쳐서 카드를 띄우지 않는다. `SecureSettings`는 통화 한 번에 한 번만 읽어 메모리 스냅숏으로(지금은 신호마다 다시 읽음 `CallCardService.kt:114`). 개인 번호 "기억"(2회 연속 판정)은 통화가 끝난 뒤 큰 DB에서. 시험: 벨 → 카드 경로에서 CallRecordStore open 카운터 0, 카드 파일 open ≤ 1.
+3. **통화 대기**: 세션에 `waiting` 표시. OFFHOOK 중 RINGING이 오면 첫 상대 카드를 숨기고 다음 IDLE까지 아무것도 띄우지 않는다(둘째 상대 카드도 띄우지 않음 — 삼성 통화 대기 화면과 겹침). waiting 중에는 `phoneKey`·`startedMs`를 바꾸지 않고(지금도 `:128`은 무시), 둘째 통화를 받은 뒤의 OFFHOOK에서 카드를 다시 띄우지 않으며, IDLE의 CallEnd는 첫 통화 것 하나만 만든다. 둘째 통화는 통화기록에 맞추는 단계에서 처리한다.
+4. **FGS와 상태 전달**: "창 먼저, 그다음 시작" 순서 변경은 하지 않는다 — 배터리 최적화에서 제외된 앱(`batteryFree=true`, EXEMPTED는 그 결과)은 백그라운드 FGS 시작 제한의 예외이고, 시작 거부 뒤 IDLE 정리 경로가 이미 있다(`CallCardService.kt:193`). S26에서 `fgsRefused`로 실측해 확인한다(삼성 "절전 앱"은 별개로 동작, phoneCall 타입은 MANAGE_OWN_CALLS 전제 — 확인 필요). 남기는 것: 시작 거부를 `fgsRefused`로 세고, 상태 전달은 이미 도는 서비스에 프로세스 안 정적 참조로, start는 첫 시작에만. "오버레이 권한이 없으면 서비스를 시작하지 않는다"(옛 설계 8절)는 **삭제** — 알림 대체에도 프로세스 유지가 필요하다.
+5. **통계**(`CardStats` → 하트비트 `callCard`): v3.x가 통화를 하나라도 보면 null 대신 0으로 내보낸다(null = 연결 안 됨). 키: `shown`, `shownOutgoing`, `eligibleOutgoing`(개인·제외·끔을 뺀 발신 수), `noCard`, `thin`, `noNumber`(수신·발신 따로), `noRole`(참고용), `ignored`(개인·제외), `off`(설정 끔), `locked`(잠금이라 창 못 띄움, 알림만), `cold`(프로세스 없이 시작), `fgsRefused`, `noPermission`(`canDrawOverlays=false`일 때만), `noNotify`(알림 권한 없음), `ringToCardMs`(중앙값·최대: 시작은 수신기 onReceive의 elapsedRealtime, 끝은 addView 완료 또는 알림 게시; 발신은 OFFHOOK부터; 콜드는 `ringToCardMsCold`로 따로), `expanded`, `closedUnder2s`. 워치독 권한 경보는 `noPermission`일 때만.
+6. **카드 JSON v2**(`ContactCards`): `dueMs`(KST 자정, 해석 불가면 null), `checkReason`(r13-1의 tentative 사유), `lastDurationMs`, `lastCallMs`, `calls30d`를 더하고, 통화기록만 있는 번호에도 thin 카드를 돌려준다(`build()`). 옛 v1 파일은 읽고 다음 refresh 때 v2로 다시 쓴다. `Task.due`가 문자열뿐이므로(`ContactCards.kt:40`) r13-1의 `dueMs` 저장이 선행.
+- 시험: Robolectric — 역할 없이 OFFHOOK 번호 → 판정 통과, 통화 대기 시나리오(둘째 RINGING에 숨김, phoneKey 유지, IDLE까지 유지, CallEnd 1개), start 거부 + IDLE → hide·stop, 통계 키 전부(locked는 noPermission이 아님, 알림 권한 없음은 noNotify, 기록 0이면 null·1이면 0), 콜드 판정 CallRecordStore open 0·카드 파일 open ≤ 1, blocked 표 읽기 실패 → 카드 없음, 제외 규칙 변경 → blocked 재작성, 카드 JSON v1→v2.
 
-### 4.4 확인 기준
-- 단위 전체. device-test call-card(기존 7 + 새 4 시나리오) 통과. S25 체크리스트 통과(사용자 보고). 하트비트 `callCard.shown` > 0, `ringToCardMs` 중앙값 < 1000(실기기), `locked`가 `noPermission`과 분리.
+### 4.2 묶음 r14-2 카드가 3초 안에 읽힌다: 잠금, 위치, 카드 글, 통화 알림, 신호등
+1. **잠금 화면**: 잠금 상태에서 벨이 울리면 오버레이 `addView`와 내용 있는 알림을 **함께** 띄우고, `ACTION_USER_PRESENT`에서 알림을 지운다. 창이 보이는지 판정에 기대지 않는다(정책으로 가려져도 View에는 알림이 오지 않음). `TYPE_APPLICATION_OVERLAY`는 잠금 화면 아래에 놓이지만 수신 화면이 잠금을 가린(occluded) 상태에서는 보일 수 있다 — **확인 필요(S26 체크리스트)**. 서비스 알림(741)과 카드 알림(3011)은 서비스가 돌 때 하나로 합친다. 알림 내용은 r13-1-5 설정("잠금 화면에서도 이름과 한 줄 보기")을 따른다.
+2. **위치**: 벨 중(받기 전) 카드는 높이 한도 34%, 아래 끝 ≤ 72%(1.3배 포함). 사용자가 끌어 옮긴 위치(`KEY_POS_Y`)도 이 범위 안으로 당긴다. 통화 중(OFFHOOK)에는 접힌 띠를 화면 위 8~20%에 둔다. **발신 15초 상수(`CallCardOverlay.kt:58 COLLAPSE_OUT_MS`)는 지우고 3초로 통일**(지금은 `CallCardService.kt:48,172`의 Driver가 3초에 접어 15초는 쓰이지 않는다). 발신은 OFFHOOK가 다이얼 순간이라 읽을 틈이 없으므로 처음부터 **위쪽 25% 안에 펼친 채 3초 → 띠**. 요약·할 일이 없으면 OFFHOOK에서 띠 대신 숨김.
+3. **카드 글(3초용) 알고리즘**: 입력은 ContactCard v2와 지금 시각(KST). 첫 줄은 다음 순서로 고른다 — ① `dueMs`가 지났거나 7일 안인 열린 할 일("견적서 · 금요일까지") ② `checkReason`이 있는 할 일(배지 "확인 필요"를 첫 줄 앞에) ③ `lastCallMs`가 14일 안인 지난 통화의 요약 첫 문장 ④ 진행 중인 일(기한을 해석할 수 없는 할 일 포함) ⑤ thin("3일 전 통화, 30일간 5번", `lastCallMs`·`calls30d`). 같은 순위면 기한이 빠른 것, 그다음 최근 요청 순. 첫 줄은 20sp 굵게, **2줄, 줄당 18자 안팎**, 띄어쓰기 경계에서 자르고 말줄임표는 쓰지 않는다. 전화번호만 가리고 금액·날짜·수량은 보인다. 둘째 줄 "김민수 대표 · ○○철강 · 3일 전"(INK 보통 18sp, 상대 날짜를 앞에). 셋째 줄 체크할 일 1줄 + "외 n개", 넷째 진행 중인 일 1줄. 줄 수 5 이하(1.3배 렌더 ≤ 7). **`noticeLines()`(잠금 알림)와 `strip()`(띠)도 같은 순서**로.
+4. **통화 알림 바로잡기**(`CallFollowupNotice`): (가) 거는 전화가 연결되지 않아도 "정리하고 있어요" → 2분 뒤 "녹음이 없어 정리할 수 없어요"가 뜬다(`answered`가 "걸었음"만 뜻함, `CallSession.kt:29-30,143`, `CallFollowupNotice.kt:84,151-158`) → `checkNoRecording`에서 통화기록 DURATION이 0이면 알림을 조용히 지우고, 발신은 통화기록 길이 > 0일 때만 알림. (나) 저녁 보고 뒤에 정리된 통화는 다음 아침 보고(`CallDigestWork`)에 "늦게 정리된 통화 n건" 한 줄(`CallFollowupNotice.kt:45,175-178`). (다) 잠금 대체 글은 상태별 "통화 정리됨 / 확인할 통화"(지금은 늘 "통화 정리 중", `:278`).
+5. **신호등**(`StatusLights`·`SelfCheckNotices`): "통화 카드" 줄 — READ_CALL_LOG, 대기 버킷(EXEMPTED 아니면 주황), 최근 7일 `noNumber`·`noCard` 비율. 녹음 줄에 `pendingText` 판정(`RecordingGap`): 그 통화의 시간 창 안에 파일이 있고 그 파일의 자막 작업이 대기·진행 중이면 `pendingText`("녹음은 있는데 아직 글자로 바꾸는 중 n건"); 실패했거나 지원하지 않는 형식이면 `noMatch`. 분석 줄 — 설정 키 `routineEndedMs`(r14-3이 씀)로 "분석이 n시간 안 돌았어요": hourly 자가 보고의 `endedMs`를 cron상 예정된 직전 실행과 비교해 2회 놓치면 주황, 4회면 빨강(07:34 이전 아침은 전날 22:34 기준이라 울리지 않음). 봉인 DB 사용률 80% 넘으면 주황(지금은 Log.w뿐).
+- 시험: Robolectric에서 1.3배 꽉 찬 카드 아래 끝 ≤ 72%, 통화 중 띠 상단 8~20%, 줄 수 ≤ 5, 첫 줄 고르기 고정 사례 8개(기한 지남 > 확인 필요 > 요약 > 진행 > thin, 같은 순위 규칙, 줄당 18자 안팎, 전화번호 없음·금액 있음), noticeLines·strip 동일 순서, TalkBack 순서 = 화면 순서, 연결 안 된 발신 → 알림 없음, pendingText 세 경우, 분석 신호등 2회·4회 경계, 카드 샷 4종(밝게/어둡게 × 1.0/1.3) 재촬영.
 
-UPDATE_NOTE: `v3.4: 잠긴 폰에 전화가 와도 이음 카드가 보이고, 앱이 꺼져 있어도 바로 떠요. 카드가 받기 버튼을 가리지 않아요`
+### 4.3 묶음 r14-3 스스로 지키는 루틴: 실패 알림 길, 워치독 자립, 결과 받기, 시각 교정
+1. **루틴 실패 알림 길**(hourly·tidy 지시문 v8, 앱 코드 아님 — 지금 바로): 0번에 "`git pull`이나 push가 실패하면 처리하지 않고 '확인 필요: 저장소 접근'으로 답하고 끝낸다"를 넣는다. 한 실행 처리 상한 20건(남으면 다음 실행). 자가 보고는 routine별 파일(`status/last-run-hourly.json`·`last-run-tidy.json`; tidy가 hourly 것을 덮어쓰지 않게)로 나누고 `repoOk`·`pushed` 필드를 더한다(`cron`은 이미 있음 `hourly.md:279`). 예약 작업 알림은 "확인 필요" 답일 때만 의미 있게(매시간 켜면 하루 16번 울림).
+2. **워치독을 Actions 밖으로**(지금 바로): 매시간 루틴 마지막 단계에서 `python3 tools/watchdog.py --out`을 돌리고 이슈는 `gh api`(REST)로 연다. ieum-inbox의 `.github/workflows/watchdog.yml`은 지운다(비공개 저장소 Actions 과금·결제 실패와 무관해짐; 앱 저장소의 `tools/inbox/watchdog.yml` 사본도 같이). 규칙 추가: "hourly 자가 보고의 status 커밋이 cron상 2슬롯 연속 없음"(analyze 커밋 기준이 아님 — 조용한 날엔 원래 없다). 루틴이 죽으면 워치독도 멈추므로 폰 신호등(4.2-5 분석 줄)이 둘째 눈이다: 결과 받기 때 `status/last-run-hourly.json`의 `endedMs`를 읽어 설정 키 `routineEndedMs`에 쓴다(r14-3은 키만 쓰고 신호등 문구는 r14-2).
+3. **결과 받기를 루틴 시각에 맞춤**(`CallRecordWork.kt:412-451`, `ResultChain` 순수 함수): 지금은 업로드 10분 뒤부터 10분마다 12회. 바꾼 뒤: `last-run-hourly.cron` 목록에서 KST 기준 다음 예정 시각을 구해(파싱 실패면 34분 상수) +3, +8, +15분에 받고, 없으면 다음 예정 실행으로 넘기되 최대 24시간. 일정 밖(22:34 뒤) 업로드는 다음 날 첫 실행 기준. cron이 둘(4.3-6)이면 가까운 것. GitHub 호출 절반, 결과 도착 0~10분 → 3분.
+4. **업데이트를 1시간 안에**: 결과 받기 틱이 `app/version.json`을 ETag로 읽는다(`InboxETags`에 경로 추가, 304면 비용 없음). 새 버전 확인 6시간 주기(`CallUpdate.kt:468`)는 그대로 두되 ETag가 바뀌면 즉시. 오류 코드는 하트비트 `update.error`에.
+5. **시각 교정 진단**: 하트비트 `recordTime{fileVsRecordMin: 구간별 수}`(기록마다 `created_ms − started_ms` 부호·일 단위 구간, 숫자만; 자리는 r14-1이 만듦)를 더하고, `latency` 표본에서 처음 정리 기록과 7일 넘는 값을 빼 `latency.outliers`로 따로 센다. 2-2(r12-7)의 첫 진단으로 쓴다.
+6. **예약 작업 30분 간격**(선택, 1~2가 안정된 뒤): 매시간 작업을 `34 7-22`와 `04 8-22` 둘로. 같은 날짜 같은 정각 커밋이 있으면 바로 끝내는 규칙(tidy와 같음). 빈 실행은 0번에서 끝난다.
+7. **장부 질 두 가지**(`CallRecordStore`·`tidy.md`): 업체 이름을 고치면 사람처럼 ledger edit(`{"type":"renameCompany",…}`)으로 올린다(지금은 `:543-568` 사람만); 새벽 정리 rewrite는 `numbers(new)==numbers(old)`가 아니면 거부한다(`applyTidy :1074-1078`).
+8. **메일 주소 가리기**(D8, v3.3 r13-2의 `:179` 머리 줄 수정에 더해): `maskNumbers`(`ClaudeCallAnalyzer.kt:183`)에 메일 주소 정규식을 넣어 transcript·recentTexts 안의 주소도 `[주소]`로. 메일 예외(`MessageWork.kt:189`)는 삼키지 않고 사유 코드로 하트비트 `messages.mailError`에(자리는 r14-1).
+- 시험: `test_watchdog.py` 그대로 + "status 커밋 2슬롯 없음" 규칙, ResultChain 단위 시험(업로드 시각 → 다음 세 시각, 22:50 업로드 → 다음 날 07:37, cron 2개, 파싱 실패 → 상수, 24시간 상한), ETag 304, 요청 본문에 '@' 없음(transcript 포함), latency outliers 분리, renameCompany edit, 숫자 바꾼 rewrite 거부, 저장소를 연결하지 않은 예약 작업을 한 번 돌려 "확인 필요" 답을 확인.
+
+### 4.4 묶음 r14-4 실기기 체크리스트, 시험, Actions 분량, 문서
+1. 에뮬레이터 시나리오 추가: 홈으로 보낸 뒤 `am kill kr.callbrief`로 만든 콜드(**`am force-stop`은 쓰지 않는다** — 중지된 앱은 사용자가 열 때까지 PHONE_STATE를 받지 못하는 것이 정상), 잠금(`input keyevent 26` 뒤 벨 → 창 + 알림 내용), 통화 대기, 역할 없이 발신. 기준 "벨 → 창" 3초(에뮬레이터), 하트비트 `ringToCardMs` 중앙값으로 실기기 1초 확인.
+2. **S26 체크리스트**(`docs/REAL_DEVICE_CHECKLIST.md`, 사용자 10분, 앱이 결과를 하트비트로 올림): 잠긴 채 받기, 측면 버튼으로 잠근 뒤 벨, 다른 앱 쓰는 중 벨(삼성 "통화 팝업" 모드), 최근 앱에서 밀어 닫은 뒤 벨과 걸기(설정 › 강제 중지 뒤에는 카드가 안 뜨는 것이 정상), 받기·거절 터치, 통화 중 스피커·키패드 누르기 + **통화 중 화면 스크린샷 1장**(카드 영역은 FLAG_SECURE라 검게 나오는 것이 정상 `CallCardOverlay.kt:207`, 삼성 버튼 위치만 잰다), 이어폰·블루투스 통화, 1.3배 글자, 문자 실확인(MMS 긴 문자·사진 문자·RCS 채팅+ 각 1건 → 기록이 생기는지; RCS가 `content://mms`에 안 오면 "채팅+ 끄기" 안내). 결과는 `callCard` 통계와 사용자 보고로.
+3. **무인 설치 실증**: 배포 뒤 2시간 안에 하트비트 `versionCode`가 오르는지(r14-3-4 뒤). 안 오르면 `update.error` 코드로 원인을 본다.
+4. **Actions 분량 절약**(v3.4 뒤 저장소 비공개 복귀 대비): device-test는 `workflow_dispatch`와 통합 브랜치 push만, 묶음 브랜치는 ci만; inbox-e2e 하루 16회 → 2회; release-apk의 에뮬레이터 단계는 update-smoke 하나로 합침. 비공개로 돌리기 전 Billing 분 단위 사용량으로 확인.
+5. 문서·정리: DESIGN_V3 7.2·8절의 "SAW가 있으면 백그라운드 FGS 허용", "번호 2초 대기", "시간 초과면 그냥 연결", "SAW 없으면 서비스 안 시작"을 4.1-4 결정에 맞춘다. `PRODUCT.md` 화면 원칙(73-81, 117-135)을 v3.2 홈(요약만, 처음 설정은 설정으로)에 맞게 고친다. `CallsScreen.transcribing`(12시간 규칙, 시험에서만 쓰이는 죽은 코드 `CallsScreen.kt:59-66`, `ScreensHomeCallsTest.kt:117-123`)은 지운다.
+
+### 4.5 확인 기준
+- 단위 전체. device-test call-card(기존 7 + 새 4 시나리오) 통과. S26 체크리스트 통과(사용자 보고).
+- 하트비트 48시간(r14-1 배포 뒤): `callCard`가 null이 아님, `shown` > 0, **`shownOutgoing` / `eligibleOutgoing` ≥ 90%**, 발신 `noNumber` = 0, `fgsRefused` = 0, `ringToCardMs` 중앙값 < 1,000(실기기), `cold` 표본 3건 이상이고 `ringToCardMsCold` 중앙값 < 1,500, `locked`가 `noPermission`과 분리. `expanded`·`closedUnder2s`는 관찰만(다음 개선의 근거).
+- 루틴: `last-run-hourly.json`이 예정 슬롯마다 갱신되고 `pushed=true`, 워치독이 루틴 안에서 하루 16슬롯 모두 실행. 무인 설치: 배포 뒤 2시간 안 `versionCode` 상승. 요청 본문에 '@' 없음.
+
+UPDATE_NOTE: `v3.4: 거는 전화에도 이음 카드가 떠요. 잠긴 폰에 전화가 와도 카드가 보이고, 앱이 꺼져 있어도 바로 떠요. 카드 첫 줄에 그 상대와 약속한 일이 보이고, 받기 버튼을 가리지 않아요`
 
 ## 5. 위험과 대책
 
