@@ -208,7 +208,7 @@ $HOME/Android/Sdk/emulator/emulator.exe -avd ieum34 -no-audio -no-snapshot -gpu 
 ## 4-8. v2.9 (11/5 오전, Opus 통합 — lean-calls 배포, 기준 DESIGN_V3.md 6절, 다르게 정한 것은 6.5)
 - 통합 `feature/r10-v29` 0ca80a6: r10-1(372adbe 전화 상태 감지) → r10-3(289d4c1 결과 10분 체인·ETag) → r10-2(6265c2a 통화별 알림) — 충돌 없음. `CallSessionStub.kt` 삭제, `CallSession` IDLE 끝 `CallFollowupNotice.onCallEnded` 켬. 전체 단위 시험 **492건 통과** + lint(`v29-test-1`), 화면 규칙 0, 비밀 스캔 0. 보고서 `docs/orchestration/reports/feature-r10-v29-r*.md`.
 - 새 권한 `READ_PHONE_STATE`(처음 설정 8단계 중 "통화가 끝난 걸 바로 알아차리기"), 수신기 `pipeline.call.CallStateReceiver`, 작업 `ieum.discovery.aftercall`·`ieum.calls.results`(10분 체인), 채널 `ieum.calls.followup`, 액션 `kr.callbrief.action.CALL_MEMO`, 하트비트 `resultChain`.
-- **사용자 할 일:** 예약 작업 "이음 통화 분석 (매시간)" 실행 일정 `30 * * * *` → `CRON_TZ=Asia/Seoul */30 7-22 * * *`(프롬프트 본문은 그대로). 바꾸면 이 파일·OPERATIONS의 "매시 30분"을 "30분마다(07:00~22:30)"로. 워치독 새 규칙(`tools/inbox/watchdog.py`)은 ieum-inbox `tools/watchdog.py`에 다시 복사해야 반영.
+- 예약 작업(11/5 17시 다시 만듦, 옛것 삭제): "이음 통화 분석 (매시간)" `trig_01Q8HXh1MKsfDHZsPovxRtLa` — 지시문 **버전 6**(그때까지 루틴은 버전 5였음), `CRON_TZ=Asia/Seoul 34 7-22 * * *`(30분 간격은 예약 작업이 허용하지 않음), Sonnet 5.5. "이음 새벽 정리 (매일)" `trig_018q8SX7vHbVqFVpCX3fzg7Q` — tidy v2.6판(rev, mergeCandidates), 05:16, Opus 5.5, 알림 켬. "이음 통화 목록 검증 (매일)"은 그대로. 워치독 새 규칙(`tools/inbox/watchdog.py`)은 ieum-inbox `tools/watchdog.py`에 다시 복사해야 반영.
 - 기기 확인 못 한 것: 실제 PHONE_STATE 흐름, RemoteInput 메모 — v3.0 device-test `call-card` 단계에서 같이 본다.
 
 ## 4-9. v3.0 (11/5 오후, Opus 통합 — lean-calls 배포, 기준 DESIGN_V3.md 7절, 다르게 정한 것은 7.5)
