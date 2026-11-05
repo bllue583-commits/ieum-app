@@ -7,7 +7,8 @@
 #   ringingWindow, stripAfter3s, goneAfterIdle, serviceGone, outgoing, unknownOff, personalNothing   (v3.0, seven)
 #   outgoingNoRole  without the call redirection role: a made call still has its number at OFFHOOK and shows the card
 #   callWaiting     a second call ringing during a call hides the first card; nothing until IDLE; no second card
-#   coldWindow      the app's process killed (am kill, never force-stop), then a call: the card within the limit
+#   coldWindow      the app's process killed (am kill; when a job keeps it busy, its own kill through run-as, as the
+#                   low-memory killer would; never force-stop), then a call: the card within the limit
 #   lockedNotice    screen off and locked (keyevent 26), then a call: the card's notice with its words
 # and "info" (not checks, for the report): ms from ring (or dial) to the card window, and whether the window showed over the
 # locked screen (DESIGN_V4 4.2-1: to be seen on the phone). Screenshots evidence/shots/card_*.png. The log lines it judged
@@ -53,6 +54,17 @@ notice_words() {
     END { done(); exit !ok }'
 }
 app_pid() { adb shell pidof "$pkg" 2>/dev/null | tr -d '\r'; }
+# The call state the system last announced (0 idle, 1 ringing, 2 off hook), for the log.
+call_state() { adb shell dumpsys telephony.registry 2>/dev/null | tr -d '\r' | grep -m1 -oE "mCallState=[0-9]+" || echo "mCallState=?"; }
+# This app's notices for the log: record lines, channels and the lengths of title and text (the dump is redacted by default;
+# no words are written).
+notice_lines() {
+  { echo "-- notices of $pkg --"
+    adb shell dumpsys notification 2>/dev/null | tr -d '\r' | awk -v p="pkg=$pkg" '
+      /NotificationRecord\(/ { on=(index($0,p)>0); if(on) print }
+      on && /mChannel=|android\.(title|text|bigText)=/ { print }'
+  } >> "$log"
+}
 logged() { adb logcat -d -s "$1:I" 2>/dev/null | grep -q "$2"; }
 count_logged() { adb logcat -d -s "$1:I" 2>/dev/null | grep -c "$2"; }
 # Waits up to $1 seconds for "$2" (a function name) to succeed.
@@ -187,6 +199,7 @@ gsm accept "$known"; sleep 4
 strip_up=$(b window_up)
 gsm call "$unknown"
 hidden=false; wait_for 3 not_window && hidden=true
+say "call waiting: second ring, $(call_state)"
 sleep 3; quiet_ring=$(b not_window)
 shot waiting
 gsm accept "$unknown"; sleep 3; quiet_answered=$(b not_window)
@@ -215,9 +228,17 @@ keep_log "personal"
 # ---- 콜드: 프로세스 없이 벨 (v3.4, DESIGN_V4 4.4-1). am kill: a stopped app (force-stop) gets no PHONE_STATE, that is normal --
 begin cold
 adb shell input keyevent KEYCODE_HOME; sleep 2
-for i in 1 2 3; do adb shell am kill "$pkg" >> "$log" 2>&1; sleep 1; [ -z "$(app_pid)" ] && break; sleep 2; done
+how=none
+for i in 1 2 3 4 5 6; do adb shell am kill "$pkg" >> "$log" 2>&1; sleep 1; [ -z "$(app_pid)" ] && { how=amKill; break; }; sleep 4; done
+if [ -n "$(app_pid)" ]; then
+  # Still busy (a job after the last call keeps it out of the background): the process ends the way the low-memory killer
+  # ends it. The app is not stopped, so the call's broadcast still starts it.
+  adb shell run-as "$pkg" kill -9 "$(app_pid)" >> "$log" 2>&1 || true; sleep 1
+  [ -z "$(app_pid)" ] && how=runAsKill
+fi
 before=$(app_pid)
-if [ -n "$before" ]; then say "cold: the process did not go (am kill)"; else
+say "cold: process gone by $how"
+if [ -n "$before" ]; then say "cold: the process did not go"; else
   start=$(now_ms); gsm call "$known"
   if wait_for 10 window_up; then
     took=$(( $(now_ms)-start )); ms_cold=$took; say "cold: card window after ${took} ms (limit ${cold_limit_ms})"
@@ -236,6 +257,7 @@ lock_on=$(adb shell dumpsys window 2>/dev/null | grep -cE "mDreamingLockscreen=t
 gsm call "$known"
 l_notice=false; wait_for 10 notice_words && l_notice=true
 locked_window=$(b window_up)
+say "locked: $(call_state), pid=$(app_pid), any notice=$(b notice_up), service=$(b service_up)"; notice_lines
 sleep 0.5; shot locked
 say "locked: lock screen on=$([ "$lock_on" -gt 0 ] && echo true || echo false), notice with words=$l_notice, window=$locked_window"
 [ "$l_notice" = true ] && lockedNotice=true
