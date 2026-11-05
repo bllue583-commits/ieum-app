@@ -30,6 +30,8 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
         const val LATE_MS=6*3_600_000L
         const val TRANSCRIBING="녹음을 글자로 바꾸는 중이에요"
         const val NO_SPEECH="녹음에서 말소리를 찾지 못했어요"
+        /** The words of the transcript button while the whole text is open. */
+        const val TRANSCRIPT_CLOSE="접기"
         /** The time the call screens measure against; tests set it. */
         @Volatile internal var clock:()->Long={ System.currentTimeMillis() }
         /** Test hook: runs on the IO thread right before a day is read (lets a test hold the read while it looks at the screen). */
@@ -163,10 +165,11 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
                 Read(dayCalls,runCatching { s.dayLog(target) }.getOrDefault(emptyList()),
                     runCatching { s.transcribingStarts(from-NEAR_MS,to+NEAR_MS) }.getOrDefault(emptyList()),
                     runCatching { SecureSettings(storage).snapshot().optString("treeUri").isNotBlank() }.getOrDefault(false),
-                    runCatching { s.personIdsOf(dayCalls.map { it.recordId }) }.getOrDefault(emptyMap()))
+                    runCatching { s.personIdsOf(dayCalls.map { it.recordId }) }.getOrDefault(emptyMap()),
+                    runCatching { s.openItems().associateBy { it.id } }.getOrDefault(emptyMap()))
             } }
             if(!live()||target!=day)return@launch
-            result.onSuccess { calls=it.calls;logs=it.logs;jobStarts=it.jobs;folder=it.folder;people=people+it.people;reading=false;pool=null;render() }
+            result.onSuccess { calls=it.calls;logs=it.logs;jobStarts=it.jobs;folder=it.folder;people=people+it.people;open=it.open;reading=false;pool=null;render() }
             result.onFailure {
                 reading=false
                 body.removeAllViews();CallUi.band(body,"${CallUi.dayWord(day)}의 통화")
@@ -174,7 +177,11 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
             }
         }
     }
-    private class Read(val calls:List<CallRecord>,val logs:List<LoggedCall>,val jobs:List<Long>,val folder:Boolean,val people:Map<String,String>)
+    private class Read(val calls:List<CallRecord>,val logs:List<LoggedCall>,val jobs:List<Long>,val folder:Boolean,val people:Map<String,String>,val open:Map<String,OpenItem>)
+    /** The open check items by id, read with the day: a call's detail page puts [다 됐어요] on those still open (v3.3, DESIGN_V4 3.3-4). */
+    private var open:Map<String,OpenItem> =emptyMap()
+    /** The transcript of the detail page is open ([전체 보기] became [접기]); kept while the same call is drawn again. */
+    private var transcriptOpen:String?=null
     /** The person each shown call is linked to, by record id: the badge and the name open the person page (v2.8). */
     private var people:Map<String,String> =emptyMap()
     /** Named people and their company, read with the search pool: a search shows matching people above the calls (v2.8). */
@@ -370,16 +377,29 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
                 body.addView(CallUi.section(a,"이 통화에서 생긴 체크할 일"))
                 body.addView(CallUi.list(a,done.map { t ->
                     val made=an.tasks.firstOrNull { it.title.trim().take(240)==t.title.trim() }
-                    CallUi.taskRow(a,t.title,0,null,status=if(t.op=="create"||t.op=="update") "" else "needs_confirmation").apply {
+                    // v3.3: the item as it is now (open: [다 됐어요] here too), "확인 필요" when a number or date may be misheard.
+                    val item=open[t.itemId]
+                    CallUi.taskRow(a,CallUi.shortTitle(item?.title ?: t.title,c.linkedPerson ?: an.counterpartName),0,null,
+                        status=if(t.op=="create"||t.op=="update") "" else "needs_confirmation",
+                        onDone=item?.let { i -> { row:View -> TaskActions.complete(a,i,row) { load() } } },
+                        unsure=item?.tentative ?: (made?.tentative==true)).apply {
                         tag="call_task_${t.itemId}"
-                        ScreenParts.ownerWords(made?.owner).takeIf { it.isNotEmpty() }?.let { w -> addView(CallUi.caption(a,w).apply { tag="task_owner";setPadding(0,CallUi.dp(a,6),0,0) }) }
-                        ScreenParts.quoteLine(made?.quote,made?.quoteFuzzy==true).takeIf { it.isNotEmpty() }?.let { q -> addView(CallUi.caption(a,q,CallUi.SUBTLE).apply { tag="task_quote";setPadding(0,CallUi.dp(a,4),0,0) }) }
+                        ScreenParts.ownerWords(made?.owner).takeIf { it.isNotEmpty() }?.let { w -> addView(CallUi.text(a,w,CallUi.ASIDE,color=CallUi.SUBTLE).apply { tag="task_owner";setPadding(0,CallUi.dp(a,6),0,0) }) }
+                        ScreenParts.quoteLine(made?.quote,made?.quoteFuzzy==true).takeIf { it.isNotEmpty() }?.let { q -> addView(CallUi.text(a,q,CallUi.ASIDE,color=CallUi.SUBTLE).apply { tag="task_quote";setPadding(0,CallUi.dp(a,4),0,0) }) }
                     } },inset=16))
             }
         }
         if(c.transcript.isNotBlank()) {
-            val full=CallUi.card(a).apply { addView(CallUi.text(a,c.transcript,CallUi.BODY));visibility=View.GONE }
-            body.addView(CallUi.button(a,if(c.kind=="통화") "통화 내용 전체 보기" else "${c.kind} 전체 보기") { full.visibility=if(full.visibility==View.GONE) View.VISIBLE else View.GONE }.apply { tag="toggle_transcript" })
+            // [전체 보기] opens the whole text and becomes [접기] (v3.3, DESIGN_V4 3.3-4); the place is kept on a redraw.
+            val shut=if(c.kind=="통화") "통화 내용 전체 보기" else "${c.kind} 전체 보기"
+            val opened=transcriptOpen==c.recordId
+            val full=CallUi.card(a).apply { addView(CallUi.text(a,c.transcript,CallUi.BODY));visibility=if(opened) View.VISIBLE else View.GONE;tag="call_transcript" }
+            body.addView(CallUi.button(a,if(opened) TRANSCRIPT_CLOSE else shut) {}.apply { tag="toggle_transcript"
+                val self=this
+                CallUi.onTap(this,ms=0L) {
+                    val show=full.visibility==View.GONE
+                    full.visibility=if(show) View.VISIBLE else View.GONE;self.text=if(show) TRANSCRIPT_CLOSE else shut
+                    transcriptOpen=if(show) c.recordId else null } })
             body.addView(full)
         }
     }

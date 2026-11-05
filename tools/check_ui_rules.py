@@ -7,6 +7,8 @@ Rules:
   2. No red-family color constant (hex #RRGGBB / 0xFFRRGGBB), and never #D63B3B / #F04452 / #E5xxxx.
   3. No ellipsize, no WARN_SOFT, no "기한" word on screen.
   4. No English status value (QUEUED, FAILED, ...) inside a Korean on-screen string.
+  5. (warning, v3.3 DESIGN_V4 3.3-2) No new CallUi.caption( call: a file with more uses than CAPTION_BASELINE gets a warning
+     line (not counted as a violation). New screens use CallUi.text (18sp and up) or CallUi.meta (the 16sp META line only).
 Usage: python3 tools/check_ui_rules.py [source_root ...]
 """
 import os, re, sys
@@ -17,6 +19,9 @@ STATE_WORDS = ("QUEUED", "FAILED", "FAILURE", "READY", "PENDING", "RUNNING", "SK
 STATE_RE = re.compile(r"(?<![A-Za-z_])(" + "|".join(STATE_WORDS) + r")(?![A-Za-z])")
 LOG_LINE = re.compile(r"\b(Log\.[a-z]\(|println\(|Timber\.|logger\.|check\(|require\(|error\(|IllegalStateException\(|IllegalArgumentException\(|Exception\()")
 BANNED_WORDS = ("ellipsize", "WARN_SOFT")
+# Uses of caption( per file when the rule came in (v3.3 r13-3); more than this is a new use and gets a warning.
+CAPTION_BASELINE = {"CallUi.kt": 7, "PersonScreen.kt": 4, "HomeScreen.kt": 2, "CallCardView.kt": 1}
+CAPTION_CALL = re.compile(r"(?<![A-Za-z0-9_])caption\(")
 # Text sent to the model, never shown on a screen.
 PROMPT_FILES = ("ClaudeCallAnalyzer.kt",)
 
@@ -97,6 +102,19 @@ def check_kotlin(path, text):
     return v
 
 
+def caption_uses(text):
+    """Calls of caption( in the code of a Kotlin file (comments and strings left out)."""
+    return sum(len(CAPTION_CALL.findall(c)) for _, k, c in kotlin_strings(text) if k == "code")
+
+
+def caption_warnings(path, text):
+    n = caption_uses(text)
+    allowed = CAPTION_BASELINE.get(os.path.basename(path), 0)
+    if n > allowed:
+        return [(path, 0, f"warning: {n - allowed} new caption( use(s); use CallUi.text (18sp) or CallUi.meta (META line)")]
+    return []
+
+
 def check_xml(path, text):
     v = []
     text_nc = re.sub(r"<!--.*?-->", lambda m: "\n" * m.group(0).count("\n"), text, flags=re.S)
@@ -114,7 +132,7 @@ def check_xml(path, text):
     return v
 
 
-def scan(roots):
+def scan(roots, warnings=None):
     found = []
     for root in roots:
         for d, dirs, files in os.walk(root):
@@ -122,7 +140,9 @@ def scan(roots):
             for f in files:
                 p = os.path.join(d, f)
                 if f.endswith((".kt", ".java")):
-                    found += check_kotlin(p, open(p, encoding="utf-8").read())
+                    text = open(p, encoding="utf-8").read()
+                    found += check_kotlin(p, text)
+                    if warnings is not None and f.endswith(".kt"): warnings += caption_warnings(p, text)
                 elif f.endswith(".xml") and "/res/values" in p.replace("\\", "/"):
                     found += check_xml(p, open(p, encoding="utf-8").read())
     return found
@@ -130,7 +150,10 @@ def scan(roots):
 
 def main(argv):
     roots = argv or ["android/app/src/main"]
-    found = scan(roots)
+    warnings = []
+    found = scan(roots, warnings)
+    for p, ln, msg in warnings:
+        print(f"{p}:{ln}: {msg}")
     for p, ln, msg in found:
         print(f"{p}:{ln}: {msg}")
     print(f"ui rules: {len(found)} violation(s)")

@@ -49,15 +49,25 @@ internal object CallDigestText {
     /** Up to [ISSUE_LINES] "진행 중인 일" lead the morning lines (design: 새벽 정리). */
     const val ISSUE_LINES=3
     /** Every open check item, oldest request first, with when it was asked for. No deadlines, no "지남" (user rule;
-     * round 2: before, items without a date never reached this report). */
+     * round 2: before, items without a date never reached this report). An item that may hold a misheard number ends in ", 확인 필요". */
     fun morning(items:List<CallTodoItem>,today:LocalDate,issues:List<Issue> =emptyList()):Message {
-        val lines=issues.take(ISSUE_LINES).map { "진행 중, ${it.title}"+(if(it.status.isBlank()) "" else ": ${it.status}") }+
-            items.sortedBy { it.createdMs }.map { "${it.company?.let { c -> "[$c] " } ?: ""}${it.title}"+CallUi.requested(it.createdMs).let { r -> if(r.isEmpty()) "" else ", $r" }+
-                (if(it.status=="needs_confirmation") ", 끝났는지 확인" else "") }
+        val issueLines=issues.take(ISSUE_LINES).map { "진행 중, ${it.title}"+(if(it.status.isBlank()) "" else ": ${it.status}") }
+        val itemLines=items.sortedBy { it.createdMs }.map { "${it.company?.let { c -> "[$c] " } ?: ""}${it.title}"+CallUi.requested(it.createdMs).let { r -> if(r.isEmpty()) "" else ", $r" }+
+                (if(it.status=="needs_confirmation") ", 끝났는지 확인" else "")+
+                // v3.3 (DESIGN_V4 3.1-2): a number or date that may have been misheard, said in words (a notification has no badge).
+                (if(it.tentative) ", ${CallUi.UNSURE}" else "") }
+        // v3.3 (DESIGN_V4 3.3-4): the line the [다 됐어요] button finishes leads, marked "지금 할 일:"; the issues under way follow
+        // the check items (they always fit: the items give way to them).
+        val marked=itemLines.mapIndexed { i,l -> if(i==0) NOW_PREFIX+l else l }
+        val lines=(if(issueLines.isEmpty()) more(marked) else moreIn(marked,MAX_LINES-issueLines.size))+issueLines
         val first=items.minByOrNull { it.createdMs }
-        return Message("체크할 일 ${items.size}개",if(items.isEmpty()) "체크할 일이 없어요" else lines[minOf(issues.take(ISSUE_LINES).size,lines.size-1)],more(lines),
+        return Message("체크할 일 ${items.size}개",if(items.isEmpty()) "체크할 일이 없어요" else marked.first(),lines,
             first?.id,first?.revision ?: 0)
     }
+    /** The words in front of the morning report's first check item, the one its [다 됐어요] button finishes. */
+    const val NOW_PREFIX="지금 할 일: "
+    private fun moreIn(lines:List<String>,room:Int):List<String> { val keep=(room-1).coerceAtLeast(1)
+        return if(lines.size>room.coerceAtLeast(1)) lines.take(keep)+"외 ${lines.size-keep}개" else lines }
     /** The morning report once its last item was finished from the notification: no button any more. */
     fun allDone(issues:List<Issue> =emptyList()):Message {
         val lines=issues.take(ISSUE_LINES).map { "진행 중, ${it.title}"+(if(it.status.isBlank()) "" else ": ${it.status}") }

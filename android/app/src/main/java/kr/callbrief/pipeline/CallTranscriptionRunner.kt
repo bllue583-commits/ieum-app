@@ -16,6 +16,9 @@ import kr.callbrief.GeneralLocalStore
 import kr.callbrief.LocalPrivacy
 import kr.callbrief.RecordingRef
 import kr.callbrief.SecureSettings
+import kr.callbrief.SttDecode
+import kr.callbrief.SttPrompt
+import org.json.JSONObject
 import java.io.File
 import java.time.Instant
 import java.util.concurrent.TimeUnit
@@ -49,20 +52,65 @@ internal class WhisperCallTranscriber(private val engine:AndroidWhisperEngine,pr
      * emulator transcribe a whole recording in one piece and pass a longer limit. */
     private val deadlineSeconds:Int=CallTranscriptionRunner.NATIVE_DEADLINE_SECONDS,
     /** F4 initial prompt, "" for none (the default while [AndroidWhisperEngine.PROMPT_ENABLED] is off); the golden set passes it explicitly. */
-    private val prompt:String=AndroidWhisperEngine.defaultPrompt()):CallTranscriber {
+    private val prompt:String=AndroidWhisperEngine.defaultPrompt(),
+    /** v3.3 golden variants (DESIGN_V4 3.2-5..8); the app keeps every default. Decoding switches (B1, B4, B5). */
+    private val decode:SttDecode=SttDecode.DEFAULT,
+    /** B3: names for a sentence-style prompt ([SttPrompt.sentence], token-limited); used instead of [prompt] when not null. */
+    private val promptNames:List<String>?=null,
+    /** B2: the end of the previous piece of the same recording goes in front of the prompt ([SttPrompt.context]). */
+    private val carryContext:Boolean=false,
+    /** v3.3 (3.2-1): numbers of each finished piece (ms, fallbacks, repaired and dropped segments, uncertain numbers). */
+    private val pieceStats:(SttPieceStats)->Unit={}):CallTranscriber {
     private fun threads()=threadCount ?: threadSource?.invoke() ?: (Runtime.getRuntime().availableProcessors()-1).coerceIn(1,6) // S26: 6 threads 85 s/min, 8 threads ~3x slower
     private fun segmentsOf(raw:ByteArray):List<CallTranscript.Segment> {
         val output=AndroidWhisperEngine.decodeOutput(raw) // no segments = silence; a malformed segment is dropped alone
         if(output.dropped>0)android.util.Log.w("ieum.stt","dropped ${output.dropped} malformed segment(s) of ${output.dropped+output.segments.length()}")
-        return (0 until output.segments.length()).map { i -> val s=output.segments.getJSONObject(i)
-            CallTranscript.Segment(s.getLong("startMs"),s.getLong("endMs"),s.getString("text")) }
+        val segments=segmentsOf(output)
+        runCatching { pieceStats(SttPieceStats.of(output,segments)) }
+        return segments
     }
     override fun transcribe(model:File,pcm:FloatArray,stopped:()->Boolean):List<CallTranscript.Segment> = open(model,stopped).use { it.transcribe(pcm,stopped) }
     override fun open(model:File,stopped:()->Boolean):CallTranscriber.Session {
         val session=engine.openVerifiedModel(model,{this.model.verifiedModelFile()!=null},threads(),stopped)
         return object:CallTranscriber.Session {
-            override fun transcribe(pcm:FloatArray,stopped:()->Boolean)=segmentsOf(session.transcribe(pcm,"ko",deadlineSeconds,prompt,stopped))
+            private var previous=""
+            private val base by lazy { promptNames?.let { SttPrompt.sentence(it,count=session::countTokens) } ?: prompt }
+            override fun transcribe(pcm:FloatArray,stopped:()->Boolean):List<CallTranscript.Segment> {
+                val hint=if(!carryContext) base else SttPrompt.join(SttPrompt.context(previous,count=session::countTokens),base,count=session::countTokens)
+                val out=segmentsOf(session.transcribe(pcm,"ko",deadlineSeconds,hint,decode,stopped))
+                if(carryContext) previous=out.joinToString(" ") { it.text.trim() }.trim()
+                return out
+            }
             override fun close()=session.close()
+        }
+    }
+    companion object {
+        /** The segments of a decoded piece, with the numbers the recognizer was unsure of (r13-1's number guard). */
+        fun segmentsOf(output:kr.callbrief.AndroidWhisperOutput):List<CallTranscript.Segment> =
+            (0 until output.segments.length()).map { i -> val s=output.segments.getJSONObject(i)
+                val unsure=s.optJSONArray("uncertainNumbers")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList()
+                CallTranscript.Segment(s.getLong("startMs"),s.getLong("endMs"),s.getString("text"),unsure) }
+    }
+}
+
+/** v3.3 (DESIGN_V4 3.2-1): the numbers of one finished piece. Never its text. */
+internal data class SttPieceStats(val segments:Int,val repaired:Int,val dropped:Int,val uncertainNumbers:Int,val timings:JSONObject?) {
+    companion object {
+        fun of(o:kr.callbrief.AndroidWhisperOutput,segments:List<CallTranscript.Segment>)=
+            SttPieceStats(segments.size,o.repaired,o.dropped,segments.sumOf { it.uncertainNumbers.size },o.timings)
+        /** Running totals under [PhoneStatus.STT_DECODE] for the heartbeat's transcription.decode: {"pieces","segments",
+         * "repaired","dropped","uncertainNumbers","timed","encodeMs","decodeMs","batchdMs","promptMs","sampleMs",
+         * "fallbackP","fallbackH","last":{the timings of the last piece}}. Numbers only. */
+        fun add(previous:JSONObject?,s:SttPieceStats):JSONObject {
+            val o=previous?.let { JSONObject(it.toString()) } ?: JSONObject()
+            fun plus(k:String,v:Number) { o.put(k,if(v is Long||v is Int) o.optLong(k,0)+v.toLong() else Math.round((o.optDouble(k,0.0).takeIf { it.isFinite() } ?: 0.0)*10+v.toDouble()*10)/10.0) }
+            plus("pieces",1);plus("segments",s.segments);plus("repaired",s.repaired);plus("dropped",s.dropped);plus("uncertainNumbers",s.uncertainNumbers)
+            s.timings?.let { t ->
+                plus("timed",1)
+                for(k in kr.callbrief.AndroidWhisperEngine.TIMING_KEYS) if(t.has(k)) { if(k.startsWith("fallback")) plus(k,t.getLong(k)) else plus(k,t.getDouble(k)) }
+                o.put("last",JSONObject(t.toString()))
+            }
+            return o
         }
     }
 }
@@ -137,7 +185,7 @@ internal class CallTranscriptionRunner(
                     throw e
                 }
             if(stopped())stop(stallId) // a piece cut short is not kept
-            val shifted=raw.map { CallTranscript.Segment(it.startMs+offset,it.endMs+offset,it.text) }
+            val shifted=raw.map { it.copy(startMs=it.startMs+offset,endMs=it.endMs+offset) } // v3.3: uncertain numbers go along
             store.savePart(key,partId,shifted);pieces++;recordingPieces++;return shifted
         }
         try {
@@ -272,7 +320,8 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
         val began=android.os.SystemClock.elapsedRealtime()
         return try {
             GeneralLocalStore(storage).use { local -> CallTranscriptionStore(storage).use { store ->
-                val pass=CallTranscriptionRunner(store,model,PipelineAudioDecoder(channels={ r -> settings.update{ PipelineAudioDecoder.accumulate(it,r) } }),WhisperCallTranscriber(AndroidWhisperEngine(storage).also { engine=it },model,threadSource={ TranscriptionThreads.current(storage) }),
+                val pass=CallTranscriptionRunner(store,model,PipelineAudioDecoder(channels={ r -> settings.update{ PipelineAudioDecoder.accumulate(it,r) } }),WhisperCallTranscriber(AndroidWhisperEngine(storage).also { engine=it },model,threadSource={ TranscriptionThreads.current(storage) },
+                        pieceStats={ st -> runCatching { settings.update { s -> s.put(PhoneStatus.STT_DECODE,SttPieceStats.add(runCatching { JSONObject(s.optString(PhoneStatus.STT_DECODE)) }.getOrNull(),st).toString()) } } }),
                     read={ c -> readAudio(local,c) },
                     skipReason={ c -> skipReason(c,settings) },
                     // The app may not have been opened since the phone restarted: the sink is made here then (review 11/4, round 2).

@@ -145,8 +145,11 @@ class UiV2Test:ProtectedTextHostTestBase() {
     @Test fun mainActivityIsTheOnlyScreenAndKeepsItsStateAcrossARestart() {
         val pm=app.packageManager
         val info=pm.getPackageInfo(app.packageName,android.content.pm.PackageManager.GET_ACTIVITIES)
-        assertEquals(listOf(MainActivity::class.java.name),info.activities!!.map { it.name })
-        assertEquals(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,info.activities!!.single().screenOrientation)
+        // v3.3 (DESIGN_V4 3.2-4): besides the one screen Activity only the hidden golden measurement tool, not exported.
+        val activities=info.activities!!
+        assertEquals(listOf(MainActivity::class.java.name),activities.filter { it.name!=GoldenMeasureActivity::class.java.name }.map { it.name })
+        activities.firstOrNull { it.name==GoldenMeasureActivity::class.java.name }?.let { assertFalse(it.exported) }
+        activities.forEach { assertEquals(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,it.screenOrientation) }
         seeded()
         val c=Robolectric.buildActivity(MainActivity::class.java,MainActivity.intent(app,Screen.COMPANIES)).setup()
         val a=c.get();settle { tagged(a,"company_").any { it is ViewGroup } }
@@ -228,7 +231,7 @@ class UiV2Test:ProtectedTextHostTestBase() {
         SecureSettings(app).update { it.put(PipelineSettingsKeys.LAST_UPDATE_ERROR,"STATUS_FAILURE_STORAGE (6): 공간 부족") }
         val a=launchMain(Screen.SETTINGS)
         settle { tag(a,"status_update")!=null }
-        assertEquals(listOf(SettingsScreen.GROUP_NOW,"group_연결","group_통화 카드","group_정리","group_상태와 도움"),views(a.window.decorView).mapNotNull { it.tag as? String }.filter { it.startsWith("group_") })
+        assertEquals(listOf(SettingsScreen.GROUP_NOW,"group_연결","group_통화 카드","group_정리","group_상태와 도움"),views(a.window.decorView).mapNotNull { it.tag as? String }.filter { it.startsWith("group_") && it!="group_"+SettingsScreen.STATUS_NAME }) // v3.3: 지금 상태 leads while a light is amber
         val update=views(tag(a,"status_update")).filterIsInstance<TextView>().joinToString { it.text }
         assertTrue(update,update.contains("저장 공간이 부족해 설치하지 못했어요") && !update.contains("STATUS") && !update.contains("공간 부족"))
         assertEquals("저장 공간이 부족해 설치하지 못했어요.",(tag(a,"update_error") as TextView).text.toString())

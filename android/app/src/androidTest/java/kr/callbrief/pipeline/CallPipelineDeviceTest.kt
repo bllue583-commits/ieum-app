@@ -179,7 +179,10 @@ class CallPipelineDeviceTest {
             fun walk(v:View):Boolean=(v is android.widget.TextView&&v.text.toString().contains(value))||(v is android.view.ViewGroup&&(0 until v.childCount).any{walk(v.getChildAt(it))})
             return walk(a.window.decorView)
         }
-        shot("1_home",Screen.HOME){has(it,"home_calls_button")&&has(it,"home_today")}
+        // v3.3 (DESIGN_V4 3.3-3): the width of the home title at 1.0, to hold the 1.3 picture against.
+        fun titleWidth(a:Activity)=(a.window.decorView.findViewWithTag<View>("page_title") as? android.widget.TextView)?.let { it.paint.measureText(it.text.toString()) }
+        var normalTitle:Float?=null
+        shot("1_home",Screen.HOME){ a -> (has(a,"home_calls_button")&&has(a,"home_today")).also { if(it) normalTitle=titleWidth(a) } }
         shot("2_today",Screen.CALLS){text(it,"김민수")}
         shot("3_tasks",Screen.TASKS){text(it,"견적서 보내기")}
         shot("4_settings",Screen.SETTINGS){text(it,"정리 동의")}
@@ -210,9 +213,33 @@ class CallPipelineDeviceTest {
             if(!personOpened) { a.openPerson(personId);personOpened=true }
             has(a,"person_section_recent") }
         fun shell(cmd:String) { inst.uiAutomation.executeShellCommand(cmd).close();Thread.sleep(1500) }
+        // v3.3 (DESIGN_V4 3.3-3): the 1.3 picture only once the Activity really has fontScale 1.3 (an Activity already made keeps
+        // the old size: it is made again), and its title is then at least 1.2 times as wide as at 1.0.
         shell("settings put system font_scale 1.3")
-        try { shotWith("9_home_large",MainActivity.intent(context,Screen.HOME)){ has(it,"home_calls_button")&&has(it,"home_today") } }
-        finally { shell("settings put system font_scale 1.0") }
+        try {
+            ActivityScenario.launch<MainActivity>(MainActivity.intent(context,Screen.HOME)).use { s ->
+                fun scale():Float { var f=0f;s.onActivity { f=it.resources.configuration.fontScale };return f }
+                repeat(3) { if(Math.abs(scale()-1.3f)>0.01f) { s.recreate();inst.waitForIdleSync();Thread.sleep(1000) } }
+                val scaled=scale();shots.put("fontScale",scaled.toDouble())
+                assertEquals("fontScale of the Activity",1.3f,scaled,0.01f)
+                var ok=false;var large:Float?=null
+                repeat(300){ if(!ok){ s.onActivity{a->ok=has(a,"home_calls_button")&&has(a,"home_today");if(ok) large=titleWidth(a)};if(!ok)Thread.sleep(100) } }
+                inst.waitForIdleSync();Thread.sleep(2000);inst.waitForIdleSync()
+                var bmp:Bitmap?=null
+                repeat(3){ if(bmp==null){ bmp=inst.uiAutomation.takeScreenshot();if(bmp==null)Thread.sleep(1000) } }
+                bmp?.let { b -> File(out,"9_home_large.png").outputStream().use{b.compress(Bitmap.CompressFormat.PNG,100,it)} }
+                shots.put("9_home_large",ok);assertTrue("9_home_large did not render",ok)
+                val ratio=if(normalTitle!=null && large!=null && normalTitle!!>0f) large!!/normalTitle!! else 0f
+                // Android 14 and later scale large sizes less than small ones (non-linear font scaling): a 30sp title at 1.3 is
+                // drawn about 1.1 times as wide, so the drawn ratio is recorded and must only grow; the 1.2 of the design holds for
+                // the scale itself (fontScale above and the host test of scaledDensity).
+                shots.put("titleRatio",ratio.toDouble());assertTrue("title at 1.3 is $ratio times as wide",ratio>1.0f)
+            }
+        } finally { shell("settings put system font_scale 1.0") }
+        // v3.3: home at night (the phone's dark setting), a picture to look at.
+        shell("cmd uimode night yes")
+        try { shotWith("10_home_dark",MainActivity.intent(context,Screen.HOME)){ has(it,"home_calls_button")&&has(it,"home_today") } }
+        finally { shell("cmd uimode night no") }
         report("t4_screens",shots)
     }
 

@@ -27,26 +27,30 @@ internal object CheckRows {
         if(open!=null) outer.apply { isClickable=true;isFocusable=true;background=CallUi.rowRipple();CallUi.onTap(this,action=open) }
         else outer.apply { isClickable=false;isFocusable=false;background=null }
         // 1. The company badge, and the state ("확인 필요", "진행 중") beside it.
-        val pill=CallUi.taskStatus(status).takeIf { it.isNotEmpty() }?.let { CallUi.pill(a,it,CallUi.ACCENT) }
-        if(!company.isNullOrBlank() || pill!=null) outer.addView(LinearLayout(a).apply {
+        val pill=CallUi.stateWords(status).takeIf { it.isNotEmpty() }?.let { CallUi.pill(a,it,CallUi.ACCENT) }
+        // v3.3: "확인 필요" when a number or date may have been misheard (or the item was only loosely asked for).
+        val unsure=if(item.tentative) CallUi.unsureBadge(a) else null
+        if(!company.isNullOrBlank() || pill!=null || unsure!=null) outer.addView(LinearLayout(a).apply {
             orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;tag="task_badges"
             if(!company.isNullOrBlank()) addView(CallUi.chip(a,company).apply { tag="task_company" },LinearLayout.LayoutParams(-2,-2).apply { marginEnd=CallUi.dp(a,8) })
+            unsure?.let { addView(it,LinearLayout.LayoutParams(-2,-2).apply { marginEnd=CallUi.dp(a,8) }) }
             pill?.let { addView(it,LinearLayout.LayoutParams(-2,-2)) }
         },LinearLayout.LayoutParams(-1,-2).apply { bottomMargin=CallUi.dp(a,8) })
-        // 2. The title.
-        outer.addView(CallUi.text(a,item.title,CallUi.SUMMARY,true).apply { tag="task_title";setPadding(0,0,0,0) })
+        // 2. The title, without the "○○ 님께" the META line already says.
+        val title=CallUi.shortTitle(item.title,item.counterpart)
+        outer.addView(CallUi.text(a,title,CallUi.SUMMARY,true).apply { tag="task_title";setPadding(0,0,0,0) })
         // 3. META: who asked and when. The name is a link to that call when a call made the item.
         // A name written with its number shows the name only; a bare number (no name known) stays a number.
         val person=item.counterpart?.takeIf { it.isNotBlank() }?.let { CallRecordStore.noNumber(it) ?: it }?.let(CallUi::who)
         val asked=CallUi.requested(item.createdMs)
         if(person!=null || asked.isNotEmpty()) {
             val meta=CallUi.FitRow(a,flex=if(person!=null && asked.isNotEmpty()) 1 else 0,minFraction=0.3f,gapDp=0).apply { tag="task_meta" }
-            if(person!=null) meta.addView(CallUi.caption(a,if(asked.isNotEmpty()) "$person," else person,if(openWho!=null) CallUi.ACCENT else CallUi.SUBTLE,openWho!=null).apply {
+            if(person!=null) meta.addView(CallUi.meta(a,if(asked.isNotEmpty()) "$person," else person,if(openWho!=null) CallUi.ACCENT else CallUi.SUBTLE,openWho!=null).apply {
                 tag=when { personId!=null -> "task_who_person";open!=null -> "task_who_link";else -> "task_who_name" };setPadding(0,0,CallUi.dp(a,4),0)
                 if(openWho!=null) { isClickable=true;isFocusable=true;background=CallUi.rowRipple();minHeight=CallUi.dp(a,40);gravity=Gravity.CENTER_VERTICAL
                     contentDescription=if(personId!=null) "$person 보기" else "$person 통화 보기";CallUi.onTap(this,action=openWho) }
             },LinearLayout.LayoutParams(-2,-2))
-            if(asked.isNotEmpty()) meta.addView(CallUi.caption(a,asked,CallUi.SUBTLE).apply { tag="task_who";setPadding(0,0,0,0);gravity=Gravity.CENTER_VERTICAL
+            if(asked.isNotEmpty()) meta.addView(CallUi.meta(a,asked,CallUi.SUBTLE).apply { tag="task_who";setPadding(0,0,0,0);gravity=Gravity.CENTER_VERTICAL
                 if(openWho!=null) minHeight=CallUi.dp(a,40) },LinearLayout.LayoutParams(-2,-2))
             outer.addView(meta,LinearLayout.LayoutParams(-1,-2).apply { topMargin=CallUi.dp(a,if(openWho!=null) 0 else 6) })
         }
@@ -60,7 +64,7 @@ internal object CheckRows {
             minHeight=CallUi.dp(a,48);minimumHeight=CallUi.dp(a,48);minWidth=0;minimumWidth=0;setPadding(CallUi.dp(a,12),0,CallUi.dp(a,14),0)
             contentDescription="${item.title}, 다 됐어요";CallUi.onTap(this) { act(outer) }
         },LinearLayout.LayoutParams(-2,-2).apply { gravity=Gravity.END;topMargin=CallUi.dp(a,10) }) }
-        outer.contentDescription=listOfNotNull(company,item.title,person,asked.takeIf { it.isNotEmpty() }).joinToString(", ")+(if(open!=null) ". 눌러서 통화 보기" else "")
+        outer.contentDescription=listOfNotNull(company,unsure?.let { CallUi.UNSURE },title,person,asked.takeIf { it.isNotEmpty() }).joinToString(", ")+(if(open!=null) ". 눌러서 통화 보기" else "")
         return outer
     }
 }
@@ -202,7 +206,7 @@ internal class TasksScreen(a:MainActivity):AppScreen(a) {
             setPopupBackgroundDrawable(CallUi.sheet(a,CallUi.CARD,radius=14));setPadding(CallUi.dp(a,4),0,CallUi.dp(a,4),0) }
         val box=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL
             addView(title,LinearLayout.LayoutParams(-1,-2))
-            addView(CallUi.caption(a,"업체").apply { setPadding(CallUi.dp(a,4),CallUi.dp(a,14),0,CallUi.dp(a,6)) })
+            addView(CallUi.text(a,"업체",CallUi.ASIDE,color=CallUi.SUBTLE).apply { setPadding(CallUi.dp(a,4),CallUi.dp(a,14),0,CallUi.dp(a,6)) })
             addView(pick,LinearLayout.LayoutParams(-1,-2)) }
         CallUi.sheetDialog(a,"체크할 일 직접 적기",body=box,primary="저장",
             validate={ if(title.text.isNullOrBlank()) "무엇을 할지 적어 주세요" else null },

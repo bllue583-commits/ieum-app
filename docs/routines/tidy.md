@@ -20,7 +20,7 @@ v2.6(11/5): state의 tasks에 rev, state에 mergeCandidates가 실린다. 6번�
 중복 방지: `git pull` 직후, 기본 브랜치에 오늘(한국 시각) 날짜로 메시지가 "tidy"인 커밋이 이미 있으면 다른 정리 작업이 먼저 끝낸 것이다. 그때는 장부와 제안을 건드리지 않고 마지막 단계(자가 보고)만 한 뒤 11번 형식으로 "이미 정리됨"이라고 보고한다.
 
 1. `git pull` 한다. tidy/state.json이 없거나 generatedMs가 지금보다 24시간 넘게 오래됐으면 아무것도 고치지 않고 마지막 단계(자가 보고)만 한 뒤 11번 형식으로 "정리할 것 없음: 이유"라고 보고한다(이유 예: "폰 자료가 이틀째 안 옴"). firstPassDone이 false여도 멈추지 않는다(폰이 아직 처음 정리 중이면 최근 14일 기록만 올라와 있다, 3번).
-2. ledger/edits/*.json(사용자 수정)이 있으면 먼저 장부에 반영한다. rename이면 그 id의 사람 이름을 바꾸고 예전 이름은 aliases에, locked에 "name"을 넣는다. 반영한 파일은 `git rm` 한다.
+2. ledger/edits/*.json(사용자 수정)이 있으면 먼저 장부에 반영한다. rename이면 그 id의 사람 이름을 바꾸고 예전 이름은 aliases에, locked에 "name"을 넣는다. mergePeople({"from","into"}, 사용자가 폰에서 두 사람을 합침)이면 from 사람에 mergedInto: into를 적고 from의 이름을 into의 aliases에 더한다. unmergePeople({"from","into"}, 사용자가 합치기를 되돌림)이면 from의 mergedInto를 지우고, 두 사람 모두의 keepApart 목록에 서로의 id를 넣는다. keepApart에 있는 두 사람은 다시 합치거나 합치자고 제안하지 않는다. 반영한 파일은 `git rm` 한다.
 3. 읽을 범위: state의 firstPassDone이 false이면(폰이 아직 처음 정리 중) state의 records(최근 14일)를 날짜순으로 전부 읽고 그 범위 안에서만 정리한다. 이때는 7번의 tidiedOnce를 쓰지 않는다(처음 정리가 끝나면 폰이 10월부터 전체를 올리고 그때 처음부터 다시 정리한다). firstPassDone이 true이고 장부의 tidiedOnce가 true가 아니면 10월 1일부터의 records를 날짜순으로 전부 읽고 서로 대조해 처음부터 다시 정리한다. 그 뒤로는 9번의 기억 파일을 먼저 읽고, 열린 issues에 묶인 기록(recordKeys)과 최근 7일 기록 전체를 읽는다.
 4. 진행 중인 일(issues): 지난 통화, 문자, 메일을 "진행 중인 일" 단위로 묶고 한 줄 현황을 쓴다(예: "철근 단가 재견적: 업체 회신 대기, 금요일 계약 예정"). 진행 중인 것만 최근 것부터 20개까지 둔다. 있던 일은 id를 유지하고, 새 일의 id는 "i_"와 8자다. 끝난 일은 뺀다(끝난 일의 경과는 project.md와 history에 남는다). issueSuggestions와 corrections를 판단해 반영한 뒤 비운다.
 5. 팔로업: 약속했는데 이후 기록에 이행 흔적이 없는 것, 물어보고 답을 못 받은 것, 상대가 하기로 하고 소식이 없는 것을 찾아 "○○에게 견적 회신 받았는지 확인"처럼 체크할 일로 제안한다(op create, 근거 날짜와 상대를 basis에 남긴다). recentlyDone에 있는 일은 다시 살리지 않는다.
@@ -30,7 +30,7 @@ v2.6(11/5): state의 tasks에 rev, state에 mergeCandidates가 실린다. 6번�
    - {"op":"done_suggested","id","rev"}: 나중 기록에서 끝난 것으로 보이면 "끝났는지 확인"만 표시한다.
    - {"op":"create","title","due","company","basis"}: 5번의 팔로업.
    create가 아닌 각 제안 항목에는 state의 rev를 그대로 적는다(그 항목의 state tasks에 있는 rev 값, 바꾸거나 계산하지 않는다). 폰은 rev가 지금 값과 다르면(state를 올린 뒤 통화로 바뀐 일) 그 제안을 건너뛴다. create에는 rev가 없다.
-   state에 mergeCandidates가 있으면 폰이 서로 비슷해 중복일 수 있다고 본 체크할 일의 id 쌍 목록이다. merge를 판단할 때 이 쌍부터 대조하되, 대상(문서, 공정, 회차)이 다르면 합치지 않는다.
+   state에 mergeCandidates가 있으면 폰이 서로 비슷해 중복일 수 있다고 본 쌍의 목록이고, 한 쌍은 [남겨 둔 체크할 일 id, 비슷한 일을 냈다가 빠진 기록 key]이다(체크할 일 id 둘이 아니다). merge를 판단할 때 그 체크할 일과 그 기록(records의 key)부터 대조하되, 대상(문서, 공정, 회차)이 다르면 합치지 않는다.
    완료 처리는 하지 않는다(사용자가 누른다). locked가 true인 항목은 바꾸지 않는다. 제목에 가운데 점, 말줄임표, 영어를 쓰지 않는다.
 7. 장부 정리: 같은 업체의 다른 표기는 하나로 합치고 없어지는 쪽에 mergedInto를 적는다. 번호 없이 이름으로만 있는 중복 사람도 mergedInto로 합친다(번호가 다른 두 사람은 폰이 합치지 않으므로 합치지 않는다). 없어지는 쪽 업체와 사람 항목은 지우지 말고 mergedInto만 적어 둔다(폰은 그 항목의 mergedInto를 보고 합친다). 다음 새벽 정리에서 폰 state에 그 이름이 더 이상 보이지 않으면 지운다. siteMemo는 600자, 업체 memo는 400자 안으로 짧게 다시 쓴다. locked 항목은 바꾸지 않는다. 끝나면 tidiedOnce를 true로 쓴다. 단 state의 firstPassDone이 false인 날(3번)에는 tidiedOnce를 쓰지 않고 장부에 있던 값을 그대로 둔다. state에 personCandidates(사람 id 쌍)가 있으면 폰이 같은 번호인데 이름이 조금 다르거나 같은 업체에 같은 이름이라 자동으로 합치지 않은 쌍이다. 자막과 기록으로 같은 사람이 확실할 때만 mergedInto로 합치고, 애매하면 그대로 둔다.
 8. 원칙: 근거 없는 내용을 만들지 않는다. 파일은 Read 도구로 읽고 직접 판단하며, 결과를 스크립트로 일괄 생성하지 않고 파일 내용을 터미널에 출력하지 않는다. 장부와 기억 파일에 전화번호, 녹음, 자막과 문자 원문을 넣지 않는다. JSON은 `python3 -c 'import json;json.load(open("파일"))'`로 형식만 확인한다.

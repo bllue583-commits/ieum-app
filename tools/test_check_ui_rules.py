@@ -41,6 +41,14 @@ class UiRulesTest(unittest.TestCase):
         v = c.check_xml("strings.xml", '<string name="a">보내는 중…</string>\n<color name="r">#D63B3B</color>')
         self.assertEqual(2, len(v))
 
+    def test_new_caption_use_is_warned_not_counted(self):
+        # v3.3 (DESIGN_V4 3.3-2): a screen with no caption( before gets a warning for its first one; comments do not count.
+        self.assertEqual([], c.caption_warnings("NewScreen.kt", 'val t = CallUi.text(a, "본문") // CallUi.caption(a, "주석")'))
+        w = c.caption_warnings("NewScreen.kt", 'val t = CallUi.caption(a, "곁들이는 글")')
+        self.assertEqual(1, len(w)); self.assertIn("warning", w[0][2])
+        self.assertEqual([], c.caption_warnings("HomeScreen.kt", 'CallUi.caption(a, "하나"); CallUi.caption(a, "둘")'))
+        self.assertEqual([], kt('val t = CallUi.caption(a, "곁들이는 글")'))
+
 
 if __name__ == "__main__":
     unittest.main()

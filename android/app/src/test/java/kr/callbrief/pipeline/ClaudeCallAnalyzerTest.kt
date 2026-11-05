@@ -28,7 +28,7 @@ class ClaudeCallAnalyzerTest {
 
     @Test fun schemaHasTasksWithOwnerAndNoSeparatePromises() {
         val schema=ClaudeCallAnalyzer.SCHEMA;assertFalse(schema.getBoolean("additionalProperties"))
-        assertEquals(setOf("summary","keyPoints","counterpartName","counterpartCompany","counterpart","business","speakerNotes","tasks"),
+        assertEquals(setOf("summary","keyPoints","counterpartName","counterpartCompany","counterpart","business","speakerNotes","tasks","corrected"),
             (0 until schema.getJSONArray("required").length()).map { schema.getJSONArray("required").getString(it) }.toSet())
         val item=schema.getJSONObject("properties").getJSONObject("tasks").getJSONObject("items").getJSONObject("properties")
         assertEquals(setOf("op","taskId","title","due","quote","company","owner","certainty"),item.keys().asSequence().toSet())
@@ -78,7 +78,7 @@ class ClaudeCallAnalyzerTest {
 
     @Test fun rulesV4CarryTheNewWordingWithTheKeptExceptions() {
         val sys=ClaudeCallAnalyzer.SYSTEM
-        assertEquals(6,ClaudeCallAnalyzer.PROMPT_VERSION)
+        assertEquals(7,ClaudeCallAnalyzer.PROMPT_VERSION)
         listOf("speakerNotes","줄바꿈은 말이 끊긴 자리일 뿐 화자가 바뀐 표시가 아닙니다","(숫자 확인 필요)","\"다음 주 초\"는 다음 주 월요일","\"내일모레\"는 이틀 뒤",
             "호칭(과장, 소장, 님)은 이름에 붙이지 말고 role","[이 번호를 쓰는 사람들]","[통화 방향]","\"첨부: 견적서.pdf\"",
             "certainty \"sure\"","<transcript>","<texts>").forEach { assertTrue(it,sys.contains(it)) }
@@ -144,8 +144,9 @@ class ClaudeCallAnalyzerTest {
     @Test fun aQuoteTidiedFromTheSpeechIsKeptAsFuzzyOnlyWhenNearlyAllItsPiecesAreThere() {
         val said="견적서는 내일까지 메일로 보내드릴께요 그리고 계약서는 다음 주에 받기로 했어요"
         val r=filter.filter(parsed(tasks(task("create",null,"견적서 보내기","견적서는 내일까지 메일로 보내드릴게요"))),request(transcript=said))
-        // 보내드릴게요 vs 보내드릴께요: only 13 of the quote's 15 3-letter pieces are there (0.87): below 0.9, dropped.
-        assertEquals(0,r.tasks.size)
+        // 보내드릴게요 vs 보내드릴께요: only 13 of the quote's 15 3-letter pieces are there (0.87): below 0.9, dropped before v3.3;
+        // kept now as tentative with the quote reason (DESIGN_V4 3.1-1 (6)).
+        assertEquals(1,r.tasks.size);assertTrue(r.tasks.single().tentative);assertTrue(NumberGuard.QUOTE in r.tasks.single().guard)
         val long="네 그래서 정리하면 견적서는 내일까지 메일로 보내드릴께요 그리고 나머지 도면도 같이 보내드리겠습니다 확인 부탁드립니다"
         val q="네 그래서 정리하면 견적서는 내일까지 메일로 보내드릴께요 그리고 나머지 도면도 같이 보내드리겠습니다"
         val ok=filter.filter(parsed(tasks(task("create",null,"견적서와 도면 보내기",q.replace("드릴께요","드릴게요")))),request(transcript=long))

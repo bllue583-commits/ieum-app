@@ -31,13 +31,17 @@ internal data class ContactCard(
     val issues:List<IssueLine>,
     val texts:List<Text>,
     val updatedMs:Long,
+    /** v3.3 (DESIGN_V4 3.1-5): a number only the call log knows (no person, company or summarised call): its phone-book name
+     * (no number in it) and how often it called in the last 30 days. Null on every other card. */
+    val thin:Thin?=null,
 ) {
+    data class Thin(val name:String?,val calls30:Int)
     data class Person(val personId:String,val name:String,val role:String?,val isStaff:Boolean)
     data class Company(val id:String,val name:String,val trade:String?)
-    /** [kind]: "통화", "문자" or "메일". */
-    data class Recent(val atMs:Long,val kind:String,val summaryFirst:String)
-    /** [requestedMs]: when it was asked for (the "요청 날짜" the screens show). */
-    data class Task(val id:String,val title:String,val requestedMs:Long,val status:String,val aiNote:String?)
+    /** [kind]: "통화", "문자" or "메일". [unsure]: the summary ended in "(숫자 확인 필요)" (taken off [summaryFirst]; the card shows a badge). */
+    data class Recent(val atMs:Long,val kind:String,val summaryFirst:String,val unsure:Boolean=false)
+    /** [requestedMs]: when it was asked for (the "요청 날짜" the screens show). [tentative]: "확인 필요" (v3.3). */
+    data class Task(val id:String,val title:String,val requestedMs:Long,val status:String,val aiNote:String?,val tentative:Boolean=false)
     data class IssueLine(val title:String,val status:String)
     /** [dir]: "in" or "out". */
     data class Text(val atMs:Long,val dir:String,val first:String)
@@ -46,11 +50,12 @@ internal data class ContactCard(
         .put("people",JSONArray().apply { people.forEach { put(JSONObject().put("personId",it.personId).put("name",it.name).put("role",it.role ?: JSONObject.NULL).put("isStaff",it.isStaff)) } })
         .put("company",company?.let { JSONObject().put("id",it.id).put("name",it.name).put("trade",it.trade ?: JSONObject.NULL) } ?: JSONObject.NULL)
         .put("lastCallMs",lastCallMs ?: JSONObject.NULL).put("lastDirection",lastDirection ?: JSONObject.NULL)
-        .put("recent",JSONArray().apply { recent.forEach { put(JSONObject().put("atMs",it.atMs).put("kind",it.kind).put("summaryFirst",it.summaryFirst)) } })
-        .put("openTasks",JSONArray().apply { openTasks.forEach { put(JSONObject().put("id",it.id).put("title",it.title).put("requestedMs",it.requestedMs).put("status",it.status).put("aiNote",it.aiNote ?: JSONObject.NULL)) } })
+        .put("recent",JSONArray().apply { recent.forEach { put(JSONObject().put("atMs",it.atMs).put("kind",it.kind).put("summaryFirst",it.summaryFirst).apply { if(it.unsure) put("unsure",true) }) } })
+        .put("openTasks",JSONArray().apply { openTasks.forEach { put(JSONObject().put("id",it.id).put("title",it.title).put("requestedMs",it.requestedMs).put("status",it.status).put("aiNote",it.aiNote ?: JSONObject.NULL).apply { if(it.tentative) put("tentative",true) }) } })
         .put("issues",JSONArray().apply { issues.forEach { put(JSONObject().put("title",it.title).put("status",it.status)) } })
         .put("texts",JSONArray().apply { texts.forEach { put(JSONObject().put("atMs",it.atMs).put("dir",it.dir).put("first",it.first)) } })
         .put("updatedMs",updatedMs)
+        .apply { thin?.let { t -> put("thin",JSONObject().put("name",t.name ?: JSONObject.NULL).put("calls30",t.calls30)) } }
 
     companion object {
         private fun JSONObject.text(k:String)=if(isNull(k)) null else optString(k)
@@ -60,11 +65,12 @@ internal data class ContactCard(
             o.list("people") { Person(it.optString("personId"),it.optString("name"),it.text("role"),it.optBoolean("isStaff")) },
             o.optJSONObject("company")?.let { Company(it.optString("id"),it.optString("name"),it.text("trade")) },
             o.long("lastCallMs"),o.text("lastDirection"),
-            o.list("recent") { Recent(it.optLong("atMs"),it.optString("kind"),it.optString("summaryFirst")) },
-            o.list("openTasks") { Task(it.optString("id"),it.optString("title"),it.optLong("requestedMs"),it.optString("status"),it.text("aiNote")) },
+            o.list("recent") { Recent(it.optLong("atMs"),it.optString("kind"),it.optString("summaryFirst"),it.optBoolean("unsure",false)) },
+            o.list("openTasks") { Task(it.optString("id"),it.optString("title"),it.optLong("requestedMs"),it.optString("status"),it.text("aiNote"),it.optBoolean("tentative",false)) },
             o.list("issues") { IssueLine(it.optString("title"),it.optString("status")) },
             o.list("texts") { Text(it.optLong("atMs"),it.optString("dir"),it.optString("first")) },
-            o.optLong("updatedMs"))
+            o.optLong("updatedMs"),
+            o.optJSONObject("thin")?.let { Thin(it.text("name"),it.optInt("calls30")) })
     }
 }
 
@@ -205,11 +211,17 @@ internal object ContactCards {
     private fun marks(n:Int)=List(n) { "?" }.joinToString(",",prefix="(",postfix=")")
     private fun Map<String,Any?>.str(k:String)=this[k] as? String
     private fun Map<String,Any?>.long(k:String)=(this[k] as? Number)?.toLong()
-    /** A summary's first sentence, no phone number in it, at most [FIRST_CHARS] letters. */
+    /** The summary's own warning (rule 9) that a number may be wrong: on a card it becomes the "확인 필요" badge. */
+    const val NUMBER_WARNING="(숫자 확인 필요)"
+    /** A summary's first sentence, no phone number in it, at most [FIRST_CHARS] letters, cut at a space when it is longer
+     * (v3.3: never inside a word, and without "…"). */
     internal fun firstSentence(text:String?):String {
-        val t=PrivacyRules.removePhoneTokens(text.orEmpty()).replace(Regex("\\s+")," ").trim()
+        val t=PrivacyRules.removePhoneTokens(text.orEmpty()).replace(NUMBER_WARNING,"").replace(Regex("\\s+")," ").trim()
         val end=Regex("[.!?。](\\s|$)").find(t)?.range?.first?.plus(1) ?: t.length
-        return t.substring(0,end).trim().take(FIRST_CHARS)
+        val s=t.substring(0,end).trim()
+        if(s.length<=FIRST_CHARS) return s
+        val cut=s.lastIndexOf(' ',FIRST_CHARS).takeIf { it>=FIRST_CHARS/2 } ?: FIRST_CHARS
+        return s.substring(0,cut).trim()
     }
     private fun business(analysisJson:String?)=analysisJson?.let { j -> runCatching { JSONObject(j).optJSONObject("analysis")?.optBoolean("business",true) }.getOrNull() }!=false
     private fun direction(logType:Int?)=when(logType) { 1 -> "in";2 -> "out";3 -> "missed";5,6 -> "rejected";else -> null }
@@ -233,9 +245,10 @@ internal object ContactCards {
         val recent=store.cardRows("""SELECT COALESCE(c.started_ms,c.created_ms) AS at,c.recording_id,c.summary,c.analysis_json FROM call_records c
             WHERE $mine AND c.state='ANALYZED' AND c.summary IS NOT NULL AND c.summary!='' ORDER BY at DESC LIMIT 12""",*mineArgs.toTypedArray())
             .filter { business(it.str("analysis_json")) }
-            .mapNotNull { r -> firstSentence(r.str("summary")).takeIf { it.isNotEmpty() }?.let { ContactCard.Recent(r.long("at") ?: 0,MessageKind.of(r.str("recording_id").orEmpty()),it) } }
+            .mapNotNull { r -> firstSentence(r.str("summary")).takeIf { it.isNotEmpty() }?.let { ContactCard.Recent(r.long("at") ?: 0,MessageKind.of(r.str("recording_id").orEmpty()),it,
+                r.str("summary").orEmpty().contains(NUMBER_WARNING)) } }
             .take(RECENT)
-        if(people.isEmpty() && company==null && recent.isEmpty()) return null
+        if(people.isEmpty() && company==null && recent.isEmpty()) return thin(store,key,v,now)
         val logLast=store.cardRows("SELECT start_ms,type FROM call_log WHERE number_key IN $inV ORDER BY start_ms DESC LIMIT 1",*v.toTypedArray()).firstOrNull()
         val recordLast=store.cardRows("""SELECT COALESCE(c.started_ms,c.created_ms) AS at,x.direction FROM call_records c LEFT JOIN call_record_log x ON x.record_id=c.record_id
             WHERE c.counterpart_key IN $inV AND c.recording_id NOT LIKE 'sms:%' AND c.recording_id NOT LIKE 'mail:%' ORDER BY at DESC LIMIT 1""",*v.toTypedArray()).firstOrNull()
@@ -245,13 +258,13 @@ internal object ContactCards {
             recordLast!=null -> recordLast.long("at") to when(recordLast.str("direction")) { "받은 전화" -> "in";"건 전화" -> "out";else -> null }
             else -> null to null
         }
-        val tasks=store.cardRows("""SELECT i.id,i.title,i.status,i.created_ms,i.ai_note,
+        val tasks=store.cardRows("""SELECT i.id,i.title,i.status,i.created_ms,i.ai_note,i.tentative,
             CASE WHEN i.id IN (SELECT b.item_id FROM call_task_bindings b JOIN call_records c ON c.record_id=b.record_id WHERE $mine) THEN 0 ELSE 1 END AS far
             FROM workflow_items i WHERE i.kind='TODO' AND i.status NOT IN ('done','merged') AND (
               i.id IN (SELECT b.item_id FROM call_task_bindings b JOIN call_records c ON c.record_id=b.record_id WHERE $mine)
               OR i.id IN (SELECT item_id FROM task_companies WHERE company_id=?))
             ORDER BY far,i.created_ms DESC LIMIT $TASKS""",*(mineArgs+mineArgs+listOf(companyId ?: "")).toTypedArray())
-            .map { ContactCard.Task(it.str("id")!!,PrivacyRules.removePhoneTokens(it.str("title").orEmpty()).trim(),it.long("created_ms") ?: 0,it.str("status").orEmpty(),it.str("ai_note")) }
+            .map { ContactCard.Task(it.str("id")!!,PrivacyRules.removePhoneTokens(it.str("title").orEmpty()).trim(),it.long("created_ms") ?: 0,it.str("status").orEmpty(),it.str("ai_note"),it.long("tentative")==1L) }
         val issues=company?.let { c -> store.issues(c.name).take(ISSUES).map { ContactCard.IssueLine(it.title,it.status) } }.orEmpty()
         val texts=store.cardRows("""SELECT COALESCE(c.started_ms,c.created_ms) AS at,c.recording_id,c.summary,c.transcript,c.analysis_json FROM call_records c
             WHERE c.counterpart_key IN $inV AND (c.recording_id LIKE 'sms:%' OR c.recording_id LIKE 'mail:%') ORDER BY at DESC LIMIT 8""",*v.toTypedArray())
@@ -263,6 +276,21 @@ internal object ContactCards {
                 first.takeIf { it.isNotEmpty() }?.let { ContactCard.Text(r.long("at") ?: 0,dir,it) } }.take(TEXTS)
         val cardPeople=people.map { ContactCard.Person(it.str("id")!!,it.str("name").orEmpty(),it.str("role"),it.long("is_staff")==1L) }
         return ContactCard(key,cardPeople,company,lastMs,lastDir,recent,tasks,issues,texts,now)
+    }
+
+    /** Days of the call log a thin card counts calls over. */
+    const val THIN_DAYS=30L
+    /** The thin card of a number only the call log knows (DESIGN_V4 3.1-5): its last call, how many in [THIN_DAYS] days, and the
+     * phone-book name it had (numbers taken out); null when the log has no call with it either. Personal and excluded numbers
+     * never get here ([blocked]). */
+    private fun thin(store:CallRecordStore,key:String,v:List<String>,now:Long):ContactCard? {
+        val inV=marks(v.size)
+        val last=store.cardRows("SELECT start_ms,type,name FROM call_log WHERE number_key IN $inV ORDER BY start_ms DESC LIMIT 1",*v.toTypedArray()).firstOrNull() ?: return null
+        val n=store.cardRows("SELECT COUNT(*) AS n FROM call_log WHERE number_key IN $inV AND start_ms>=CAST(? AS INTEGER)",*(v+listOf((now-THIN_DAYS*86_400_000L).toString())).toTypedArray())
+            .firstOrNull()?.long("n")?.toInt() ?: 0
+        val name=CallRecordStore.noNumber(last.str("name"))?.replace(Regex("\\s+")," ")?.trim()?.take(30)
+        return ContactCard(key,emptyList(),null,last.long("start_ms"),direction(last.long("type")?.toInt()),
+            emptyList(),emptyList(),emptyList(),emptyList(),now,ContactCard.Thin(name,n))
     }
 
     // ---- the file ------------------------------------------------------------------------------------------------

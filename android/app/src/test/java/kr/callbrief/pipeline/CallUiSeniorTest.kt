@@ -111,6 +111,41 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
         assertTrue(contrast(off.currentTextColor,CallUi.CARD)>=4.5)
     }
 
+    /** v3.3 (DESIGN_V4 3.3-2): 18sp is enforced. A 16sp text that is not the META line fails the size rule; [CallUi.meta] passes,
+     * and [CallUi.caption] is reading size now. The "확인 필요" badge is 18sp bold, dark on amber (4.5:1 and up). */
+    @Test fun aSixteenSpCaptionFailsTheSizeRule() {
+        val a=Robolectric.buildActivity(MainActivity::class.java).get()
+        assertFalse("16sp outside META",sizeOk(CallUi.text(a,"말소리를 찾지 못한 녹음",CallUi.CAPTION,color=CallUi.SUBTLE)))
+        assertTrue(sizeOk(CallUi.meta(a,"김민수 님, 오늘 요청")));assertTrue(sizeOk(CallUi.caption(a,"선택 단계예요")))
+        assertEquals(18f,sp(CallUi.caption(a,"선택 단계예요")),0.01f)
+        assertTrue(sizeOk(CallUi.pill(a,"진행 중",CallUi.ACCENT)));assertTrue(sizeOk(CallUi.chip(a,"탄탄이엔씨")))
+        val badge=CallUi.unsureBadge(a)
+        assertEquals(CallUi.UNSURE,badge.text.toString());assertEquals(18f,sp(badge),0.01f);assertEquals(CallUi.font(a,CallUi.Weight.SEMIBOLD),badge.typeface)
+        assertTrue(contrast(badge.currentTextColor,CallUi.AMBER_RAIL)>=4.5)
+        assertEquals("끝났는지 확인",CallUi.stateWords("needs_confirmation"));assertEquals("진행 중",CallUi.stateWords("in_progress"))
+        // A check row's META line is the 16sp one; the rest of the row is reading size.
+        val row=CallUi.taskRow(a,"견적서 보내기",System.currentTimeMillis(),"탄탄이엔씨","김민수",unsure=true)
+        val small=views(row).filterIsInstance<TextView>().filter { sp(it)<18f }
+        assertTrue(small.joinToString { "${it.text} ${sp(it)}" },small.all { it.getTag(kr.callbrief.R.id.ui_min_sp)!=null })
+        assertNotNull(row.findViewWithTag<View>("task_unsure"))
+    }
+
+    /** v3.3 (DESIGN_V4 3.3-3): a picture "at 1.3" is only one when the Activity is made after the change: a new Activity has
+     * fontScale 1.3 and letters 1.2 times as large and more (scaledDensity). The drawn width of the title is checked by the device
+     * harness (CallPipelineDeviceTest t4): Robolectric does not scale an sp size by itself. */
+    @Test fun atOnePointThreeTimesANewActivityHasTheLargerLetters() {
+        fun scaled(scale:Float):Float {
+            org.robolectric.RuntimeEnvironment.setFontScale(scale)
+            val a=Robolectric.buildActivity(android.app.Activity::class.java).setup().get()
+            assertEquals(scale,a.resources.configuration.fontScale,0.01f)
+            return a.resources.displayMetrics.scaledDensity/a.resources.displayMetrics.density
+        }
+        try {
+            val normal=scaled(1.0f);val large=scaled(1.3f)
+            assertTrue("$large vs $normal",large>=1.2f*normal)
+        } finally { org.robolectric.RuntimeEnvironment.setFontScale(1.0f) }
+    }
+
     @Test fun nextReportTimeIsPlainKorean() {
         val z=java.time.ZoneId.of("Asia/Seoul")
         assertEquals("오늘 저녁 7시 (통화 정리)",CallUi.nextReport(19,6,java.time.ZonedDateTime.of(2026,10,30,9,0,0,0,z)))

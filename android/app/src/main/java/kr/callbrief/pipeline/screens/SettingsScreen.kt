@@ -43,7 +43,19 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         /** First setup's part in that group (home's line opens settings here while a required step is left). */
         const val SETUP_TAG="setup_card"
         /** Test hook in place of reading 처음 정리 from the store (null reads it). */
-        @androidx.annotation.VisibleForTesting @Volatile internal var firstPassHook:((android.content.Context)->HomeScreen.FirstPassView?)?=null }
+        @androidx.annotation.VisibleForTesting @Volatile internal var firstPassHook:((android.content.Context)->HomeScreen.FirstPassView?)?=null
+        /** v3.3: the card switch for numbers nothing was sorted out for yet (was "전화부에 없는 번호도"). */
+        const val UNKNOWN_SWITCH="아직 정리된 통화가 없는 번호도"
+        const val LOCK_SWITCH="잠금 화면에서도 이름과 한 줄 보기"
+        /** The golden measurement screen (r13-2, DESIGN_V4 3.2-4), found by name: no line when the build has no such screen.
+         * r13-2 names it GoldenMeasureActivity ("골든 측정"). */
+        const val GOLDEN_ACTIVITY="kr.callbrief.pipeline.GoldenMeasureActivity"
+        /** Test hook: whether the golden screen is in this build (null: look for the class). */
+        @androidx.annotation.VisibleForTesting @Volatile internal var goldenHook:(()->Boolean)?=null
+        fun goldenInBuild():Boolean=goldenHook?.invoke() ?: runCatching { Class.forName(GOLDEN_ACTIVITY);true }.getOrDefault(false)
+        /** The group the status lights take at the top of the page while one of them is amber (v3.3, DESIGN_V4 3.3-4). */
+        const val STATUS_NAME="지금 상태"
+        const val MERGE_TAG="merge_undo" }
     private val page:LinearLayout get()=a.column
     /** The sheet the current settings group is written into. */
     private lateinit var body:LinearLayout
@@ -137,7 +149,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         updateKey=key;block.removeAllViews()
         val name=(ready ?: avail)?.let(CallUpdate::shownName)
         fun headline(t:String,color:Int=CallUi.INK)=CallUi.text(a,t,CallUi.HEADING,true,color).apply { tag="update_state";fontFeatureSettings="tnum";setPadding(0,CallUi.dp(a,12),0,0) }
-        fun note(t:String)=CallUi.text(a,t,CallUi.CAPTION,color=CallUi.SUBTLE).apply { tag="update_note" }
+        fun note(t:String)=CallUi.text(a,t,CallUi.ASIDE,color=CallUi.SUBTLE).apply { tag="update_note" }
         when {
             ready!=null -> {
                 block.addView(headline("새 버전이 준비됐어요",CallUi.ACCENT))
@@ -215,6 +227,8 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         body.addView(CallUi.text(a,name,CallUi.HEADING,true).apply { setPadding(0,0,0,CallUi.dp(a,4)) })
     }
     private fun button(value:String,action:()->Unit)=CallUi.button(a,value,action)
+    /** A grey line under what it explains, at reading size (v3.3, DESIGN_V4 3.3-2: no 16sp outside a META line). */
+    private fun aside(value:String,color:Int=CallUi.SUBTLE)=CallUi.text(a,value,CallUi.ASIDE,color=color)
 
     // ---- actions that take a while: each one busy on its own (review #11) ----
     /** Actions running now, by the tag of their button, with the words it shows meanwhile; a page drawn again meanwhile shows
@@ -253,6 +267,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
                 folderReadable=StatusLights.folderReadable(a,s)
                 storagePercent=watch?.dbPercent
                 personal=runCatching { db!!.personalNumbers() }.getOrDefault(emptyList())
+                merges=runCatching { db!!.mergeEntries(s.optString(PipelineSettingsKeys.MERGE_LOG,"[]")) }.getOrDefault(emptyList())
                 firstPass=firstPassHook?.invoke(a) ?: db?.let { runCatching { HomeScreen.readFirstPass(CallPipelineStartup.storage(a),it,s) }.getOrNull() }
                 gapText=HomeScreen.gapBanner(a)?.text?.takeIf { it.isNotBlank() }
                 installStep=HomeScreen.installStep(a)
@@ -289,7 +304,10 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
 
         // ---- v3.1 r12-6: 지금 할 일과 진행 상황 (moved from home: first setup, 처음 정리, the voice model, missing recordings) ----
         val modelState=s.optString(PipelineSettingsKeys.MODEL_STATE)
-        nowGroup(s,modelState)
+        // v3.3 (DESIGN_V4 3.3-4): an amber light puts "지금 상태" first, above everything else.
+        val amber=anyAmber(s,counts);statusTop=amber
+        if(amber) { group(STATUS_NAME);statusLights(s,counts) }
+        nowGroup(s,modelState,amber)
 
         // ---- 연결: where the calls, texts and mail come from ----
         group("연결")
@@ -314,7 +332,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
             CallUi.BODY,phone,if(phone) CallUi.OK else CallUi.INK).apply { tag="phone_state_state" })
         if(!phone) {
             if(ReadingPermission.blocked(a,android.Manifest.permission.READ_PHONE_STATE)) {
-                body.addView(CallUi.text(a,"허용 창이 다시 뜨지 않아요. 앱 정보의 권한에서 전화 항목을 허용해 주세요.",CallUi.CAPTION,color=CallUi.SUBTLE))
+                body.addView(CallUi.text(a,"허용 창이 다시 뜨지 않아요. 앱 정보의 권한에서 전화 항목을 허용해 주세요.",CallUi.ASIDE,color=CallUi.SUBTLE))
                 body.addView(button("앱 정보 열기") { ReadingPermission.openAppInfo(a) }.apply { tag="phone_state_allow" })
             } else body.addView(button("전화 상태 허용") { ReadingPermission.markAsked(a,android.Manifest.permission.READ_PHONE_STATE);askPhoneState.launch(android.Manifest.permission.READ_PHONE_STATE) }.apply { tag="phone_state_allow" })
         }
@@ -348,13 +366,12 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
 
         // ---- 상태와 도움 ----
         group("상태와 도움")
-        statusLights(s,counts)
-        body.addView(CallUi.divider(a))
+        if(!amber) { statusLights(s,counts);body.addView(CallUi.divider(a)) }
         // Installed version, and the next one when it is downloaded and waiting (design: 보고와 화면); a failed install shows its reason.
         body.addView(CallUi.text(a,CallUpdate.versionLine(kr.callbrief.BuildConfig.VERSION_NAME,kr.callbrief.BuildConfig.VERSION_CODE,CallUpdate.ready(a)),CallUi.BODY,true).apply { tag="app_version" })
         updateBlock=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;tag="update_block" }.also { body.addView(it) };updateKey=null;fillUpdate()
         CallUpdate.errorWords(s.optString(PipelineSettingsKeys.LAST_UPDATE_ERROR))?.let {
-            body.addView(CallUi.text(a,it.reason,CallUi.CAPTION,color=CallUi.AMBER).apply { tag="update_error" }) }
+            body.addView(CallUi.text(a,it.reason,CallUi.ASIDE,color=CallUi.AMBER).apply { tag="update_error" }) }
         storagePercent?.let { body.addView(CallUi.text(a,"저장 공간 ${it}% 사용",CallUi.BODY).apply { tag="storage_use" }) }
 
         // The voice model once it is ready (or cannot be used here) stays in this group; while it is not, it is in the first one.
@@ -373,7 +390,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         val allFailed=counts[CallRecordStore.FAILED] ?: 0
         val failed=watch?.failed ?: allFailed
         body.addView(CallUi.text(a,"정리된 통화 ${counts[CallRecordStore.ANALYZED] ?: 0}건, 기다리는 통화 ${waiting}건, 정리 못 한 통화 ${failed}건",CallUi.BODY,true).apply { tag="handled_calls" })
-        if(allFailed>failed) body.addView(CallUi.caption(a,"말소리를 찾지 못한 녹음 ${allFailed-failed}건은 다시 정리해도 같아서 세지 않았어요.").apply { tag="handled_empty" })
+        if(allFailed>failed) body.addView(aside("말소리를 찾지 못한 녹음 ${allFailed-failed}건은 다시 정리해도 같아서 세지 않았어요.").apply { tag="handled_empty" })
         if(waiting+failed>0) body.addView(act("기다리는 통화 다시 정리하기","reanalyze_all","다시 정리하는 중이에요") { done ->
             a.lifecycleScope.launch {
                 val n=withContext(Dispatchers.IO) { runCatching { store().requeueAll() }.getOrDefault(0) }
@@ -390,6 +407,8 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
                 Toast.makeText(a,if(n!=null) "상대 카드 ${n}장을 다시 만들었어요" else "다시 만들지 못했어요",Toast.LENGTH_SHORT).show()
             }
         })
+        // v3.3 (DESIGN_V4 3.3-1): people the phone made one by itself can be made two again.
+        mergeUndo(s)
         // Sends the heartbeat now so whoever looks after the app sees the phone's state (design B5).
         body.addView(CallUi.divider(a))
         body.addView(act("문제 알리기","report_problem","보내는 중이에요") { done ->
@@ -399,9 +418,43 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
                 Toast.makeText(a,if(ok) "관리하는 분께 상태를 보냈어요" else "보내지 못했어요. 인터넷을 확인해 주세요",Toast.LENGTH_SHORT).show()
             }
         })
+        goldenLink()
         a.putBack(keep)
         val want=focusTag;val group=focusGroup;focusTag=null;focusGroup=null
         if(want!=null) page.post { if(live()) { if(page.findViewWithTag<View>(want)!=null) goTo(want) else group?.let(::goTo) } }
+    }
+
+    // ---- v3.3 (DESIGN_V4 3.3-1): 합친 사람 되돌리기 ----
+    /** The merges that can be undone, read with the page. */
+    @Volatile private var merges:List<CallRecordStore.MergeEntry> =emptyList()
+    /** [합친 사람 되돌리기]: only while there is a merge to undo; a list of them, one tap and a yes puts the person back. */
+    private fun mergeUndo(s:JSONObject) {
+        val list=merges;if(list.isEmpty()) return
+        body.addView(CallUi.divider(a))
+        body.addView(CallUi.text(a,"이음이 같은 사람으로 보고 합친 사람이 ${list.size}명 있어요. 다른 사람이면 되돌릴 수 있어요.",CallUi.BODY).apply { tag="merge_state" })
+        body.addView(button("합친 사람 되돌리기") {
+            val labels=list.map { m -> "${m.name.ifBlank { "이름 없는 사람" }} 님"+(m.intoName?.let { " (${it} 님과 합침)" } ?: "")+", "+java.time.format.DateTimeFormatter.ofPattern("M월 d일").format(java.time.Instant.ofEpochMilli(m.atMs).atZone(java.time.ZoneId.of("Asia/Seoul"))) }
+            CallUi.sheetDialog(a,"눌러서 따로 된 사람으로 되돌려요",options=labels,onOption={ i -> val m=list[i]
+                CallUi.sheetDialog(a,"합친 사람 되돌리기",message="${m.name.ifBlank { "이 사람" }} 님을 다시 따로 둘까요? 통화 ${m.links}건이 ${m.name.ifBlank { "이 사람" }} 님께 돌아가요.",
+                    primary="되돌리기",onPrimary={ undoMerge(m) },secondary="닫기") },secondary="닫기")
+        }.apply { tag=MERGE_TAG })
+    }
+    private fun undoMerge(m:CallRecordStore.MergeEntry) {
+        a.lifecycleScope.launch {
+            val ok=withContext(Dispatchers.IO) { runCatching { store().undoMerge(m) }.getOrDefault(false) }
+            if(!live()) return@launch
+            Toast.makeText(a,if(ok) "따로 된 사람으로 되돌렸어요" else "되돌리지 못했어요",Toast.LENGTH_SHORT).show()
+            refresh()
+        }
+    }
+
+    // ---- v3.3 (DESIGN_V4 3.2-4): the golden measurement, a quiet line at the end of 상태와 도움 ----
+    private fun goldenLink() {
+        if(!goldenInBuild()) return
+        body.addView(CallUi.linkButton(a,"골든 측정 ›") {
+            runCatching { a.startActivity(android.content.Intent().setClassName(a,GOLDEN_ACTIVITY)) }
+                .onFailure { Toast.makeText(a,"이 버전에는 아직 없어요.",Toast.LENGTH_SHORT).show() }
+        }.apply { tag="golden_link";contentDescription="골든 측정, 자막 정확도 재기" },LinearLayout.LayoutParams(-2,-2).apply { marginStart=-CallUi.dp(a,6) })
     }
 
     // ---- v3.1 r12-6: 지금 할 일과 진행 상황 ----
@@ -475,14 +528,14 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
     }
 
     /** The first group (r12-6): what needs doing and what is under way, each part only while it has something to say. */
-    private fun nowGroup(s:JSONObject,modelState:String) {
+    private fun nowGroup(s:JSONObject,modelState:String,statusOnTop:Boolean=false) {
         group(NOW_NAME)
         var first=true
         fun part(name:String) { sub(name,first);first=false }
         // Recordings that do not come: the status light below already says it, so one line that goes there (not said twice).
         gapText?.let {
             part("녹음")
-            body.addView(CallUi.text(a,"녹음이 들어오지 않고 있어요. 아래 지금 상태에서 볼게요 ›",CallUi.BODY,true,CallUi.AMBER).apply {
+            body.addView(CallUi.text(a,if(statusOnTop) "녹음이 들어오지 않고 있어요. 위 지금 상태에서 볼게요 ›" else "녹음이 들어오지 않고 있어요. 아래 지금 상태에서 볼게요 ›",CallUi.BODY,true,CallUi.AMBER).apply {
                 tag="now_gap";isClickable=true;isFocusable=true;background=CallUi.rowRipple();minHeight=CallUi.dp(a,56);gravity=Gravity.CENTER_VERTICAL
                 contentDescription="녹음이 들어오지 않고 있어요. 눌러서 지금 상태 보기"
                 CallUi.onTap(this) { goTo("status_import") } })
@@ -503,7 +556,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         val c=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;tag=SETUP_TAG }
         c.addView(CallUi.text(a,"처음 설정 남은 ${left.size}단계"+(if(required==0) " (모두 선택)" else ""),CallUi.BODY,true,if(required>0) CallUi.AMBER else CallUi.INK).apply { tag="setup_count" })
         c.addView(CallUi.text(a,"다음 할 일: ${next.label}",CallUi.HEADING,true).apply { tag="setup_next_label";setPadding(0,CallUi.dp(a,6),0,0) })
-        if(next.optional) c.addView(CallUi.caption(a,"선택 단계예요. 하지 않아도 이음은 그대로 돌아가요.").apply { tag="setup_optional";setPadding(0,CallUi.dp(a,6),0,0) })
+        if(next.optional) c.addView(aside("선택 단계예요. 하지 않아도 이음은 그대로 돌아가요.").apply { tag="setup_optional";setPadding(0,CallUi.dp(a,6),0,0) })
         // The reason right above the button, in reading size and ink (bold when the overlay list came back unchanged).
         c.addView(CallUi.text(a,next.reason,CallUi.BODY,next.strong,CallUi.INK).apply { tag="setup_detail";setPadding(0,CallUi.dp(a,8),0,0) })
         c.addView(CallUi.bigButton(a,"",next.button,next.action).apply { tag="setup_next" })
@@ -528,7 +581,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
                 body.addView(CallUi.stats(a,items,units).apply { tag="first_pass_left" })
             }
             if(f.waiting>0) body.addView(CallUi.text(a,"요약을 기다리는 통화 ${f.waiting}건",CallUi.BODY).apply { setPadding(0,CallUi.dp(a,6),0,0) })
-            if(f.lowBattery) body.addView(CallUi.caption(a,"배터리가 절반 넘게 차도 이어서 해요."))
+            if(f.lowBattery) body.addView(aside("배터리가 절반 넘게 차도 이어서 해요."))
         } else {
             val lines=buildList {
                 if(f.toTranscribe>0) f.hoursLeft?.let { h -> add("끝나기까지 약 ${if(h<1) "1시간 안" else "${Math.round(h)}시간"}") }
@@ -536,9 +589,9 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
                 if(f.toTranscribe==0 && f.waiting==0) add("지난 문자와 메일을 읽고 있어요")
             }
             lines.forEach { body.addView(CallUi.text(a,it,CallUi.BODY).apply { setPadding(0,CallUi.dp(a,4),0,0) }) }
-            body.addView(CallUi.caption(a,"10월 1일부터 밀린 통화를 정리하는 중이에요. 오늘 통화는 지금처럼 바로 정리돼요. 충전해 두면 더 빨리 끝나요.").apply { tag="first_pass_note" })
+            body.addView(aside("10월 1일부터 밀린 통화를 정리하는 중이에요. 오늘 통화는 지금처럼 바로 정리돼요. 충전해 두면 더 빨리 끝나요.").apply { tag="first_pass_note" })
         }
-        if(!f.mailConnected) body.addView(CallUi.caption(a,"메일을 연결하면 메일도 함께 정리해요. 아래 연결 묶음의 메일에서 연결할 수 있어요.").apply { tag="first_pass_mail" })
+        if(!f.mailConnected) body.addView(aside("메일을 연결하면 메일도 함께 정리해요. 아래 연결 묶음의 메일에서 연결할 수 있어요.").apply { tag="first_pass_mail" })
     }
 
     /** The voice model: "음성 인식 모델 받는 중 42% (241MB / 574MB)" with a bar, following the download every second; [다시 받기] after
@@ -551,7 +604,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         modelPart=part;modelShown=modelState;modelSeen=part.isFile
         if(modelState==PipelineModelState.DOWNLOADING && part.isFile)
             body.addView(UpdateViews.bar(a,(part.length()*100/HomeScreen.MODEL_BYTES).toInt().coerceIn(0,99)).apply { tag="model_bar";contentDescription="음성 인식 모델 받기" })
-        if(modelNow) body.addView(CallUi.caption(a,"통화 녹음을 휴대폰 안에서 글자로 바꾸는 데 써요. 한 번만 받아요."))
+        if(modelNow) body.addView(aside("통화 녹음을 휴대폰 안에서 글자로 바꾸는 데 써요. 한 번만 받아요."))
         if(modelState!=PipelineModelState.READY && modelState!=PipelineModelState.UNSUPPORTED && modelState!=PipelineModelState.DOWNLOADING)
             body.addView(button(if(failed) "다시 받기" else "모델 받기") {
                 runCatching { HomeScreen.modelStart(a) };Toast.makeText(a,"음성 인식 모델을 받기 시작해요.",Toast.LENGTH_SHORT).show();refresh()
@@ -579,18 +632,23 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         body.addView(CallUi.divider(a))
         body.addView(switchRow("card_outgoing_switch",s.optBoolean(PipelineSettingsKeys.CARD_OUTGOING,true),PipelineSettingsKeys.CARD_OUTGOING) { "전화 걸 때" })
         if(CallCardAsk.roleAvailable(a) && !CallCardAsk.roleHeld(a)) {
-            body.addView(CallUi.text(a,"거는 전화에 카드를 보려면 한 번 허용해 주세요. 전화는 그대로 걸려요.",CallUi.CAPTION,color=CallUi.SUBTLE).apply { tag="card_role_state" })
+            body.addView(CallUi.text(a,"거는 전화에 카드를 보려면 한 번 허용해 주세요. 전화는 그대로 걸려요.",CallUi.ASIDE,color=CallUi.SUBTLE).apply { tag="card_role_state" })
             body.addView(button("거는 전화도 허용") { CallCardAsk.askRole(a,askCallRole) }.apply { tag="card_role_allow" })
         }
         body.addView(CallUi.divider(a))
-        body.addView(switchRow("card_unknown_switch",s.optBoolean(PipelineSettingsKeys.CARD_UNKNOWN,false),PipelineSettingsKeys.CARD_UNKNOWN) { "전화부에 없는 번호도" })
+        body.addView(switchRow("card_unknown_switch",s.optBoolean(PipelineSettingsKeys.CARD_UNKNOWN,false),PipelineSettingsKeys.CARD_UNKNOWN) { UNKNOWN_SWITCH })
+        // v3.3 (DESIGN_V4 3.1-5): what the notice says on a locked phone when the card cannot be drawn over it.
+        body.addView(CallUi.divider(a))
+        body.addView(switchRow("lock_screen_detail_switch",s.optBoolean(PipelineSettingsKeys.LOCK_SCREEN_DETAIL,true),PipelineSettingsKeys.LOCK_SCREEN_DETAIL) { LOCK_SWITCH })
+        body.addView(aside("켜 두면 잠긴 화면의 알림에 이름, 업체, 체크할 일 한 줄이 보여요. 번호와 금액, 통화 내용은 보이지 않아요.").apply { tag="lock_screen_detail_note" })
         body.addView(CallUi.divider(a))
         body.addView(button("카드 위치 처음으로") {
             save(redraw=false,done={ Toast.makeText(a,"카드 위치를 처음으로 돌렸어요.",Toast.LENGTH_SHORT).show() }) { it.remove(PipelineSettingsKeys.CARD_POS_Y) }
         }.apply { tag="card_position_reset" })
     }
 
-    private fun notifyAllowed()=android.os.Build.VERSION.SDK_INT<33||a.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)==android.content.pm.PackageManager.PERMISSION_GRANTED
+    /** The lights lead the page in their own group (an amber light). */
+    private var statusTop=false
     /** The "지금 상태" sheet part, kept so a switch or a slider can draw only the lights again. */
     private var lightsCard:LinearLayout?=null
     /** "지금 상태": five lights (green "정상" or amber with the reason and what to do, never red) at the top of the last group. */
@@ -599,11 +657,13 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         fillLights(card,s,counts);lightsCard=card
         body.addView(card)
     }
-    private fun fillLights(card:LinearLayout,s:JSONObject,counts:Map<String,Int>) {
+    /** Whether a status light is amber now: the lights then lead the page (v3.3, DESIGN_V4 3.3-4). */
+    private fun anyAmber(s:JSONObject,counts:Map<String,Int>)=runCatching { StatusLights.lights(lightsInput(s,counts)).any { !it.ok } }.getOrDefault(false)
+    private fun lightsInput(s:JSONObject,counts:Map<String,Int>):StatusLights.Input {
         val now=System.currentTimeMillis();val w=watch
-        val input=StatusLights.Input(now,s.optString("treeUri").isNotBlank(),s.optString(PipelineSettingsKeys.MODEL_STATE),
+        return StatusLights.Input(now,s.optString("treeUri").isNotBlank(),s.optString(PipelineSettingsKeys.MODEL_STATE),
             w?.queue?.count ?: 0,s.optLong(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,0),s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false),
-            w?.lateLive ?: 0,w?.failed ?: (counts[CallRecordStore.FAILED] ?: 0),w?.oldestLateMs,s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),
+            w?.lateLive ?: 0,w?.failed ?: (counts[CallRecordStore.FAILED] ?: 0),w?.oldestLateMs,s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),NotifyAsk.allowed(a),
             s.optString(PipelineSettingsKeys.LAST_UPDATE_ERROR),CallUpdate.ready(a)!=null,
             folderReadable=folderReadable,lastDiscoveryMs=s.optLong(kr.callbrief.AutomaticRecordingDiscovery.LAST_DISCOVERY_MS,0L),
             oldestQueuedMs=w?.queue?.oldestMs,updateReadySinceMs=s.optLong(PhoneStatus.UPDATE_READY_SINCE_MS,0L),
@@ -612,8 +672,12 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
             cardRole=!CallCardAsk.roleAvailable(a) || CallCardAsk.roleHeld(a),
             cardOn=s.optBoolean(PipelineSettingsKeys.CARD_INCOMING,true) || s.optBoolean(PipelineSettingsKeys.CARD_OUTGOING,true),
             gap=RecordingGap.confirmed(s,now)) // r12-1 (DESIGN_V4 2.1-2)
+    }
+    private fun fillLights(card:LinearLayout,s:JSONObject,counts:Map<String,Int>) {
+        val input=lightsInput(s,counts)
         card.removeAllViews()
-        card.addView(CallUi.text(a,"지금 상태",CallUi.HEADING,true).apply { setPadding(0,0,0,CallUi.dp(a,4)) })
+        // At the top the group's own name says it already.
+        if(!statusTop) card.addView(CallUi.text(a,STATUS_NAME,CallUi.HEADING,true).apply { setPadding(0,0,0,CallUi.dp(a,4)) })
         // A light that names a group of this page goes there when it is pressed (review #24).
         StatusLights.lights(input).forEach { l -> card.addView(CallUi.signalRow(a,l.label,l.words,l.ok,l.target?.let { t -> { goTo(t) } }).apply { tag=l.tag }) }
     }
@@ -655,7 +719,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
     /** Ask; once asked and still refused, explain the restricted setting and open App info instead. */
     private fun readingButton(permission:String,what:String,ask:androidx.activity.result.ActivityResultLauncher<String>,tag:String) {
         if(ReadingPermission.blocked(a,permission)) {
-            body.addView(CallUi.text(a,ReadingPermission.restrictedHelp(what),CallUi.CAPTION,color=CallUi.SUBTLE))
+            body.addView(CallUi.text(a,ReadingPermission.restrictedHelp(what),CallUi.ASIDE,color=CallUi.SUBTLE))
             body.addView(button("앱 정보 열기") { ReadingPermission.openAppInfo(a) }.apply { this.tag=tag })
         } else body.addView(button("$what 읽기 허용") { ReadingPermission.markAsked(a,permission);ask.launch(permission) }.apply { this.tag=tag })
     }
@@ -686,7 +750,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         if(user.isNotBlank() && s.optString(PipelineSettingsKeys.MAIL_PASSWORD).isNotBlank()) {
             val error=s.optString(PipelineSettingsKeys.MAIL_ERROR)
             body.addView(CallUi.text(a,if(error.isBlank()) "연결됨 ✓  $user" else error,CallUi.BODY,true,if(error.isBlank()) CallUi.OK else CallUi.AMBER).apply { tag="mail_state" })
-            body.addView(CallUi.text(a,"받은 메일 중 업무 메일을 30분마다 가져와 통화와 함께 정리해요.",CallUi.CAPTION,color=CallUi.SUBTLE))
+            body.addView(CallUi.text(a,"받은 메일 중 업무 메일을 30분마다 가져와 통화와 함께 정리해요.",CallUi.ASIDE,color=CallUi.SUBTLE))
             body.addView(act("메일 연결 끊기","mail_disconnect","끊는 중이에요") { done ->
                 save(done=done) { it.remove(PipelineSettingsKeys.MAIL_HOST);it.remove(PipelineSettingsKeys.MAIL_USER);it.remove(PipelineSettingsKeys.MAIL_PASSWORD);it.remove(PipelineSettingsKeys.MAIL_ERROR) } })
             return
@@ -703,7 +767,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         }
         val host=field("IMAP 서버 (예: imap.회사.com)").apply { tag="mail_host";setText(mailHost) }
         watching(host) { mailHost=it }
-        val guide=CallUi.caption(a,mailGuide(mailService),CallUi.SUBTLE).apply { tag="mail_guide";setPadding(0,CallUi.dp(a,8),0,0) }
+        val guide=aside(mailGuide(mailService),CallUi.SUBTLE).apply { tag="mail_guide";setPadding(0,CallUi.dp(a,8),0,0) }
         val services=ArrayList<Pair<String,Button>>()
         // A service button changes only the buttons' colours, the guide line and the server field; nothing typed is lost.
         fun paint() {
@@ -781,19 +845,19 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
             })
         },LinearLayout.LayoutParams(-1,-2).apply { topMargin=CallUi.dp(a,8);marginStart=-CallUi.dp(a,8);marginEnd=-CallUi.dp(a,8) })
         val ends=LinearLayout(a).apply { orientation=LinearLayout.HORIZONTAL }
-        ends.addView(CallUi.caption(a,hourWords(range.first),CallUi.MUTED),LinearLayout.LayoutParams(0,-2,1f))
-        ends.addView(CallUi.caption(a,hourWords(range.last),CallUi.MUTED))
+        ends.addView(aside(hourWords(range.first),CallUi.MUTED),LinearLayout.LayoutParams(0,-2,1f))
+        ends.addView(aside(hourWords(range.last),CallUi.MUTED))
         box.addView(ends)
         body.addView(box)
     }
     /** 내 정보 (design C5 [사용자]): who "I" am in the calls, so the summary knows whose check items they are. Empty fields send roles only. */
     private fun myInfo(s:JSONObject) {
         sub("내 정보")
-        body.addView(CallUi.caption(a,"통화를 정리할 때 누가 \"나\"인지 알려 줘요. 비워 둬도 돼요.").apply { tag="my_info_note" })
+        body.addView(aside("통화를 정리할 때 누가 \"나\"인지 알려 줘요. 비워 둬도 돼요.").apply { tag="my_info_note" })
         listOf(Triple("이름",PipelineSettingsKeys.MY_NAME,"예: 김민지"),Triple("회사와 현장",PipelineSettingsKeys.MY_COMPANY,"예: ○○건설 △△현장"),
             Triple("직책",PipelineSettingsKeys.MY_ROLE,"예: 공무 부장")).forEach { (label,key,hint) ->
             val value=s.optString(key).trim()
-            body.addView(CallUi.caption(a,label).apply { setPadding(0,CallUi.dp(a,10),0,0) })
+            body.addView(aside(label).apply { setPadding(0,CallUi.dp(a,10),0,0) })
             body.addView(CallUi.text(a,value.ifEmpty { "적지 않았어요" },CallUi.BODY,value.isNotEmpty(),if(value.isEmpty()) CallUi.SUBTLE else CallUi.INK).apply { tag="my_$key" })
             body.addView(button(if(value.isEmpty()) "$label 적기" else "$label 고치기") {
                 val field=CallUi.sheetInput(a,value,hint,tag="my_input")

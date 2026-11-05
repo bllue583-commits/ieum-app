@@ -1,0 +1,221 @@
+{
+ "names": {
+  "company": [
+   "탄탄이엔씨",
+   "대한철강",
+   "한빛레미콘",
+   "가"
+  ],
+  "person": [
+   "김호중",
+   "박민수",
+   "이서연"
+  ]
+ },
+ "cases": [
+  {
+   "reference": "네 탄탄이엔씨 김호중 과장입니다. 3층 슬래브 타설은 11월 18일 오전 7시에 합니다. 레미콘 120㎥, D13 철근 20톤.",
+   "hypothesis": "네 탄탄 이엔씨 김호중 과장입니다 삼층 슬래브 타설은 십일 월 십팔 일 오전 일곱 시에 합니다 레미콘 백이십 루베 디 십삼 철근 이십 톤",
+   "normalizedReference": "네탄탄이엔씨김호중과장입니다삼층슬래브타설은십일월십팔일오전일곱시에합니다레미콘백이십루베디십삼철근이십톤",
+   "numbers": [
+    "삼층",
+    "십일월",
+    "십팔일",
+    "일곱시",
+    "백이십루베",
+    "십삼",
+    "이십톤"
+   ],
+   "expected": {
+    "distance": 0,
+    "refChars": 53,
+    "hypChars": 53,
+    "cer": 0.0,
+    "company": {
+     "total": 1,
+     "hit": 1
+    },
+    "person": {
+     "total": 1,
+     "hit": 1
+    },
+    "number": {
+     "total": 7,
+     "hit": 7
+    }
+   }
+  },
+  {
+   "reference": "대한철강 박민수 소장님, 단가 @15,000원에 2,405,000원 견적 보내 드릴게요. 3개월 뒤 10개 더.",
+   "hypothesis": "대한 철강 박민서 소장님 단가 만오천 원에 이백사십만 오천 원 견적 보내 드릴게요 삼 개월 뒤 열 개 더",
+   "normalizedReference": "대한철강박민수소장님단가일만오천원에이백사십만오천원견적보내드릴게요삼개월뒤열개더",
+   "numbers": [
+    "일만오천원",
+    "이백사십만오천원",
+    "삼개월",
+    "열개"
+   ],
+   "expected": {
+    "distance": 2,
+    "refChars": 41,
+    "hypChars": 40,
+    "cer": 0.04878048780487805,
+    "company": {
+     "total": 1,
+     "hit": 1
+    },
+    "person": {
+     "total": 1,
+     "hit": 0
+    },
+    "number": {
+     "total": 4,
+     "hit": 3
+    }
+   }
+  },
+  {
+   "reference": "한빛레미콘입니다. 13층 30층 헷갈리시면 안 돼요. 1.5m, 100mm, 25kg, 3% 차이.",
+   "hypothesis": "한빛 레미콘입니다 30층 30층 헷갈리시면 안 돼요 1.5 m 100 mm 25 kg 3 퍼센트 차이",
+   "normalizedReference": "한빛레미콘입니다십삼층삼십층헷갈리시면안돼요일오엠백엠엠이십오케이지삼퍼센트차이",
+   "numbers": [
+    "십삼층",
+    "삼십층",
+    "일오엠",
+    "백엠엠",
+    "이십오케이지",
+    "삼퍼센트"
+   ],
+   "expected": {
+    "distance": 2,
+    "refChars": 40,
+    "hypChars": 40,
+    "cer": 0.05,
+    "company": {
+     "total": 1,
+     "hit": 1
+    },
+    "person": {
+     "total": 0,
+     "hit": 0
+    },
+    "number": {
+     "total": 6,
+     "hit": 5
+    }
+   }
+  },
+  {
+   "reference": "도면 번호는 77 1234이고 견적은 0042번입니다. 금요일까지 회신 주세요.",
+   "hypothesis": "",
+   "normalizedReference": "도면번호는칠십칠천이백삼십사이고견적은공공사이번입니다금요일까지회신주세요",
+   "numbers": [
+    "칠십칠",
+    "천이백삼십사",
+    "공공사이번"
+   ],
+   "expected": {
+    "distance": 37,
+    "refChars": 37,
+    "hypChars": 0,
+    "cer": 1.0,
+    "company": {
+     "total": 0,
+     "hit": 0
+    },
+    "person": {
+     "total": 0,
+     "hit": 0
+    },
+    "number": {
+     "total": 3,
+     "hit": 0
+    }
+   }
+  },
+  {
+   "reference": "내일 오후 2시 반에 이서연 대리가 갑니다. 1대 2명.",
+   "hypothesis": "내일 오후 두 시 반에 이서연 대리가 갑니다 한 대 두 명",
+   "normalizedReference": "내일오후두시반에이서연대리가갑니다한대두명",
+   "numbers": [
+    "두시",
+    "한대",
+    "두명"
+   ],
+   "expected": {
+    "distance": 0,
+    "refChars": 21,
+    "hypChars": 21,
+    "cer": 0.0,
+    "company": {
+     "total": 0,
+     "hit": 0
+    },
+    "person": {
+     "total": 1,
+     "hit": 1
+    },
+    "number": {
+     "total": 3,
+     "hit": 3
+    }
+   }
+  },
+  {
+   "reference": "숫자만 12345678901234567 그리고 0 하나.",
+   "hypothesis": "숫자만 일이삼사오육칠팔구공일이삼사오육칠 그리고 영 하나",
+   "normalizedReference": "숫자만일이삼사오육칠팔구공일이삼사오육칠그리고영하나",
+   "numbers": [
+    "일이삼사오육칠팔구공일이삼사오육칠",
+    "영"
+   ],
+   "expected": {
+    "distance": 0,
+    "refChars": 26,
+    "hypChars": 26,
+    "cer": 0.0,
+    "company": {
+     "total": 0,
+     "hit": 0
+    },
+    "person": {
+     "total": 0,
+     "hit": 0
+    },
+    "number": {
+     "total": 2,
+     "hit": 2
+    }
+   }
+  },
+  {
+   "reference": "ABC 현장 m3 단위 5m3, 2 m3 그리고 7시간",
+   "hypothesis": "에이비씨 현장 루베 단위 오 루베 이 루베 그리고 일곱 시간",
+   "normalizedReference": "에이비씨현장엠삼단위오루베이루베그리고일곱시간",
+   "numbers": [
+    "삼",
+    "오루베",
+    "이루베",
+    "일곱시간"
+   ],
+   "expected": {
+    "distance": 2,
+    "refChars": 23,
+    "hypChars": 23,
+    "cer": 0.08695652173913043,
+    "company": {
+     "total": 0,
+     "hit": 0
+    },
+    "person": {
+     "total": 0,
+     "hit": 0
+    },
+    "number": {
+     "total": 4,
+     "hit": 3
+    }
+   }
+  }
+ ]
+}

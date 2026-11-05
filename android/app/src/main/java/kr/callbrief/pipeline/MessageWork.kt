@@ -131,6 +131,18 @@ internal object MessageIntake {
         return (if(cut>0) lines.take(cut) else lines).joinToString("\n").replace(Regex("\n{3,}"),"\n\n").trim()
     }
     /** "첨부: 견적서.pdf, 도면.dwg" under the body (design C4 rule 17: a sent file is a sign the "보내기" item is done); empty without files. */
+    /** The text of one mail as it is kept and later sent for analysis. v3.3 (DESIGN_V4 3.2-3, prompt v7): "보낸 사람" is
+     * the name only, never the address (the sender is known by the counterpart id); a name that is itself an address,
+     * or no name at all, becomes "이름 없음". Addresses quoted in the subject or body ("보낸 사람: x@y" of a forwarded
+     * mail, a signature) become [ADDRESS_MASK], so no request carries an address. A unit-price '@' ("단가 @15,000")
+     * is content and stays. */
+    internal fun mailContent(subject:String?,senderName:String?,body:String,files:List<String>):String {
+        val name=ClaudeCallAnalyzer.mailSender(senderName)?.takeIf { '@' !in it } ?: "이름 없음"
+        return noAddress("제목: ${subject.orEmpty()}\n보낸 사람: $name\n\n$body"+attachedLine(files))
+    }
+    internal const val ADDRESS_MASK="[메일 주소]"
+    private val ADDRESS=Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)+")
+    internal fun noAddress(text:String)=ADDRESS.replace(text,ADDRESS_MASK)
     internal fun attachedLine(names:List<String>)=names.map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(10)
         .takeIf { it.isNotEmpty() }?.joinToString(", ",prefix="\n첨부: ") { it.take(80) } ?: ""
     private fun attachments(part:javax.mail.Part):List<String> = when {
@@ -176,7 +188,7 @@ internal object MessageIntake {
                         // The address identifies the sender (design: 장부의 원본); the name is in the text.
                         val who=from?.address?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: from?.personal
                         val files=runCatching { attachments(m) }.getOrDefault(emptyList())
-                        val content="제목: ${m.subject.orEmpty()}\n보낸 사람: ${listOfNotNull(from?.personal,from?.address).joinToString(" ")}\n\n$body"+attachedLine(files)
+                        val content=mailContent(m.subject,from?.personal,body,files)
                         val id=MessageKind.MAIL+(uidFolder?.let { "${it.uidValidity}:${it.getUID(m)}" } ?: "${m.messageNumber}:$at")
                         if(store.insertMessage(id,at,who,content)) added++
                     }

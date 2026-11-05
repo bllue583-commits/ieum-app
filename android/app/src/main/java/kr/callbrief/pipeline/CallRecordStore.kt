@@ -165,6 +165,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         const val MERGE_CANDIDATES_MAX=50
         /** Entries kept in [PipelineSettingsKeys.MERGE_LOG] (each carries the merged person's rows, r12-4). */
         const val MERGE_LOG_MAX=100
+        /** Ledger edits of a merge of two people and of its undo (ledger/edits, v3.3): {"type",from,into,atMs} by ledger id. */
+        const val MERGE_EDIT="mergePeople";const val UNMERGE_EDIT="unmergePeople"
         /** Where the open of this thread's store got to (r12-4, DESIGN_V4 2.4-2): the "stage" of [PipelineSettingsKeys.STORE_OPEN_ERROR]. */
         const val STAGE_OPEN="open";const val STAGE_SCHEMA="schema";const val STAGE_MIGRATE="migrate";const val STAGE_REPAIR="repair"
         const val STAGE_SEAL="seal";const val STAGE_DONE="done"
@@ -240,7 +242,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         mergeSamePeople()
         // Gone: the API-key route (a record waiting for a key waits for the task like any other) and the unused segment copy (B20).
         port.execute("UPDATE call_records SET state='TRANSCRIBED' WHERE state='WAITING_KEY'")
-        port.execute("UPDATE call_records SET segments_json='[]' WHERE segments_json!='[]'")
+        // v3.3: the small time list of [NumberGuard.Times] ("{...}") is kept; only the old full copies go.
+        port.execute("UPDATE call_records SET segments_json='[]' WHERE segments_json!='[]' AND segments_json NOT LIKE '{%'")
         // The sealed store holds 16 MB; a log line when it is four fifths full is the only warning (B20).
         runCatching {
             val bytes=(rows("PRAGMA page_count").single().long("page_count") ?: 0)*(rows("PRAGMA page_size").single().long("page_size") ?: 0)
@@ -271,11 +274,15 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     /** Merges person [from] into [into] for the migration and keeps, in [migrationMerges], ids plus the rows [from] had
      * (people, people_phones, call_links, person_aliases) so the merge can be undone (screen in v3.2). */
     private fun logMerge(from:Map<String,Any?>,into:Map<String,Any?>) {
-        val id=from.str("id")!!;val lid=from.str("ledger_id")
+        val id=from.str("id")!!;val lid=from.str("ledger_id");val intoLid=into.str("ledger_id")
         fun json(rs:List<Map<String,Any?>>)=JSONArray().apply { rs.forEach { r -> put(JSONObject().apply { r.forEach { (k,v) -> put(k,v ?: JSONObject.NULL) } }) } }
-        migrationMerges+=JSONObject().put("from",lid ?: id).put("into",into.str("ledger_id") ?: into.str("id")!!).put("atMs",clock())
+        migrationMerges+=JSONObject().put("from",lid ?: id).put("into",intoLid ?: into.str("id")!!).put("atMs",clock())
             .put("rows",JSONObject().put("people",json(rows("SELECT * FROM people WHERE id=?",id))).put("people_phones",json(rows("SELECT * FROM people_phones WHERE person_id=?",id)))
                 .put("call_links",json(rows("SELECT * FROM call_links WHERE person_id=?",id))).put("person_aliases",json(rows("SELECT * FROM person_aliases WHERE person_id=?",id))))
+            // v3.3 (DESIGN_V4 3.3-1): the kept one's own numbers, so an undo takes back only the numbers the merge gave it.
+            .put("intoPhones",JSONArray(numbersOf(into).sorted()))
+        // The repository ledger is told when it knows both people (ledger/edits, like a rename).
+        if(lid!=null && intoLid!=null) ledgerEdit(JSONObject().put("type",MERGE_EDIT).put("from",lid).put("into",intoLid).put("atMs",clock()))
         mergePerson(from,into)
         // The ledger knows the person by the merged one's id when the kept one has none.
         if(lid!=null) port.execute("UPDATE people SET ledger_id=? WHERE id=? AND ledger_id IS NULL",lid,into.str("id"))
@@ -296,6 +303,83 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
             if(alive(a) && alive(b) && out.length()<MERGE_CANDIDATES_MAX) out.put(JSONArray().put(a).put(b)) }
         return out
     }
+    /** A user correction for the repository ledger (ledger/edits/), sent by the hourly work. */
+    private fun ledgerEdit(o:JSONObject)=port.execute("INSERT INTO ledger_edits VALUES(?,?,?)","e_"+UUID.randomUUID().toString().replace("-",""),o.toString(),clock())
+
+    // ---- v3.3 (DESIGN_V4 3.3-1): undo of a merge of people ---------------------------------------------------------------
+    /** One merge of two people as the settings screen lists it: [name] was made part of [intoName]; [links] calls go back. */
+    data class MergeEntry(val from:String,val into:String,val name:String,val intoName:String?,val atMs:Long,val links:Int,val json:JSONObject)
+    /** The merges of [log] (the settings value [PipelineSettingsKeys.MERGE_LOG]) that can still be undone, the latest first:
+     * the merged person is not back yet and the entry still carries their rows. */
+    fun mergeEntries(log:String?):List<MergeEntry> {
+        val list=runCatching { JSONArray(log ?: "[]") }.getOrNull() ?: return emptyList()
+        return (0 until list.length()).mapNotNull { list.optJSONObject(it) }.mapNotNull { e ->
+            val person=e.optJSONObject("rows")?.optJSONArray("people")?.optJSONObject(0) ?: return@mapNotNull null
+            val id=person.optString("id").takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            if(personById(id)!=null) return@mapNotNull null
+            val into=e.optString("into");val kept=rows("SELECT name FROM people WHERE ledger_id=? OR id=?",into,into).firstOrNull()?.str("name")
+            MergeEntry(e.optString("from"),into,person.optString("name"),kept,e.optLong("atMs"),e.optJSONObject("rows")?.optJSONArray("call_links")?.length() ?: 0,e)
+        }.sortedByDescending { it.atMs }
+    }
+    /** Puts the merged person of [entry] back as they were before the merge: their row (ledger id included), numbers, calls and
+     * spellings; the kept person gives back the numbers and the spelling the merge gave it. The entry leaves the merge log, and
+     * the repository ledger is told (a merge not sent yet is simply not sent). False when there is nothing to put back. */
+    fun undoMerge(entry:MergeEntry):Boolean {
+        val e=entry.json;val saved=e.optJSONObject("rows") ?: return false
+        val person=saved.optJSONArray("people")?.optJSONObject(0) ?: return false
+        val id=person.optString("id").takeIf { it.isNotEmpty() } ?: return false
+        val done=port.transaction {
+            if(personById(id)!=null) return@transaction false
+            val into=rows("SELECT * FROM people WHERE ledger_id=? OR id=?",entry.into,entry.into).firstOrNull()
+            val lid=person.optString("ledger_id").takeIf { !person.isNull("ledger_id") && it.isNotEmpty() }
+            val phones=saved.optJSONArray("people_phones").strings("phone_key")+listOfNotNull(person.optString("phone_key").takeIf { !person.isNull("phone_key") && it.isNotEmpty() })
+            if(into!=null) {
+                val intoId=into.str("id")!!
+                // The numbers the merge gave the kept person go back (when the entry knows which were its own, r13-3 and later).
+                e.optJSONArray("intoPhones")?.let { own -> val keep=(0 until own.length()).map { own.optString(it) }.toSet()
+                    phones.filter { it !in keep }.forEach { ph -> port.execute("DELETE FROM people_phones WHERE phone_key=? AND person_id=?",ph,intoId)
+                        port.execute("UPDATE people SET phone_key=NULL WHERE id=? AND phone_key=?",intoId,ph) }
+                    port.execute("UPDATE people SET phone_key=(SELECT x.phone_key FROM people_phones x WHERE x.person_id=? AND x.phone_key NOT IN (SELECT phone_key FROM people WHERE phone_key IS NOT NULL) LIMIT 1) WHERE id=? AND phone_key IS NULL",intoId,intoId) }
+                // The merged one's name stayed as a spelling of the kept one.
+                personKey(person.optString("name")).takeIf { it.isNotEmpty() && it!=personKey(into.str("name")) }?.let { port.execute("DELETE FROM person_aliases WHERE name_key=? AND person_id=?",it,intoId) }
+            }
+            // The ledger id went to the kept one when it had none: it comes back.
+            if(lid!=null) port.execute("UPDATE people SET ledger_id=NULL WHERE ledger_id=?",lid)
+            restoreRow("people",person) { col,v -> if(col=="phone_key" && v!=null && rows("SELECT 1 FROM people WHERE phone_key=?",v).isNotEmpty()) null else v }
+            saved.optJSONArray("people_phones").objects().forEach { restoreRow("people_phones",it,replace=false) }
+            saved.optJSONArray("call_links").objects().forEach { restoreRow("call_links",it) }
+            saved.optJSONArray("person_aliases").objects().forEach { restoreRow("person_aliases",it) }
+            // The ledger: a merge still waiting to be sent is dropped; one already sent is answered by its undo.
+            val intoLid=into?.str("ledger_id")
+            if(lid!=null) {
+                val waiting=rows("SELECT id,json FROM ledger_edits").filter { r -> runCatching { JSONObject(r.str("json")!!) }.getOrNull()?.let { it.optString("type")==MERGE_EDIT && it.optString("from")==lid }==true }
+                waiting.forEach { port.execute("DELETE FROM ledger_edits WHERE id=?",it.str("id")) }
+                if(waiting.isEmpty() && intoLid!=null) ledgerEdit(JSONObject().put("type",UNMERGE_EDIT).put("from",lid).put("into",intoLid).put("atMs",clock()))
+            }
+            port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER)
+            true
+        }
+        if(!done) return false
+        settingsEdit { s ->
+            val list=runCatching { JSONArray(s.optString(PipelineSettingsKeys.MERGE_LOG,"[]")) }.getOrNull() ?: JSONArray()
+            val keep=JSONArray();for(i in 0 until list.length()) { val o=list.optJSONObject(i)
+                if(o!=null && o.optString("from")==entry.from && o.optLong("atMs")==entry.atMs) continue;keep.put(list.get(i)) }
+            s.put(PipelineSettingsKeys.MERGE_LOG,keep.toString())
+        }
+        ContactCards.touchAll(this)
+        return true
+    }
+    private fun JSONArray?.objects():List<JSONObject> =if(this==null) emptyList() else (0 until length()).mapNotNull { optJSONObject(it) }
+    private fun JSONArray?.strings(key:String):List<String> =objects().mapNotNull { o -> o.optString(key).takeIf { !o.isNull(key) && it.isNotEmpty() } }
+    /** Writes a row kept in the merge log back into [table], with the columns the table has today; [fix] may change a value. */
+    private fun restoreRow(table:String,o:JSONObject,replace:Boolean=true,fix:(String,Any?)->Any?={ _,v -> v }) {
+        val have=rows("PRAGMA table_info($table)").mapNotNull { it.str("name") }.toSet()
+        val cols=o.keys().asSequence().filter { it in have }.toList();if(cols.isEmpty()) return
+        val values=cols.map { c -> val v=if(o.isNull(c)) null else o.get(c)
+            fix(c,when(v) { is Int -> v.toLong();is Long,is String,null -> v;is Number -> v.toDouble();else -> v.toString() }) }
+        port.execute("INSERT OR ${if(replace) "REPLACE" else "IGNORE"} INTO $table(${cols.joinToString(",")}) VALUES(${cols.joinToString(",") { "?" }})",*values.toTypedArray())
+    }
+
     private fun flushMigrationMerges() {
         if(migrationMerges.isEmpty()) return
         val add=migrationMerges.toList();migrationMerges.clear()
@@ -319,9 +403,11 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         val id=recordId(t)
         if(rows("SELECT 1 FROM call_records WHERE record_id=?",id).isNotEmpty()) return@transaction false
         val now=clock()
-        // The segments are not kept: nothing reads them and they doubled the size of every record (B20).
-        port.execute("INSERT INTO call_records(record_id,recording_id,started_ms,duration_ms,counterpart,counterpart_key,transcript,segments_json,state,created_ms) VALUES(?,?,?,?,?,?,?,'[]',?,?)",
-            id,t.recordingId,t.originalStartedAtMs,t.durationMs,t.counterpart,counterpartKey(t.counterpart),t.text,TRANSCRIBED,now)
+        // The segments' words are not kept twice (B20): only when each line was said and its unsure numbers (v3.3, DESIGN_V4 3.1-1,
+        // a few bytes a line), for the number guard; they go with the transcript ([trim]).
+        val times=NumberGuard.Times.of(t.segments,t.text)?.toJson() ?: "[]"
+        port.execute("INSERT INTO call_records(record_id,recording_id,started_ms,duration_ms,counterpart,counterpart_key,transcript,segments_json,state,created_ms) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            id,t.recordingId,t.originalStartedAtMs,t.durationMs,t.counterpart,counterpartKey(t.counterpart),t.text,times,TRANSCRIBED,now)
         trim(now)
         true
     }
@@ -329,7 +415,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
      * is in now (one that never got a result keeps its words so it can still be analysed); the full analysis of a call
      * older than 90 days shrinks to its summary and names. */
     fun trim(now:Long) {
-        port.execute("UPDATE call_records SET transcript='' WHERE analyzed_ms IS NOT NULL AND analyzed_ms<CAST(? AS INTEGER) AND transcript!=''",now-TRANSCRIPT_KEEP_DAYS*86_400_000L)
+        port.execute("UPDATE call_records SET transcript='',segments_json='[]' WHERE analyzed_ms IS NOT NULL AND analyzed_ms<CAST(? AS INTEGER) AND (transcript!='' OR segments_json!='[]')",now-TRANSCRIPT_KEEP_DAYS*86_400_000L)
         rows("""SELECT record_id,analysis_json FROM call_records WHERE analysis_json LIKE '%"keyPoints"%' AND COALESCE(started_ms,created_ms)<CAST(? AS INTEGER) LIMIT 200""",now-ANALYSIS_KEEP_DAYS*86_400_000L).forEach { r ->
             val root=runCatching { JSONObject(r.str("analysis_json")!!) }.getOrNull() ?: return@forEach
             val a=root.optJSONObject("analysis") ?: return@forEach
@@ -616,8 +702,11 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         val companyNames=rows("SELECT name FROM companies ORDER BY updated_ms DESC LIMIT 60").mapNotNull { it.str("name") }
         // The name list carries what is known of each person (company, title, and the wrong spellings the user corrected).
         val aliases=rows("SELECT person_id,name_key FROM person_aliases").groupBy({ it.str("person_id") },{ it.str("name_key").orEmpty() })
-        val people=rows("""SELECT p.id,p.name,p.role,p.is_staff,co.name AS cname FROM people p LEFT JOIN companies co ON co.id=p.company_id WHERE p.name!='' ORDER BY p.updated_ms DESC LIMIT 300""")
-        val personNames=people.mapNotNull { it.str("name") }.distinct()
+        val people=rows("""SELECT p.id,p.name,p.role,p.is_staff,co.name AS cname FROM people p LEFT JOIN companies co ON co.id=p.company_id WHERE p.name!=''
+            ORDER BY EXISTS(SELECT 1 FROM call_links l JOIN call_records c ON c.record_id=l.record_id WHERE l.person_id=p.id
+                AND COALESCE(c.started_ms,c.created_ms)>=CAST(? AS INTEGER)) DESC,p.updated_ms DESC LIMIT 300""",before-30L*24*3600*1000)
+        // v3.3 (DESIGN_V4 3.2-2): people called in the last 30 days first, and never a number-shaped name.
+        val personNames=people.mapNotNull { noNumber(it.str("name")) }.distinct()
         val personDetails=LinkedHashMap<String,String>()
         for(p in people) { val n=p.str("name") ?: continue;if(n in personDetails) continue
             val wrong=aliases[p.str("id")].orEmpty().filter { it.isNotBlank() && it!=personKey(n) }
@@ -644,7 +733,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
                 AND COALESCE(c.started_ms,c.created_ms)>=CAST(? AS INTEGER) AND COALESCE(c.started_ms,c.created_ms)<CAST(? AS INTEGER) AND (l.person_id IS NULL OR l.person_id!=?)
                 ORDER BY COALESCE(c.started_ms,c.created_ms) DESC LIMIT 5""",companyId,r.recordId,startOf(kstDay(r.dayMs)),before,person?.str("id") ?: "")
                 .map { ClaudeCallRequest.PastCall(CallUi.time(it.long("started_ms") ?: it.long("created_ms")),noNumber(it.str("person")),it.str("summary").orEmpty()) },
-            personDetails = personDetails,sameNumberPeople = sameNumber)
+            personDetails = personDetails,sameNumberPeople = sameNumber,
+            segmentTimes = rows("SELECT segments_json FROM call_records WHERE record_id=?",r.recordId).firstOrNull()?.str("segments_json")?.let { NumberGuard.Times.parse(it) }
+                ?.takeIf { it.size==r.transcript.split("\n").size })
     }
 
     /** Work texts and mail with the same person in the 7 days before this record (and the day after), newest first, raw,
@@ -677,10 +768,10 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
 
     /** Stores the result and applies tasks in one transaction. User-edited and finished items are never changed. */
     fun applyAnalysis(id:String,a:ClaudeCallAnalysis):List<Applied> {
-        skippedNear.clear()
+        skippedNear.clear();guarded.clear()
         val cardKeys=runCatching { cardKeysOfRecord(id) }.getOrDefault(emptySet()) // before: a personal text is deleted
         val out=applyInTransaction(id,a)
-        flushMergeCandidates()
+        flushMergeCandidates();flushGuardStats()
         ContactCards.touch(this) { cardKeys+cardKeysOfRecord(id) }
         return out
     }
@@ -724,7 +815,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         }
         fun taskCompany(name:String?)=name?.takeIf { normName(it)!=null }?.let { upsertCompany(it,now) }
         var noted=false
-        val applied=a.tasks.map { t ->
+        // v3.3 (DESIGN_V4 3.1-3): items made now that a confusable number sets apart from one asked for shortly before.
+        val confused=mutableMapOf<Int,String>()
+        val applied=a.tasks.mapIndexed { index,t ->
             when(t.op) {
                 "create" -> {
                     // The same open item, a near one of the same company, or one finished in the last 14 days is not made again (B11).
@@ -733,10 +826,13 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
                     if(!hasRecording) Applied("create","",t.title,t.due,false)
                     else if(dup!=null) { if(dup.second) skippedNear+=dup.first to CallInbox.recordKey(id);Applied("create","",t.title,t.due,false,duplicate=true) } else {
                         val item="wf_item_"+UUID.randomUUID().toString().replace("-","")
-                        // created_ms is when it was asked for (the call), the "요청 날짜" the screens show.
-                        port.execute("INSERT INTO workflow_items(id,recording_id,case_id,kind,title,edition,due_text,status,revision,source_key,evidence_quote,created_ms,tentative,last_call_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",item,recording,case,"TODO",t.title.take(240),"",t.due.orEmpty(),"open",1,null,t.quote,callMs,if(t.tentative) 1 else 0,callMs)
+                        val itemCompany=taskCompany(t.company) ?: companyId
+                        val memo=itemCompany?.let { confusableMemo(t.title,it,callMs) }
+                        if(memo!=null) confused[index]=memo
+                        // created_ms is when it was asked for (the call), the "요청 날짜" the screens show. The confusable memo is the item's note line.
+                        port.execute("INSERT INTO workflow_items(id,recording_id,case_id,kind,title,edition,due_text,status,revision,source_key,evidence_quote,created_ms,tentative,last_call_ms,ai_note) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",item,recording,case,"TODO",t.title.take(240),"",t.due.orEmpty(),"open",1,null,t.quote,callMs,if(t.tentative || memo!=null) 1 else 0,callMs,memo)
                         port.execute("INSERT INTO call_task_bindings VALUES(?,?,?,?)",item,id,1,now)
-                        (taskCompany(t.company) ?: companyId)?.let { port.execute("INSERT OR REPLACE INTO task_companies VALUES(?,?)",item,it) }
+                        itemCompany?.let { port.execute("INSERT OR REPLACE INTO task_companies VALUES(?,?)",item,it) }
                         Applied("create",item,t.title,t.due,true)
                     }
                 }
@@ -774,7 +870,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
                 }
             }
         }
-        val json=JSONObject().put("analysis",a.toJson()).put("applied",JSONArray().apply { applied.forEach {
+        val kept=if(confused.isEmpty()) a else a.copy(tasks=a.tasks.mapIndexed { i,t -> if(i in confused) t.copy(tentative=true,guard=(t.guard+NumberGuard.CONFUSABLE).distinct()) else t })
+        kept.tasks.forEach { t -> t.guard.forEach { r -> guarded[r]=(guarded[r] ?: 0)+1 } }
+        val json=JSONObject().put("analysis",kept.toJson()).put("applied",JSONArray().apply { applied.forEach {
             put(JSONObject().put("op",it.op).put("itemId",it.itemId).put("title",it.title).put("due",it.due ?: "").put("applied",it.applied).apply { it.note?.let { n -> put("note",n) };it.reason?.let { r -> put("reason",r) } }) } })
         port.execute("UPDATE call_records SET state='ANALYZED',summary=?,analysis_json=?,error=NULL,analyzed_ms=? WHERE record_id=?",a.summary,json.toString(),now,id)
         if(applied.any { it.applied } || noted) port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER)
@@ -1216,6 +1314,24 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         val same=list.filter { it.str("status") !in setOf("done","merged") && it.str("cid")==companyId };if(same.isEmpty()) return null
         val names=(rows("SELECT name FROM companies")+rows("SELECT name FROM people WHERE name!=''")).mapNotNull { it.str("name") }.distinct()
         return same.firstOrNull { NameKey.nearTitle(title,it.str("title").orEmpty(),names) }?.let { it.str("id")!! to true }
+    }
+    /** The memo of an item titled [title] when an item of the same company asked for in the [NumberGuard.CONFUSABLE_DAYS] before
+     * [callMs] has the same title but for a confusable number ("13층" and "30층", DESIGN_V4 3.1-3); null otherwise. */
+    private fun confusableMemo(title:String,companyId:String,callMs:Long):String? =
+        rows("""SELECT i.title FROM workflow_items i JOIN task_companies tc ON tc.item_id=i.id WHERE tc.company_id=? AND i.kind='TODO' AND i.status!='merged'
+            AND i.created_ms>=CAST(? AS INTEGER) AND i.created_ms<=CAST(? AS INTEGER) ORDER BY i.created_ms DESC""",companyId,callMs-NumberGuard.CONFUSABLE_DAYS*86_400_000L,callMs)
+            .firstNotNullOfOrNull { r -> r.str("title")?.let { NumberGuard.confusable(it,title) } }
+    /** Items the number guard marked in this store's last [applyAnalysis], by reason, waiting to be added to [PipelineSettingsKeys.GUARD_STATS]. */
+    private val guarded=mutableMapOf<String,Int>()
+    /** Adds [guarded] to the running counts (numbers only; the heartbeat's guard block reads them). */
+    private fun flushGuardStats() {
+        if(guarded.isEmpty()) return
+        val add=guarded.toMap();guarded.clear()
+        settingsEdit { s ->
+            val o=runCatching { JSONObject(s.optString(PipelineSettingsKeys.GUARD_STATS,"{}")) }.getOrNull() ?: JSONObject()
+            add.forEach { (k,n) -> o.put(k,o.optLong(k,0)+n) }
+            s.put(PipelineSettingsKeys.GUARD_STATS,o.toString())
+        }
     }
     /** Near duplicates skipped in this store's last [applyAnalysis], waiting to be written to settings. */
     private val skippedNear=mutableListOf<Pair<String,String>>()

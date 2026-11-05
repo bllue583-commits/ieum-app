@@ -5,6 +5,9 @@ import org.json.JSONObject
 
 internal class ClaudeCallException(val code:String):Exception(code)
 
+/** How a quote was found ([ClaudeCallAnalyzer.filter]). */
+private const val PROOF_EXACT=0;private const val PROOF_CLOSE=1;private const val PROOF_LOW=2
+
 /** Context the model gets besides the transcript. The model has no memory between calls, so everything it
  * should know about the site, the counterpart's company and the open work travels with every call. */
 internal data class ClaudeCallRequest(
@@ -46,6 +49,9 @@ internal data class ClaudeCallRequest(
     val sameNumberPeople:List<String> =emptyList(),
     /** The user as entered under "내 정보" (name, company and site, title); null or blank: roles only. */
     val user:UserInfo?=null,
+    /** v3.3 (DESIGN_V4 3.1-1): when each transcript line was said (and its unsure numbers), for the number guard; null for
+     * texts, mail and records stored before v3.3 (the guard then reads lines around the quote instead). Never sent. */
+    val segmentTimes:NumberGuard.Times?=null,
 ) {
     data class UserInfo(val name:String?,val company:String?,val role:String?) {
         val empty get()=listOf(name,company,role).all { it.isNullOrBlank() }
@@ -79,21 +85,31 @@ internal data class ClaudeCallAnalysis(
     val companyTrade:String?=null,
     /** False when a text or mail turns out personal: it is then dropped, not stored or summarised. */
     val business:Boolean=true,
+    /** v3.3 (DESIGN_V4 3.1-6, rules v7): the answer's own "corrected" mark (a mishearing it fixed), kept as JSON text, not shown yet. */
+    val corrected:String?=null,
 ) {
     /** Kept to read results stored before the section was merged into [tasks]; new answers have none. */
     data class Promise(val text:String,val due:String?,val owner:String,val quote:String,val quoteFuzzy:Boolean=false)
     /** [owner]: who does it, "me" (the user), "them" or "unknown". [quoteFuzzy]: the quote was not found letter for letter. */
     /** [tentative]: certainty "tentative" ("알아볼게요"), not a firm promise. */
-    data class Task(val op:String,val taskId:String?,val title:String,val due:String?,val quote:String,val company:String?=null,val owner:String="unknown",val quoteFuzzy:Boolean=false,val tentative:Boolean=false)
+    /** [guard]: why the number guard marked it tentative ([NumberGuard.REASONS]), empty when it did not. [corrected]: the
+     * answer's "corrected" mark of this item as JSON text (rules v7), kept only. */
+    data class Task(val op:String,val taskId:String?,val title:String,val due:String?,val quote:String,val company:String?=null,val owner:String="unknown",val quoteFuzzy:Boolean=false,val tentative:Boolean=false,
+                    val guard:List<String> =emptyList(),val corrected:String?=null)
     data class Counterpart(val personName:String?,val companyName:String?,val role:String?,val isStaff:Boolean)
     fun toJson():JSONObject=JSONObject().put("summary",summary).put("keyPoints",JSONArray(keyPoints))
         .put("counterpartName",counterpartName ?: JSONObject.NULL).put("counterpartCompany",counterpartCompany ?: JSONObject.NULL)
         .put("counterpart",counterpart?.let { JSONObject().put("personName",it.personName ?: JSONObject.NULL).put("companyName",it.companyName ?: JSONObject.NULL).put("role",it.role ?: JSONObject.NULL).put("isStaff",it.isStaff) } ?: JSONObject.NULL)
         .put("siteMemo",siteMemo ?: JSONObject.NULL).put("companyMemo",companyMemo ?: JSONObject.NULL).put("companyTrade",companyTrade ?: JSONObject.NULL)
-        .put("business",business)
+        .put("business",business).apply { corrected?.let { put("corrected",rawJson(it)) } }
         .put("promises",JSONArray().apply { promises.forEach { put(JSONObject().put("text",it.text).put("due",it.due ?: JSONObject.NULL).put("owner",it.owner).put("quote",it.quote).put("quoteFuzzy",it.quoteFuzzy)) } })
-        .put("tasks",JSONArray().apply { tasks.forEach { put(JSONObject().put("op",it.op).put("taskId",it.taskId ?: JSONObject.NULL).put("title",it.title).put("due",it.due ?: JSONObject.NULL).put("quote",it.quote).put("company",it.company ?: JSONObject.NULL).put("owner",it.owner).put("certainty",if(it.tentative) "tentative" else "sure").put("quoteFuzzy",it.quoteFuzzy)) } })
+        .put("tasks",JSONArray().apply { tasks.forEach { put(JSONObject().put("op",it.op).put("taskId",it.taskId ?: JSONObject.NULL).put("title",it.title).put("due",it.due ?: JSONObject.NULL).put("quote",it.quote).put("company",it.company ?: JSONObject.NULL).put("owner",it.owner).put("certainty",if(it.tentative) "tentative" else "sure").put("quoteFuzzy",it.quoteFuzzy)
+            .apply { if(it.guard.isNotEmpty()) put("guard",JSONArray(it.guard));it.corrected?.let { c -> put("corrected",rawJson(c)) } }) } })
     companion object {
+        /** A value of any JSON type as JSON text ("corrected" is kept whatever shape rules v7 gives it); null when absent. */
+        internal fun rawText(o:JSONObject,k:String):String? { if(!o.has(k) || o.isNull(k)) return null
+            return when(val v=o.opt(k)) { is String -> JSONObject.quote(v);else -> v.toString() }.takeIf { it.length<=2000 } }
+        internal fun rawJson(t:String):Any = runCatching { org.json.JSONTokener(t).nextValue() }.getOrDefault(t)
         /** Parses the model's JSON (or a stored copy of [toJson]). Fields added later are optional. */
         fun parse(o:JSONObject):ClaudeCallAnalysis {
             fun JSONObject.str(k:String)=if(isNull(k)) null else optString(k).trim().takeIf { it.isNotEmpty() }
@@ -109,8 +125,9 @@ internal data class ClaudeCallAnalysis(
                 name,company,
                 o.optJSONArray("promises").objects().map { Promise(it.optString("text").trim(),it.str("due"),it.optString("owner","unknown").lowercase(),it.optString("quote").trim(),it.optBoolean("quoteFuzzy",false)) },
                 o.optJSONArray("tasks").objects().map { Task(it.optString("op").lowercase(),it.str("taskId"),it.optString("title").trim(),it.str("due"),it.optString("quote").trim(),it.str("company"),it.optString("owner","unknown").lowercase(),it.optBoolean("quoteFuzzy",false),
-                    it.optString("certainty").trim().lowercase()=="tentative") },
-                counterpart,o.str("siteMemo"),o.str("companyMemo"),o.str("companyTrade"),o.optBoolean("business",true))
+                    it.optString("certainty").trim().lowercase()=="tentative",
+                    it.optJSONArray("guard")?.let { g -> (0 until g.length()).map { i -> g.optString(i) }.filter { r -> r in NumberGuard.REASONS } }.orEmpty(),rawText(it,"corrected")) },
+                counterpart,o.str("siteMemo"),o.str("companyMemo"),o.str("companyTrade"),o.optBoolean("business",true),rawText(o,"corrected"))
         }
     }
 }
@@ -144,12 +161,15 @@ internal class ClaudeCallAnalyzer {
                 "quote" to str("자막이나 texts 원문 그대로, 8글자 이상"),"company" to nullable("string"),
                 "owner" to enum("me","them","unknown").put("description","일을 하는 쪽: 사용자 me, 상대 them, 애매하면 unknown"),
                 "certainty" to enum("sure","tentative").put("description","하기로 정해졌으면 sure, 알아보겠다 정도면 tentative")),
-                "체크할 일, 한 기록에 최대 5개"))
+                "체크할 일, 한 기록에 최대 5개"),
+            "corrected" to array(obj("heard" to str("자막에 들린 표기"),"written" to str("[이름 목록]의 표기로 고쳐 쓴 것")),
+                "자막 오인을 고친 이름, 호칭, 업체명(숫자, 날짜, 규격은 고치지 않음), 없으면 빈 배열"))
         /** Version of the analysis rules and result format (docs/routines/hourly.md). Requests carry it; the request file format is [FORMAT].
          * 5: the result no longer has siteMemo, companyMemo, companyTrade (the phone never used them; the task keeps the ledger).
          * 6: rules 7, 8, 11 to 16 and 19 say more (how people address each other, more date words, a surname with a title only);
-         * the result format is the same as 5, so a 4 or 5 request is answered by the same rules. */
-        const val PROMPT_VERSION=6
+         * the result format is the same as 5, so a 4 or 5 request is answered by the same rules.
+         * 7 (v3.3): no person name in titles, number certainty, `corrected` (misheard names fixed from [이름 목록]). */
+        const val PROMPT_VERSION=7
         const val FORMAT=3
         /** Site words the speech recogniser tends to mishear (design C5 [용어]). */
         val TERMS=listOf("타설","양생","레미콘","슬럼프","거푸집","동바리","배근","D10","D13","D16","D19","D22","D25","샵드로잉","기성","내역서","견적서","도면",
@@ -214,27 +234,27 @@ internal class ClaudeCallAnalyzer {
 8. 날짜는 메시지의 [달력]을 보고 YYYY-MM-DD로 쓰고, 알 수 없으면 null로 둡니다. 계산 기준은 [통화기록]의 실제 통화 시각 하나입니다. "오늘 중", "오전 중", "퇴근 전"은 통화 당일, "이번 주 X요일"은 통화일이 속한 월~일 주의 X요일, "다음 주 X요일"은 그다음 주, "다음 주 초"는 다음 주 월요일, "월말"은 그달 마지막 평일, "내일모레"는 이틀 뒤입니다. 이미 지난 요일을 말했다면 앞으로 처음 오는 그 요일입니다. '내일'은 통화일 다음 날, '모레'는 이틀 뒤, '글피'는 사흘 뒤, '이번 주 안'은 그 주 금요일, '주말'은 그 주 토요일, '다음 달 초'는 다음 달 첫 평일입니다. '금요일까지'처럼 '이번 주/다음 주'가 없으면 앞으로 처음 오는 그 요일입니다. [달력]이 없거나 통화 시각이 '시각 미상'이면 due는 모두 null입니다. [달력]의 '공휴일'이 기한이면 그대로 두고 옮기지 마세요. 분명하지 않으면 null입니다.
 
 [숫자와 용어]
-9. 금액, 수량, 규격(철근 규격, 콘크리트 강도, 타설 물량 등), 날짜, 시각은 자막에 나온 그대로 쓰고 합산, 반올림, 단위 변환을 하지 마세요. 숫자가 앞뒤와 맞지 않으면 summary 끝에 "(숫자 확인 필요)"를 붙이세요. 메시지의 [용어]에 있는 말과 비슷한 소리의 다른 말이 자막에 있으면 그 용어로 이해하되 quote는 자막 그대로 복사하세요.
+9. 금액, 수량, 규격(철근 규격, 콘크리트 강도, 타설 물량 등), 날짜, 시각은 자막에 나온 그대로 쓰고 합산, 반올림, 단위 변환을 하지 마세요. 숫자가 앞뒤와 맞지 않으면 summary 끝에 "(숫자 확인 필요)"를 붙이세요. 체크할 일의 숫자나 날짜가 잘못 들렸을 수 있으면(13과 30, 14와 40처럼 소리가 비슷하거나 앞뒤와 맞지 않으면) 들린 대로 적되 그 일의 certainty를 "tentative"로 하세요. 숫자를 짐작해 바꾸지 마세요. 메시지의 [용어]에 있는 말과 비슷한 소리의 다른 말이 자막에 있으면 그 용어로 이해하되 quote는 자막 그대로 복사하세요.
 
 [체크할 일]
-10. tasks는 사용자가 나중에 "됐는지 확인할 일" 목록입니다. 사용자는 부장이라 상대에게 일을 시키는 경우가 많습니다. 상대가 하기로 한 약속(owner "them")과 사용자가 하기로 한 약속(owner "me") 모두 넣으세요. 상대가 할 일의 title은 "김민수 과장 견적서 회신 확인"처럼 누가 무엇을 했는지 확인하는 꼴로 짧게 쓰세요.
+10. tasks는 사용자가 나중에 "됐는지 확인할 일" 목록입니다. 사용자는 부장이라 상대에게 일을 시키는 경우가 많습니다. 상대가 하기로 한 약속(owner "them")과 사용자가 하기로 한 약속(owner "me") 모두 넣으세요. 상대가 할 일의 title은 "견적서 회신 확인"처럼 무엇을 했는지 확인하는 꼴로 짧게 쓰세요. title에 사람 이름이나 호칭(김민수 과장, 소장님)을 넣지 마세요. 화면이 그 일의 상대 이름을 따로 보여 줍니다.
 11. "~하겠다", "~하기로 했다", "~보내드리겠다"처럼 정해진 것만 certainty "sure"로 만드세요. "~해 볼게요", "알아볼게요", "검토해 보겠습니다"는 certainty "tentative"로 하고 title을 "회신 확인"처럼 쓰세요. "~하면 좋겠다", "~일 것 같다"는 만들지 마세요. 상대가 '확인해 보고 연락드릴게요', '여쭤보고 말씀드릴게요'라고 하면 tentative이고 title은 '○○ 회신 확인'입니다. 사용자가 '알아보고 연락드릴게요'라고 하면 owner 'me', tentative입니다.
 12. 체크할 일을 정하는 순서: (1) [열린 체크할 일]에 같은 업체의 같은 대상(문서 이름, 공정, 회차)이 있으면 op "update"와 그 taskId를 쓰세요. 새 날짜가 분명할 때만 due를 쓰고 아니면 null로 두세요(기존 날짜가 유지됩니다). update는 대상이 같고 '날짜', '수량', '방법' 중 하나가 바뀌었을 때만 씁니다. 같은 대상에 대해 다시 말하기만 했으면 아무것도 내지 마세요. (2) 이번 통화에서 그 일이 끝났다고 누군가 말했으면 op "done_suggested"로 제안만 하세요(quote는 끝났다고 말한 부분). 일이 끝났다고 스스로 결정하지 마세요. (3) 둘 다 아니면 "create"(taskId null). 같은 일에 update와 create를 함께 내지 마세요. 회차나 날짜가 다른 일(11/5 타설과 11/12 타설)은 새 일입니다. taskId는 메시지에 있는 것만 쓸 수 있습니다. 기록 하나에서 tasks는 5개까지입니다. [최근 끝낸 체크할 일]에 있는 일은 새로 요청받지 않는 한 다시 만들지 마세요. tasks의 company에는 그 일이 속한 업체 이름을 [이름 목록]의 표기로 쓰고 모르면 null로 두세요. [열린 체크할 일]의 각 항목에는 taskId, title, due, status, company와 함께 askedOn(요청한 날), owner(그때 정한 맡는 쪽), person(요청한 통화 상대 이름), quote(그때 근거 원문의 앞 40자)가 있을 수 있고, 없는 키는 알 수 없다는 뜻입니다.
 
 [이름]
 13. counterpart에는 이번 통화 상대의 personName, companyName, role, isStaff(우리 회사 직원이면 true, 이때 companyName은 null)를 씁니다. 자막이나 [이름 목록]에서 확인되지 않으면 null로 두고, 자막과 [이름 목록]에 없는 이름은 절대 지어내지 마세요. counterpartName과 counterpartCompany에는 같은 값을 넣습니다. 호칭(과장, 소장, 님)은 이름에 붙이지 말고 role에 씁니다.
-14. 자막의 이름은 음성 인식 오타가 있을 수 있습니다. [이름 목록]에 비슷한 이름이 있으면 목록의 표기를 그대로 쓰세요. 목록에 "김민수(△△철강 과장, 오인식 김민서)"처럼 "오인식" 뒤에 적힌 이름은 다르게 들린 적이 있는 틀린 표기이니 같은 사람으로 보고 앞의 이름을 쓰세요.
+14. 자막의 이름은 음성 인식 오타가 있을 수 있습니다. [이름 목록]에 비슷한 이름이 있으면 목록의 표기를 그대로 쓰세요. 목록에 "김민수(△△철강 과장, 오인식 김민서)"처럼 "오인식" 뒤에 적힌 이름은 다르게 들린 적이 있는 틀린 표기이니 같은 사람으로 보고 앞의 이름을 쓰세요. 호칭, 업체명, 사람 이름이 [이름 목록]의 것과 비슷하게 들렸으면(자막 "단단 이엔씨", 목록 "탄탄이엔씨") summary, keyPoints, title, company, counterpart에는 목록의 표기로 쓰고, 고친 것마다 corrected에 {"heard": 자막에 들린 표기, "written": 고쳐 쓴 표기}를 하나씩 넣으세요. quote는 고치지 말고 자막 그대로 두세요. 숫자, 날짜, 시각, 금액, 규격(철근 규격, 강도, 수량)은 비슷하게 들려도 절대 고치지 말고 corrected에도 넣지 마세요. 비슷한지 확신이 없으면 고치지 마세요. 고친 것이 없으면 corrected는 빈 배열입니다.
 15. "상대 id"가 있으면 그 상대는 전화번호(메일은 주소)로 확인된 사람입니다. 자막의 이름이 [상대]의 이름과 다르게 들려도 같은 사람이니 [상대]의 이름을 쓰세요. 다만 자막에서 상대가 자기 이름을 분명히 다르게 말하면 [이 번호를 쓰는 사람들]에서 고르고, 거기에도 없으면 그 이름을 쓰세요(사무실 번호를 여러 사람이 씁니다).
 16. 전화부 이름에 업체나 직책이 붙어 있으면(김과장 △△철강) 이름, 업체, 직책으로 나눠 쓰세요. 자막이나 전화부 이름에 '김 과장'처럼 성과 직책만 들리고 [상대]나 [이름 목록]에 같은 성의 그 직책 사람이 하나 있으면 그 사람의 이름을 쓰세요. 없으면 personName은 '김'이 아니라 null로 두고 role만 '과장'으로 씁니다.
 
 [문자와 메일]
-17. 메시지 맨 위 "종류"가 문자나 메일이면 <transcript> 안의 글은 업무 문자(시각과 보낸/받은 표시) 또는 메일(제목, 보낸 사람, 본문, 첨부 목록)입니다. 자막 규칙을 똑같이 적용하고 quote도 그 글에서 복사하세요. 보낸 문자의 약속은 사용자의 약속(owner "me")입니다. "첨부: 견적서.pdf" 같은 줄은 그 서류가 실제로 갔다는 신호이므로 [열린 체크할 일]의 "보내기" 일이 끝난 것으로 보이면 done_suggested를 내세요.
+17. 메시지 맨 위 "종류"가 문자나 메일이면 <transcript> 안의 글은 업무 문자(시각과 보낸/받은 표시) 또는 메일(제목, 보낸 사람, 본문, 첨부 목록)입니다. 메일의 "보낸 사람"에는 이름만 있고 주소는 없습니다(보낸 사람은 "상대 id"로 확인됩니다). 본문의 [메일 주소]는 가려 둔 주소입니다. 자막 규칙을 똑같이 적용하고 quote도 그 글에서 복사하세요. 보낸 문자의 약속은 사용자의 약속(owner "me")입니다. "첨부: 견적서.pdf" 같은 줄은 그 서류가 실제로 갔다는 신호이므로 [열린 체크할 일]의 "보내기" 일이 끝난 것으로 보이면 done_suggested를 내세요.
 18. <texts>는 같은 상대와 최근 7일 동안 주고받은 업무 문자와 메일 원문입니다. 통화와 문자, 메일을 한 흐름으로 이어서 요약하고, 이미 문자로 끝난 일은 새 할 일로 만들지 마세요. "아직 정리 전" 표시는 아직 분석되지 않은 문자라는 뜻입니다.
 
 [개인 내용]
 19. business는 이 통화·문자·메일이 사용자의 일(현장, 협력업체, 회사 업무)과 관련 있으면 true입니다. 가족, 지인, 쇼핑, 택배, 광고, 금융 알림 같은 개인적인 것이면 false로 하고, summary는 "개인 내용"이라고만 쓰고 나머지 목록은 비우며 이름과 업체도 모두 null로 두세요. 개인 내용은 요약하거나 옮겨 적지 마세요. [상대]에 업체가 있는 통화는 분명히 개인적인 내용일 때만 false입니다. 협력업체 사람의 명절 인사, 경조사 안내는 업무 관계이므로 business true이고 tasks는 비웁니다.
 
-[예시 1] [열린 체크할 일]에 {"taskId":"w12","title":"김민수 과장 수정 견적서 회신 확인"}이 있고 자막에 "수정 견적서는 어제 메일로 보내드렸습니다"가 있으면 → tasks: [{"op":"done_suggested","taskId":"w12","quote":"수정 견적서는 어제 메일로 보내드렸습니다","owner":"them","certainty":"sure"}]
+[예시 1] [열린 체크할 일]에 {"taskId":"w12","title":"수정 견적서 회신 확인"}이 있고 자막에 "수정 견적서는 어제 메일로 보내드렸습니다"가 있으면 → tasks: [{"op":"done_suggested","taskId":"w12","quote":"수정 견적서는 어제 메일로 보내드렸습니다","owner":"them","certainty":"sure"}]
 [예시 2] [열린 체크할 일]에 {"taskId":"w20","title":"3층 타설 일정표 공유","due":"2026-11-05"}가 있고 자막에 "타설 일정표는 금요일까지 드릴게요"(통화일 수요일 11/4)가 있으면 → tasks: [{"op":"update","taskId":"w20","title":"3층 타설 일정표 공유","due":"2026-11-06","quote":"타설 일정표는 금요일까지 드릴게요","owner":"them","certainty":"sure"}]
 """.trim()
         private fun durationText(ms:Long)=if(ms<=0) "미상" else "${ms/60000}분 ${(ms/1000)%60}초"
@@ -342,16 +362,21 @@ internal class ClaudeCallAnalyzer {
             }
             return false
         }
-        /** null: no proof; false: found letter for letter; true: found closely. */
-        fun proof(q:String,title:String):Boolean? {
+        /** null: no proof; [PROOF_EXACT]: found letter for letter; [PROOF_CLOSE]: found closely; [PROOF_LOW]: only 70 to 90% of it (v3.3: kept, tentative). */
+        fun proofOf(q:String,title:String):Int? {
             val b=NameKey.bare(q);if(b.length<MIN_QUOTE) return null
             val c=count(inCall,b);val t=count(inTexts,b)
-            if(c==1 || (c==0 && t==1)) return false
+            if(c==1 || (c==0 && t==1)) return PROOF_EXACT
             // Said several times (a repeated phrase, a looping transcript): only next to what the title is about, and only as a close match.
-            if(c+t>1) return if(nearTitleWord(b,title)) true else null
+            if(c+t>1) return if(nearTitleWord(b,title)) PROOF_CLOSE else null
             // Close: one stretch of the call (or of the texts) the quote's length plus 20% holds 90% of its 3-letter pieces.
-            return if(maxOf(NameKey.windowCoverage3(b,inCall),NameKey.windowCoverage3(b,inTexts))>=FUZZY_COVERAGE) true else null
+            val cover=maxOf(NameKey.windowCoverage3(b,inCall),NameKey.windowCoverage3(b,inTexts))
+            return when { cover>=FUZZY_COVERAGE -> PROOF_CLOSE;cover>=NumberGuard.QUOTE_LOW -> PROOF_LOW;else -> null }
         }
+        fun proof(q:String,title:String):Boolean? = proofOf(q,title)?.takeIf { it!=PROOF_LOW }?.let { it!=PROOF_EXACT }
+        // The number guard (DESIGN_V4 3.1-1) reads the lines of the call (and of the texts) as they were sent.
+        val callLines=r.transcript.split("\n").map(::maskNumbers);val textLines=r.recentTexts.split("\n").map(::maskNumbers)
+        val callDay=r.callDay
         fun iso(d:String?)=d?.trim()?.takeIf { Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(it) && runCatching { java.time.LocalDate.parse(it) }.isSuccess }
         val heard=NameKey.squash(r.transcript+r.recentTexts+(r.callLog?.phoneBookName ?: ""))
         val names=r.companyNames+r.personNames+listOfNotNull(r.counterpart,r.person?.name,r.person?.company,r.company?.name)+r.openTasks.mapNotNull { it.company }
@@ -364,8 +389,16 @@ internal class ClaudeCallAnalyzer {
         return a.copy(
             counterpart=cp,siteMemo=memo(a.siteMemo,600),companyMemo=memo(a.companyMemo,400),companyTrade=memo(a.companyTrade,20),
             promises=a.promises.mapNotNull { p -> proof(p.quote,p.text)?.takeIf { p.text.isNotEmpty() }?.let { p.copy(owner=owner(p.owner),due=iso(p.due),quoteFuzzy=it) } },
-            tasks=a.tasks.mapNotNull { t -> val fuzzy=proof(t.quote,t.title)
-                if(fuzzy==null || t.title.isEmpty() || !when(t.op) { "create" -> true;"update","done_suggested" -> t.taskId in known;else -> false }) null
-                else t.copy(taskId=if(t.op=="create") null else t.taskId,company=seen(t.company),due=iso(t.due),owner=owner(t.owner),quoteFuzzy=fuzzy) }.take(MAX_TASKS))
+            tasks=a.tasks.mapNotNull { t -> val found=proofOf(t.quote,t.title)
+                if(found==null || t.title.isEmpty() || !when(t.op) { "create" -> true;"update","done_suggested" -> t.taskId in known;else -> false }) null
+                else {
+                    val due=iso(t.due)
+                    // done_suggested changes neither title nor date: nothing to guard.
+                    val v=if(t.op=="done_suggested") NumberGuard.Verdict(emptyList(),due)
+                        else NumberGuard.check(t.title,due,t.quote,callLines,textLines,r.segmentTimes,callDay,lowQuote=found==PROOF_LOW)
+                    t.copy(taskId=if(t.op=="create") null else t.taskId,company=seen(t.company),due=v.due,owner=owner(t.owner),quoteFuzzy=found!=PROOF_EXACT,
+                        tentative=t.tentative || v.reasons.isNotEmpty(),guard=v.reasons)
+                } }.take(MAX_TASKS))
     }
+
 }
