@@ -339,7 +339,7 @@ def hours(ms):
 # A request that went up at night waits for 07:00 by design, so its age counts only the time the routine runs.
 KST_OFFSET_MS = 9 * HOUR
 ROUTINE_FIRST_HOUR = 7
-ROUTINE_END_HOUR = 23  # the last run is 22:30; the next one is 07:00
+ROUTINE_END_HOUR = 23  # hourly cron is 34 7-22 KST: the last run is 22:34, the next one is 07:34
 
 
 def routine_ms(from_ms, to_ms):
