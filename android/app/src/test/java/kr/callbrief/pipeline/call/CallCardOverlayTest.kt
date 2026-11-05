@@ -208,7 +208,7 @@ class CallCardOverlayTest:ProtectedTextHostTestBase() {
         CallCardOverlay.latestText={ _,_ -> "내일 아침에 다시 전화 드릴게요" }
         ring(stranger);settle(50)
         val v=windows.single()
-        assertEquals("전화부에 없는 번호예요",(tagged(v,"card_name") as TextView).text.toString())
+        assertEquals("아직 정리된 통화가 없는 번호예요",(tagged(v,"card_name") as TextView).text.toString())
         assertEquals("최근 문자  내일 아침에 다시 전화 드릴게요",(tagged(v,"card_summary") as TextView).text.toString())
     }
 
@@ -262,6 +262,53 @@ class CallCardOverlayTest:ProtectedTextHostTestBase() {
         assertTrue(v.measuredHeight<=CallUi.dp(app,300))
         assertEquals(View.GONE,tagged(v,"card_issue").visibility)
         assertEquals(View.VISIBLE,tagged(v,"card_summary").visibility)
+    }
+
+    /** v3.3 (DESIGN_V4 3.1-5, 1.3 #9): the locked screen shows the name, the company and one check item, no number or amount,
+     * nothing of the call; with "잠금 화면에서도 이름과 한 줄 보기" off, as before. */
+    @Test fun lockedScreenShowsTheNameAndOneLineUnlessTurnedOff() {
+        val money=card().copy(openTasks=listOf(ContactCard.Task("wf_1","철근 대금 50만원 입금 확인",now,"open",null,tentative=true)))
+        ContactCards.write(app,mapOf(key to money),replaceAll=true)
+        CallCardOverlay.locked={ true }
+        ring();settle(50)
+        val pub=notices.single().publicVersion!!
+        assertEquals("김민수 대표",pub.extras.getString(android.app.Notification.EXTRA_TITLE))
+        val line=pub.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString()
+        assertTrue(line,line.contains("탄탄이엔씨") && line.contains("체크할 일: 철근 대금"))
+        assertFalse(line,line.contains("50") || line.contains("만원") || line.contains("견적서는 금요일") || line.contains("2222"))
+        CallCardOverlay.hide();settle();CallSession.onPhoneState(app,TelephonyManager.EXTRA_STATE_IDLE,"")
+        SecureSettings(app).update { it.put(CallCardOverlay.KEY_LOCK_DETAIL,false) }
+        ring();settle(50)
+        val off=notices.single().publicVersion!!
+        assertEquals("이음 통화 카드",off.extras.getString(android.app.Notification.EXTRA_TITLE))
+        assertEquals("잠금을 풀면 카드가 보여요",off.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString())
+        // The private notice itself says which item needs a check.
+        assertTrue(notices.single().extras.getCharSequence(android.app.Notification.EXTRA_BIG_TEXT).toString().contains("확인 필요"))
+    }
+
+    /** v3.3 (DESIGN_V4 3.1-5): a number only the call log knows shows a thin card, not "noCard". */
+    @Test fun aThinCardShowsWhenTheLogKnowsTheNumber() {
+        ContactCards.write(app,mapOf(key to ContactCard(key,emptyList(),null,now-3*day,"in",emptyList(),emptyList(),emptyList(),emptyList(),now,ContactCard.Thin("현장",2))),replaceAll=true)
+        ring();settle(50)
+        val v=windows.single()
+        assertEquals("현장",(tagged(v,"card_name") as TextView).text.toString())
+        assertEquals("지난 통화 3일 전, 30일간 2번, 정리된 통화 없음",(tagged(v,"card_last") as TextView).text.toString())
+        assertEquals(listOf(CallCardOverlay.SHOWN),outcomes)
+        assertFalse(v.texts().joinToString().contains("2222"))
+    }
+
+    /** v3.3 (DESIGN_V4 3.1-2): "확인 필요" beside a check item and a summary whose numbers may be wrong. */
+    @Test fun unsureItemsCarryTheBadgeOnTheCard() {
+        val unsure=card().copy(recent=listOf(ContactCard.Recent(now-day,"통화","철근 30톤 반입을 정했어요.",unsure=true)),
+            openTasks=listOf(ContactCard.Task("wf_1","철근 30톤 반입 확인",now-day,"open",null,tentative=true),ContactCard.Task("wf_2","도면 받기",now-day,"open",null)))
+        val v=CallCardView(app).apply { showAll(CallCardView.Content.of(unsure)) }
+        val first=(tagged(v,"card_task_0") as TextView).text
+        assertTrue(first.toString(),first.toString().contains("확인 필요"))
+        val spans=(first as android.text.Spanned).getSpans(0,first.length,android.text.style.BackgroundColorSpan::class.java)
+        assertEquals(CallUi.AMBER_RAIL,spans.single().backgroundColor)
+        assertFalse((tagged(v,"card_task_1") as TextView).text.toString().contains("확인 필요"))
+        assertTrue((tagged(v,"card_summary") as TextView).text.toString().contains("확인 필요"))
+        assertTrue(contrast(0xFF191F28.toInt(),CallUi.AMBER_RAIL)>=4.5)
     }
 
     private fun luminance(c:Int):Double { fun ch(v:Int):Double { val x=v/255.0;return if(x<=0.03928) x/12.92 else Math.pow((x+0.055)/1.055,2.4) }

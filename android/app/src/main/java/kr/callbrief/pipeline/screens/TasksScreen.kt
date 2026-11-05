@@ -18,6 +18,30 @@ import kotlinx.coroutines.withContext
  * ("김민수 님, 오늘 요청"), the AI's note, then [다 됐어요] at the end. Only an item a call made opens anything: the whole row and the
  * person's name in the META line open that call. An item the user wrote or the morning tidy made shows no press at all. */
 internal object CheckRows {
+    /** "확인 필요" (DESIGN_V4 3.1-2): an item whose numbers or date may have been misheard (tentative). 18sp bold, dark letters on
+     * amber (contrast well above 4.5:1 in both themes), and the words themselves carry the meaning, not the colour.
+     * Lives here until r13-3 moves it to CallUi. */
+    const val UNSURE="확인 필요"
+    /** Letters of the badge: the same dark ink on the amber of both themes. */
+    private const val BADGE_INK=0xFF191F28.toInt()
+    fun unsureBadge(a:android.content.Context)=CallUi.text(a,UNSURE,18f,true,BADGE_INK).apply {
+        tag="task_unsure";background=CallUi.sheet(a,CallUi.AMBER_RAIL,radius=8);setPadding(CallUi.dp(a,10),CallUi.dp(a,2),CallUi.dp(a,10),CallUi.dp(a,2))
+        gravity=Gravity.CENTER;contentDescription="숫자나 날짜를 확인해 주세요" }
+    /** The pill of a state: "끝났는지 확인" for an item the AI thinks is finished (so it is not mixed up with [UNSURE]). */
+    fun stateWords(status:String)=if(status=="needs_confirmation") "끝났는지 확인" else CallUi.taskStatus(status)
+    /** [title] without a leading "김민수 님께" / "김민수 과장에게" when it names [person], the one the META line shows (DESIGN_V4 3.1-4,
+     * until rules v7 stop writing it). Nothing else of the title changes; a title that would be empty stays whole. */
+    fun shortTitle(title:String,person:String?):String {
+        val who=CallRecordStore.noNumber(person)?.trim()?.takeIf { it.isNotEmpty() } ?: return title
+        val names=(listOf(who,NameKey.withoutTitle(who))+who.split(Regex("\\s+"))).map { it.trim() }.filter { it.length>=2 }.distinct().sortedByDescending { it.length }
+        val roles=NameKey.TITLES.filter { it!="님" && it!="씨" }.joinToString("|") { Regex.escape(it) }
+        for(n in names) {
+            val re=Regex("^\\s*"+Regex.escape(n)+"\\s*(?:(?:$roles)\\s*)?(?:님|씨)?\\s*(?:께서|께|에게|한테)\\s+")
+            val m=re.find(title) ?: continue
+            return title.substring(m.range.last+1).trim().takeIf { it.isNotEmpty() } ?: title
+        }
+        return title
+    }
     /** [personId]: the person of the call that made the item (v2.8): the name in the META line then opens the person page
      * instead of the call (the rest of the row still opens the call). */
     fun row(a:MainActivity,item:OpenItem,status:String=item.status,company:String?=item.company,onDone:((View)->Unit)?=null,personId:String?=null):LinearLayout {
@@ -27,14 +51,18 @@ internal object CheckRows {
         if(open!=null) outer.apply { isClickable=true;isFocusable=true;background=CallUi.rowRipple();CallUi.onTap(this,action=open) }
         else outer.apply { isClickable=false;isFocusable=false;background=null }
         // 1. The company badge, and the state ("확인 필요", "진행 중") beside it.
-        val pill=CallUi.taskStatus(status).takeIf { it.isNotEmpty() }?.let { CallUi.pill(a,it,CallUi.ACCENT) }
-        if(!company.isNullOrBlank() || pill!=null) outer.addView(LinearLayout(a).apply {
+        val pill=stateWords(status).takeIf { it.isNotEmpty() }?.let { CallUi.pill(a,it,CallUi.ACCENT) }
+        // v3.3: "확인 필요" when a number or date may have been misheard (or the item was only loosely asked for).
+        val unsure=if(item.tentative) unsureBadge(a) else null
+        if(!company.isNullOrBlank() || pill!=null || unsure!=null) outer.addView(LinearLayout(a).apply {
             orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;tag="task_badges"
             if(!company.isNullOrBlank()) addView(CallUi.chip(a,company).apply { tag="task_company" },LinearLayout.LayoutParams(-2,-2).apply { marginEnd=CallUi.dp(a,8) })
+            unsure?.let { addView(it,LinearLayout.LayoutParams(-2,-2).apply { marginEnd=CallUi.dp(a,8) }) }
             pill?.let { addView(it,LinearLayout.LayoutParams(-2,-2)) }
         },LinearLayout.LayoutParams(-1,-2).apply { bottomMargin=CallUi.dp(a,8) })
-        // 2. The title.
-        outer.addView(CallUi.text(a,item.title,CallUi.SUMMARY,true).apply { tag="task_title";setPadding(0,0,0,0) })
+        // 2. The title, without the "○○ 님께" the META line already says.
+        val title=shortTitle(item.title,item.counterpart)
+        outer.addView(CallUi.text(a,title,CallUi.SUMMARY,true).apply { tag="task_title";setPadding(0,0,0,0) })
         // 3. META: who asked and when. The name is a link to that call when a call made the item.
         // A name written with its number shows the name only; a bare number (no name known) stays a number.
         val person=item.counterpart?.takeIf { it.isNotBlank() }?.let { CallRecordStore.noNumber(it) ?: it }?.let(CallUi::who)
@@ -60,7 +88,7 @@ internal object CheckRows {
             minHeight=CallUi.dp(a,48);minimumHeight=CallUi.dp(a,48);minWidth=0;minimumWidth=0;setPadding(CallUi.dp(a,12),0,CallUi.dp(a,14),0)
             contentDescription="${item.title}, 다 됐어요";CallUi.onTap(this) { act(outer) }
         },LinearLayout.LayoutParams(-2,-2).apply { gravity=Gravity.END;topMargin=CallUi.dp(a,10) }) }
-        outer.contentDescription=listOfNotNull(company,item.title,person,asked.takeIf { it.isNotEmpty() }).joinToString(", ")+(if(open!=null) ". 눌러서 통화 보기" else "")
+        outer.contentDescription=listOfNotNull(company,unsure?.let { UNSURE },title,person,asked.takeIf { it.isNotEmpty() }).joinToString(", ")+(if(open!=null) ". 눌러서 통화 보기" else "")
         return outer
     }
 }

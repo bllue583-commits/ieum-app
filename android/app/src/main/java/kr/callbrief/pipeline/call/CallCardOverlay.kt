@@ -40,7 +40,9 @@ import java.util.concurrent.TimeUnit
  * - Without the "draw over other apps" permission, or while the screen is locked (an overlay cannot show above the lock
  *   screen), a silent heads-up notice in channel [CHANNEL] says the same in three lines; once the phone is unlocked
  *   (`ACTION_USER_PRESENT`) during the call the notice becomes the card.
- * - A number without a contact card only when the user turned on [KEY_UNKNOWN] ("전화부에 없는 번호예요" and the latest text).
+ * - A number without a contact card only when the user turned on [KEY_UNKNOWN] ("아직 정리된 통화가 없는 번호예요" and the latest text);
+ *   a number the call log knows has a thin card (v3.3, [kr.callbrief.pipeline.ContactCard.thin]).
+ * - On the locked screen the notice shows the name, company and one check item unless "잠금 화면에서도 이름과 한 줄 보기" is off.
  *   A personal or excluded number ([CallSession.Snapshot.ignored]): nothing at all. */
 internal object CallCardOverlay {
     const val CHANNEL="ieum.calls.card"
@@ -148,7 +150,7 @@ internal object CallCardOverlay {
         if(settings?.optBoolean(KEY_UNKNOWN,false)!=true || runCatching { CallSession.isPrivate(c,phoneKey) }.getOrDefault(true)) {
             main.post { if(gen==generation) { loading=false;tell(c,NO_CARD) } };return
         }
-        // The name line first ("전화부에 없는 번호예요"), the latest text once read (the call store may take a moment to open).
+        // The name line first ("아직 정리된 통화가 없는 번호예요"), the latest text once read (the call store may take a moment to open).
         deliver(c,gen,CallCardView.Content.unknown(null),rest=false)
         val text=runCatching { latestText(c,phoneKey) }.getOrNull()
         deliver(c,gen,CallCardView.Content.unknown(text))
@@ -268,10 +270,18 @@ internal object CallCardOverlay {
             .setStyle(Notification.BigTextStyle().setBigContentTitle(data.name).bigText(lines.joinToString("\n")))
             .setCategory(Notification.CATEGORY_CALL).setOngoing(true).setLocalOnly(true).setShowWhen(false)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
-            // Lock screen without "show content": no name, no summary.
-            .setPublicVersion(Notification.Builder(c,CHANNEL).setSmallIcon(R.drawable.ic_stat_ieum).setContentTitle("이음 통화 카드")
-                .setContentText("잠금을 풀면 카드가 보여요").build())
+            .setPublicVersion(publicNotice(c,data,lockDetail(c)))
             .build()
+    }
+    /** "잠금 화면에서도 이름과 한 줄 보기" ([KEY_LOCK_DETAIL], on unless the user turned it off). */
+    const val KEY_LOCK_DETAIL=kr.callbrief.pipeline.PipelineSettingsKeys.LOCK_SCREEN_DETAIL
+    internal fun lockDetail(c:Context):Boolean =runCatching { SecureSettings(c).snapshot().optBoolean(KEY_LOCK_DETAIL,true) }.getOrDefault(true)
+    /** What the locked screen shows of the notice (DESIGN_V4 3.1-5, 1.3 #9). With [detail]: the name, the company and one check
+     * item ([CallCardView.Content.publicText]: no number, no amount, nothing of the call's words). Without: no name, no summary. */
+    internal fun publicNotice(c:Context,data:CallCardView.Content,detail:Boolean):Notification {
+        val b=Notification.Builder(c,CHANNEL).setSmallIcon(R.drawable.ic_stat_ieum)
+        return if(detail) b.setContentTitle(data.publicTitle()).setContentText(data.publicText() ?: "잠금을 풀면 카드가 보여요").build()
+        else b.setContentTitle("이음 통화 카드").setContentText("잠금을 풀면 카드가 보여요").build()
     }
     private fun notice(c:Context,data:CallCardView.Content) {
         if(Build.VERSION.SDK_INT>=33 && c.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) return

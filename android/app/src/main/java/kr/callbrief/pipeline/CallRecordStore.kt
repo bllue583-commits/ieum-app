@@ -240,7 +240,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         mergeSamePeople()
         // Gone: the API-key route (a record waiting for a key waits for the task like any other) and the unused segment copy (B20).
         port.execute("UPDATE call_records SET state='TRANSCRIBED' WHERE state='WAITING_KEY'")
-        port.execute("UPDATE call_records SET segments_json='[]' WHERE segments_json!='[]'")
+        // v3.3: the small time list of [NumberGuard.Times] ("{...}") is kept; only the old full copies go.
+        port.execute("UPDATE call_records SET segments_json='[]' WHERE segments_json!='[]' AND segments_json NOT LIKE '{%'")
         // The sealed store holds 16 MB; a log line when it is four fifths full is the only warning (B20).
         runCatching {
             val bytes=(rows("PRAGMA page_count").single().long("page_count") ?: 0)*(rows("PRAGMA page_size").single().long("page_size") ?: 0)
@@ -319,9 +320,11 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         val id=recordId(t)
         if(rows("SELECT 1 FROM call_records WHERE record_id=?",id).isNotEmpty()) return@transaction false
         val now=clock()
-        // The segments are not kept: nothing reads them and they doubled the size of every record (B20).
-        port.execute("INSERT INTO call_records(record_id,recording_id,started_ms,duration_ms,counterpart,counterpart_key,transcript,segments_json,state,created_ms) VALUES(?,?,?,?,?,?,?,'[]',?,?)",
-            id,t.recordingId,t.originalStartedAtMs,t.durationMs,t.counterpart,counterpartKey(t.counterpart),t.text,TRANSCRIBED,now)
+        // The segments' words are not kept twice (B20): only when each line was said and its unsure numbers (v3.3, DESIGN_V4 3.1-1,
+        // a few bytes a line), for the number guard; they go with the transcript ([trim]).
+        val times=NumberGuard.Times.of(t.segments,t.text)?.toJson() ?: "[]"
+        port.execute("INSERT INTO call_records(record_id,recording_id,started_ms,duration_ms,counterpart,counterpart_key,transcript,segments_json,state,created_ms) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            id,t.recordingId,t.originalStartedAtMs,t.durationMs,t.counterpart,counterpartKey(t.counterpart),t.text,times,TRANSCRIBED,now)
         trim(now)
         true
     }
@@ -329,7 +332,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
      * is in now (one that never got a result keeps its words so it can still be analysed); the full analysis of a call
      * older than 90 days shrinks to its summary and names. */
     fun trim(now:Long) {
-        port.execute("UPDATE call_records SET transcript='' WHERE analyzed_ms IS NOT NULL AND analyzed_ms<CAST(? AS INTEGER) AND transcript!=''",now-TRANSCRIPT_KEEP_DAYS*86_400_000L)
+        port.execute("UPDATE call_records SET transcript='',segments_json='[]' WHERE analyzed_ms IS NOT NULL AND analyzed_ms<CAST(? AS INTEGER) AND (transcript!='' OR segments_json!='[]')",now-TRANSCRIPT_KEEP_DAYS*86_400_000L)
         rows("""SELECT record_id,analysis_json FROM call_records WHERE analysis_json LIKE '%"keyPoints"%' AND COALESCE(started_ms,created_ms)<CAST(? AS INTEGER) LIMIT 200""",now-ANALYSIS_KEEP_DAYS*86_400_000L).forEach { r ->
             val root=runCatching { JSONObject(r.str("analysis_json")!!) }.getOrNull() ?: return@forEach
             val a=root.optJSONObject("analysis") ?: return@forEach
@@ -644,7 +647,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
                 AND COALESCE(c.started_ms,c.created_ms)>=CAST(? AS INTEGER) AND COALESCE(c.started_ms,c.created_ms)<CAST(? AS INTEGER) AND (l.person_id IS NULL OR l.person_id!=?)
                 ORDER BY COALESCE(c.started_ms,c.created_ms) DESC LIMIT 5""",companyId,r.recordId,startOf(kstDay(r.dayMs)),before,person?.str("id") ?: "")
                 .map { ClaudeCallRequest.PastCall(CallUi.time(it.long("started_ms") ?: it.long("created_ms")),noNumber(it.str("person")),it.str("summary").orEmpty()) },
-            personDetails = personDetails,sameNumberPeople = sameNumber)
+            personDetails = personDetails,sameNumberPeople = sameNumber,
+            segmentTimes = rows("SELECT segments_json FROM call_records WHERE record_id=?",r.recordId).firstOrNull()?.str("segments_json")?.let { NumberGuard.Times.parse(it) }
+                ?.takeIf { it.size==r.transcript.split("\n").size })
     }
 
     /** Work texts and mail with the same person in the 7 days before this record (and the day after), newest first, raw,
@@ -677,10 +682,10 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
 
     /** Stores the result and applies tasks in one transaction. User-edited and finished items are never changed. */
     fun applyAnalysis(id:String,a:ClaudeCallAnalysis):List<Applied> {
-        skippedNear.clear()
+        skippedNear.clear();guarded.clear()
         val cardKeys=runCatching { cardKeysOfRecord(id) }.getOrDefault(emptySet()) // before: a personal text is deleted
         val out=applyInTransaction(id,a)
-        flushMergeCandidates()
+        flushMergeCandidates();flushGuardStats()
         ContactCards.touch(this) { cardKeys+cardKeysOfRecord(id) }
         return out
     }
@@ -724,7 +729,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         }
         fun taskCompany(name:String?)=name?.takeIf { normName(it)!=null }?.let { upsertCompany(it,now) }
         var noted=false
-        val applied=a.tasks.map { t ->
+        // v3.3 (DESIGN_V4 3.1-3): items made now that a confusable number sets apart from one asked for shortly before.
+        val confused=mutableMapOf<Int,String>()
+        val applied=a.tasks.mapIndexed { index,t ->
             when(t.op) {
                 "create" -> {
                     // The same open item, a near one of the same company, or one finished in the last 14 days is not made again (B11).
@@ -733,10 +740,13 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
                     if(!hasRecording) Applied("create","",t.title,t.due,false)
                     else if(dup!=null) { if(dup.second) skippedNear+=dup.first to CallInbox.recordKey(id);Applied("create","",t.title,t.due,false,duplicate=true) } else {
                         val item="wf_item_"+UUID.randomUUID().toString().replace("-","")
-                        // created_ms is when it was asked for (the call), the "요청 날짜" the screens show.
-                        port.execute("INSERT INTO workflow_items(id,recording_id,case_id,kind,title,edition,due_text,status,revision,source_key,evidence_quote,created_ms,tentative,last_call_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",item,recording,case,"TODO",t.title.take(240),"",t.due.orEmpty(),"open",1,null,t.quote,callMs,if(t.tentative) 1 else 0,callMs)
+                        val itemCompany=taskCompany(t.company) ?: companyId
+                        val memo=itemCompany?.let { confusableMemo(t.title,it,callMs) }
+                        if(memo!=null) confused[index]=memo
+                        // created_ms is when it was asked for (the call), the "요청 날짜" the screens show. The confusable memo is the item's note line.
+                        port.execute("INSERT INTO workflow_items(id,recording_id,case_id,kind,title,edition,due_text,status,revision,source_key,evidence_quote,created_ms,tentative,last_call_ms,ai_note) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",item,recording,case,"TODO",t.title.take(240),"",t.due.orEmpty(),"open",1,null,t.quote,callMs,if(t.tentative || memo!=null) 1 else 0,callMs,memo)
                         port.execute("INSERT INTO call_task_bindings VALUES(?,?,?,?)",item,id,1,now)
-                        (taskCompany(t.company) ?: companyId)?.let { port.execute("INSERT OR REPLACE INTO task_companies VALUES(?,?)",item,it) }
+                        itemCompany?.let { port.execute("INSERT OR REPLACE INTO task_companies VALUES(?,?)",item,it) }
                         Applied("create",item,t.title,t.due,true)
                     }
                 }
@@ -774,7 +784,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
                 }
             }
         }
-        val json=JSONObject().put("analysis",a.toJson()).put("applied",JSONArray().apply { applied.forEach {
+        val kept=if(confused.isEmpty()) a else a.copy(tasks=a.tasks.mapIndexed { i,t -> if(i in confused) t.copy(tentative=true,guard=(t.guard+NumberGuard.CONFUSABLE).distinct()) else t })
+        kept.tasks.forEach { t -> t.guard.forEach { r -> guarded[r]=(guarded[r] ?: 0)+1 } }
+        val json=JSONObject().put("analysis",kept.toJson()).put("applied",JSONArray().apply { applied.forEach {
             put(JSONObject().put("op",it.op).put("itemId",it.itemId).put("title",it.title).put("due",it.due ?: "").put("applied",it.applied).apply { it.note?.let { n -> put("note",n) };it.reason?.let { r -> put("reason",r) } }) } })
         port.execute("UPDATE call_records SET state='ANALYZED',summary=?,analysis_json=?,error=NULL,analyzed_ms=? WHERE record_id=?",a.summary,json.toString(),now,id)
         if(applied.any { it.applied } || noted) port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER)
@@ -1216,6 +1228,24 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         val same=list.filter { it.str("status") !in setOf("done","merged") && it.str("cid")==companyId };if(same.isEmpty()) return null
         val names=(rows("SELECT name FROM companies")+rows("SELECT name FROM people WHERE name!=''")).mapNotNull { it.str("name") }.distinct()
         return same.firstOrNull { NameKey.nearTitle(title,it.str("title").orEmpty(),names) }?.let { it.str("id")!! to true }
+    }
+    /** The memo of an item titled [title] when an item of the same company asked for in the [NumberGuard.CONFUSABLE_DAYS] before
+     * [callMs] has the same title but for a confusable number ("13층" and "30층", DESIGN_V4 3.1-3); null otherwise. */
+    private fun confusableMemo(title:String,companyId:String,callMs:Long):String? =
+        rows("""SELECT i.title FROM workflow_items i JOIN task_companies tc ON tc.item_id=i.id WHERE tc.company_id=? AND i.kind='TODO' AND i.status!='merged'
+            AND i.created_ms>=CAST(? AS INTEGER) AND i.created_ms<=CAST(? AS INTEGER) ORDER BY i.created_ms DESC""",companyId,callMs-NumberGuard.CONFUSABLE_DAYS*86_400_000L,callMs)
+            .firstNotNullOfOrNull { r -> r.str("title")?.let { NumberGuard.confusable(it,title) } }
+    /** Items the number guard marked in this store's last [applyAnalysis], by reason, waiting to be added to [PipelineSettingsKeys.GUARD_STATS]. */
+    private val guarded=mutableMapOf<String,Int>()
+    /** Adds [guarded] to the running counts (numbers only; the heartbeat's guard block reads them). */
+    private fun flushGuardStats() {
+        if(guarded.isEmpty()) return
+        val add=guarded.toMap();guarded.clear()
+        settingsEdit { s ->
+            val o=runCatching { JSONObject(s.optString(PipelineSettingsKeys.GUARD_STATS,"{}")) }.getOrNull() ?: JSONObject()
+            add.forEach { (k,n) -> o.put(k,o.optLong(k,0)+n) }
+            s.put(PipelineSettingsKeys.GUARD_STATS,o.toString())
+        }
     }
     /** Near duplicates skipped in this store's last [applyAnalysis], waiting to be written to settings. */
     private val skippedNear=mutableListOf<Pair<String,String>>()
