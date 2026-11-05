@@ -25,6 +25,23 @@ import java.util.concurrent.TimeUnit
  * "새 버전" (home banner + notification). With [PipelineSettingsKeys.AUTO_INSTALL] on (default) it then installs in the background
  * (design 3.3); when Android still wants a tap, the notification and the home banner lead to it. */
 internal object CallUpdate {
+    // ---- v3.1 contract (DESIGN_V4 2.2-4, 2.2-5; key commit). r12-2 fills the bodies, r12-5 puts them on screen. ----
+    /** What the settings "앱 버전" row and the home banner say about a new version. [phase]: none | checking | offline |
+     * downloading | ready | waitingConfirm | failed. [words]: the Korean sentence to show (empty for none). [percent]: -1 unknown.
+     * [canInstall]: show [지금 업데이트]. */
+    data class UpdateState(val phase:String="none",val words:String="",val percent:Int=-1,val canInstall:Boolean=false)
+    /** r12-2: the state now, from [fetchState], the download progress and the last error. */
+    fun state(c:Context):UpdateState = UpdateState()
+    /** r12-2: true while this app may not install updates by itself (canRequestPackageInstalls() false) — the optional
+     * first-setup step "새 버전을 저절로 설치하기". */
+    fun setupStep(c:Context):Boolean = false
+    /** r12-2: opens ACTION_MANAGE_UNKNOWN_APP_SOURCES for this app (the setup step's button). */
+    fun openInstallSourceSettings(a:Activity) {}
+    /** r12-2: [지금 확인] — checks for a new version now, off the main thread; [done] runs on the main thread with the new state. */
+    fun checkNow(c:Context,done:(UpdateState)->Unit={}) {}
+    /** r12-2 for r12-1's self-check notice: a verified new version has waited more than a day to be installed. */
+    fun notInstalledForADay(c:Context,now:Long=System.currentTimeMillis()):Boolean = false
+
     /** "앱 버전 v2.0 (빌드 1050)", plus the downloaded next version: the name from docs/VERSION, the build number to tell builds apart. */
     fun versionLine(name:String,code:Int,next:Info?):String {
         fun label(n:String,c:Int)=if(Regex("""\d+\.\d+""").matches(n)) "v$n (빌드 $c)" else "v$c"

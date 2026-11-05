@@ -143,6 +143,26 @@ class PhoneStatusHealthTest {
             assertEquals(1764583200000L,CallInbox.tokenExpiresMs)
         } finally { CallInbox.tokenExpiresMs=before }
     }
+    /** DESIGN_V4 2절 머리 (r12-2 키 커밋): the v3.1 keys are always there, and strings go up as codes only. */
+    @Test fun v31KeysAreThereAndHoldNoContent() {
+        val empty=PhoneStatus.build(base())
+        for(k in listOf("permissions","recordingGap","recordingGapVerdict","latency")) { assertTrue(k,empty.has(k));assertTrue(k,empty.isNull(k)) }
+        assertEquals(0,empty.getJSONObject("followup").getInt("noRecording"))
+        val r=empty.getJSONObject("results");for(k in listOf("applyFailed","bad","receivedNotApplied")) assertEquals(k,0,r.getInt(k))
+        for(k in listOf("transcriptionFailed","droppedItems","duplicateSkipped")) assertEquals(k,0,empty.getInt(k))
+        assertFalse(empty.has("storeOpenError"))
+        val gap=org.json.JSONObject().put("calls",10).put("withFile",0).put("matched",0).put("newestFileMs",5).put("sinceMs",6).put("verdict","noRecording").put("who","김부장")
+        val o=PhoneStatus.build(base().copy(v31=PhoneStatus.V31(PhoneStatus.Permissions(true,false,false,true),gap,"noRecording 김",
+            2,"SQLiteException:open 김",1,2,3,4,5,6,org.json.JSONObject().put("p50Min",40).put("p90Min",80).put("n",12))))
+        val p=o.getJSONObject("permissions");assertTrue(p.getBoolean("phoneState"));assertFalse(p.getBoolean("overlay"));assertTrue(p.getBoolean("installAllowed"))
+        assertEquals(10,o.getJSONObject("recordingGap").getInt("calls"));assertFalse(o.getJSONObject("recordingGap").has("verdict"))
+        assertFalse(o.getJSONObject("recordingGap").has("who"))
+        assertEquals("noRecording",o.getString("recordingGapVerdict"))
+        assertFalse(o.getString("storeOpenError").contains(" "))
+        assertEquals(2,o.getJSONObject("followup").getInt("noRecording"));assertEquals(3,o.getJSONObject("results").getInt("receivedNotApplied"))
+        assertEquals(40,o.getJSONObject("latency").getInt("p50Min"))
+        assertFalse(o.toString().contains("김"))
+    }
 }
 
 /** The whole heartbeat as the phone sends it, from a phone holding a named call: no name, number or content goes up. */
@@ -193,4 +213,5 @@ class PhoneStatusPublishTest:kr.callbrief.ProtectedTextHostTestBase() {
         // The expiry is kept for the next heartbeat after a restart.
         assertEquals(o.getLong("tokenExpiresMs"),kr.callbrief.SecureSettings(context).snapshot().optLong(PhoneStatus.TOKEN_EXPIRES_MS))
     }
+
 }

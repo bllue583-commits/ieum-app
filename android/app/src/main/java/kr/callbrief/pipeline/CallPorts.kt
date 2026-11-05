@@ -121,6 +121,30 @@ object PipelineSettingsKeys {
     /** r11-3: how often the call card showed and why not, once per call ([kr.callbrief.pipeline.call.CardStats]): a JSON object
      * {"shown","noPermission","noNumber","noCard","day"(KST yyyymmdd),"today":{the four}}; the heartbeat's callCard. */
     const val CARD_STATS="cardStats"
+
+    // ---- v3.1 (DESIGN_V4 2절 머리, r12-2 key commit): names only, each bundle writes its own value. ----
+    /** r12-1 [RecordingGap.judge]: the last verdict as a JSON string {"calls","withFile","matched","newestFileMs","sinceMs",
+     * "verdict","atMs"}; verdict is one of [GAP_OK], [GAP_NO_RECORDING], [GAP_PARTIAL], [GAP_NO_MATCH], [GAP_FOLDER], [GAP_TOO_MANY]. */
+    const val RECORDING_GAP="recordingGap"
+    const val GAP_OK="ok";const val GAP_NO_RECORDING="noRecording";const val GAP_PARTIAL="partial"
+    const val GAP_NO_MATCH="noMatch";const val GAP_FOLDER="folder";const val GAP_TOO_MANY="tooMany"
+    /** r12-1: calls whose notice said "이 통화는 녹음이 없어 정리할 수 없어요" (a running count; heartbeat followup.noRecording). */
+    const val FOLLOWUP_NO_RECORDING="followupNoRecording"
+    /** r12-4: why the record store could not be opened, "ExceptionClass:stage" (empty/absent once it opens again). */
+    const val STORE_OPEN_ERROR="storeOpenError"
+    /** r12-3: result files that failed to apply (a try), went to bad/, and records whose received mark was released after 24 hours. */
+    const val RESULTS_APPLY_FAILED="resultsApplyFailed"
+    const val RESULTS_BAD="resultsBad"
+    const val RESULTS_RECEIVED_NOT_APPLIED="resultsReceivedNotApplied"
+    /** The FAILED reason of a record whose result went to bad/ twice (r12-3); the call screen offers [다시 정리하기] (r12-5). */
+    const val RESULT_NOT_APPLIED="RESULT_NOT_APPLIED"
+    /** r12-3: transcriptions that ended in failure (a running count). */
+    const val TRANSCRIPTION_FAILED="transcriptionFailed"
+    /** r12-3: call end → result applied, minutes over the last 7 days, as a JSON string {"p50Min","p90Min","n","atMs"}. */
+    const val LATENCY="latency"
+    /** r12-2 (2.2-5): the update state the settings row and home banner show, a JSON string
+     * {"phase","code","doneBytes","totalBytes","atMs"}; phase is checking | offline | downloading | ready | waitingConfirm | failed | none. */
+    const val UPDATE_PROGRESS="updateProgress"
 }
 
 /** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets

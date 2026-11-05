@@ -53,6 +53,9 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         (r["byte_count"] as Number?)?.toLong() ?: 0,(r["modified_at_ms"] as Number?)?.toLong() ?: 0)
 
     /** The owner's current recording versions with encrypted audio, newest first. */
+    /** r12-3 (DESIGN_V4 2.3-4): when the oldest still-queued job entered the queue (queued_ms; null: none). Key-commit
+     * stub until r12-3 adds the column — r12-1's status light reads it. */
+    fun oldestQueuedMs():Long? = null
     fun candidates():List<Candidate> = db.query("$select WHERE r.owner_key=? AND r.presence='PRESENT' AND gone.ciphertext_sha256 IS NULL ORDER BY coalesce(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0) DESC",
         GeneralLocalStore.OWNER).map(::candidate)
 

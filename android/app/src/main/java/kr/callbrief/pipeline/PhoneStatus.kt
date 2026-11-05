@@ -43,7 +43,17 @@ internal object PhoneStatus {
         /** Is the call log read in full (asked 11/4): counts and times only, never a number or a name. Null: left out. */
         val callLog:CallLogStatus?=null,
         /** Design 3.6 (r7-6): the queue split new/old by entry time, discovery tries, store fill and the update wait. */
-        val watch:Watch=Watch())
+        val watch:Watch=Watch(),
+        /** DESIGN_V4 2절 (v3.1): permissions, the recording gap, follow-ups, store open, results, counts and latency. */
+        val v31:V31=V31())
+    /** Granted permissions and roles (r12-2); null: not read. */
+    data class Permissions(val phoneState:Boolean,val overlay:Boolean,val redirectRole:Boolean,val installAllowed:Boolean)
+    /** The v3.1 keys (DESIGN_V4 2절 머리). Values come from settings keys the bundles write; null/absent where nothing is known yet.
+     * [recordingGap] goes through [counts]; its verdict goes up as the top-level code [recordingGapVerdict]. */
+    data class V31(val permissions:Permissions?=null,val recordingGap:JSONObject?=null,val recordingGapVerdict:String?=null,
+        val followupNoRecording:Long=0,val storeOpenError:String?=null,
+        val resultsApplyFailed:Long=0,val resultsBad:Long=0,val resultsReceivedNotApplied:Long=0,
+        val transcriptionFailed:Long=0,val droppedItems:Long=0,val duplicateSkipped:Long=0,val latency:JSONObject?=null)
     /** Counts, times and short codes; null where the phone does not know (yet). [callLogMatch] is counts only (see [counts]). */
     data class Watch(val newQueuedCount:Int=0,val newOldestQueuedMs:Long?=null,val oldQueuedCount:Int=0,
         val lastDiscoveryAttemptMs:Long?=null,val lastDiscoveryOutcome:String?=null,val inventoryTruncated:Boolean?=null,val heldUnsupported:Int?=null,
@@ -107,7 +117,20 @@ internal object PhoneStatus {
         code(i.lastUpdateError).takeIf { it.isNotEmpty() }?.let { o.put("lastUpdateError",it) }
         // Since when the same inbox error code is reported (watchdog: 2 hours); only next to an error.
         if(o.has("lastInboxError")) w.lastInboxErrorSinceMs?.let { o.put("lastInboxErrorSinceMs",it) }
+        putV31(o,i.v31)
         return o
+    }
+    private fun putV31(o:JSONObject,v:V31) {
+        o.put("permissions",v.permissions?.let { p -> JSONObject().put("phoneState",p.phoneState).put("overlay",p.overlay)
+            .put("redirectRole",p.redirectRole).put("installAllowed",p.installAllowed) } ?: JSONObject.NULL)
+        o.put("recordingGap",v.recordingGap?.let(::counts) ?: JSONObject.NULL)
+        // String values as top-level codes so the counts() filter does not drop them (DESIGN_V4 2절 머리).
+        o.put("recordingGapVerdict",v.recordingGapVerdict?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
+        o.put("followup",JSONObject().put("noRecording",v.followupNoRecording))
+        v.storeOpenError?.let(::code)?.takeIf { it.isNotEmpty() }?.let { o.put("storeOpenError",it) }
+        o.put("results",JSONObject().put("applyFailed",v.resultsApplyFailed).put("bad",v.resultsBad).put("receivedNotApplied",v.resultsReceivedNotApplied))
+        o.put("transcriptionFailed",v.transcriptionFailed).put("droppedItems",v.droppedItems).put("duplicateSkipped",v.duplicateSkipped)
+        o.put("latency",v.latency?.let(::counts) ?: JSONObject.NULL)
     }
     private fun windowJson(w:CallLogWindow)=JSONObject().put("total",w.total).put("incoming",w.incoming).put("outgoing",w.outgoing)
         .put("missed",w.missed).put("rejected",w.rejected).put("other",w.other).put("recorded",w.recorded)
@@ -206,8 +229,32 @@ internal object PhoneStatus {
                 matchStats(s),s.optString(DB_RECOVERY_LAST).takeIf { it.isNotBlank() },inboxErrorSince(app,s,now),
                 (s.opt(kr.callbrief.IeumApplication.DB_OPEN_MS) as? Number)?.toLong(),(s.opt(kr.callbrief.IeumApplication.HOME_READ_MS) as? Number)?.toLong(),
                 (s.opt(ResultChain.ROUND_KEY) as? Number)?.toInt(),(s.opt(ResultChain.NEXT_MS_KEY) as? Number)?.toLong()?.takeIf { it>0 },
-                runCatching { kr.callbrief.pipeline.call.CardStats.heartbeat(s,now) }.getOrNull()))
+                runCatching { kr.callbrief.pipeline.call.CardStats.heartbeat(s,now) }.getOrNull()),
+            v31 = v31(app,s))
     }
+    private fun jsonOf(s:JSONObject,key:String):JSONObject? = when(val v=s.opt(key)) {
+        is JSONObject -> v
+        is String -> runCatching { JSONObject(v) }.getOrNull()
+        else -> null }
+    private fun v31(app:Context,s:JSONObject):V31 {
+        val gap=jsonOf(s,PipelineSettingsKeys.RECORDING_GAP)
+        return V31(permissions(app),gap,gap?.optString("verdict")?.takeIf { it.isNotBlank() },
+            s.optLong(PipelineSettingsKeys.FOLLOWUP_NO_RECORDING,0),s.optString(PipelineSettingsKeys.STORE_OPEN_ERROR).takeIf { it.isNotBlank() },
+            s.optLong(PipelineSettingsKeys.RESULTS_APPLY_FAILED,0),s.optLong(PipelineSettingsKeys.RESULTS_BAD,0),
+            s.optLong(PipelineSettingsKeys.RESULTS_RECEIVED_NOT_APPLIED,0),s.optLong(PipelineSettingsKeys.TRANSCRIPTION_FAILED,0),
+            s.optLong(PipelineSettingsKeys.DROPPED_ITEMS,0),s.optLong(PipelineSettingsKeys.DUPLICATE_SKIPPED,0),
+            jsonOf(s,PipelineSettingsKeys.LATENCY))
+    }
+    /** What is actually granted now (r12-2, design 2.2-1): phone state, drawing over apps, the call redirection role, installs. */
+    internal fun permissions(app:Context):Permissions? = runCatching {
+        val sdk=android.os.Build.VERSION.SDK_INT
+        val phone=app.checkSelfPermission(android.Manifest.permission.READ_PHONE_STATE)==android.content.pm.PackageManager.PERMISSION_GRANTED
+        val overlay=android.provider.Settings.canDrawOverlays(app)
+        val role=sdk>=29 && runCatching { app.getSystemService(android.app.role.RoleManager::class.java)
+            ?.isRoleHeld(android.app.role.RoleManager.ROLE_CALL_REDIRECTION)==true }.getOrDefault(false)
+        val install=runCatching { app.packageManager.canRequestPackageInstalls() }.getOrDefault(false)
+        Permissions(phone,overlay,role,install)
+    }.onFailure { Log.w(TAG,"permissions not read: ${it.javaClass.simpleName}") }.getOrNull()
     private fun inboxErrorSince(app:Context,s:JSONObject,now:Long):Long? {
         val c=code(s.optString(PipelineSettingsKeys.LAST_INBOX_ERROR,""))
         val since=sameErrorSince(s.optString(INBOX_ERROR_SEEN),s.optLong(INBOX_ERROR_SINCE_MS,0L),c,now)
