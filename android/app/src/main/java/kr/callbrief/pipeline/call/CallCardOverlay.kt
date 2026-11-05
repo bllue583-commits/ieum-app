@@ -108,7 +108,7 @@ internal object CallCardOverlay {
     /** Folds the card into its strip. */
     fun collapse():Unit = onMain {
         main.removeCallbacks(autoCollapse);collapseQueued=false
-        view?.setCollapsed(true);relayout()
+        view?.let { it.setCollapsed(true);Log.i(LOG,"card collapsed") };relayout()
     }
     /** Opens the strip into the whole card again. */
     fun expand():Unit = onMain {
@@ -211,6 +211,8 @@ internal object CallCardOverlay {
         }
         wm.addView(v,p)
         view=v;params=p
+        // r11-3: the emulator check reads these lines (tools/device/call_card_test.sh); no number, no name.
+        Log.i(LOG,"card shown unknown=${data.unknown}")
     }
     private fun relayout() { val v=view ?: return;val p=params ?: return;val c=app ?: return
         p.y=clampY(c,p.y,v);runCatching { c.getSystemService(WindowManager::class.java)?.updateViewLayout(v,p) } }

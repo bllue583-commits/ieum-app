@@ -22,6 +22,8 @@ class OutgoingCallService:CallRedirectionService() {
     }
 
     override fun onPlaceCall(handle:Uri,initialPhoneAccount:PhoneAccountHandle,allowInteractiveResponse:Boolean) {
+        // r11-3: the emulator check (tools/device/call_card_test.sh) looks for these two lines; never the number.
+        Log.i(TAG,"onPlaceCall")
         try {
             // tel: numbers only; a SIP address or a voicemail call gives no number to show a card for.
             val number=handle.takeIf { it.scheme=="tel" }?.schemeSpecificPart
@@ -30,7 +32,7 @@ class OutgoingCallService:CallRedirectionService() {
             Log.w(TAG,"pending failed: ${t.javaClass.simpleName}")
         } finally {
             // Always, and right away: the system waits for this answer before it dials.
-            runCatching { placeUnmodified(this) }.onFailure { Log.w(TAG,"placeCallUnmodified failed: ${it.javaClass.simpleName}") }
+            runCatching { placeUnmodified(this);Log.i(TAG,"placeCallUnmodified") }.onFailure { Log.w(TAG,"placeCallUnmodified failed: ${it.javaClass.simpleName}") }
         }
     }
 }
