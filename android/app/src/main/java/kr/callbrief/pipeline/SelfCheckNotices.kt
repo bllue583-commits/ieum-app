@@ -35,12 +35,21 @@ internal object SelfCheckNotices {
          * and when that report ended (0: never). */
         val routineMissed:Int=0,val routineEndedMs:Long=0,
         /** v3.5 r15-0: a downloaded new version waits to be installed ([CallUpdate.installWaiting]), for less than a day or more. */
-        val updateWaiting:Boolean=false)
+        val updateWaiting:Boolean=false,
+        /** v3.5 r15-3 (DESIGN_V5 2.3-3): KakaoTalk is linked and [카카오톡으로 받기] is on, yet today's morning report did not go
+         * out in full (read with [SelfCheckNotices.kakaoMissed]). */
+        val kakaoMissed:Boolean=false)
 
     const val TRANSCRIBE_LATE="transcribe_late";const val MODEL_FAILED="model_failed";const val FOLDER_LOST="folder_lost"
     const val NO_RESULT="no_result";const val STORAGE_FULL="storage_full"
     const val RECORDING_GAP="recording_gap";const val UPDATE_STUCK="update_stuck"
     const val ROUTINE_LATE="routine_late";const val UPDATE_WAITING="update_waiting"
+    const val KAKAO_MISSED="kakao_missed"
+    /** v3.5 r15-3: the evening line when the morning report did not go over KakaoTalk today. */
+    const val KAKAO_MISSED_TITLE="아침 보고가 카카오톡으로 안 갔어요"
+    const val KAKAO_MISSED_TEXT="체크할 일은 이음 앱에서 볼 수 있어요. 이음 설정의 아침 보고 묶음에서 연결 상태를 확인해 주세요."
+    /** [Input.kakaoMissed] from the phone: a Kakao key in the build, linked, the switch on, and today not sent in full. */
+    fun kakaoMissed(linked:Boolean,on:Boolean,sentToday:Boolean):Boolean = linked && on && !sentToday
     /** Same thresholds as the status lights and the watchdog (B2, B5). */
     const val TRANSCRIBE_LATE_MS=StatusLights.TRANSCRIBE_LATE_MS
     const val NO_RESULT_MS=StatusLights.NO_RESULT_MS
@@ -78,6 +87,8 @@ internal object SelfCheckNotices {
         // v3.5 r15-0: the same line as the morning report while it waits (the day-old notice above says it more strongly).
         else if(i.updateWaiting)
             add(Notice(UPDATE_WAITING,CallDigestText.UPDATE_LINE,"알림이나 이음 홈의 지금 업데이트를 눌러 설치를 마쳐 주세요."))
+        // v3.5 r15-3: once a day, the morning KakaoTalk report that did not go.
+        if(i.kakaoMissed) add(Notice(KAKAO_MISSED,KAKAO_MISSED_TITLE,KAKAO_MISSED_TEXT))
     }
     /** The self-check notice of a recording-gap verdict (spoken codes only). */
     fun gapNotice(v:RecordingGap.Verdict):Notice? = when(v.code) {

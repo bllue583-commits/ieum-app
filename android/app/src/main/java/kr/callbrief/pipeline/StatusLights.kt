@@ -1,6 +1,7 @@
 package kr.callbrief.pipeline
 
 import android.content.Context
+import kr.callbrief.pipeline.report.KakaoReport
 import org.json.JSONObject
 
 /** The lights of settings "지금 상태" (design B5): 녹음 가져오기, 글자로 바꾸기, 통화 정리, 알림, 업데이트, and (v3.0) 통화 카드.
@@ -14,6 +15,8 @@ internal object StatusLights {
     const val GROUP_SUMMARY="group_정리"
     const val GROUP_STATUS="group_상태와 도움"
     const val GROUP_CARD="group_통화 카드"
+    /** v3.5 r15-3: the settings group of the morning report (KakaoTalk and the app notice's hour). */
+    const val GROUP_MORNING="group_아침 보고"
     /** Everything the lights are judged from; all of it is read from settings, permissions and the store already on the phone. */
     data class Input(
         val now:Long,
@@ -50,7 +53,11 @@ internal object StatusLights {
         val dbPercent:Int?=null,val pendingText:String?=null,
         /** v3.5 r15-0, filled by [withPhone]: recordings whose text failed (transcription jobs FAILED now), and the recordings
          * have not paired with the calls (the recording-gap verdict noMatch) for more than [NO_MATCH_MS]. */
-        val textFailed:Int=0,val noMatchLong:Boolean=false)
+        val textFailed:Int=0,val noMatchLong:Boolean=false,
+        /** v3.5 r15-3 (DESIGN_V5 2.3-3), filled by [withPhone]: the KakaoTalk link ([KakaoReport.linkState]), the settings switch
+         * [카카오톡으로 받기] ([PipelineSettingsKeys.MORNING_KAKAO]), the last full send and the failed sends so far. */
+        val kakao:KakaoReport.Link=KakaoReport.Link.UNAVAILABLE,
+        val kakaoOn:Boolean=true,val kakaoLastSentMs:Long=0,val kakaoFailed:Long=0)
 
     const val TRANSCRIBE_LATE_MS=6*3_600_000L
     const val ANALYZE_LATE_MS=3*3_600_000L
@@ -64,6 +71,25 @@ internal object StatusLights {
     /** v3.5 r15-0: recordings not paired with the calls for this long turn the recording light amber. */
     const val NO_MATCH_MS=48*3_600_000L
     const val NO_MATCH_WORDS="녹음이 2일 넘게 통화와 이어지지 않아요. 관리하는 분께 알려 주세요."
+    /** v3.5 r15-3: the KakaoTalk words of the 알림 line (said "위"; [below] turns them while the lights lead the page). */
+    const val KAKAO_BROKEN_WORDS="카카오톡 연결이 풀렸어요. 위 아침 보고 묶음에서 다시 연결해 주세요."
+    const val KAKAO_FAILING_WORDS="아침 보고가 3일 넘게 카카오톡으로 가지 않았어요. 위 아침 보고 묶음에서 지금 보내 보기를 눌러 주세요."
+    /** No full send for this long while the sends kept failing: the 알림 line turns amber. */
+    const val KAKAO_LATE_MS=3*24*3_600_000L
+    /** Failed sends that count as three days of failure when nothing ever went (a send is tried once a day). */
+    const val KAKAO_FAILED_DAYS=3L
+    /** The KakaoTalk morning report is linked and on, yet has not gone for over [KAKAO_LATE_MS] while its sends failed (never
+     * sent: at least [KAKAO_FAILED_DAYS] failures). */
+    fun kakaoFailing(i:Input):Boolean {
+        if(i.kakao!=KakaoReport.Link.LINKED || !i.kakaoOn || i.kakaoFailed<=0) return false
+        return if(i.kakaoLastSentMs>0) i.now-i.kakaoLastSentMs>KAKAO_LATE_MS else i.kakaoFailed>=KAKAO_FAILED_DAYS
+    }
+    /** [KakaoReport.linkState] from a settings snapshot already read (no second read on the main thread). */
+    fun kakaoLink(s:JSONObject):KakaoReport.Link = when {
+        !KakaoReport.available() -> KakaoReport.Link.UNAVAILABLE
+        s.optBoolean(PipelineSettingsKeys.KAKAO_LINKED,false) -> KakaoReport.Link.LINKED
+        s.optString(PipelineSettingsKeys.KAKAO_LAST_ERROR).startsWith(KakaoReport.TOKEN_PREFIX) -> KakaoReport.Link.BROKEN
+        else -> KakaoReport.Link.NOT_LINKED }
     fun textFailedWords(n:Int)="글자로 바꾸지 못한 녹음이 ${n}건 있어요. 새 버전이 오면 한 번 더 바꿔 봐요."
 
     fun waitWords(ms:Long):String { val m=(ms/60_000).coerceAtLeast(0);return if(m<60) "${m}분" else "${m/60}시간"+(if(m%60>0) " ${m%60}분" else "") }
@@ -98,7 +124,13 @@ internal object StatusLights {
             i.failed>0 -> "정리하지 못한 통화가 ${i.failed}건 있어요. 아래 기다리는 통화 다시 정리하기를 눌러 주세요."
             i.waiting>0 -> (i.oldestWaitMs?.let { "통화 ${i.waiting}건이 ${waitWords(it)} 밀렸어요. " } ?: "정리가 늦어지고 있어요. ")+"순서대로 정리하고 있으니 기다려 주세요."
             else -> null }
-        val notify=if(!i.notifyAllowed) "알림이 꺼져 있어요. 휴대폰 설정에서 이음 알림을 켜 주세요." else null
+        val notify=when {
+            !i.notifyAllowed -> "알림이 꺼져 있어요. 휴대폰 설정에서 이음 알림을 켜 주세요."
+            // v3.5 r15-3: the morning report over KakaoTalk (the switch off says nothing: the app notice comes as before).
+            i.kakao==KakaoReport.Link.BROKEN && i.kakaoOn -> KAKAO_BROKEN_WORDS
+            kakaoFailing(i) -> KAKAO_FAILING_WORDS
+            else -> null }
+        val notifyTarget=if(i.notifyAllowed) GROUP_MORNING else null
         val update=when {
             // The stored value is a code for the heartbeat; the light shows only its Korean words (a cancel is no error).
             CallUpdate.errorWords(i.updateError)!=null -> CallUpdate.errorWords(i.updateError)!!.sentence
@@ -112,14 +144,14 @@ internal object StatusLights {
         // v3.4: recordings that are there but still waiting for their text are said in green on the recording line.
         val importLight=if(import==null && i.pendingText!=null) Light("status_import","녹음 가져오기",true,i.pendingText) else light("status_import","녹음 가져오기",import,importTarget)
         val all=listOf(importLight,light("status_transcribe","글자로 바꾸기",transcribe,transcribeTarget),
-            light("status_analyze","통화 정리",analyze,analyzeTarget),light("status_notify","알림",notify),light("status_update","업데이트",update,GROUP_STATUS),
+            light("status_analyze","통화 정리",analyze,analyzeTarget),light("status_notify","알림",notify,notifyTarget),light("status_update","업데이트",update,GROUP_STATUS),
             card(i))
         // v3.5 r15-0: an amber light puts the lights at the top of the page (v3.3), so every group is below them then; without
         // one they sit in 상태와 도움 near the end, below 연결, 정리 and 통화 카드.
         return if(all.any { !it.ok }) all.map { it.copy(words=below(it.words)) } else all
     }
     /** The settings groups the words name, said as below the lights (they lead the page). */
-    fun below(words:String)=listOf("연결","정리","통화 카드").fold(words) { w,g -> w.replace("위 $g 묶음","아래 $g 묶음") }
+    fun below(words:String)=listOf("연결","정리","통화 카드","아침 보고").fold(words) { w,g -> w.replace("위 $g 묶음","아래 $g 묶음") }
 
     /** "통화 카드" (v3.0 r11-3): amber without the overlay permission (fixed in the 통화 카드 group) or without the call state
      * (fixed in 연결, where 전화 상태 허용 is). The role for calls that go out is optional: green, and the words say so. */
@@ -187,7 +219,10 @@ internal object StatusLights {
             cardNoCard=stats?.optInt(kr.callbrief.pipeline.call.CardStats.NO_CARD,0) ?: 0,
             routineMissed=runCatching { routineMissed(s,i.now) }.getOrDefault(0),routineEndedMs=s.optLong(PipelineSettingsKeys.ROUTINE_ENDED_MS,0),
             dbPercent=dbPercent,pendingText=RecordingGap.pendingText(s,i.now),
-            textFailed=runCatching { CallTranscriptionStore(app).use { it.failedCount() } }.getOrDefault(i.textFailed),noMatchLong=noMatchLong(s,i.now))
+            textFailed=runCatching { CallTranscriptionStore(app).use { it.failedCount() } }.getOrDefault(i.textFailed),noMatchLong=noMatchLong(s,i.now),
+            kakao=runCatching { kakaoLink(s) }.getOrDefault(KakaoReport.Link.UNAVAILABLE),
+            kakaoOn=s.optBoolean(PipelineSettingsKeys.MORNING_KAKAO,true),kakaoLastSentMs=s.optLong(PipelineSettingsKeys.KAKAO_LAST_SENT_MS,0),
+            kakaoFailed=s.optLong(PipelineSettingsKeys.KAKAO_FAILED_COUNT,0))
     }
     /** v3.5 r15-0: the last recording-gap verdict is noMatch, fresh, and has held for more than [NO_MATCH_MS]. */
     fun noMatchLong(s:JSONObject,now:Long):Boolean {

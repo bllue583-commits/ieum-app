@@ -15,6 +15,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kr.callbrief.R
 import kr.callbrief.SecureSettings
+import kr.callbrief.pipeline.report.KakaoReport
+import kr.callbrief.pipeline.report.ReportFetch
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
@@ -50,11 +52,22 @@ internal object CallDigestText {
     const val NO_RECORDING_WORDS="녹음이 없어 정리한 통화가 없어요"
     /** Up to [ISSUE_LINES] "진행 중인 일" lead the morning lines (design: 새벽 정리). */
     const val ISSUE_LINES=3
-    /** Every open check item, oldest request first, with when it was asked for. No deadlines, no "지남" (user rule;
+    /** v3.5 r15-3 (DESIGN_V5 2.3-2, review C-12: the first line was the oldest item): the morning report's order, the same as
+     * the KakaoTalk report's "오늘 챙길 일" (tidy.md 9-1): the items to check (needs_confirmation, or a number that may be
+     * misheard) first, then the ones asked for today or yesterday, then the rest; within each, the latest request first. */
+    fun ranked(items:List<CallTodoItem>,today:LocalDate):List<CallTodoItem> {
+        fun rank(i:CallTodoItem)=when {
+            i.status=="needs_confirmation" || i.tentative -> 0
+            i.createdMs>0 && !CallRecordStore.kstDay(i.createdMs).isBefore(today.minusDays(1)) -> 1
+            else -> 2 }
+        return items.sortedWith(compareBy<CallTodoItem>(::rank).thenByDescending { it.createdMs })
+    }
+    /** Every open check item in [ranked] order, with when it was asked for. No deadlines, no "지남" (user rule;
      * round 2: before, items without a date never reached this report). An item that may hold a misheard number ends in ", 확인 필요". */
     fun morning(items:List<CallTodoItem>,today:LocalDate,issues:List<Issue> =emptyList()):Message {
         val issueLines=issues.take(ISSUE_LINES).map { "진행 중, ${it.title}"+(if(it.status.isBlank()) "" else ": ${it.status}") }
-        val itemLines=items.sortedBy { it.createdMs }.map { "${it.company?.let { c -> "[$c] " } ?: ""}${it.title}"+CallUi.requested(it.createdMs).let { r -> if(r.isEmpty()) "" else ", $r" }+
+        val order=ranked(items,today)
+        val itemLines=order.map { "${it.company?.let { c -> "[$c] " } ?: ""}${it.title}"+CallUi.requested(it.createdMs).let { r -> if(r.isEmpty()) "" else ", $r" }+
                 (if(it.status=="needs_confirmation") ", 끝났는지 확인" else "")+
                 // v3.3 (DESIGN_V4 3.1-2): a number or date that may have been misheard, said in words (a notification has no badge).
                 (if(it.tentative) ", ${CallUi.UNSURE}" else "") }
@@ -62,7 +75,7 @@ internal object CallDigestText {
         // the check items (they always fit: the items give way to them).
         val marked=itemLines.mapIndexed { i,l -> if(i==0) NOW_PREFIX+l else l }
         val lines=(if(issueLines.isEmpty()) more(marked) else moreIn(marked,MAX_LINES-issueLines.size))+issueLines
-        val first=items.minByOrNull { it.createdMs }
+        val first=order.firstOrNull()
         return Message("체크할 일 ${items.size}개",if(items.isEmpty()) "체크할 일이 없어요" else marked.first(),lines,
             first?.id,first?.revision ?: 0)
     }
@@ -213,7 +226,9 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
             val update=kind==CallDigestSchedule.MORNING && runCatching { CallUpdate.installWaiting(applicationContext) }.getOrDefault(false)
             val message=if(kind==CallDigestSchedule.MORNING) CallDigestText.withUpdate(CallDigestText.withLate(CallDigestText.morning(store,plan.day),late),update) else CallDigestText.evening(store,plan.day)
             // The evening report carries its day, so a tap the next morning still opens that day's calls.
-            val posted=post(kind,message,plan.day.atTime(12,0).atZone(CallRecordStore.KST).toInstant().toEpochMilli())
+            // v3.5 r15-3: the morning notice stays away when today's report went out in full over KakaoTalk.
+            val posted=if(kind==CallDigestSchedule.MORNING) CallDigestKakao.postMorning(applicationContext,message,waitForSend=true)
+                else post(kind,message,plan.day.atTime(12,0).atZone(CallRecordStore.KST).toInstant().toEpochMilli())
             if(kind==CallDigestSchedule.EVENING) {
                 if(posted) runCatching { val waiting=CallDigestText.eveningWaiting(store.day(plan.day),plan.day,System.currentTimeMillis())
                     settings.update { it.put(CallDigestText.EVENING_WAITING_KEY,waiting) } }
@@ -271,7 +286,44 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
             s.optString(PipelineSettingsKeys.STALL_WARNED_DAY),s.optString(PipelineSettingsKeys.DISCONNECT_WARNED_DAY),store.dbRows,
             RecordingGap.noticeDue(s,now),runCatching { CallUpdate.notInstalledForADay(app,now) }.getOrDefault(false),
             runCatching { StatusLights.routineMissed(s,now) }.getOrDefault(0),s.optLong(PipelineSettingsKeys.ROUTINE_ENDED_MS,0),
-            runCatching { CallUpdate.installWaiting(app) }.getOrDefault(false))
+            runCatching { CallUpdate.installWaiting(app) }.getOrDefault(false),
+            // v3.5 r15-3: linked and on, yet no full KakaoTalk send today.
+            runCatching { SelfCheckNotices.kakaoMissed(KakaoReport.linkState(app)==KakaoReport.Link.LINKED,
+                s.optBoolean(PipelineSettingsKeys.MORNING_KAKAO,true),KakaoReport.sentToday(app,now)) }.getOrDefault(false))
+    }
+}
+
+/** v3.5 r15-3 (DESIGN_V5 2.3-2): the app's morning notice is the KakaoTalk report's fallback. With the switch
+ * [카카오톡으로 받기] on ([PipelineSettingsKeys.MORNING_KAKAO], default on) and today's report sent in full
+ * ([KakaoReport.sentToday]) no notice is posted, not even a quiet one ([다 됐어요] is in the app). A failed or partial send,
+ * no link, the switch off or a build without a Kakao key: the notice as before. */
+internal object CallDigestKakao {
+    /** How long the 06:00 notice waits for a KakaoTalk send that is running right now (the 06:00 try of [ReportFetch]). */
+    const val WAIT_MS=2*60_000L
+    /** Test hook: whether the morning report work is running now (null: asks WorkManager). */
+    @Volatile internal var sending:((Context)->Boolean)?=null
+    /** True when the app notice is not needed this morning. Never throws. */
+    fun covered(context:Context,nowMs:Long=System.currentTimeMillis()):Boolean = runCatching {
+        if(!KakaoReport.available()) return false
+        val s=SecureSettings(CallPipelineStartup.storage(context)).snapshot()
+        s.optBoolean(PipelineSettingsKeys.MORNING_KAKAO,true) && KakaoReport.sentToday(context,nowMs)
+    }.getOrDefault(false)
+    /** The KakaoTalk morning work may still be sending: linked, on, not sent today and its work running. */
+    private fun mayStillSend(context:Context):Boolean = runCatching {
+        if(!KakaoReport.available() || KakaoReport.linkState(context)!=KakaoReport.Link.LINKED) return false
+        val s=SecureSettings(CallPipelineStartup.storage(context)).snapshot()
+        if(!s.optBoolean(PipelineSettingsKeys.MORNING_KAKAO,true)) return false
+        (sending ?: { c -> WorkManager.getInstance(c.applicationContext).getWorkInfosForUniqueWork(ReportFetch.NAME).get().any { it.state==WorkInfo.State.RUNNING } })(context)
+    }.getOrDefault(false)
+    /** Posts the morning notice [m] unless [covered]; [waitForSend] (the scheduled run, off the main thread) first waits up to
+     * [WAIT_MS] for a send in progress. True when the notice was posted. */
+    fun postMorning(context:Context,m:CallDigestText.Message,waitForSend:Boolean=false):Boolean {
+        if(waitForSend && !covered(context)) {
+            var waited=0L
+            while(waited<WAIT_MS && mayStillSend(context)) { Thread.sleep(2_000);waited+=2_000 }
+        }
+        if(covered(context)) { Log.i("ieum.digest","morning notice not posted: sent over KakaoTalk");return false }
+        return CallDigestNotifier.post(context,CallDigestSchedule.MORNING,m)
     }
 }
 

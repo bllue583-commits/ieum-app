@@ -53,6 +53,25 @@ class MainActivity:ComponentActivity() {
         const val FADE_MS=120L
         internal fun intent(c:Context,screen:Screen,dayMs:Long?=null,callId:String?=null)=Intent(c,MainActivity::class.java)
             .putExtra(EXTRA_SCREEN,screen.name).apply { dayMs?.let { putExtra(EXTRA_DAY_MS,it) };callId?.let { putExtra(EXTRA_CALL_ID,it) } }
+        /** The host of the KakaoTalk message buttons (kakao<app key>://kakaolink?screen=…&dayMs=…, AndroidManifest). */
+        const val KAKAO_HOST="kakaolink"
+        /** v3.5 r15-3: the screen and day of a KakaoTalk button's execution parameters: "calls" (with its day, else today) and
+         * "tasks"; anything else, or no parameter, is home. Null when [uri] is not a KakaoTalk button's link. */
+        internal fun kakaoTarget(uri:android.net.Uri?):Pair<Screen,Long?>? {
+            if(uri==null || uri.host!=KAKAO_HOST || uri.scheme?.startsWith("kakao")!=true) return null
+            val screen=runCatching { uri.getQueryParameter("screen") }.getOrNull()?.trim()?.lowercase()
+            val day=runCatching { uri.getQueryParameter("dayMs")?.trim()?.toLongOrNull() }.getOrNull()?.takeIf { it>0 }
+            return when(screen) { "calls" -> Screen.CALLS to day;"tasks" -> Screen.TASKS to null;else -> Screen.HOME to null }
+        }
+    }
+    /** A KakaoTalk button's link turned into the notification extras ([take] reads them); the link itself is dropped, so it is
+     * read once. False when [i] carries no such link. */
+    private fun kakaoLink(i:Intent):Boolean {
+        val (s,day)=kakaoTarget(i.data) ?: return false
+        i.data=null
+        i.putExtra(EXTRA_SCREEN,s.name);i.removeExtra(EXTRA_CALL_ID)
+        if(day!=null) i.putExtra(EXTRA_DAY_MS,day) else i.removeExtra(EXTRA_DAY_MS)
+        return true
     }
     internal lateinit var column:LinearLayout
         private set
@@ -133,6 +152,8 @@ class MainActivity:ComponentActivity() {
 
     /** Reads a notification's extras: the screen, the day of calls, the call to open. False when the Intent names no screen. */
     private fun take(i:Intent?):Boolean {
+        // v3.5 r15-3 (DESIGN_V5 2.3-4): the KakaoTalk report's [이음에서 보기] button, read into the same extras.
+        if(i!=null && kakaoLink(i)) return take(i)
         val target=i?.getStringExtra(EXTRA_SCREEN)?.let { n -> runCatching { Screen.valueOf(n) }.getOrNull() }?.takeIf { it!=Screen.PERSON }
         val call=i?.getStringExtra(EXTRA_CALL_ID);val day=i?.getLongExtra(EXTRA_DAY_MS,0L)?.takeIf { it>0 }
         if(target==null && call==null) {

@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kr.callbrief.SecureSettings
+import kr.callbrief.pipeline.report.KakaoReport
 import org.json.JSONObject
 
 /** The download bar shared by settings and the home card: a thick horizontal bar in the accent over its soft tint. */
@@ -55,6 +56,28 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         /** Test hook: whether the golden screen is in this build (null: look for the class). */
         @androidx.annotation.VisibleForTesting @Volatile internal var goldenHook:(()->Boolean)?=null
         fun goldenInBuild():Boolean=goldenHook?.invoke() ?: runCatching { Class.forName(GOLDEN_ACTIVITY);true }.getOrDefault(false)
+        /** v3.5 r15-3 (DESIGN_V5 2.3-1): the morning report's group (was the "알림 시각" part of 정리 for the morning hour). */
+        const val MORNING_NAME="아침 보고"
+        const val KAKAO_SWITCH="카카오톡으로 받기"
+        /** The last full KakaoTalk send: "오늘 5:30에 보냈어요", "어제 5:30에 보냈어요", "11월 4일 5:30에 보냈어요", never sent. */
+        fun lastSentWords(atMs:Long,nowMs:Long):String {
+            if(atMs<=0) return "아직 보낸 적이 없어요"
+            val t=java.time.Instant.ofEpochMilli(atMs).atZone(CallRecordStore.KST)
+            val clock=if(t.hour<12) "${t.hour}:%02d".format(t.minute) else "오후 ${if(t.hour==12) 12 else t.hour-12}:%02d".format(t.minute)
+            val d=t.toLocalDate();val today=CallRecordStore.kstDay(nowMs)
+            val day=when(d) { today -> "오늘";today.minusDays(1) -> "어제";else -> "${d.monthValue}월 ${d.dayOfMonth}일" }
+            return "$day ${clock}에 보냈어요"
+        }
+        /** [지금 보내 보기]'s result in one Korean line ([KakaoReport.sendNow]: null, a result constant or an error code). */
+        fun sendWords(code:String?):String = when {
+            code==null -> "카카오톡으로 보냈어요. 나와의 채팅을 확인해 주세요."
+            code==KakaoReport.ALREADY_SENT -> "오늘 보고는 이미 보냈어요. 내일 아침에 다시 보내요."
+            code==KakaoReport.NOT_LINKED -> "카카오톡이 연결되어 있지 않아요. 먼저 연결해 주세요."
+            code==KakaoReport.UNAVAILABLE -> "이 버전에서는 카카오톡으로 보낼 수 없어요."
+            code==KakaoReport.NO_REPORT -> "보낼 내용이 아직 없어요."
+            code.startsWith(KakaoReport.TOKEN_PREFIX) -> "카카오톡 연결이 풀렸어요. 다시 연결해 주세요."
+            else -> "보내지 못했어요. 인터넷 연결을 확인하고 잠시 뒤 다시 눌러 주세요."
+        }
         /** The group the status lights take at the top of the page while one of them is amber (v3.3, DESIGN_V4 3.3-4). */
         const val STATUS_NAME="지금 상태"
         const val MERGE_TAG="merge_undo" }
@@ -352,8 +375,6 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
 
         sub("알림 시각")
         hourRow("저녁 통화 정리",PipelineSettingsKeys.EVENING_HOUR,s.optInt(PipelineSettingsKeys.EVENING_HOUR,19),15..23)
-        body.addView(CallUi.divider(a))
-        hourRow("아침 체크할 일",PipelineSettingsKeys.MORNING_HOUR,s.optInt(PipelineSettingsKeys.MORNING_HOUR,6),4..11)
         body.addView(CallUi.divider(a));body.addView(switchRow("followup_switch",s.optBoolean(PipelineSettingsKeys.FOLLOWUP_NOTICE,true),PipelineSettingsKeys.FOLLOWUP_NOTICE) { "통화마다 알림" })
         // Design 3.3 (r7-3): a verified new version installs by itself; off, a notification only.
         body.addView(CallUi.divider(a))
@@ -364,6 +385,9 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         }
         myInfo(s)
         personalNumbers()
+
+        // ---- v3.5 r15-3 (DESIGN_V5 2.3-1): 아침 보고, the KakaoTalk report and the app notice's hour ----
+        morningGroup(s)
 
         // ---- 상태와 도움 ----
         group("상태와 도움")
@@ -423,6 +447,75 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         a.putBack(keep)
         val want=focusTag;val group=focusGroup;focusTag=null;focusGroup=null
         if(want!=null) page.post { if(live()) { if(page.findViewWithTag<View>(want)!=null) goTo(want) else group?.let(::goTo) } }
+    }
+
+    // ---- v3.5 r15-3 (DESIGN_V5 2.3-1): 아침 보고 ----
+    /** The words under [지금 보내 보기] after its last press (kept while the page is drawn again). */
+    private var kakaoResult:String?=null
+    /** "아침 보고": without a Kakao key in the build only the app notice's hour; with one the switch [카카오톡으로 받기]
+     * ([PipelineSettingsKeys.MORNING_KAKAO]), the link's state with its one button, [지금 보내 보기] and a small 연결 끊기. */
+    private fun morningGroup(s:JSONObject) {
+        group(MORNING_NAME)
+        var first=true
+        fun part(name:String) { sub(name,first);first=false }
+        if(KakaoReport.available()) {
+            part("카카오톡")
+            val on=s.optBoolean(PipelineSettingsKeys.MORNING_KAKAO,true)
+            val link=StatusLights.kakaoLink(s)
+            body.addView(Switch(a).apply {
+                text=KAKAO_SWITCH;textSize=CallUi.SUMMARY;isChecked=on;minHeight=CallUi.dp(a,64);tag="kakao_switch";setTextColor(CallUi.INK)
+                val tint=android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_checked),intArrayOf()),intArrayOf(CallUi.ACCENT,CallUi.FAINT))
+                thumbTintList=tint;trackTintList=tint.withAlpha(120)
+                // The rows under the switch change with it: the page is drawn again.
+                setOnCheckedChangeListener { _,checked -> save { it.put(PipelineSettingsKeys.MORNING_KAKAO,checked) } }
+            })
+            if(!on) body.addView(aside("꺼 두면 아침 보고는 이음 알림으로만 와요.").apply { tag="kakao_off_note" })
+            else when(link) {
+                KakaoReport.Link.LINKED -> {
+                    body.addView(CallUi.text(a,"연결됨, 매일 5:30에 보내요",CallUi.BODY,true,CallUi.OK).apply { tag="kakao_state" })
+                    body.addView(aside(lastSentWords(s.optLong(PipelineSettingsKeys.KAKAO_LAST_SENT_MS,0),System.currentTimeMillis())).apply { tag="kakao_last" })
+                    body.addView(act("지금 보내 보기","kakao_send","보내는 중이에요") { done ->
+                        a.lifecycleScope.launch {
+                            val code=withContext(Dispatchers.IO) { runCatching { KakaoReport.sendNow(a) }.getOrElse { "SEND_"+it.javaClass.simpleName } }
+                            kakaoResult=sendWords(code);done()
+                            if(live()) { Toast.makeText(a,kakaoResult,Toast.LENGTH_LONG).show();refresh() }
+                        }
+                    })
+                    kakaoResult?.let { body.addView(aside(it).apply { tag="kakao_send_result" }) }
+                    body.addView(aside("하루에 한 번 보내요. 오늘 보고를 이미 보냈으면 다시 보내지 않아요.").apply { tag="kakao_send_note" })
+                    body.addView(CallUi.linkButton(a,"연결 끊기") {
+                        a.lifecycleScope.launch {
+                            withContext(Dispatchers.IO) { runCatching { KakaoReport.unlink(a) } }
+                            kakaoResult=null
+                            if(live()) { Toast.makeText(a,"카카오톡 연결을 끊었어요. 아침 보고는 이음 알림으로 와요.",Toast.LENGTH_LONG).show();refresh() }
+                        }
+                    }.apply { tag="kakao_unlink" },LinearLayout.LayoutParams(-2,-2).apply { marginStart=-CallUi.dp(a,6) })
+                }
+                KakaoReport.Link.BROKEN -> {
+                    body.addView(CallUi.text(a,"카카오톡 연결이 풀렸어요",CallUi.BODY,true,CallUi.AMBER).apply { tag="kakao_state" })
+                    body.addView(aside("다시 연결하기 전에는 아침 보고가 이음 알림으로 와요."))
+                    body.addView(linkButton("다시 연결"))
+                }
+                else -> {
+                    body.addView(CallUi.text(a,"카카오톡을 연결하면 매일 아침 5:30에 나와의 채팅으로 어제 통화 정리와 오늘 챙길 일을 보내요.",CallUi.BODY).apply { tag="kakao_state" })
+                    body.addView(linkButton("카카오톡 연결하기"))
+                }
+            }
+            part("이음 알림")
+            body.addView(aside(if(on && link==KakaoReport.Link.LINKED) "카카오톡으로 보내지 못한 날에만 이음 알림이 와요." else "매일 이 시각에 이음 알림으로 체크할 일을 알려 드려요.").apply { tag="morning_notice_note" })
+        }
+        hourRow("아침 체크할 일",PipelineSettingsKeys.MORNING_HOUR,s.optInt(PipelineSettingsKeys.MORNING_HOUR,6),4..11)
+    }
+    /** [카카오톡 연결하기] / [다시 연결]: the Kakao login, then the page again. */
+    private fun linkButton(label:String)=act(label,"kakao_link","연결하는 중이에요",big=true) { done ->
+        a.lifecycleScope.launch {
+            val code=runCatching { KakaoReport.link(a) }.getOrElse { "SDK_"+it.javaClass.simpleName }
+            done()
+            if(!live()) return@launch
+            if(code!=null) Toast.makeText(a,if(code=="CANCELLED") "카카오톡 연결을 그만뒀어요." else "카카오톡에 연결하지 못했어요. 잠시 뒤 다시 해 주세요.",Toast.LENGTH_LONG).show()
+            else Toast.makeText(a,"카카오톡에 연결했어요. 내일 아침 5:30부터 보내요.",Toast.LENGTH_LONG).show()
+            refresh()
+        }
     }
 
     // ---- v3.3 (DESIGN_V4 3.3-1): 합친 사람 되돌리기 ----
