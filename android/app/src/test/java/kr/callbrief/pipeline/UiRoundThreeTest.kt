@@ -257,12 +257,13 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
         val ok=StatusLights.Input(now=100L*3_600_000,folderConnected=true,modelState="READY",consent=true)
         assertTrue(StatusLights.lights(ok).all { it.target==null })
         val noFolder=StatusLights.lights(ok.copy(folderConnected=false)).single { !it.ok }
-        assertTrue(noFolder.words,noFolder.words.contains("위 연결 묶음에서"));assertEquals(StatusLights.GROUP_CONNECT,noFolder.target)
+        // v3.5 r15-0: an amber light puts the lights at the top of the page, so the groups they name are below them.
+        assertTrue(noFolder.words,noFolder.words.contains("아래 연결 묶음에서"));assertEquals(StatusLights.GROUP_CONNECT,noFolder.target)
         val noConsent=StatusLights.lights(ok.copy(consent=false)).single { !it.ok }
-        assertTrue(noConsent.words,noConsent.words.contains("위 정리 묶음에서"));assertEquals(StatusLights.GROUP_SUMMARY,noConsent.target)
+        assertTrue(noConsent.words,noConsent.words.contains("아래 정리 묶음에서"));assertEquals(StatusLights.GROUP_SUMMARY,noConsent.target)
         assertEquals(StatusLights.GROUP_STATUS,StatusLights.lights(ok.copy(modelState="FAILED")).single { !it.ok }.target)
         assertNull("the phone's own settings",StatusLights.lights(ok.copy(notifyAllowed=false)).single { !it.ok }.target)
-        StatusLights.lights(ok.copy(folderConnected=false,consent=false,modelState="FAILED")).forEach { assertFalse(it.words,it.words.contains("아래 연결") || it.words.contains("아래 정리")) }
+        StatusLights.lights(ok.copy(folderConnected=false,consent=false,modelState="FAILED")).forEach { assertFalse(it.words,it.words.contains("위 연결") || it.words.contains("위 정리")) }
         // The groups the targets name are the ones settings draws.
         seeded()
         val a=launchMain(Screen.SETTINGS)

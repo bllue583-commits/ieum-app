@@ -47,7 +47,10 @@ internal object StatusLights {
         val callLog:Boolean=true,val standbyBucket:String?=null,
         val cardCalls:Int=0,val cardNoNumber:Int=0,val cardNoCard:Int=0,
         val routineMissed:Int=0,val routineEndedMs:Long=0,
-        val dbPercent:Int?=null,val pendingText:String?=null)
+        val dbPercent:Int?=null,val pendingText:String?=null,
+        /** v3.5 r15-0, filled by [withPhone]: recordings whose text failed (transcription jobs FAILED now), and the recordings
+         * have not paired with the calls (the recording-gap verdict noMatch) for more than [NO_MATCH_MS]. */
+        val textFailed:Int=0,val noMatchLong:Boolean=false)
 
     const val TRANSCRIBE_LATE_MS=6*3_600_000L
     const val ANALYZE_LATE_MS=3*3_600_000L
@@ -58,6 +61,10 @@ internal object StatusLights {
     const val DISCOVERY_LATE_MS=24*3_600_000L
     const val UPDATE_LATE_MS=24*3_600_000L
     const val OK="정상"
+    /** v3.5 r15-0: recordings not paired with the calls for this long turn the recording light amber. */
+    const val NO_MATCH_MS=48*3_600_000L
+    const val NO_MATCH_WORDS="녹음이 2일 넘게 통화와 이어지지 않아요. 관리하는 분께 알려 주세요."
+    fun textFailedWords(n:Int)="글자로 바꾸지 못한 녹음이 ${n}건 있어요. 새 버전이 오면 한 번 더 바꿔 봐요."
 
     fun waitWords(ms:Long):String { val m=(ms/60_000).coerceAtLeast(0);return if(m<60) "${m}분" else "${m/60}시간"+(if(m%60>0) " ${m%60}분" else "") }
 
@@ -69,7 +76,7 @@ internal object StatusLights {
             i.lastDiscoveryMs<=0 || i.now-i.lastDiscoveryMs>DISCOVERY_LATE_MS ->
                 "하루 넘게 녹음을 가져오지 못했어요. 위 연결 묶음에서 폴더를 다시 골라 주세요."
             // v3.1: the folder is read, but the calls of the last day have (almost) no recordings, or the folder is too full.
-            else -> i.gap?.let(RecordingGap::lightWords) }
+            else -> i.gap?.let(RecordingGap::lightWords) ?: if(i.noMatchLong) NO_MATCH_WORDS else null }
         val importTarget=if(import!=null && i.gap!=null && i.folderConnected && i.folderReadable && i.lastDiscoveryMs>0 &&
             i.now-i.lastDiscoveryMs<=DISCOVERY_LATE_MS) RecordingGap.lightTarget(i.gap) else GROUP_CONNECT
         val transcribe=when {
@@ -78,6 +85,8 @@ internal object StatusLights {
             i.modelState!="READY" -> "음성 인식 모델을 아직 받지 않았어요. 아래 [모델 받기]를 눌러 주세요. 어떤 연결에서든 받아요."
             i.transcribeBacklog>0 && (i.oldestQueuedMs?.let { i.now-it>TRANSCRIBE_LATE_MS } ?: true) && i.now-i.lastTranscribedMs>TRANSCRIBE_LATE_MS ->
                 "녹음 ${i.transcribeBacklog}개가 밀려 있어요. 충전기에 꽂아 두면 밤에 끝나요."
+            // v3.5 r15-0: failed texts are told too (each build tries them once more, CallTranscriptionStore.requeueFailedOnce).
+            i.textFailed>0 -> textFailedWords(i.textFailed)
             else -> null }
         val analyze=when {
             !i.consent -> "정리 동의가 꺼져 있어요. 위 정리 묶음에서 켜 주세요."
@@ -102,10 +111,15 @@ internal object StatusLights {
         val transcribeTarget=if(i.modelState=="UNSUPPORTED") null else GROUP_STATUS
         // v3.4: recordings that are there but still waiting for their text are said in green on the recording line.
         val importLight=if(import==null && i.pendingText!=null) Light("status_import","녹음 가져오기",true,i.pendingText) else light("status_import","녹음 가져오기",import,importTarget)
-        return listOf(importLight,light("status_transcribe","글자로 바꾸기",transcribe,transcribeTarget),
+        val all=listOf(importLight,light("status_transcribe","글자로 바꾸기",transcribe,transcribeTarget),
             light("status_analyze","통화 정리",analyze,analyzeTarget),light("status_notify","알림",notify),light("status_update","업데이트",update,GROUP_STATUS),
             card(i))
+        // v3.5 r15-0: an amber light puts the lights at the top of the page (v3.3), so every group is below them then; without
+        // one they sit in 상태와 도움 near the end, below 연결, 정리 and 통화 카드.
+        return if(all.any { !it.ok }) all.map { it.copy(words=below(it.words)) } else all
     }
+    /** The settings groups the words name, said as below the lights (they lead the page). */
+    fun below(words:String)=listOf("연결","정리","통화 카드").fold(words) { w,g -> w.replace("위 $g 묶음","아래 $g 묶음") }
 
     /** "통화 카드" (v3.0 r11-3): amber without the overlay permission (fixed in the 통화 카드 group) or without the call state
      * (fixed in 연결, where 전화 상태 허용 is). The role for calls that go out is optional: green, and the words say so. */
@@ -172,7 +186,13 @@ internal object StatusLights {
             cardNoNumber=stats?.optInt(kr.callbrief.pipeline.call.CardStats.NO_NUMBER,0) ?: 0,
             cardNoCard=stats?.optInt(kr.callbrief.pipeline.call.CardStats.NO_CARD,0) ?: 0,
             routineMissed=runCatching { routineMissed(s,i.now) }.getOrDefault(0),routineEndedMs=s.optLong(PipelineSettingsKeys.ROUTINE_ENDED_MS,0),
-            dbPercent=dbPercent,pendingText=RecordingGap.pendingText(s,i.now))
+            dbPercent=dbPercent,pendingText=RecordingGap.pendingText(s,i.now),
+            textFailed=runCatching { CallTranscriptionStore(app).use { it.failedCount() } }.getOrDefault(i.textFailed),noMatchLong=noMatchLong(s,i.now))
+    }
+    /** v3.5 r15-0: the last recording-gap verdict is noMatch, fresh, and has held for more than [NO_MATCH_MS]. */
+    fun noMatchLong(s:JSONObject,now:Long):Boolean {
+        val v=RecordingGap.last(s)?.takeIf { it.code==PipelineSettingsKeys.GAP_NO_MATCH } ?: return false
+        return now-v.atMs<=RecordingGap.STALE_MS && v.sinceMs>0 && now-v.sinceMs>NO_MATCH_MS
     }
 
     // ---- what the lights, the heartbeat and the self-check read from the store (one place, so they agree) ----

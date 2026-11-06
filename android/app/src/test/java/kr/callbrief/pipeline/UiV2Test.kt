@@ -193,8 +193,9 @@ class UiV2Test:ProtectedTextHostTestBase() {
         assertTrue(StatusLights.lights(ok).all { it.ok })
         // Folder chosen but the permission is gone: amber, pointing up to the connection group.
         val lost=bad(ok.copy(folderReadable=false),"status_import")
-        assertTrue(lost,lost.contains("풀렸어요") && lost.contains("위 연결 묶음에서"))
-        assertTrue(bad(ok.copy(folderConnected=false,folderReadable=false),"status_import").contains("위 연결 묶음에서"))
+        // v3.5 r15-0: amber puts the lights first on the page, so the connection group is below them.
+        assertTrue(lost,lost.contains("풀렸어요") && lost.contains("아래 연결 묶음에서"))
+        assertTrue(bad(ok.copy(folderConnected=false,folderReadable=false),"status_import").contains("아래 연결 묶음에서"))
         // Permission kept but no good discovery cycle for a day (or never): amber.
         assertTrue(bad(ok.copy(lastDiscoveryMs=ok.now-25*h),"status_import").contains("하루"))
         assertTrue(bad(ok.copy(lastDiscoveryMs=0),"status_import").contains("하루"))

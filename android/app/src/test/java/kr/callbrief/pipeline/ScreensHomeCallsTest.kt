@@ -47,9 +47,9 @@ class ScreensHomeCallsTest:ProtectedTextHostTestBase() {
     @Test fun homeNumbersSayWhatTheyCountAndTheMemoSaysCallsAreBeingSortedOut() {
         val a=home(HomeScreen.Snapshot(folder=true,consent=true,model="READY",calls=3,working=0,newTasks=1,due=0,overdue=0,lastAnalyzedMs=0))
         val all=texts(a)
-        listOf("오늘 통화","오늘 생긴 체크","남은 체크할 일","먼저 볼 체크할 일").forEach { assertTrue(it,all.contains(it)) }
+        listOf("오늘 녹음","오늘 생긴 체크","남은 체크할 일","먼저 볼 체크할 일","녹음 3개 중 정리 0개").forEach { assertTrue(it,all.contains(it)) }
         assertFalse(all.contains("새 체크"));assertFalse(all.contains("오늘 체크할 일"))
-        assertEquals("오늘 통화 3건을 정리하고 있어요",(tag(a,"home_memos_none") as TextView).text.toString())
+        assertEquals("오늘 녹음 3개를 정리하고 있어요",(tag(a,"home_memos_none") as TextView).text.toString())
         val none=home(HomeScreen.Snapshot(true,true,"READY",0,0,0,0,0,0))
         assertEquals("오늘은 아직 정리된 통화가 없어요",(tag(none,"home_story_none") as TextView).text.toString())
     }
@@ -60,11 +60,12 @@ class ScreensHomeCallsTest:ProtectedTextHostTestBase() {
         settle { tag(a,"home_today")!=null }
         val snap=a.home.read()
         val db=IeumApplication.store(app);val today=CallUi.today()
-        val calls=db.day(today);val logs=db.dayLog(today)
-        assertEquals(CallsScreen.callCount(calls,logs),snap.calls)
-        // The call list's line says the same number.
-        assertTrue(CallsScreen.counts(calls,CallsScreen.visibleLogs(calls,logs)).startsWith("통화 ${snap.calls}건"))
-        assertTrue("the call-log lines count too",snap.calls>calls.count { it.kind=="통화" })
+        val calls=db.day(today)
+        // v3.5 r15-0 (user 11/6): home counts recordings (the call records and the recordings still waiting for their text), not
+        // the call log's lines; the summed-up ones are said beside them.
+        val waiting=CallTranscriptionStore.withoutRecord(today) { sql,args -> db.cardRows(sql,*args) }
+        assertEquals(calls.count { it.kind=="통화" }+waiting,snap.calls)
+        assertEquals(TodayStory.summarized(calls),snap.summarized)
         // The short list: asked for today or asking for a check, the checks first, at most five.
         assertTrue(snap.tasks.isNotEmpty())
         assertTrue(snap.tasks.all { it.status=="needs_confirmation" || CallRecordStore.kstDay(it.createdMs)==today })

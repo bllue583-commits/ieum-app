@@ -164,7 +164,7 @@ class RecordingGapTest:ProtectedTextHostTestBase() {
         val t0=now-30*min
         val end=CallSession.CallEnd("010-5555-6666",CallSession.Direction.IN,t0,t0+3*min,true)
         CallFollowupNotice.onCallEnded(app,end)
-        assertEquals("끝나면 여기에 요약이 와요",notices().single().notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
+        assertEquals(CallFollowupNotice.WORKING_WORDS,notices().single().notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
         // A pass right after the call does not decide yet (the file may still be written).
         RecordingGap.afterPass(app,RecordingGap.CHECKED,end.endedMs+30_000,end.endedMs+30_000)
         assertEquals(CallFollowupNotice.WORKING,CallFollowupNotice.entries(app).single().state)
@@ -190,7 +190,8 @@ class RecordingGapTest:ProtectedTextHostTestBase() {
         assertTrue(CallFollowupNotice.entries(app).isEmpty())
         val late=CallFollowupNotice.Entry(1,"박지성",null,"h",now-7*h,now-7*h+min,state=CallFollowupNotice.LATE)
         assertEquals("정리가 늦어지고 있어요",CallFollowupNotice.words(late,null).text)
-        assertEquals("정리가 늦어지고 있어요, 저녁 보고에 넣어 드릴게요",CallFollowupNotice.words(late.copy(record="rec"),null).text)
+        // v3.5 r15-0: no promise of a report, the call list instead.
+        assertEquals("정리가 늦어지고 있어요, 끝나면 통화 목록에 보여요",CallFollowupNotice.words(late.copy(record="rec"),null).text)
     }
 
     @Test fun theCallListLineWithoutARecord() {
@@ -205,17 +206,17 @@ class RecordingGapTest:ProtectedTextHostTestBase() {
     }
 
     @Test fun eveningTitleWithCallsButNoRecording() {
-        val m=CallDigestText.evening(emptyList(),0,4)
-        assertEquals("오늘 통화 4건, 녹음된 통화 0건",m.title)
+        // v3.5 r15-0: by recording; the call log only says there were calls.
+        val m=CallDigestText.evening(emptyList(),0,0,4)
+        assertEquals("오늘은 녹음된 통화가 없어요",m.title)
         assertEquals("녹음이 없어 정리한 통화가 없어요",m.text)
         // From the store: the call log only, the same count as home.
         val day=LocalDate.of(2026,11,5)
         seedCalls(3,now)
         val store=IeumApplication.store(app)
         assertEquals(CallsScreen.callCount(store.day(day),store.dayLog(day)),3)
-        assertEquals("오늘 통화 3건, 녹음된 통화 0건",CallDigestText.evening(store,day).title)
-        // With recorded calls the title stays as it was.
-        assertEquals("오늘 통화 0건, 새 체크할 일 0개",CallDigestText.evening(emptyList(),0,0).title)
+        assertEquals("오늘은 녹음된 통화가 없어요",CallDigestText.evening(store,day).title)
+        assertEquals("녹음 0개 중 정리 0개, 새 체크할 일 0개",CallDigestText.evening(emptyList(),0,0).title)
         assertEquals(180_000L,CallDigestPrefetch.TIMEOUT_MS)
     }
 

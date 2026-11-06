@@ -155,10 +155,11 @@ class FirstSetupHomeTest:ProtectedTextHostTestBase() {
         val page=tag(a,"home_today").parent as ViewGroup
         val order=listOf("home_attention","home_story","home_tasks","home_memos","home_today").map { page.indexOfChild(tag(a,it)) }
         assertFalse(order.toString(),order.contains(-1));assertEquals(order.sorted(),order)
-        assertEquals("오늘 통화 3건",text(a,"home_story_title"))
+        // v3.5 r15-0: one count, by recording (12 recordings today, the story tells 3 summed-up calls).
+        assertEquals("녹음 12개 중 정리 3개",text(a,"home_story_title"))
         assertEquals("아침에 철강 김 과장과 철근 단가를 다시 보기로 했어요. 오후에는 타설 일정을 금요일로 옮겼어요.",text(a,"home_story_text"))
         val body=tag(a,"home_story_text") as TextView
-        assertTrue(body.textSize/a.resources.displayMetrics.scaledDensity>=CallUi.BODY);assertEquals(4,body.maxLines)
+        assertTrue(body.textSize/a.resources.displayMetrics.scaledDensity>=CallUi.BODY);assertEquals(HomeScreen.STORY_LINES,body.maxLines)
         val dm=a.resources.displayMetrics;val w=dm.widthPixels;val h=dm.heightPixels
         val root=a.window.decorView
         root.measure(View.MeasureSpec.makeMeasureSpec(w,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(h,View.MeasureSpec.EXACTLY));root.layout(0,0,w,h)

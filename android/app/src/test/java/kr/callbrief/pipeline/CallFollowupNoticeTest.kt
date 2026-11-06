@@ -66,7 +66,8 @@ class CallFollowupNoticeTest:ProtectedTextHostTestBase() {
     /** A known counterpart: an earlier call made the contact card. */
     private fun knownCounterpart() { call("rec0",t0-86_400_000L,"지난주 도면을 받았어요");ContactCards.flushPending(store()) }
 
-    private fun notices()=manager.activeNotifications.filter { it.notification.channelId==CallFollowupNotice.CHANNEL }
+    /** The calls' notices (v3.5 r15-0: the bundle's summary, which comes from two notices on, is not one of them). */
+    private fun notices()=manager.activeNotifications.filter { it.notification.channelId==CallFollowupNotice.CHANNEL && it.id!=CallFollowupNotice.SUMMARY_ID }
     private fun only()=notices().single()
     private fun title(n:Notification)=n.extras.getCharSequence(Notification.EXTRA_TITLE).toString()
     private fun text(n:Notification)=n.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
@@ -85,7 +86,7 @@ class CallFollowupNoticeTest:ProtectedTextHostTestBase() {
         val first=only()
         assertEquals(CallFollowupNotice.TAG,first.tag);assertEquals(CallFollowupNotice.tempId(key,t0+120_000),first.id)
         assertEquals("김민수 대표와 통화를 정리하고 있어요",title(first.notification))
-        assertEquals("끝나면 여기에 요약이 와요",text(first.notification))
+        assertEquals(CallFollowupNotice.WORKING_WORDS,text(first.notification))
         assertEquals("통화 정리 중",first.notification.publicVersion.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
         assertNull("no name on the lock screen",first.notification.publicVersion.extras.getCharSequence(Notification.EXTRA_TEXT))
         assertEquals("메모 남기기",first.notification.actions.single().title.toString())
@@ -134,7 +135,7 @@ class CallFollowupNoticeTest:ProtectedTextHostTestBase() {
         CallFollowupNotice.onCallEnded(app,end)
         val id=only().id
         CallFollowupNotice.sweep(app,t0+120_000+CallFollowupNotice.LATE_MS-60_000)
-        assertEquals("끝나면 여기에 요약이 와요",text(only().notification))
+        assertEquals(CallFollowupNotice.WORKING_WORDS,text(only().notification))
         CallFollowupNotice.sweep(app,t0+120_000+CallFollowupNotice.LATE_MS+1)
         assertEquals(id,only().id)
         // v3.1 (DESIGN_V4 2.1-3): no record yet, so no promise of the evening report.

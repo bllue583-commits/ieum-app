@@ -268,6 +268,9 @@ internal object CallFollowupNotice {
         val batchim=last.code in 0xAC00..0xD7A3 && (last.code-0xAC00)%28!=0
         return who+if(batchim) "과" else "와"
     }
+    /** v3.5 r15-0: what the notice says while the call is being sorted out, and once that is late (with its record). */
+    const val WORKING_WORDS="정리하고 있어요, 끝나면 통화 목록에 보여요"
+    const val LATE_WORDS="정리가 늦어지고 있어요, 끝나면 통화 목록에 보여요"
     /** Title, short text and expanded text of the notice in its state. */
     internal data class Words(val title:String,val text:String,val big:String)
     internal fun words(e:Entry,record:CallRecord?):Words {
@@ -279,12 +282,12 @@ internal object CallFollowupNotice {
                 val task=when(made.size) { 0 -> "새 체크할 일은 없어요";1 -> "체크할 일: ${made[0].title}";else -> "체크할 일: ${made[0].title} 외 ${made.size-1}개" }
                 Words("${withParticle(e.who)} 통화가 정리됐어요",first,"$first\n$task$memo")
             }
-            // v3.1 (2.1-3): the evening report is promised only for a call that has its record (only then is it in that report).
-            LATE -> if(e.record!=null) Words("${withParticle(e.who)} 통화","정리가 늦어지고 있어요, 저녁 보고에 넣어 드릴게요","정리가 늦어지고 있어요, 저녁 보고에 넣어 드릴게요$memo")
+            // v3.5 r15-0: facts only, no promise of a report or a time. A call with its record shows up in the call list once done.
+            LATE -> if(e.record!=null) Words("${withParticle(e.who)} 통화",LATE_WORDS,"$LATE_WORDS$memo")
                 else Words("${withParticle(e.who)} 통화","정리가 늦어지고 있어요","정리가 늦어지고 있어요$memo")
             NO_RECORDING -> Words("${withParticle(e.who)} 통화","이 통화는 녹음이 없어 정리할 수 없어요",
                 "이 통화는 녹음이 없어 정리할 수 없어요. 메모를 남기면 체크할 일에 넣어 드려요$memo")
-            else -> Words("${withParticle(e.who)} 통화를 정리하고 있어요","끝나면 여기에 요약이 와요","끝나면 여기에 요약이 와요$memo")
+            else -> Words("${withParticle(e.who)} 통화를 정리하고 있어요",WORKING_WORDS,"$WORKING_WORDS$memo")
         }
     }
 
@@ -312,11 +315,45 @@ internal object CallFollowupNotice {
             .setVisibility(Notification.VISIBILITY_PRIVATE)
             // Lock screen: no name, no summary; only what state the call is in (v3.4, 4.2-4 다).
             .setPublicVersion(Notification.Builder(context,CHANNEL).setSmallIcon(R.drawable.ic_stat_ieum).setContentTitle(publicTitle(e.state)).build())
+            .setGroup(GROUP)
             .addAction(action).build()
         manager.notify(TAG,e.id,n)
+        summary(context,manager)
         return true
     }
-    private fun cancel(context:Context,id:Int) { runCatching { context.getSystemService(NotificationManager::class.java)?.cancel(TAG,id) } }
+    private fun cancel(context:Context,id:Int) { runCatching { context.getSystemService(NotificationManager::class.java)?.let { m -> m.cancel(TAG,id);summary(context,m) } } }
+
+    // ---- v3.5 r15-0: one bundle for the day's notices ----
+    /** The group of every follow-up notice, so 20 to 30 calls a day fold into one entry with a summary. */
+    const val GROUP="ieum.calls.followup.group"
+    /** The summary's id under [TAG] (no call's [idFor] is this, by the "followup" prefix of theirs). */
+    const val SUMMARY_ID=0x1EE0
+    /** From this many notices the bundle gets its summary (one notice stands by itself). */
+    const val SUMMARY_FROM=2
+    /** The summary's title and text for the shown notices' states, e.g. "통화 알림 5개" and "정리됨 3건, 정리 중 2건". */
+    internal fun summaryWords(states:List<String>):Pair<String,String> {
+        val done=states.count { it==DONE };val late=states.count { it==LATE || it==NO_RECORDING };val working=states.size-done-late
+        val parts=listOfNotNull("정리됨 ${done}건".takeIf { done>0 },"정리 중 ${working}건".takeIf { working>0 },"확인할 통화 ${late}건".takeIf { late>0 })
+        return "통화 알림 ${states.size}개" to parts.joinToString(", ")
+    }
+    /** Posts, updates or takes away the bundle's summary after a notice changed. Quiet: the notices themselves alert (once). */
+    private fun summary(context:Context,manager:NotificationManager) {
+        runCatching {
+            val shown=manager.activeNotifications.filter { it.tag==TAG && it.id!=SUMMARY_ID }.map { it.id }.toSet()
+            if(shown.size<SUMMARY_FROM) { manager.cancel(TAG,SUMMARY_ID);return }
+            val states=entries(context).filter { it.id in shown }.map { it.state }.ifEmpty { shown.map { WORKING } }
+            val (title,text)=summaryWords(states)
+            val open=MainActivity.intent(context,Screen.CALLS,dayMs=System.currentTimeMillis())
+                .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            val content=PendingIntent.getActivity(context,SUMMARY_ID,open,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            manager.notify(TAG,SUMMARY_ID,Notification.Builder(context,CHANNEL).setSmallIcon(R.drawable.ic_stat_ieum)
+                .setContentTitle(title).setContentText(text).setContentIntent(content).setAutoCancel(false).setLocalOnly(true)
+                .setGroup(GROUP).setGroupSummary(true).setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN).setOnlyAlertOnce(true)
+                .setCategory(Notification.CATEGORY_STATUS).setVisibility(Notification.VISIBILITY_PRIVATE)
+                .setPublicVersion(Notification.Builder(context,CHANNEL).setSmallIcon(R.drawable.ic_stat_ieum).setContentTitle(title).build())
+                .build())
+        }.onFailure { Log.w(LOG,"summary not shown: ${it.javaClass.simpleName}") }
+    }
     /** The locked screen's words of a notice in [state]: "통화 정리됨", "확인할 통화" (late, no recording) or "통화 정리 중". */
     internal fun publicTitle(state:String)=when(state) { DONE -> "통화 정리됨";LATE,NO_RECORDING -> "확인할 통화";else -> "통화 정리 중" }
 

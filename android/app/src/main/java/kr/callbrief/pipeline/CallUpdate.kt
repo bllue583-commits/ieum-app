@@ -338,7 +338,7 @@ internal object CallUpdate {
     }
     /** Installed (or nothing newer): nothing waits any more; the session and the "새 버전" notification are over. */
     internal fun settleInstalled(c:Context) {
-        prefs(c).edit().remove(SESSION).remove(SESSION_CODE).remove(PROGRESS).apply()
+        prefs(c).edit().remove(SESSION).remove(SESSION_CODE).remove(SESSION_MS).remove(WAIT_SINCE).remove(PROGRESS).apply()
         runCatching { if(settings(c).snapshot().has(PipelineSettingsKeys.UPDATE_PROGRESS)) settings(c).update { it.remove(PipelineSettingsKeys.UPDATE_PROGRESS) } }
         runCatching { c.getSystemService(NotificationManager::class.java)?.cancel(NOTIFY_TAG,NOTIFY_ID) }
         fun clear(s:JSONObject)=s.optInt(PipelineSettingsKeys.UPDATE_AVAILABLE_CODE,0)==0 && s.optLong(PipelineSettingsKeys.UPDATE_READY_SINCE_MS,0)==0L
@@ -360,7 +360,7 @@ internal object CallUpdate {
     }
     fun sessionInProgress(c:Context)=sessionId(c)!=0
     /** That session ended. A result without an id leaves the record alone: [sessionId] drops it once the system forgets the session. */
-    internal fun sessionDone(c:Context,id:Int) { val p=prefs(c);if(id!=0 && p.getInt(SESSION,0)==id) p.edit().remove(SESSION).remove(SESSION_CODE).apply() }
+    internal fun sessionDone(c:Context,id:Int) { val p=prefs(c);if(id!=0 && p.getInt(SESSION,0)==id) p.edit().remove(SESSION).remove(SESSION_CODE).remove(SESSION_MS).remove(WAIT_SINCE).apply() }
     /** Commits the verified file to a PackageInstaller session that asks for no user action (API 31+). False when it cannot be
      * tried here (older Android, installs from this app not allowed yet, the file does not match, or an error now kept in
      * [PipelineSettingsKeys.LAST_UPDATE_ERROR]): then the notification and the home banner stay the way in. */
@@ -368,8 +368,10 @@ internal object CallUpdate {
         if(Build.VERSION.SDK_INT<31) return false
         val r=ready(c) ?: return false
         sessionId(c).takeIf { it!=0 }?.let { old ->
-            if(prefs(c).getInt(SESSION_CODE,0)==r.versionCode) return true // one at a time: its result is still coming
-            runCatching { c.packageManager.packageInstaller.abandonSession(old) };sessionDone(c,old) // an older version's session gives way
+            // One at a time: its result is still coming. v3.5 r15-0 (11/6 on the wife's phone): a session left waiting for the tap
+            // for over a day (its notification swiped away) is given up and committed again, so Android shows a new one.
+            if(prefs(c).getInt(SESSION_CODE,0)==r.versionCode && !confirmOverdue(c)) return true
+            runCatching { c.packageManager.packageInstaller.abandonSession(old) };sessionDone(c,old) // gives way to a new session
         }
         if(!c.packageManager.canRequestPackageInstalls()) { saveError(c,INSTALL_SOURCE_NOT_ALLOWED);return false } // setup step, notification
         if(errorCode(storedErrorText(c)) in setOf(INSTALL_SOURCE_NOT_ALLOWED,USER_ACTION_REQUIRED)) saveError(c,null) // a new try: that is over
@@ -378,7 +380,26 @@ internal object CallUpdate {
         catch(e:Exception) { saveError(c,errorText(PackageInstaller.STATUS_FAILURE,e.javaClass.simpleName+" "+(e.message ?: "")));false }
     }
     /** Android asked for a tap on a background install: kept for the heartbeat (watchdog) and the screens' "설치 확인을 기다리는 중". */
-    internal fun pendingUserAction(c:Context) { progress(c,P_WAITING_CONFIRM,ready(c)?.versionCode ?: 0);saveError(c,USER_ACTION_REQUIRED) }
+    internal fun pendingUserAction(c:Context) {
+        // v3.5 r15-0: since when this session waits for the tap (kept from its first answer; a new session starts a new wait).
+        val p=prefs(c);if(p.getLong(WAIT_SINCE,0)<=0) p.edit().putLong(WAIT_SINCE,clock()).apply()
+        progress(c,P_WAITING_CONFIRM,ready(c)?.versionCode ?: 0);saveError(c,USER_ACTION_REQUIRED)
+    }
+
+    // ---- v3.5 r15-0: the confirmation asked again, and the reports' line ----
+    /** A background session waiting this long for the user's tap is given up and committed again ([installInBackground]). */
+    const val CONFIRM_AGAIN_MS=24*3_600_000L
+    private const val WAIT_SINCE="wait_since_ms";private const val SESSION_MS="session_ms"
+    /** The session's wait for the tap (or, when Android never answered, the session itself) is older than [CONFIRM_AGAIN_MS]. */
+    internal fun confirmOverdue(c:Context,now:Long=clock()):Boolean {
+        val p=prefs(c);val since=p.getLong(WAIT_SINCE,0).takeIf { it>0 } ?: p.getLong(SESSION_MS,0).takeIf { it>0 }
+        // A session an older build committed carries no time: its day starts now.
+        if(since==null) { p.edit().putLong(SESSION_MS,now).apply();return false }
+        return now-since>CONFIRM_AGAIN_MS
+    }
+    /** A downloaded new version still waits to be installed: the morning report and the evening self-check say so in one line
+     * ([CallDigestText.UPDATE_LINE]); the home banner keeps its own words. */
+    fun installWaiting(c:Context):Boolean = runCatching { ready(c.applicationContext)!=null }.getOrDefault(false)
     /** Writes [f] into a new session and commits it; the result comes to [UpdateStatusReceiver]. The id is kept until it ends. */
     private fun commit(c:Context,f:File,background:Boolean):Int {
         val app=c.applicationContext
@@ -394,7 +415,7 @@ internal object CallUpdate {
                 s.openWrite("ieum",0,f.length()).use { out -> f.inputStream().use { it.copyTo(out) };s.fsync(out) }
                 val status=PendingIntent.getBroadcast(app,id,Intent(app,UpdateStatusReceiver::class.java).putExtra(EXTRA_BACKGROUND,background),
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
-                prefs(app).edit().putInt(SESSION,id).putInt(SESSION_CODE,ready(app)?.versionCode ?: 0).commit()
+                prefs(app).edit().putInt(SESSION,id).putInt(SESSION_CODE,ready(app)?.versionCode ?: 0).putLong(SESSION_MS,clock()).remove(WAIT_SINCE).commit()
                 s.commit(status.intentSender)
             }
         } catch(e:Exception) { runCatching { installer.abandonSession(id) };sessionDone(app,id);throw e }

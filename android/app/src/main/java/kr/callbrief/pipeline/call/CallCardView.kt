@@ -26,7 +26,7 @@ import kotlin.math.abs
  *  - open: a bar to drag it with [접기] [닫기] on its right; then the first line (20 bold, at most two lines: the one promise or
  *    piece of work with this person that matters now, picked by [Content.of]); "김민수 대표, 탄탄이엔씨, 3일 전" (18); one more
  *    "체크할 일" with "외 n개"; one "진행 중인 일". Five lines at most.
- *  - folded: one strip, "김민수 대표, 견적서 보내기, 금요일까지"; a tap opens it again, a drag moves it.
+ *  - folded: one strip, "김민수 대표, 견적서 보내기, 어제 요청"; a tap opens it again, a drag moves it.
  * Never a phone number, never the transcript (amounts, dates and counts stay). Taller than [maxHeightPx] it leaves out the
  * lowest rows (the ongoing work, then the check item), so nothing is ever cut in half. */
 @SuppressLint("ViewConstructor")
@@ -97,22 +97,27 @@ internal class CallCardView(context:Context):LinearLayout(context) {
             /** The thin line: "3일 전 통화, 30일간 5번" (the call log only). */
             fun thinLine(lastMs:Long?,calls30:Int,now:Long=System.currentTimeMillis()):String =
                 listOfNotNull(ago(lastMs,now)?.let { "$it 통화" },if(calls30>0) "30일간 ${calls30}번" else null).joinToString(", ").ifEmpty { "정리된 통화가 아직 없어요" }
-            /** When an item is due, as a person says it: "오늘까지", "내일까지", "금요일까지", "다음 주 화요일까지", "2일 지났어요";
-             * "11월 20일까지" further out. */
-            fun dueWords(dueMs:Long,now:Long=System.currentTimeMillis()):String {
-                val today=CallRecordStore.kstDay(now);val due=CallRecordStore.kstDay(dueMs)
-                val days=ChronoUnit.DAYS.between(today,due)
-                val weekday=WEEKDAYS[due.dayOfWeek.value-1]
-                return when {
-                    days<0 -> "${-days}일 지났어요"
-                    days==0L -> "오늘까지"
-                    days==1L -> "내일까지"
-                    days<7 -> "${weekday}까지"
-                    days==7L -> "다음 주 ${weekday}까지"
-                    else -> "${due.monthValue}월 ${due.dayOfMonth}일까지"
-                }
+            /** v3.5 r15-0 (user 11/6: no deadline words, no "지났어요"): where an item stands, from what came after it. A later
+             * text, mail or call that left its note on the item says it ("11/5 메일: 끝난 것으로 보여요" -> "메일에서 끝난 것으로
+             * 보여요"); an item the analysis thinks finished asks "끝났는지 확인"; otherwise the day it was asked for ("오늘 요청",
+             * "어제 요청", "3일 전 요청"). */
+            fun statusWords(t:ContactCard.Task,now:Long=System.currentTimeMillis()):String {
+                if(t.status=="needs_confirmation") return "끝났는지 확인"
+                noteWords(t.aiNote)?.takeIf { t.checkReason==null }?.let { return it }
+                return requestedWords(t.requestedMs,now)
             }
-            private val WEEKDAYS=listOf("월요일","화요일","수요일","목요일","금요일","토요일","일요일")
+            /** "11/5 메일: 끝난 것으로 보여요" -> "메일에서 끝난 것으로 보여요"; the part after a comma (the changed words) is left out. */
+            internal fun noteWords(note:String?):String? {
+                val m=Regex("^\\s*\\d{1,2}/\\d{1,2}\\s+(\\S+):\\s*(.+)$").find(note?.trim() ?: return null) ?: return null
+                val what=m.groupValues[2].substringBefore(',').trim().takeIf { it.isNotEmpty() } ?: return null
+                return "${m.groupValues[1]}에서 $what"
+            }
+            /** "오늘 요청", "어제 요청", "3일 전 요청"; "요청한 일" without a time. */
+            fun requestedWords(ms:Long,now:Long=System.currentTimeMillis()):String {
+                if(ms<=0) return "요청한 일"
+                val days=ChronoUnit.DAYS.between(CallRecordStore.kstDay(ms),CallRecordStore.kstDay(now))
+                return when { days<=0 -> "오늘 요청";days==1L -> "어제 요청";else -> "${days}일 전 요청" }
+            }
             /** A phone number written into the words, also with a particle stuck to it ("010-2222-3333로"). */
             private val PHONE=Regex("(?<![0-9])(?:\\+?82[- ]?)?0[0-9]{1,2}[- .]?[0-9]{3,4}[- .]?[0-9]{4}(?![0-9])")
             private fun safe(s:String?)=s?.let { PrivacyRules.removePhoneTokens(it).replace(PHONE,"").replace(Regex("\\s+")," ").trim() }?.takeIf { it.isNotEmpty() }
@@ -126,11 +131,12 @@ internal class CallCardView(context:Context):LinearLayout(context) {
             /** The open items in the order the card names them: by rank, then the earlier due date, then the latest request. */
             internal fun ordered(tasks:List<ContactCard.Task>,now:Long):List<ContactCard.Task> =tasks.filter { safe(it.title)!=null }
                 .sortedWith(compareBy<ContactCard.Task>({ rank(it,now) },{ it.dueMs ?: Long.MAX_VALUE }).thenByDescending { it.requestedMs })
-            /** An item's words: the title and, when it has one, when it is due ("견적서 보내기, 금요일까지"), within [max]. */
+            /** An item's words: the title and where it stands ([statusWords]: "견적서 보내기, 메일에서 끝난 것으로 보여요",
+             * "견적서 보내기, 어제 요청"), within [max]. v3.5 r15-0: never a deadline. */
             private fun taskWords(t:ContactCard.Task,now:Long,max:Int):String {
                 val title=safe(CallUi.clean(t.title))!!
-                val due=t.dueMs?.let { dueWords(it,now) } ?: return cut(title,max)
-                return cut(title,(max-due.length-2).coerceAtLeast(LINE_CHARS/2))+", "+due
+                val status=statusWords(t,now)
+                return cut(title,(max-status.length-2).coerceAtLeast(LINE_CHARS/2))+", "+status
             }
 
             /** The card of [card] at [now] (KST), 4.2-3. The first line is, in this order: ① an open item due within 7 days or

@@ -33,12 +33,14 @@ internal object SelfCheckNotices {
         val updateStuck:Boolean=false,
         /** v3.4 (DESIGN_V4 4.2-5): scheduled analysis runs missed since the routine last reported ([StatusLights.routineMissed])
          * and when that report ended (0: never). */
-        val routineMissed:Int=0,val routineEndedMs:Long=0)
+        val routineMissed:Int=0,val routineEndedMs:Long=0,
+        /** v3.5 r15-0: a downloaded new version waits to be installed ([CallUpdate.installWaiting]), for less than a day or more. */
+        val updateWaiting:Boolean=false)
 
     const val TRANSCRIBE_LATE="transcribe_late";const val MODEL_FAILED="model_failed";const val FOLDER_LOST="folder_lost"
     const val NO_RESULT="no_result";const val STORAGE_FULL="storage_full"
     const val RECORDING_GAP="recording_gap";const val UPDATE_STUCK="update_stuck"
-    const val ROUTINE_LATE="routine_late"
+    const val ROUTINE_LATE="routine_late";const val UPDATE_WAITING="update_waiting"
     /** Same thresholds as the status lights and the watchdog (B2, B5). */
     const val TRANSCRIBE_LATE_MS=StatusLights.TRANSCRIBE_LATE_MS
     const val NO_RESULT_MS=StatusLights.NO_RESULT_MS
@@ -73,6 +75,9 @@ internal object SelfCheckNotices {
             add(Notice(ROUTINE_LATE,"분석이 ${StatusLights.hoursSince(i.routineEndedMs,i.now)}시간 안 돌았어요","통화 정리 결과가 늦게 올 수 있어요. 관리하는 분께 이 알림을 보여 주세요."))
         if(i.updateStuck)
             add(Notice(UPDATE_STUCK,"새 버전이 하루 넘게 설치되지 않았어요","이음 설정의 앱 버전에서 지금 업데이트를 눌러 주세요."))
+        // v3.5 r15-0: the same line as the morning report while it waits (the day-old notice above says it more strongly).
+        else if(i.updateWaiting)
+            add(Notice(UPDATE_WAITING,CallDigestText.UPDATE_LINE,"알림이나 이음 홈의 지금 업데이트를 눌러 설치를 마쳐 주세요."))
     }
     /** The self-check notice of a recording-gap verdict (spoken codes only). */
     fun gapNotice(v:RecordingGap.Verdict):Notice? = when(v.code) {

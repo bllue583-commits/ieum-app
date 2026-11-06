@@ -46,10 +46,30 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
                 // Encrypted originals deleted by GeneralLocalStore.pruneVault (#39); a recording whose blob is gone is not offered again.
                 db.execute("CREATE TABLE IF NOT EXISTS vault_pruned(ciphertext_sha256 TEXT PRIMARY KEY,at_ms INTEGER NOT NULL)")
                 // Recordings from before 10/1 left queued by an older build (r7-1): one statement, whatever the offer pass does.
-                db.execute(SKIP_BEFORE_START_SQL,now(),FirstPass.FROM_MS);null
+                db.execute(SKIP_BEFORE_START_SQL,now(),FirstPass.FROM_MS)
+                // v3.5 r15-0: the build (versionCode) a row last failed under, and the build that last gave a FAILED row another try.
+                for(col in listOf("failed_build","retried_build")) if(db.query("PRAGMA table_info(call_transcription_jobs)").none { it["name"]==col }) db.execute("ALTER TABLE call_transcription_jobs ADD COLUMN $col INTEGER")
+                // Rows that failed under an older build (or before v3.5) go back to the queue once for this build.
+                requeueFailedOnce(buildCode());null
             }
         } catch(e:Exception){db.close();throw e}
     }
+
+    /** v3.5 r15-0 (DESIGN_V5 2, r15-0): FAILED rows go back to the queue once for each new build (a later build may read what an
+     * older one could not), with their attempts at 0. A row that fails under build B is marked with it (failed_build), and a row
+     * this build revived is marked too (retried_build): either way the same build never revives it again. It runs each time the
+     * store opens, so the app start or the day's first transcription run does it; after that it finds nothing.
+     * Returns how many rows were revived now. */
+    internal fun requeueFailedOnce(build:Int):Int {
+        if(build<=0) return 0
+        val where="state='FAILED' AND coalesce(failed_build,0)!=CAST(? AS INTEGER) AND coalesce(retried_build,0)!=CAST(? AS INTEGER)"
+        val n=db.query("SELECT count(*) AS n FROM call_transcription_jobs WHERE $where",build,build).single()["n"].let { (it as Number).toInt() }
+        if(n>0) db.execute("UPDATE call_transcription_jobs SET state='QUEUED',reason='$REQUEUED',attempts=0,updated_ms=?,queued_ms=?,retried_build=CAST(? AS INTEGER) WHERE $where",
+            now(),now(),build,build,build)
+        return n
+    }
+    /** Recordings whose text failed (FAILED now): the "글자로 바꾸기" light. */
+    fun failedCount():Int = db.query("SELECT count(*) AS n FROM call_transcription_jobs WHERE state='FAILED'").single()["n"].let { (it as Number).toInt() }
 
     // The call time comes from the recorder's filename (Samsung: "..._yyMMdd_HHmmss"); intake keeps it on local_files.
     private val select="""SELECT r.recording_id,r.source_version,v.audio_sha256,r.display_name,r.mime_type,
@@ -111,7 +131,7 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         val n=db.transaction {
             val limit=now()-staleMs
             val n=db.query("SELECT count(*) AS n FROM call_transcription_jobs WHERE state='RUNNING' AND attempts>=? AND updated_ms<?",maxAttempts,limit).single()["n"].let { (it as Number).toInt() }
-            db.execute("UPDATE call_transcription_jobs SET state='FAILED',reason='INTERRUPTED',updated_ms=? WHERE state='RUNNING' AND attempts>=? AND updated_ms<?",now(),maxAttempts,limit)
+            db.execute("UPDATE call_transcription_jobs SET state='FAILED',reason='INTERRUPTED',updated_ms=?,failed_build=CAST(? AS INTEGER) WHERE state='RUNNING' AND attempts>=? AND updated_ms<?",now(),buildCode(),maxAttempts,limit)
             db.execute("UPDATE call_transcription_jobs SET state='QUEUED',reason='INTERRUPTED',updated_ms=? WHERE state='RUNNING' AND updated_ms<?",now(),limit);n
         }
         if(n>0) failed(n)
@@ -188,8 +208,8 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
     }
 
     fun finish(k:Key,state:String,reason:String,refundAttempt:Boolean=false) {
-        db.execute("UPDATE call_transcription_jobs SET state=?,reason=?,attempts=attempts-?,updated_ms=? WHERE recording_id=? AND source_version=? AND audio_sha=?",
-            state,reason,if(refundAttempt)1 else 0,now(),k.recordingId,k.sourceVersion,k.audioSha)
+        db.execute("UPDATE call_transcription_jobs SET state=?,reason=?,attempts=attempts-?,updated_ms=?,failed_build=CASE WHEN ?='FAILED' THEN CAST(? AS INTEGER) ELSE failed_build END WHERE recording_id=? AND source_version=? AND audio_sha=?",
+            state,reason,if(refundAttempt)1 else 0,now(),state,buildCode(),k.recordingId,k.sourceVersion,k.audioSha)
         if(state=="FAILED") failed(1)
     }
 
@@ -207,15 +227,33 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         val records=db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='call_records'").isNotEmpty()
         val recordLen=if(records) "(SELECT MAX(c.duration_ms) FROM call_records c WHERE c.recording_id=j.recording_id AND c.duration_ms>0)" else "NULL"
         fun n(v:Any?)=(v as? Number)?.toLong()
-        val rows=db.query("""SELECT j.state,j.reason,j.updated_ms,coalesce(j.queued_ms,j.updated_ms) AS q,coalesce(j.audio_ms,$recordLen) AS len,r.byte_count AS b,
+        val build=buildCode().toLong()
+        val rows=db.query("""SELECT j.state,j.reason,j.updated_ms,coalesce(j.queued_ms,j.updated_ms) AS q,coalesce(j.audio_ms,$recordLen) AS len,r.byte_count AS b,j.retried_build AS rb,
             coalesce(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms) AS at
             FROM call_transcription_jobs j LEFT JOIN recordings r ON r.recording_id=j.recording_id LEFT JOIN local_files l ON l.recording_id=j.recording_id""")
-            .map { TranscriptionStats.Row(it["state"].toString(),it["reason"].toString(),n(it["q"]),n(it["updated_ms"]) ?: 0,n(it["len"]),n(it["b"]),n(it["at"])) }
+            .map { TranscriptionStats.Row(it["state"].toString(),it["reason"].toString(),n(it["q"]),n(it["updated_ms"]) ?: 0,n(it["len"]),n(it["b"]),n(it["at"]),n(it["rb"])==build) }
         return TranscriptionStats.of(rows,nowMs)
     }
 
     override fun close()=db.close()
     companion object {
+        /** The running build's versionCode for [requeueFailedOnce] (replaceable in tests). */
+        @Volatile internal var buildCode:()->Int={ kr.callbrief.BuildConfig.VERSION_CODE }
+        /** The reason of a FAILED row sent back to the queue by a new build. */
+        const val REQUEUED="REQUEUED"
+        /** v3.5 r15-0 (user 11/6: the numbers count recordings): recordings of the KST day [day] that have no call record yet, the
+         * ones still waiting for their text (QUEUED, RUNNING) and the failed ones. With the day's call records they make "녹음 n개"
+         * of home and the evening report. [query] runs on the call database (the process store's [CallRecordStore.cardRows] does);
+         * 0 when the job table is not there yet. */
+        fun withoutRecord(day:java.time.LocalDate,query:(String,Array<Any?>)->List<Map<String,Any?>>):Int = runCatching {
+            val from=day.atStartOfDay(CallRecordStore.KST).toInstant().toEpochMilli();val to=day.plusDays(1).atStartOfDay(CallRecordStore.KST).toInstant().toEpochMilli()
+            val at="coalesce(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)"
+            val records=query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='call_records'",emptyArray()).isNotEmpty()
+            val sql="SELECT count(DISTINCT j.recording_id) AS n FROM call_transcription_jobs j JOIN recordings r ON r.recording_id=j.recording_id AND r.source_version=j.source_version "+
+                "LEFT JOIN local_files l ON l.recording_id=j.recording_id WHERE j.state IN('QUEUED','RUNNING','FAILED') AND $at>=CAST(? AS INTEGER) AND $at<CAST(? AS INTEGER)"+
+                (if(records) " AND NOT EXISTS(SELECT 1 FROM call_records c WHERE c.recording_id=j.recording_id)" else "")
+            (query(sql,arrayOf(from,to)).single()["n"] as Number).toInt()
+        }.getOrDefault(0)
         /** r12-8 A2: a recording that has waited this long in the queue goes before new calls. */
         const val WAITED_MS=24*3_600_000L
         /** r12-8 A4: the reason of a job whose piece ran into the native deadline (the piece is halved, the attempt given back). */
@@ -255,7 +293,8 @@ internal object TranscriptionStats {
     /** Calls longer than this are the "long calls" of A8 (DESIGN_V4 2-3: none over 100 s had ever reached the analysis). */
     const val LONG_CALL_MS=100_000L
     const val WINDOW_MS=48*3_600_000L
-    data class Row(val state:String,val reason:String,val queuedMs:Long?,val updatedMs:Long,val lengthMs:Long?,val bytes:Long?,val callMs:Long?)
+    /** [requeued]: v3.5 r15-0, the running build gave this row another try ([CallTranscriptionStore.requeueFailedOnce]). */
+    data class Row(val state:String,val reason:String,val queuedMs:Long?,val updatedMs:Long,val lengthMs:Long?,val bytes:Long?,val callMs:Long?,val requeued:Boolean=false)
     /** Length bucket: lt1m, m1to3, m3to10, m10plus, unknown. */
     fun bucket(ms:Long?)=when { ms==null || ms<=0 -> "unknown";ms<60_000 -> "lt1m";ms<180_000 -> "m1to3";ms<600_000 -> "m3to10";else -> "m10plus" }
     private val BUCKETS=listOf("lt1m","m1to3","m3to10","m10plus","unknown")
@@ -275,6 +314,8 @@ internal object TranscriptionStats {
         val longDone=long.count(::finished)
         val o=org.json.JSONObject().put("failReasons",fails).put("queuedByLen",buckets(waiting)).put("doneByLen48h",buckets(done48))
             .put("long48h",org.json.JSONObject().put("total",long.size).put("done",longDone).apply { if(long.isNotEmpty()) put("ratePct",longDone*100/long.size) })
+            // v3.5 r15-0: rows the running build sent back to the queue once (counted on the rows, no settings key).
+            .put("requeuedFailed",rows.count { it.requeued })
         waiting.mapNotNull { it.queuedMs }.minOrNull()?.let { o.put("oldestWaitMin",((now-it)/60_000).coerceAtLeast(0)) }
         return o
     }

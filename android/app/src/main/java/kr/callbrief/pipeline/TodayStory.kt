@@ -26,7 +26,25 @@ internal object TodayStory {
         val n=maxOf(story?.optInt("calls",0) ?: 0,summarized(calls))
         if(n==0) return null
         val text=story?.optString("text")?.trim()?.takeIf { it.isNotEmpty() } ?: fallback(calls)
-        return Shown(n,clean(text))
+        return Shown(n,clip(clean(text)))
+    }
+    // ---- v3.5 r15-0 ----
+    /** "녹음 5개 중 정리 3개" (user 11/6: the numbers count recordings): the story's heading, home's numbers and the evening report's
+     * title say this one count. [recordings]: today's recordings (call records and recordings still without one); never fewer
+     * than [summarized]. */
+    fun countLine(recordings:Int,summarized:Int)="녹음 ${maxOf(recordings,summarized)}개 중 정리 ${summarized}개"
+    /** The card shows at most this many letters (about seven lines at reading size): whole sentences only, so the words never
+     * stop in the middle of a sentence (the task may write 200 characters, hourly.md 5-1). */
+    const val MAX_CHARS=120
+    /** [t] cut to whole sentences within [max] letters; a first sentence longer than that is cut at its last space before [max]. */
+    fun clip(t:String,max:Int=MAX_CHARS):String {
+        val s=t.trim();if(s.length<=max) return s
+        val sentences=Regex("(?<=[.!?])\\s+").split(s)
+        val out=StringBuilder()
+        for(x in sentences) { val next=if(out.isEmpty()) x else "$out $x";if(next.length>max) break;out.clear();out.append(next) }
+        if(out.isNotEmpty()) return out.toString()
+        val at=s.lastIndexOf(' ',max).takeIf { it>max/2 } ?: max
+        return s.substring(0,at).trim().trimEnd(',')
     }
     /** The screen rules hold for words that come from the task too: no middle dot (a comma instead) and no ellipsis. */
     fun clean(t:String)=t.replace(Regex("\\s*[\u00B7\u30FB\uFF65]\\s*"),", ").replace("\u2026","").replace("...","").trim()

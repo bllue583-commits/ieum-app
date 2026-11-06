@@ -52,7 +52,10 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
                                  /** Bytes of the model got so far while it comes (-1: unknown), for "받는 중 42% (240MB / 574MB)". */
                                  val modelBytes:Long=-1,
                                  /** v3.2 (DESIGN_V4 2-1): "오늘 통화 이야기" at the top of home; null: no call summarized today yet. */
-                                 val story:TodayStory.Shown?=null)
+                                 val story:TodayStory.Shown?=null,
+                                 /** v3.5 r15-0 (user 11/6: numbers by recording): today's business calls with their summary; [calls] is
+                                  * today's recordings (call records and recordings still waiting for their text or failed). */
+                                 val summarized:Int=0)
     /** [audioMinutesLeft]: how long the recordings still to transcribe are, together. [lowBattery]: not charging and under half
      * the battery, so old recordings wait ([FirstPass.powerOk]). [stalled]: nothing came back for [FirstPass.STALL_MS], so no
      * new batch goes up (design C7). Either one shows the "잠시 쉬고 있어요" line (#20). */
@@ -67,11 +70,13 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
         fun roughLength(minutes:Long):Pair<String,String> = if(minutes<60) "${minutes.coerceAtLeast(1)}" to "분" else "${(minutes+30)/60}" to "시간"
         /** How many to-dos "먼저 볼 체크할 일" shows; the rest are one tap away ("외 n개 보기 ›"). */
         const val FIRST_TASKS=5
+        /** v3.5 r15-0: the story's line guard (its words are already whole sentences within [TodayStory.MAX_CHARS]). */
+        const val STORY_LINES=7
         /** "먼저 볼 체크할 일" (design G3, review #17): the open to-dos asked for today and the ones asking for a check, those first. */
         internal fun firstLook(open:List<OpenItem>,today:java.time.LocalDate)=
             TaskActions.ordered(open).filter { it.status=="needs_confirmation" || (it.createdMs>0 && CallRecordStore.kstDay(it.createdMs)==today) }
         /** The memo list's words when today has calls but none is sorted out yet. */
-        fun sortingWords(calls:Int)="오늘 통화 ${calls}건을 정리하고 있어요"
+        fun sortingWords(calls:Int)="오늘 녹음 ${calls}개를 정리하고 있어요"
 
         // ---- v3.1 (DESIGN_V4 2.5, r12-5) ----
         /** The voice model's size (the pinned file of [PipelineModelManager]). */
@@ -215,8 +220,9 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
         val today=CallUi.today()
         val db=kr.callbrief.IeumApplication.store(storage)
         val (calls,due,newTasks)=Triple(db.day(today),db.dueItems(today),db.newTaskCount(today))
-        // "오늘 통화" counts as the call list does: the records and the call-log lines beside them (review #18).
-        val logs=runCatching { db.dayLog(today) }.getOrDefault(emptyList())
+        // v3.5 r15-0 (user 11/6): home counts recordings, the call records and the recordings still without one; the call log's
+        // own count stays in the heartbeat only.
+        val waitingText=CallTranscriptionStore.withoutRecord(today) { sql,args -> db.cardRows(sql,*args) }
         val companies=runCatching { db.companyCount() }.getOrDefault(0)
         val week=runCatching { (6 downTo 0).map { db.day(today.minusDays(it.toLong())).size } }.getOrDefault(emptyList())
         val open=runCatching { db.openItems() }.getOrDefault(emptyList())
@@ -235,12 +241,12 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
         val story=runCatching { TodayStory.shown(s.optString(PipelineSettingsKeys.STORY),today,calls) }.getOrNull()
         // v3.1 r12-6: 처음 정리 is shown in settings only, so home does not read it (firstPass stays null).
         return Snapshot(folder,consent,
-            model,CallsScreen.callCount(calls,logs),calls.count{it.state!=CallRecordStore.ANALYZED},newTasks,
+            model,calls.count { it.kind=="통화" }+waitingText,calls.count{it.state!=CallRecordStore.ANALYZED},newTasks,
             due.size,due.count{CallUi.overdue(it.due)},s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),notifyAllowed(),batteryFree(),percent,next,companies,
             week,byCompany,memos,
             granted(android.Manifest.permission.READ_SMS),granted(android.Manifest.permission.READ_CALL_LOG),granted(android.Manifest.permission.READ_PHONE_STATE),
             null,first,NotifyAsk.blocked(a),mm.partFile.path,people,
-            CallCardAsk.overlayAllowed(a),true /* v3.4 (4.1-1): no role step */,installStep(a),gapBanner(a)?.text?.takeIf { it.isNotBlank() },updateState(a),partBytes,story)
+            CallCardAsk.overlayAllowed(a),true /* v3.4 (4.1-1): no role step */,installStep(a),gapBanner(a)?.text?.takeIf { it.isNotBlank() },updateState(a),partBytes,story,TodayStory.summarized(calls))
     }
 
     /** While a new version or the voice model is coming, home looks every second whether it now needs the person (the update
@@ -289,13 +295,15 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
             addView(CallUi.text(a,"오늘은 아직 정리된 통화가 없어요",CallUi.BODY,color=CallUi.SUBTLE).apply { tag="home_story_none" }) })
         else body.addView(CallUi.card(a,rail=CallUi.ACCENT).apply {
             tag="home_story";isClickable=true;isFocusable=true;foreground=CallUi.rowRipple();minimumHeight=CallUi.dp(a,56)
-            contentDescription="오늘 통화 ${story.calls}건. ${story.text} 눌러서 오늘 통화 보기"
+            val heading=TodayStory.countLine(s.calls,story.calls)
+            contentDescription="$heading. ${story.text} 눌러서 오늘 통화 보기"
             val head=LinearLayout(a).apply { orientation=LinearLayout.HORIZONTAL;gravity=android.view.Gravity.CENTER_VERTICAL }
-            head.addView(CallUi.text(a,"오늘 통화 ${story.calls}건",CallUi.HEADING,true).apply { tag="home_story_title";fontFeatureSettings="tnum" },LinearLayout.LayoutParams(0,-2,1f))
+            head.addView(CallUi.text(a,heading,CallUi.HEADING,true).apply { tag="home_story_title";fontFeatureSettings="tnum" },LinearLayout.LayoutParams(0,-2,1f))
             head.addView(CallUi.caption(a,"전체 보기 ›",CallUi.SUBTLE,true))
             addView(head)
-            // Up to four lines and never cut: the task keeps it to 200 characters (hourly.md 5-1).
-            addView(CallUi.text(a,story.text,CallUi.BODY).apply { tag="home_story_text";maxLines=4;setPadding(0,CallUi.dp(a,6),0,0) })
+            // v3.5 r15-0: never cut in the middle of a sentence. The words are whole sentences within [TodayStory.MAX_CHARS];
+            // the line limit is only a guard against a very narrow screen.
+            addView(CallUi.text(a,story.text,CallUi.BODY).apply { tag="home_story_text";maxLines=STORY_LINES;setPadding(0,CallUi.dp(a,6),0,0) })
             CallUi.onTap(this) { a.calls.show(CallUi.today(),null);a.switchTo(Screen.CALLS) }
         })
 
@@ -327,11 +335,12 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
         // Today at a glance: three big numbers (only the open to-dos in the accent), then when the next report comes.
         body.addView(CallUi.section(a,"오늘 한눈에"))
         val today=CallUi.card(a).apply { tag="home_today" }
-        today.addView(CallUi.stats(a,listOf(Triple("${s.calls}","오늘 통화",CallUi.INK),Triple("${s.newTasks}","오늘 생긴 체크",CallUi.INK),
-            Triple("$left","남은 체크할 일",CallUi.ACCENT)),listOf("건","개","개")).apply { tag="home_calls" })
+        today.addView(CallUi.stats(a,listOf(Triple("${s.calls}","오늘 녹음",CallUi.INK),Triple("${s.newTasks}","오늘 생긴 체크",CallUi.INK),
+            Triple("$left","남은 체크할 일",CallUi.ACCENT)),listOf("개","개","개")).apply { tag="home_calls" })
         today.addView(CallUi.divider(a))
         today.addView(CallUi.caption(a,s.nextReport.takeIf{it.isNotBlank()}?.let{"다음 알림 $it"} ?: "마지막 정리 "+CallUi.dateTime(s.lastAnalyzedMs)).apply { tag="home_next_report";setPadding(0,0,0,0) })
-        if(s.working>0) today.addView(CallUi.pill(a,"정리 중 ${s.working}건",CallUi.SUBTLE))
+        // v3.5 r15-0: the same count as the story's heading and the evening report.
+        if(s.calls>0) today.addView(CallUi.pill(a,TodayStory.countLine(s.calls,s.summarized),CallUi.SUBTLE).apply { tag="home_count_line" })
         body.addView(today)
 
         // Open to-dos per company: one bar each, the busiest on top.

@@ -29,23 +29,25 @@ internal object CallDigestText {
     private fun more(lines:List<String>)=if(lines.size>MAX_LINES) lines.take(MAX_LINES-1)+"외 ${lines.size-MAX_LINES+1}개" else lines
     /** The body's first line is the latest call, one line ("오후 2:10 △△철강 김민수, 단가를 다시 받기로 했어요"), then the waiting count; the expanded
      * notification lists every call, the latest first. */
-    /** [callCount]: the day's calls as home counts them ([CallsScreen.callCount]: records and call-log lines); null: the
-     * records alone (older callers). v3.1 (DESIGN_V4 2.1-5): with calls in the log but none recorded the title says so,
-     * "오늘 통화 n건, 녹음된 통화 0건". */
-    fun evening(calls:List<CallRecord>,newTasks:Int,callCount:Int?=null):Message {
+    /** v3.5 r15-0 (user 11/6: the report counts recordings): the title is "녹음 n개 중 정리 m개, 새 체크할 일 k개", the same count
+     * as home ([TodayStory.countLine]). [recordings]: the day's recordings, the call records and the recordings still without one
+     * ([CallTranscriptionStore.withoutRecord]); null: the call records alone (older callers). [logged]: calls in the call log
+     * that day; with calls there but no recording at all the title says so without the log's count (kept for the heartbeat). */
+    fun evening(calls:List<CallRecord>,newTasks:Int,recordings:Int?=null,logged:Int=0):Message {
         val lines=calls.sortedByDescending { it.startedMs ?: it.createdMs }.map { c ->
             "${CallUi.time(c.startedMs)} ${c.displayName}, "+(c.summary?.let(CallUi::firstSentence) ?: CallUi.state(c))
         }
-        val n=callCount ?: calls.size
         val recorded=calls.count { it.kind=="통화" }
-        if(n>0 && recorded==0 && callCount!=null) {
-            val text=if(calls.isEmpty()) "녹음이 없어 정리한 통화가 없어요" else lines.first()
-            return Message("오늘 통화 ${n}건, 녹음된 통화 0건",text,listOf("녹음이 없어 정리한 통화가 없어요")+more(lines))
+        val n=maxOf(recordings ?: recorded,recorded)
+        if(n==0 && logged>0) {
+            val text=if(calls.isEmpty()) NO_RECORDING_WORDS else lines.first()
+            return Message("오늘은 녹음된 통화가 없어요",text,listOf(NO_RECORDING_WORDS)+more(lines))
         }
-        val waiting=calls.count { it.summary==null && it.state!=CallRecordStore.FAILED }
+        val waiting=calls.count { it.summary==null && it.state!=CallRecordStore.FAILED }+(n-recorded)
         val text=if(calls.isEmpty()) "오늘 정리된 통화가 없어요" else lines.first()+(if(waiting>0) ", 아직 정리 중인 통화가 ${waiting}건 있어요" else "")
-        return Message("오늘 통화 ${n}건, 새 체크할 일 ${newTasks}개",text,more(lines))
+        return Message("${TodayStory.countLine(n,TodayStory.summarized(calls))}, 새 체크할 일 ${newTasks}개",text,more(lines))
     }
+    const val NO_RECORDING_WORDS="녹음이 없어 정리한 통화가 없어요"
     /** Up to [ISSUE_LINES] "진행 중인 일" lead the morning lines (design: 새벽 정리). */
     const val ISSUE_LINES=3
     /** Every open check item, oldest request first, with when it was asked for. No deadlines, no "지남" (user rule;
@@ -75,11 +77,22 @@ internal object CallDigestText {
     }
     fun evening(store:CallRecordStore,day:LocalDate):Message {
         val calls=store.day(day)
-        // The same count as home's "오늘 통화" (r12-1): records and the call-log lines the call list shows beside them.
+        // v3.5 r15-0: the same count as home, by recording; the call log only says whether there were calls at all.
         val logs=runCatching { store.dayLog(day) }.getOrDefault(emptyList())
-        return evening(calls,store.newTaskCount(day),CallsScreen.callCount(calls,logs))
+        val recordings=calls.count { it.kind=="통화" }+CallTranscriptionStore.withoutRecord(day) { sql,args -> store.cardRows(sql,*args) }
+        return evening(calls,store.newTaskCount(day),recordings,CallsScreen.visibleLogs(calls,logs).size)
     }
     fun morning(store:CallRecordStore,day:LocalDate)=morning(store.openTodos(),day,store.issues())
+
+    // ---- v3.5 r15-0: a new version waiting for its install ----
+    /** The line the morning report and the evening self-check add while a verified new version waits to be installed. */
+    const val UPDATE_LINE="새 버전 설치가 기다리고 있어요"
+    /** [m] with [UPDATE_LINE] at its end when [waiting] (the lines stay within [MAX_LINES]). */
+    fun withUpdate(m:Message,waiting:Boolean):Message {
+        if(!waiting) return m
+        val lines=if(m.lines.size>=MAX_LINES) m.lines.take(MAX_LINES-1) else m.lines
+        return m.copy(lines=lines+UPDATE_LINE)
+    }
 
     // ---- v3.4 (DESIGN_V4 4.2-4 나): calls the evening report could not sum up, told the next morning ----
     /** Settings key: what the last evening report left waiting, a JSON text {"at": when it went out, "day": its day
@@ -196,7 +209,9 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
             val settings=SecureSettings(CallPipelineStartup.storage(applicationContext))
             // v3.4 (4.2-4 나): the morning report says how many calls were summed up after the evening report.
             val late=if(kind==CallDigestSchedule.MORNING) runCatching { CallDigestText.lateDone(store,settings.snapshot().optString(CallDigestText.EVENING_WAITING_KEY)) }.getOrDefault(0) else 0
-            val message=if(kind==CallDigestSchedule.MORNING) CallDigestText.withLate(CallDigestText.morning(store,plan.day),late) else CallDigestText.evening(store,plan.day)
+            // v3.5 r15-0: the morning report also says when a new version waits for its install (the home banner stays as it is).
+            val update=kind==CallDigestSchedule.MORNING && runCatching { CallUpdate.installWaiting(applicationContext) }.getOrDefault(false)
+            val message=if(kind==CallDigestSchedule.MORNING) CallDigestText.withUpdate(CallDigestText.withLate(CallDigestText.morning(store,plan.day),late),update) else CallDigestText.evening(store,plan.day)
             // The evening report carries its day, so a tap the next morning still opens that day's calls.
             val posted=post(kind,message,plan.day.atTime(12,0).atZone(CallRecordStore.KST).toInstant().toEpochMilli())
             if(kind==CallDigestSchedule.EVENING) {
@@ -255,7 +270,8 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
             oldestWaiting,s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0),dbBytes,
             s.optString(PipelineSettingsKeys.STALL_WARNED_DAY),s.optString(PipelineSettingsKeys.DISCONNECT_WARNED_DAY),store.dbRows,
             RecordingGap.noticeDue(s,now),runCatching { CallUpdate.notInstalledForADay(app,now) }.getOrDefault(false),
-            runCatching { StatusLights.routineMissed(s,now) }.getOrDefault(0),s.optLong(PipelineSettingsKeys.ROUTINE_ENDED_MS,0))
+            runCatching { StatusLights.routineMissed(s,now) }.getOrDefault(0),s.optLong(PipelineSettingsKeys.ROUTINE_ENDED_MS,0),
+            runCatching { CallUpdate.installWaiting(app) }.getOrDefault(false))
     }
 }
 

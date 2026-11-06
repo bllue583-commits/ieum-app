@@ -383,7 +383,7 @@ class CallCardOverlayTest:ProtectedTextHostTestBase() {
         assertEquals("이음 통화 카드",off.extras.getString(android.app.Notification.EXTRA_TITLE))
         assertEquals("잠금을 풀면 카드가 보여요",off.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString())
         // The private notice itself says which item needs a check (first, as on the card).
-        assertTrue(notices.single().extras.getCharSequence(android.app.Notification.EXTRA_BIG_TEXT).toString().startsWith("철근 대금 50만원 입금 확인, 확인 필요"))
+        assertTrue(notices.single().extras.getCharSequence(android.app.Notification.EXTRA_BIG_TEXT).toString().startsWith("철근 대금 50만원 입금 확인, 오늘 요청, 확인 필요"))
     }
 
     /** v3.3 (DESIGN_V4 3.1-5): a number only the call log knows shows a thin card, not "noCard". */

@@ -793,7 +793,8 @@ internal object CallUi {
     fun duration(ms:Long)=if(ms<60_000) "${ms/1000}초" else "${ms/60000}분"+((ms/1000)%60).let { if(it>0) " ${it}초" else "" }
     /** Record state in plain words; no English codes ever reach the screen. */
     fun state(state:String)=when(state) {
-        CallRecordStore.TRANSCRIBED -> if(CallInboxConfig.enabled) "정리하고 있어요, 1시간 안에 끝나요" else "정리하고 있어요"
+        // v3.5 r15-0: no promise of when (the analysis runs 07-23 and may wait for the subscription limit).
+        CallRecordStore.TRANSCRIBED -> "정리하고 있어요"
         CallRecordStore.WAITING_CONSENT -> "설정에서 정리 동의를 켜주세요"
         CallRecordStore.FAILED -> "정리하지 못했어요"
         else -> ""
