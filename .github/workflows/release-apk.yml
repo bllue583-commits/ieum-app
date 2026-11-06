@@ -88,8 +88,11 @@ jobs:
           # Optional. When set, the signing key comes from it, so the mailbox token can change without breaking updates.
           # When empty, the key is derived from IEUM_INBOX_TOKEN as before (same certificate for the same value).
           IEUM_SIGNING_SEED: ${{ secrets.IEUM_SIGNING_SEED }}
+          # v3.5: Kakao native app key; empty = the KakaoTalk morning report hides itself (the build still works).
+          IEUM_KAKAO_APP_KEY: ${{ secrets.IEUM_KAKAO_APP_KEY }}
         run: |
           [ -n "$IEUM_INBOX_TOKEN" ] || { echo "::error title=release::IEUM_INBOX_TOKEN secret is not set"; exit 1; }
+          [ -n "$IEUM_KAKAO_APP_KEY" ] || echo "::warning title=release::IEUM_KAKAO_APP_KEY is not set: KakaoTalk morning report hidden in this build"
           [ -z "$IEUM_SIGNING_SEED" ] || echo "::add-mask::$IEUM_SIGNING_SEED"
           # Pinned: the certificate must come out byte-identical every build (checked with 50.0.1 and 50.0.2: same fingerprint).
           pip install --quiet 'cryptography==50.0.2'
@@ -116,6 +119,15 @@ jobs:
           bash tools/rotate_signing_key.sh sign "$RUNNER_TEMP/rotate" "$RUNNER_TEMP/ieum.apk"
       # An update only installs over the old app when both APKs carry the same signing certificate,
       # or, with IEUM_ROTATE=1, when the new APK's lineage starts at the previous release's certificate.
+      # v3.5: the key hash developers.kakao.com asks for (platform > Android); public value, base64 of the signer's SHA-1.
+      - name: Kakao key hash
+        continue-on-error: true
+        run: |
+          apksigner="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          sha1=$("$apksigner" verify --print-certs "$RUNNER_TEMP/ieum.apk" | grep -m1 'SHA-1 digest' | awk '{print $NF}')
+          hash=$(echo "$sha1" | xxd -r -p | base64)
+          echo "Kakao key hash: $hash"
+          echo "### Kakao key hash: \`$hash\`" >> "$GITHUB_STEP_SUMMARY"
       - name: Compare signing certificate with the previous release
         env:
           GH_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
