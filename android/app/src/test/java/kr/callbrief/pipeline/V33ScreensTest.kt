@@ -177,7 +177,7 @@ class V33ScreensTest:ProtectedTextHostTestBase() {
     // ---- 3.3-4: the morning report ----
     @Test fun theMorningReportLeadsWithTheItemItsButtonFinishesAndPutsIssuesBelow() {
         val t=LocalDate.of(2026,11,6).atStartOfDay(CallRecordStore.KST).toInstant().toEpochMilli()
-        val items=List(9) { CallTodoItem("i$it","일 $it","","open",1,null,t+it,null,false) }
+        val items=List(9) { CallTodoItem("i$it","일 $it","","open",1,null,t-it,null,false) }
         val m=CallDigestText.morning(items,LocalDate.of(2026,11,6),listOf(Issue("철근 단가","회신 대기",emptyList())))
         assertEquals("i0",m.doneId);assertTrue(m.text,m.text.startsWith(CallDigestText.NOW_PREFIX+"일 0, "))
         assertTrue(m.lines.first(),m.lines.first().startsWith("지금 할 일: 일 0"))

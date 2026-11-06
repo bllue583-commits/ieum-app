@@ -36,7 +36,7 @@ class NotificationActionsTest:ProtectedTextHostTestBase() {
     @Before fun fake() {
         shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
         open.clear();completed.clear()
-        open+=listOf(item("a","견적서 보내기",1_000),item("b","도면 다시 받기",2_000))
+        open+=listOf(item("a","견적서 보내기",2_000),item("b","도면 다시 받기",1_000)) // v3.5 r15-3: the latest request leads (C-12)
         NotificationActions.read={ _ -> open.toList() to emptyList() }
         TaskActions.completeIo={ _,it -> completed+=it.id+":"+it.revision;open.removeAll { o -> o.id==it.id } }
     }
@@ -108,7 +108,7 @@ class NotificationActionsTest:ProtectedTextHostTestBase() {
         val before=store.openTodos();assertTrue(before.size>=2)
         CallDigestNotifier.post(app,CallDigestSchedule.MORNING,CallDigestText.morning(store,CallUi.today()))
         val i=press(morning());val id=i.getStringExtra(NotificationActions.EXTRA_ITEM)
-        assertEquals(before.minByOrNull { it.createdMs }!!.id,id)
+        assertEquals(CallDigestText.ranked(before,CallUi.today()).first().id,id)
         assertTrue(NotificationActions.handle(app,i))
         val after=IeumApplication.store(app).openTodos()
         assertFalse(after.any { it.id==id });assertEquals(before.size-1,after.size)
