@@ -278,6 +278,7 @@ internal object StatusLights {
     fun read(app:Context,s:JSONObject,now:Long):Store {
         val bytes=runCatching { dbFile(app).takeIf { it.isFile }?.length() }.getOrNull()
         var queue:Queue?=null;var late:Int?=null;var oldestLate:Long?=null;var failed:Int?=null;var rowsTotal:Long?=null
+        var textFailed:Int?=null
         runCatching {
             kr.co.callsummary.core.android.AndroidSqlPort(app,kr.callbrief.GeneralLocalStore.DATABASE,app.assets.open("call_core_schema.sql")).use { p ->
                 fun n(v:Any?)=(v as? Number)?.toLong()
@@ -289,6 +290,10 @@ internal object StatusLights {
                     queue=queue(p.query("SELECT j.updated_ms AS entered,$call AS call_ms FROM call_transcription_jobs j LEFT JOIN recordings r ON r.recording_id=j.recording_id $join WHERE j.state='QUEUED'")
                         .map { QueuedRow(n(it["call_ms"]),n(it["entered"]) ?: now) },s)
                 } else queue=Queue()
+                // v3.5 r15-4 (H1): the failed texts ([CallTranscriptionStore.failedCount]'s count) in the same read, so the lights
+                // never open a store on the main thread and this read changes nothing in the file.
+                textFailed=if("call_transcription_jobs" in tables) runCatching {
+                    (n(p.query("SELECT count(*) AS n FROM call_transcription_jobs WHERE state='FAILED'").single()["n"]) ?: 0L).toInt() }.getOrNull() else 0
                 if("call_records" in tables) runCatching {
                     val (c,o)=lateLive(p.query("SELECT created_ms,coalesce(started_ms,created_ms) AS day_ms FROM call_records WHERE state IN ('TRANSCRIBED','WAITING_CONSENT')")
                         .map { WaitingRow(n(it["created_ms"]) ?: now,n(it["day_ms"]) ?: now) },s,now)
@@ -298,13 +303,7 @@ internal object StatusLights {
             }
         }.onFailure { android.util.Log.w("ieum.status","store not read: ${it.javaClass.simpleName}") }
         // v3.1: the age of the wait by the queue's own entry time (r12-3); null keeps the rows' times.
-        // v3.5 r15-4 (H1): the failed texts are read here too, so the lights never open a store on the main thread.
-        var textFailed:Int?=null;var queuedSince:Long?=null
-        runCatching { CallTranscriptionStore(app).use { t ->
-            textFailed=runCatching { t.failedCount() }.getOrNull()
-            if((queue?.count ?: 0)>0) queuedSince=runCatching { t.oldestQueuedMs() }.getOrNull()
-        } }
-        queue=queue?.let { q -> if(q.count==0) q else withQueuedSince(q,queuedSince) }
+        queue=queue?.let { q -> if(q.count==0) q else withQueuedSince(q,runCatching { CallTranscriptionStore(app).use { it.oldestQueuedMs() } }.getOrNull()) }
         return Store(queue,late,oldestLate,failed,bytes,rowsTotal,textFailed)
     }
     /** Android still lets the app read the chosen folder (the heartbeat's "folder" and the folder light). */
