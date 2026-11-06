@@ -2,7 +2,9 @@
 
 > 사용자 결정(11/6 08:28): **v3.5의 큰 변화는 매일 아침 5:30에 카카오톡으로 어제 일 정리·요약을 보고 형식에 맞게 받는 것.** 기준 코드 `feature/lean-calls` 51a4b51(v3.4 빌드 1045). 현재 동작은 [DESIGN.md](DESIGN.md), 진행 방식은 [DEVELOPMENT.md](DEVELOPMENT.md). 구현하면서 다르게 정한 것은 5절에 적고, 배포 뒤 이 문서는 `docs/history/`로 보내며 DESIGN.md에 흡수한다.
 >
-> **착수 조건:** v3.4.x 선행 묶음(HANDOFF 5절 2번)이 배포되고 아내 폰이 1045 이상일 것. 카카오 쪽 준비(4절 사용자 할 일 1~3)는 코드와 무관하게 지금 시작해도 된다.
+> **착수 조건(11/6 11시 개정):** 코드 개발은 바로 시작할 수 있다. 아내 폰이 아직 v3.1(1040)이라 v3.4.x를 따로 배포해도 폰에 닿지 않으므로, **v3.4.x 선행 묶음을 r15-0으로 같은 통합 브랜치에 먼저 넣고 v3.5 한 번에 배포**한다(사용자 원칙: 버전마다 크게 묶어 배포). 배포·실전송 확인은 (1) 아내 폰 1045 이상, (2) 카카오 developers 앱·동의 항목·팀원 등록·GitHub 비밀 `IEUM_KAKAO_APP_KEY`가 준비된 뒤. 비밀이 비어 있으면 빌드는 되고 카톡 기능만 설정에서 숨는다.
+>
+> **SDK:** Kakao Android SDK v2 **2.26.0**(2025-10-23 기준 최신, `com.kakao.sdk:v2-user`·`v2-talk`·`v2-share`), 저장소 `https://devrepo.kakao.com/nexus/content/groups/public/`를 `settings.gradle.kts`에 추가(Maven Central에도 있으나 클라우드 세션 프록시가 429를 내므로 카카오 저장소를 먼저 둔다). minSdk 26·compileSdk 36은 요건을 넘는다.
 
 ## 0. 한눈에 보기
 
@@ -75,7 +77,7 @@
 
 ## 2. 묶음
 
-통합 브랜치 `feature/r15-v35`(= v3.4.x 완성본). 키 커밋(오케스트레이터): `PipelineSettingsKeys` v3.5 묶음(`KAKAO_LINKED`, `KAKAO_LAST_SENT_MS`, `KAKAO_LAST_ERROR`, `KAKAO_SENT_COUNT`, `KAKAO_FAILED_COUNT`, `REPORT_DAY`, `MORNING_KAKAO`(스위치, 기본 켬)), 하트비트 `kakao{linked,sent,failed,lastSentMs}`·`report{day,source}` 자리, `KakaoReport` 빈 자리, 카카오 네이티브 앱 키는 `BuildConfig.KAKAO_APP_KEY`(GitHub 비밀 `IEUM_KAKAO_APP_KEY`, release-apk가 주입; 비어 있으면 카톡 기능은 설정에서 숨김).
+통합 브랜치 `feature/r15-v35`. **r15-0(선행, 단독 작업자):** HANDOFF 5절 2번의 v3.4.x 묶음 — FAILED 자막 1회 재큐, 홈 이야기 잘림, 숫자 기준 통일(이야기 제목·통계·저녁 알림을 녹음 기준으로), 지키지 못할 약속 문구 3곳, 신호등에 자막 실패·noMatch, 통화마다 알림 묶음, 카드 첫 줄 맥락 상태(“n일 지났어요” 제거). r15-0이 통합된 뒤 r15-3이 같은 파일(`SettingsScreen`·`CallDigestWork`·`StatusLights`)을 이어받는다. 키 커밋(오케스트레이터): `PipelineSettingsKeys` v3.5 묶음(`KAKAO_LINKED`, `KAKAO_LAST_SENT_MS`, `KAKAO_LAST_ERROR`, `KAKAO_SENT_COUNT`, `KAKAO_FAILED_COUNT`, `REPORT_DAY`, `MORNING_KAKAO`(스위치, 기본 켬)), 하트비트 `kakao{linked,sent,failed,lastSentMs}`·`report{day,source}` 자리, `KakaoReport` 빈 자리, 카카오 네이티브 앱 키는 `BuildConfig.KAKAO_APP_KEY`(GitHub 비밀 `IEUM_KAKAO_APP_KEY`, release-apk가 주입; 비어 있으면 카톡 기능은 설정에서 숨김).
 
 **파일 소유(겹치지 않게):** r15-1: `pipeline/report/KakaoReport.kt`(신설: 로그인·토큰·compose·send), `pipeline/report/ReportFetch.kt`(신설: `report/` ETag 받기, 05:30 체인), `AndroidManifest.xml`(카카오 로그인 Activity, 앱 실행 파라미터 intent-filter), `build.gradle.kts`(SDK 의존성·BuildConfig 키), `PhoneStatus.kt`(kakao·report 블록) · r15-2: `docs/routines/tidy.md`(v7, 보고서 절), `docs/routines/self-report.md`, `tools/inbox/watchdog.py`·`test_watchdog.py`, `RoutineDocTest` · r15-3: `screens/SettingsScreen.kt`(아침 보고 묶음), `CallDigestWork.kt`(앱 알림을 폴백으로), `StatusLights.kt`·`SelfCheckNotices.kt`(카톡 줄), `MainActivity.kt`(실행 파라미터 → 화면).
 
