@@ -519,5 +519,91 @@ class V34RoutineTest(unittest.TestCase):
             self.assertEqual(1, w.main(["--root", root, "--now-ms", str(NOW), "--apply", "o/r", "--out", out], gh=self.FakeGh([], list_ok=False)))
 
 
+def kakao(linked=True, last=None, sent=0, failed=0, error=None):
+    return {"linked": linked, "sent": sent, "failed": failed, "lastSentMs": last, "error": error}
+
+
+class V35ReportTest(unittest.TestCase):
+    """DESIGN_V5 2.2-4: the morning report file and the KakaoTalk send."""
+    TIDY7 = {"routine": "tidy", "processed": 3, "promptVersion": "7", "endedMs": at(4, 58), "reportWritten": False, "pushed": True}
+
+    def report(self, now, tidy=TIDY7, exists=False, ph=None, history=None):
+        got = w.evaluate(now, ph if ph is not None else phone(atMs=now - H), {"routine": "hourly", "processed": 1}, None, 0,
+                         tidy_run=tidy, report_exists=exists, history=history)
+        return [p for p in got if p["title"] in (w.T_REPORT_MISSING, w.T_KAKAO_NOT_SENT)]
+
+    def test_kst_date(self):
+        self.assertEqual("2027-01-15", w.kst_date(NOW))
+        self.assertEqual(KST_MIDNIGHT, w.kst_day_start(NOW))
+        self.assertEqual("2027-01-14", w.kst_date(KST_MIDNIGHT - 1))
+
+    def test_report_missing_after_half_past_five(self):
+        got = self.report(at(5, 31))
+        self.assertEqual([w.T_REPORT_MISSING], [p["title"] for p in got])
+        self.assertIn("report/2027-01-15.json", got[0]["body"])
+        self.assertIn("04:58", got[0]["body"])
+        self.assertIn("reportWritten=false", got[0]["body"])
+        self.assertEqual([], self.report(at(5, 29)))  # not due yet
+        self.assertEqual([], self.report(at(5, 31), exists=True))
+        self.assertEqual([], self.report(at(5, 31), exists=None))  # not checked
+        # A tidy still on prompt 6 (the release day) writes no report: no issue.
+        self.assertEqual([], self.report(at(5, 31), tidy=dict(self.TIDY7, promptVersion="6")))
+        self.assertEqual([], self.report(at(5, 31), tidy=None))
+        # Today's tidy did not run: the body says the last run was yesterday.
+        got = self.report(at(6, 0), tidy=dict(self.TIDY7, endedMs=at(4, 58, day=-1)))
+        self.assertIn("자가 보고가 없어요(마지막 실행 25.0시간 전)", got[0]["body"])
+
+    def test_report_rule_through_the_cli(self):
+        with tempfile.TemporaryDirectory() as root:
+            for rel, data in (("status/phone.json", phone(atMs=at(5, 0))), ("status/last-run-tidy.json", self.TIDY7)):
+                os.makedirs(os.path.dirname(os.path.join(root, rel)), exist_ok=True)
+                with open(os.path.join(root, rel), "w", encoding="utf-8") as f:
+                    json.dump(data, f)
+            out = os.path.join(root, "out.json")
+
+            def run():
+                self.assertEqual(0, w.main(["--root", root, "--now-ms", str(at(5, 40)), "--out", out]))
+                with open(out, encoding="utf-8") as f:
+                    return [p["title"] for p in json.load(f)]
+            self.assertIn(w.T_REPORT_MISSING, run())
+            os.makedirs(os.path.join(root, "report"))
+            with open(os.path.join(root, "report", "2027-01-15.json"), "w", encoding="utf-8") as f:
+                f.write("{}")
+            self.assertNotIn(w.T_REPORT_MISSING, run())
+
+    def test_kakao_not_sent_two_days_in_a_row(self):
+        linked_long = [phone(atMs=at(10, 0, day=-2), kakao=kakao(last=at(5, 30, day=-2)))]
+        two_days = kakao(last=at(5, 31, day=-2), sent=4, failed=2, error="KAKAO_HTTP_401")
+        got = self.report(at(9, 1), exists=True, ph=phone(atMs=at(8, 50), kakao=two_days), history=linked_long)
+        self.assertEqual([w.T_KAKAO_NOT_SENT], [p["title"] for p in got])
+        self.assertIn("KAKAO_HTTP_401", got[0]["body"])
+        self.assertIn("실패 횟수 2", got[0]["body"])
+        # Before 09:00 the phone may still be trying.
+        self.assertEqual([], self.report(at(8, 59), exists=True, ph=phone(atMs=at(8, 50), kakao=two_days), history=linked_long))
+        # Sent yesterday, not today: one day only, no issue yet.
+        one_day = kakao(last=at(5, 31, day=-1))
+        self.assertEqual([], self.report(at(9, 1), exists=True, ph=phone(atMs=at(8, 50), kakao=one_day), history=linked_long))
+        # Sent today.
+        self.assertEqual([], self.report(at(9, 1), exists=True, ph=phone(atMs=at(8, 50), kakao=kakao(last=at(5, 31))), history=linked_long))
+        # Not linked (the feature off, or the link broke: the phone's own lights say so).
+        self.assertEqual([], self.report(at(9, 1), exists=True, ph=phone(atMs=at(8, 50), kakao=kakao(linked=False, last=at(5, 31, day=-3)))))
+        # Older heartbeats without the kakao block (before v3.5).
+        self.assertEqual([], self.report(at(9, 1), exists=True, ph=phone(atMs=at(8, 50))))
+
+    def test_kakao_linked_only_since_yesterday_noon_is_one_morning(self):
+        never = kakao(last=None)
+        recent = [phone(atMs=at(12, 0, day=-1), kakao=never), phone(atMs=at(10, 0, day=-1), kakao=kakao(linked=False))]
+        self.assertEqual([], self.report(at(9, 30), exists=True, ph=phone(atMs=at(9, 10), kakao=never), history=recent))
+        # Linked since before yesterday's 09:00 and never sent: an issue.
+        early = [phone(atMs=at(8, 0, day=-1), kakao=never)]
+        got = self.report(at(9, 30), exists=True, ph=phone(atMs=at(9, 10), kakao=never), history=early)
+        self.assertEqual([w.T_KAKAO_NOT_SENT], [p["title"] for p in got])
+        self.assertIn("보낸 적이 없어요", got[0]["body"])
+
+    def test_silent_phone_says_nothing_about_kakao(self):
+        old = phone(atMs=at(9, 30) - 13 * H, kakao=kakao(last=at(5, 31, day=-3)))
+        self.assertEqual([], self.report(at(9, 30), exists=True, ph=old, history=[phone(atMs=at(5, 0, day=-3), kakao=kakao())]))
+
+
 if __name__ == "__main__":
     unittest.main()
