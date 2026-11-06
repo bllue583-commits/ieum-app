@@ -69,6 +69,21 @@ class ReportCheckTest(unittest.TestCase):
         r["yesterday"][1]["what"] = "철근 120톤 1,250만원, 11/12 반입, 2026-11-20 타설, 13층"
         self.assertEqual([], rc.check(r))
 
+    def test_wider_separators_and_mail_addresses(self):
+        """r15-4 (L10): three separator signs between the parts, and mail addresses."""
+        for number in ("010 - 1234 - 5678", "(031) 123-4567", "02 .123. 4567"):
+            r = good()
+            r["yesterday"][1]["what"] = f"배선 자재 입고, {number}로 연락 요청"
+            self.assertBreaks(r, "yesterday[1].what: 전화번호")
+        for mail in ("kim.ms@steel.co.kr", "a_b+1@x-y.com"):
+            r = good()
+            r["today"][0]["what"] = f"견적서 {mail}로 보내기"
+            self.assertBreaks(r, "today[0].what: 메일 주소")
+            self.assertFalse(any(mail in x for x in rc.check(r)))
+        r = good()
+        r["yesterday"][1]["what"] = "철근 120톤 1,250만원, 11/12 반입, 2026-11-20 타설, 13층 @현장"
+        self.assertEqual([], rc.check(r))
+
     def test_reasons_never_carry_the_text(self):
         r = good()
         r["yesterday"][1]["what"] = "010-1234-5678로 연락 요청"

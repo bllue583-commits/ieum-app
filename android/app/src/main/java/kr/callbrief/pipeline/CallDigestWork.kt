@@ -295,8 +295,9 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
 
 /** v3.5 r15-3 (DESIGN_V5 2.3-2): the app's morning notice is the KakaoTalk report's fallback. With the switch
  * [카카오톡으로 받기] on ([PipelineSettingsKeys.MORNING_KAKAO], default on) and today's report sent in full
- * ([KakaoReport.sentToday]) no notice is posted, not even a quiet one ([다 됐어요] is in the app). A failed or partial send,
- * no link, the switch off or a build without a Kakao key: the notice as before. */
+ * ([KakaoReport.sentToday]) the notice still comes, but quietly (r15-4 H2: KakaoTalk may raise no alert for "나와의 채팅"),
+ * its first line [SENT_LINE]; on a day with the update line or the late line it comes with its sound as usual. A failed or
+ * partial send, no link, the switch off or a build without a Kakao key: the notice as before. */
 internal object CallDigestKakao {
     /** How long the 06:00 notice waits for a KakaoTalk send that is running right now (the 06:00 try of [ReportFetch]). */
     const val WAIT_MS=2*60_000L
@@ -315,14 +316,20 @@ internal object CallDigestKakao {
         if(!s.optBoolean(PipelineSettingsKeys.MORNING_KAKAO,true)) return false
         (sending ?: { c -> WorkManager.getInstance(c.applicationContext).getWorkInfosForUniqueWork(ReportFetch.NAME).get().any { it.state==WorkInfo.State.RUNNING } })(context)
     }.getOrDefault(false)
-    /** Posts the morning notice [m] unless [covered]; [waitForSend] (the scheduled run, off the main thread) first waits up to
-     * [WAIT_MS] for a send in progress. True when the notice was posted. */
+    /** r15-4 (H2): the first line of the morning notice on a day the report went over KakaoTalk. */
+    const val SENT_LINE="카카오톡 나와의 채팅에 아침 보고를 보냈어요"
+    /** A morning notice that must be heard even on a KakaoTalk day: a new version waits, or calls were summed up late. */
+    fun needsSound(m:CallDigestText.Message)=m.lines.any { it==CallDigestText.UPDATE_LINE || it.startsWith("늦게 정리된 통화") }
+    /** [m] with [SENT_LINE] first (the body's text and the first of its lines). */
+    fun withSentLine(m:CallDigestText.Message)=m.copy(text=SENT_LINE,lines=listOf(SENT_LINE)+m.lines)
+    /** Posts the morning notice [m]; [waitForSend] (the scheduled run, off the main thread) first waits up to [WAIT_MS] for a
+     * send in progress. When [covered] it goes with [SENT_LINE] first, quietly unless [needsSound]. True when it was posted. */
     fun postMorning(context:Context,m:CallDigestText.Message,waitForSend:Boolean=false):Boolean {
         if(waitForSend && !covered(context)) {
             var waited=0L
             while(waited<WAIT_MS && mayStillSend(context)) { Thread.sleep(2_000);waited+=2_000 }
         }
-        if(covered(context)) { Log.i("ieum.digest","morning notice not posted: sent over KakaoTalk");return false }
+        if(covered(context)) return CallDigestNotifier.post(context,CallDigestSchedule.MORNING,withSentLine(m),quiet=!needsSound(m))
         return CallDigestNotifier.post(context,CallDigestSchedule.MORNING,m)
     }
 }
@@ -334,10 +341,13 @@ internal object CallDigestNotifier {
     fun screenFor(kind:String)=when(kind) { CallDigestSchedule.MORNING -> Screen.TASKS;CallDigestWork.SELF_CHECK -> Screen.SETTINGS;else -> Screen.CALLS }
     /** The slot of a report of [kind]: one notification per kind (tag "ieum.calls.<kind>", id [ID]); a new one replaces the old. */
     const val ID=700
+    /** r15-4 (H2): the group of a [quiet] report (it never gets a summary, so it never alerts). */
+    const val QUIET_GROUP="ieum.calls.quiet"
     fun tag(kind:String)="ieum.calls.$kind"
     /** [dayMs]: a moment of the day the evening report tells about (now when not given). [callId]: a notice about one call opens
-     * that call's page. [refresh]: the same report updated after its button was pressed (quiet, not counted as a new report). */
-    fun post(context:Context,kind:String,m:CallDigestText.Message,dayMs:Long?=null,callId:String?=null,refresh:Boolean=false):Boolean {
+     * that call's page. [refresh]: the same report updated after its button was pressed (quiet, not counted as a new report).
+     * [quiet] (r15-4 H2): a new report without sound or vibration (the KakaoTalk morning has told it already). */
+    fun post(context:Context,kind:String,m:CallDigestText.Message,dayMs:Long?=null,callId:String?=null,refresh:Boolean=false,quiet:Boolean=false):Boolean {
         if(Build.VERSION.SDK_INT>=33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) return false
         val manager=context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(CallDigestWork.CHANNEL,"이음 통화 정리",NotificationManager.IMPORTANCE_DEFAULT))
@@ -361,6 +371,9 @@ internal object CallDigestNotifier {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             builder.addAction(Notification.Action.Builder(android.graphics.drawable.Icon.createWithResource(context,R.drawable.ic_stat_ieum),"다 됐어요",done).build())
         }
+        // Silent on every Android from 8: a lone member of a group that alerts only for its summary makes no sound and no
+        // vibration (what setSilent does on 12 and up), and the channel stays the user's own.
+        if(quiet) builder.setGroup(QUIET_GROUP).setGroupAlertBehavior(Notification.GROUP_ALERT_SUMMARY)
         manager.notify(tag(kind),ID,builder.build())
         if(!refresh && (kind==CallDigestSchedule.EVENING||kind==CallDigestSchedule.MORNING)) runCatching { SecureSettings(CallPipelineStartup.storage(context)).update { it.put(PipelineSettingsKeys.LAST_DIGEST_MS,System.currentTimeMillis()) } }
         return true

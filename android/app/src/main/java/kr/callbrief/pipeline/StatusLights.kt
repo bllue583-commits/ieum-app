@@ -205,7 +205,8 @@ internal object StatusLights {
     }
     /** [i] with what v3.4 reads from the phone and the settings [s]: the call log permission, the standby bucket, the card
      * counts, the routine's missed runs, the store's share ([dbPercent], from the store read the page already did) and the
-     * recording light's green words. */
+     * recording light's green words. v3.5 r15-4 (H1): no store is opened here (it runs on the main thread); [Input.textFailed]
+     * comes in from [Store.textFailed], read on the IO thread. */
     fun withPhone(i:Input,app:Context,s:JSONObject,dbPercent:Int?):Input {
         val stats=runCatching { kr.callbrief.pipeline.call.CardStats.read(s) }.getOrNull()
         // While this page is open the app is ACTIVE whatever its standing: battery use not limited is what makes it EXEMPTED.
@@ -219,7 +220,7 @@ internal object StatusLights {
             cardNoCard=stats?.optInt(kr.callbrief.pipeline.call.CardStats.NO_CARD,0) ?: 0,
             routineMissed=runCatching { routineMissed(s,i.now) }.getOrDefault(0),routineEndedMs=s.optLong(PipelineSettingsKeys.ROUTINE_ENDED_MS,0),
             dbPercent=dbPercent,pendingText=RecordingGap.pendingText(s,i.now),
-            textFailed=runCatching { CallTranscriptionStore(app).use { it.failedCount() } }.getOrDefault(i.textFailed),noMatchLong=noMatchLong(s,i.now),
+            noMatchLong=noMatchLong(s,i.now),
             kakao=runCatching { kakaoLink(s) }.getOrDefault(KakaoReport.Link.UNAVAILABLE),
             kakaoOn=s.optBoolean(PipelineSettingsKeys.MORNING_KAKAO,true),kakaoLastSentMs=s.optLong(PipelineSettingsKeys.KAKAO_LAST_SENT_MS,0),
             kakaoFailed=s.optLong(PipelineSettingsKeys.KAKAO_FAILED_COUNT,0))
@@ -268,7 +269,9 @@ internal object StatusLights {
     }
 
     /** Everything above, read in one go from the store. Counts and times only. Each part is null when it could not be read. */
-    data class Store(val queue:Queue?,val lateLive:Int?,val oldestLateMs:Long?,val failed:Int?,val dbBytes:Long?,val dbRows:Long?) {
+    data class Store(val queue:Queue?,val lateLive:Int?,val oldestLateMs:Long?,val failed:Int?,val dbBytes:Long?,val dbRows:Long?,
+                     /** v3.5 r15-4 (H1): transcription jobs FAILED now, read here on the IO thread (null: not read). */
+                     val textFailed:Int?=null) {
         val dbPercent:Int? get()=dbPercent(dbBytes,dbRows)
     }
     fun dbFile(app:Context)=kr.co.callsummary.core.android.ProtectedDatabase.file(app,kr.callbrief.GeneralLocalStore.DATABASE)
@@ -295,8 +298,14 @@ internal object StatusLights {
             }
         }.onFailure { android.util.Log.w("ieum.status","store not read: ${it.javaClass.simpleName}") }
         // v3.1: the age of the wait by the queue's own entry time (r12-3); null keeps the rows' times.
-        queue=queue?.let { q -> if(q.count==0) q else withQueuedSince(q,runCatching { CallTranscriptionStore(app).use { it.oldestQueuedMs() } }.getOrNull()) }
-        return Store(queue,late,oldestLate,failed,bytes,rowsTotal)
+        // v3.5 r15-4 (H1): the failed texts are read here too, so the lights never open a store on the main thread.
+        var textFailed:Int?=null;var queuedSince:Long?=null
+        runCatching { CallTranscriptionStore(app).use { t ->
+            textFailed=runCatching { t.failedCount() }.getOrNull()
+            if((queue?.count ?: 0)>0) queuedSince=runCatching { t.oldestQueuedMs() }.getOrNull()
+        } }
+        queue=queue?.let { q -> if(q.count==0) q else withQueuedSince(q,queuedSince) }
+        return Store(queue,late,oldestLate,failed,bytes,rowsTotal,textFailed)
     }
     /** Android still lets the app read the chosen folder (the heartbeat's "folder" and the folder light). */
     fun folderReadable(app:Context,s:JSONObject):Boolean {

@@ -30,6 +30,8 @@ android {
         buildConfigField("String","KAKAO_APP_KEY","\""+kakaoKey+"\"")
         // The login redirect and the message button's scheme: kakao<key>://oauth, kakao<key>://kakaolink.
         manifestPlaceholders["kakaoScheme"]=if(kakaoKey.isEmpty()) "kakaonone" else "kakao$kakaoKey"
+        // r15-4 (L1): without a key the login's way back (AuthCodeHandlerActivity) is switched off in the manifest.
+        manifestPlaceholders["kakaoEnabled"]=if(kakaoKey.isEmpty()) "false" else "true"
         // Local design preview (IEUM_LOCAL_PREVIEW=1, never in CI): sample calls on first launch, nothing sent anywhere.
         buildConfigField("boolean","LOCAL_PREVIEW",(System.getenv("IEUM_LOCAL_PREVIEW")=="1").toString())
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

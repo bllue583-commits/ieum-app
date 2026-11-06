@@ -104,7 +104,8 @@ object ReportFetch {
     enum class Outcome { SENT, FAILED, RETRY_LATER, PHONE_SENT, PHONE_FAILED, TOO_LATE, OFF }
     /** One try of [day]'s chain; queues the next try or tomorrow's first. Never throws. */
     suspend fun run(app:Context,day:LocalDate,attempt:Int):Outcome {
-        val outcome=try { tryOnce(app,day,attempt) } catch(e:Exception) { Log.w(TAG,"try failed: ${e.javaClass.simpleName}");Outcome.FAILED }
+        val outcome=try { tryOnce(app,day,attempt) } catch(e:kotlinx.coroutines.CancellationException) { throw e }
+            catch(e:Exception) { Log.w(TAG,"try failed: ${e.javaClass.simpleName}");Outcome.FAILED }
         val next=if(outcome==Outcome.RETRY_LATER) plan(day,attempt+1) else plan(day.plusDays(1),0)
         // From inside the running work: appended, so the next one waits until this one has ended.
         runCatching { queue(app,next,ExistingWorkPolicy.APPEND_OR_REPLACE) }.onFailure { Log.w(TAG,"next not queued: ${it.javaClass.simpleName}") }

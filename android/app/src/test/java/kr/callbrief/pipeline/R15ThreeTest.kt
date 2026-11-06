@@ -101,7 +101,9 @@ class R15ThreeTest:ProtectedTextHostTestBase() {
         settle { (tag(a,"kakao_send_result") as? TextView)!=null }
         assertEquals(SettingsScreen.sendWords(null),(tag(a,"kakao_send_result") as TextView).text.toString())
         assertTrue(sender.sent.isNotEmpty())
-        assertTrue((tag(a,"kakao_last") as TextView).text.toString().startsWith("오늘 "))
+        // r15-4 (M1): a test send is not the 05:30 report: the last send line stays as it was.
+        assertEquals("아직 보낸 적이 없어요",(tag(a,"kakao_last") as TextView).text.toString())
+        assertFalse(KakaoReport.sentToday(app))
         // The same day once more: nothing goes, and the line says so.
         val before=sender.sent.size
         tag(a,"kakao_send").performClick()
@@ -139,11 +141,14 @@ class R15ThreeTest:ProtectedTextHostTestBase() {
     // ---- 2. the morning notice ----
     private fun morning()=shadowOf(manager).allNotifications.filter { it.channelId==CallDigestWork.CHANNEL }
     private val message=CallDigestText.Message("체크할 일 1개","지금 할 일: 견적서 보내기",listOf("지금 할 일: 견적서 보내기"))
-    @Test fun aFullKakaoSendTodayMeansNoMorningNotice() {
+    @Test fun aFullKakaoSendTodayMeansAQuietMorningNotice() {
         withKey();linked();put { it.put(PipelineSettingsKeys.KAKAO_LAST_SENT_MS,System.currentTimeMillis()) }
         assertTrue(CallDigestKakao.covered(app))
-        assertFalse(CallDigestKakao.postMorning(app,message,waitForSend=true))
-        assertTrue(morning().isEmpty())
+        // r15-4 (H2): it still comes, quietly, and says the report went to KakaoTalk.
+        assertTrue(CallDigestKakao.postMorning(app,message,waitForSend=true))
+        val n=morning().single()
+        assertEquals(CallDigestKakao.SENT_LINE,n.extras.getString(Notification.EXTRA_TEXT))
+        assertEquals(Notification.GROUP_ALERT_SUMMARY,n.groupAlertBehavior)
     }
     @Test fun aFailedOrMissingSendKeepsTheMorningNotice() {
         withKey();linked()
@@ -165,8 +170,8 @@ class R15ThreeTest:ProtectedTextHostTestBase() {
         var polls=0
         // The 06:00 try is sending: it finishes while the notice waits.
         CallDigestKakao.sending={ polls++;if(polls>=2) { put { it.put(PipelineSettingsKeys.KAKAO_LAST_SENT_MS,System.currentTimeMillis()) };false } else true }
-        assertFalse(CallDigestKakao.postMorning(app,message,waitForSend=true))
-        assertTrue(morning().isEmpty());assertEquals(2,polls)
+        assertTrue(CallDigestKakao.postMorning(app,message,waitForSend=true))
+        assertEquals(CallDigestKakao.SENT_LINE,morning().single().extras.getString(Notification.EXTRA_TEXT));assertEquals(2,polls)
     }
     @Test fun theMorningOrderPutsChecksAndRecentRequestsFirst() {
         val today=LocalDate.of(2026,11,7)

@@ -55,9 +55,11 @@ internal object PhoneStatus {
         val v34:V34=V34(),
         /** DESIGN_V5 (v3.5, key commit makes the places, r15-1 writes the values): the KakaoTalk morning report. */
         val v35:V35=V35())
-    /** v3.5: heartbeat `kakao{linked,sent,failed,lastSentMs,error}` and `report{day,source}`; numbers, dates and codes only. */
+    /** v3.5: heartbeat `kakao{on,linked,sent,failed,lastSentMs,error}` and `report{day,source}`; numbers, dates and codes only. */
     data class V35(val kakaoLinked:Boolean=false,val kakaoSent:Long=0,val kakaoFailed:Long=0,val kakaoLastSentMs:Long?=null,
-        val kakaoError:String?=null,val reportDay:String?=null,val reportSource:String?=null)
+        val kakaoError:String?=null,val reportDay:String?=null,val reportSource:String?=null,
+        /** r15-4 (M2): `kakao.on`, the settings switch [카카오톡으로 받기] ([PipelineSettingsKeys.MORNING_KAKAO], default on). */
+        val kakaoOn:Boolean=true)
     /** v3.4 (DESIGN_V4 4.1-5, 4.3-4, 4.3-5, 4.3-8): [updateError] = [PipelineSettingsKeys.UPDATE_ERROR_CODE] (a code, heartbeat
      * `update.error`); [mailError] = [PipelineSettingsKeys.MAIL_ERROR_CODES] ({code: count}, `messages.mailError`); [recordTime] =
      * [PipelineSettingsKeys.RECORD_TIME] ({bucket: count}, `recordTime.fileVsRecordMin`). The two objects go through [counts]. */
@@ -156,7 +158,7 @@ internal object PhoneStatus {
     }
     /** v3.5: always both objects so the watchdog reads a key test. */
     private fun putV35(o:JSONObject,v:V35) {
-        o.put("kakao",JSONObject().put("linked",v.kakaoLinked).put("sent",v.kakaoSent).put("failed",v.kakaoFailed)
+        o.put("kakao",JSONObject().put("on",v.kakaoOn).put("linked",v.kakaoLinked).put("sent",v.kakaoSent).put("failed",v.kakaoFailed)
             .put("lastSentMs",v.kakaoLastSentMs ?: JSONObject.NULL)
             .put("error",v.kakaoError?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL))
         o.put("report",JSONObject().put("day",v.reportDay?.takeIf { Regex("""\d{4}-\d{2}-\d{2}""").matches(it) } ?: JSONObject.NULL)
@@ -288,7 +290,8 @@ internal object PhoneStatus {
         s.optLong(PipelineSettingsKeys.KAKAO_LAST_SENT_MS,0).takeIf { it>0 },
         s.optString(PipelineSettingsKeys.KAKAO_LAST_ERROR).takeIf { it.isNotBlank() },
         s.optString(PipelineSettingsKeys.REPORT_DAY).takeIf { it.isNotBlank() },
-        s.optString(PipelineSettingsKeys.REPORT_SOURCE).takeIf { it.isNotBlank() })
+        s.optString(PipelineSettingsKeys.REPORT_SOURCE).takeIf { it.isNotBlank() },
+        s.optBoolean(PipelineSettingsKeys.MORNING_KAKAO,true))
     private fun jsonOf(s:JSONObject,key:String):JSONObject? = when(val v=s.opt(key)) {
         is JSONObject -> v
         is String -> runCatching { JSONObject(v) }.getOrNull()

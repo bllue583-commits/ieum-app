@@ -48,7 +48,8 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
                 // Recordings from before 10/1 left queued by an older build (r7-1): one statement, whatever the offer pass does.
                 db.execute(SKIP_BEFORE_START_SQL,now(),FirstPass.FROM_MS)
                 // v3.5 r15-0: the build (versionCode) a row last failed under, and the build that last gave a FAILED row another try.
-                for(col in listOf("failed_build","retried_build")) if(db.query("PRAGMA table_info(call_transcription_jobs)").none { it["name"]==col }) db.execute("ALTER TABLE call_transcription_jobs ADD COLUMN $col INTEGER")
+                // v3.5 r15-4 (M4): how often a FAILED row was given another try (NULL: never), capped by [requeueFailedOnce].
+                for(col in listOf("failed_build","retried_build","requeue_count")) if(db.query("PRAGMA table_info(call_transcription_jobs)").none { it["name"]==col }) db.execute("ALTER TABLE call_transcription_jobs ADD COLUMN $col INTEGER")
                 // Rows that failed under an older build (or before v3.5) go back to the queue once for this build.
                 requeueFailedOnce(buildCode());null
             }
@@ -59,12 +60,15 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
      * older one could not), with their attempts at 0. A row that fails under build B is marked with it (failed_build), and a row
      * this build revived is marked too (retried_build): either way the same build never revives it again. It runs each time the
      * store opens, so the app start or the day's first transcription run does it; after that it finds nothing.
+     * v3.5 r15-4 (M4): at most [MAX_REQUEUES] revivals for a row over all builds, and [MAX_REQUEUES_INTERRUPTED] when it last
+     * failed as INTERRUPTED (a crash loop under the native reader would only crash again); requeue_count counts them.
      * Returns how many rows were revived now. */
     internal fun requeueFailedOnce(build:Int):Int {
         if(build<=0) return 0
-        val where="state='FAILED' AND coalesce(failed_build,0)!=CAST(? AS INTEGER) AND coalesce(retried_build,0)!=CAST(? AS INTEGER)"
+        val where="state='FAILED' AND coalesce(failed_build,0)!=CAST(? AS INTEGER) AND coalesce(retried_build,0)!=CAST(? AS INTEGER)"+
+            " AND coalesce(requeue_count,0)<(CASE WHEN reason='INTERRUPTED' THEN $MAX_REQUEUES_INTERRUPTED ELSE $MAX_REQUEUES END)"
         val n=db.query("SELECT count(*) AS n FROM call_transcription_jobs WHERE $where",build,build).single()["n"].let { (it as Number).toInt() }
-        if(n>0) db.execute("UPDATE call_transcription_jobs SET state='QUEUED',reason='$REQUEUED',attempts=0,updated_ms=?,queued_ms=?,retried_build=CAST(? AS INTEGER) WHERE $where",
+        if(n>0) db.execute("UPDATE call_transcription_jobs SET state='QUEUED',reason='$REQUEUED',attempts=0,updated_ms=?,queued_ms=?,retried_build=CAST(? AS INTEGER),requeue_count=coalesce(requeue_count,0)+1 WHERE $where",
             now(),now(),build,build,build)
         return n
     }
@@ -241,6 +245,9 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         @Volatile internal var buildCode:()->Int={ kr.callbrief.BuildConfig.VERSION_CODE }
         /** The reason of a FAILED row sent back to the queue by a new build. */
         const val REQUEUED="REQUEUED"
+        /** v3.5 r15-4 (M4): revivals of one FAILED row in all, and of one that failed as INTERRUPTED. */
+        const val MAX_REQUEUES=2
+        const val MAX_REQUEUES_INTERRUPTED=1
         /** v3.5 r15-0 (user 11/6: the numbers count recordings): recordings of the KST day [day] that have no call record yet, the
          * ones still waiting for their text (QUEUED, RUNNING) and the failed ones. With the day's call records they make "녹음 n개"
          * of home and the evening report. [query] runs on the call database (the process store's [CallRecordStore.cardRows] does);

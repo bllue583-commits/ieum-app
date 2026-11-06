@@ -519,8 +519,11 @@ class V34RoutineTest(unittest.TestCase):
             self.assertEqual(1, w.main(["--root", root, "--now-ms", str(NOW), "--apply", "o/r", "--out", out], gh=self.FakeGh([], list_ok=False)))
 
 
-def kakao(linked=True, last=None, sent=0, failed=0, error=None):
-    return {"linked": linked, "sent": sent, "failed": failed, "lastSentMs": last, "error": error}
+def kakao(linked=True, last=None, sent=0, failed=0, error=None, on=None):
+    k = {"linked": linked, "sent": sent, "failed": failed, "lastSentMs": last, "error": error}
+    if on is not None:
+        k["on"] = on
+    return k
 
 
 class V35ReportTest(unittest.TestCase):
@@ -530,7 +533,26 @@ class V35ReportTest(unittest.TestCase):
     def report(self, now, tidy=TIDY7, exists=False, ph=None, history=None):
         got = w.evaluate(now, ph if ph is not None else phone(atMs=now - H), {"routine": "hourly", "processed": 1}, None, 0,
                          tidy_run=tidy, report_exists=exists, history=history)
-        return [p for p in got if p["title"] in (w.T_REPORT_MISSING, w.T_KAKAO_NOT_SENT)]
+        return [p for p in got if p["title"] in (w.T_REPORT_MISSING, w.T_KAKAO_NOT_SENT, w.T_KAKAO_UNLINKED)]
+
+    def test_kakao_not_sent_only_while_the_switch_is_on(self):
+        """r15-4 (M2): kakao.on false (the switch off) says nothing; on true or missing (an older heartbeat) as before."""
+        linked_long = [phone(atMs=at(10, 0, day=-2), kakao=kakao(last=at(5, 30, day=-2)))]
+        for on, want in ((False, []), (True, [w.T_KAKAO_NOT_SENT]), (None, [w.T_KAKAO_NOT_SENT])):
+            ph = phone(atMs=at(8, 50), kakao=kakao(last=at(5, 31, day=-2), on=on))
+            self.assertEqual(want, [p["title"] for p in self.report(at(9, 1), exists=True, ph=ph, history=linked_long)], on)
+
+    def test_kakao_unlinked_by_a_token_error(self):
+        """r15-4 (M2): linked=false with a TOKEN_ error is an issue at any hour; another error, linked, or the switch off is not."""
+        got = self.report(at(7, 0), exists=True, ph=phone(atMs=at(6, 50), kakao=kakao(linked=False, error="TOKEN_EXPIRED")))
+        self.assertEqual([w.T_KAKAO_UNLINKED], [p["title"] for p in got])
+        self.assertIn("TOKEN_EXPIRED", got[0]["body"]);self.assertIn("다시 연결", got[0]["body"])
+        self.assertEqual([], self.report(at(7, 0), exists=True, ph=phone(atMs=at(6, 50), kakao=kakao(linked=False, error="SEND_IO"))))
+        self.assertEqual([], self.report(at(7, 0), exists=True, ph=phone(atMs=at(6, 50), kakao=kakao(linked=False, error=None))))
+        self.assertEqual([], self.report(at(7, 0), exists=True, ph=phone(atMs=at(6, 50), kakao=kakao(linked=False, error="TOKEN_EXPIRED", on=False))))
+        # Past 09:00 the unlinked issue alone (not also "안 갔어요": the link is down, not the send).
+        got = self.report(at(9, 30), exists=True, ph=phone(atMs=at(9, 10), kakao=kakao(linked=False, error="TOKEN_X", last=at(5, 31, day=-3))))
+        self.assertEqual([w.T_KAKAO_UNLINKED], [p["title"] for p in got])
 
     def test_kst_date(self):
         self.assertEqual("2027-01-15", w.kst_date(NOW))

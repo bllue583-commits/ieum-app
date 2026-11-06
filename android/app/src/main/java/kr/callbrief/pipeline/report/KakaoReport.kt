@@ -113,7 +113,9 @@ object KakaoReport {
     suspend fun link(activity:Context):String? {
         if(!available()) return UNAVAILABLE
         val code=runCatching { (linker ?: KakaoSdkSender::login)(activity) }.getOrElse { (it as? Failure)?.code ?: "SDK_"+it.javaClass.simpleName }
-        if(code==null) save(activity) { it.put(PipelineSettingsKeys.KAKAO_LINKED,true).put(PipelineSettingsKeys.KAKAO_LAST_ERROR,"") }
+        // r15-4 (L7): the encrypted settings are written off the main thread (link runs from a button's coroutine).
+        if(code==null) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            save(activity) { it.put(PipelineSettingsKeys.KAKAO_LINKED,true).put(PipelineSettingsKeys.KAKAO_LAST_ERROR,"") } }
         return code?.let(::code)
     }
     /** Turns the link off on this phone (the SDK token is dropped too). */
@@ -317,17 +319,30 @@ object KakaoReport {
 
     // ---- send (DESIGN_V5 2.1-3) ---------------------------------------------------------------------------------------
     /** Sends today's report once (REPORT_DAY guards a second send); returns null on success, else an error code. */
-    suspend fun send(app:Context,report:JSONObject,source:String):String? = sending.withLock {
+    suspend fun send(app:Context,report:JSONObject,source:String):String? = send(app,report,source,test=false)
+    /** [test] (settings [지금 보내 보기], r15-4 M1): guarded by [TEST_SENT_DAY] alone, once a day, and it writes neither
+     * REPORT_DAY nor the last send nor the counters, so a press at 4 a.m. keeps the 05:30 report and the app notice as they
+     * are. A token error still takes the link down (the next 05:30 would fail the same way). */
+    private suspend fun send(app:Context,report:JSONObject,source:String,test:Boolean):String? = sending.withLock {
         if(!available()) return@withLock UNAVAILABLE
         if(appContext==null) appContext=app.applicationContext
         val s=settings(app) ?: return@withLock "SETTINGS"
         val day=runCatching { LocalDate.parse(report.optString("day")) }.getOrNull()?.toString() ?: CallRecordStore.kstDay(clock()).toString()
-        if(s.optString(PipelineSettingsKeys.REPORT_DAY)==day) return@withLock ALREADY_SENT
+        val today=CallRecordStore.kstDay(clock()).toString()
+        if(test) { if(s.optString(TEST_SENT_DAY)==today) return@withLock ALREADY_SENT }
+        else if(s.optString(PipelineSettingsKeys.REPORT_DAY)==day) return@withLock ALREADY_SENT
         if(!s.optBoolean(PipelineSettingsKeys.KAKAO_LINKED,false)) return@withLock NOT_LINKED
         val composed=compose(report,source==SOURCE_PHONE)
         val sender=senderFactory?.invoke(app) ?: KakaoSdkSender(app.applicationContext)
         val out=deliver(sender,composed)
         val now=clock()
+        if(test) {
+            save(app) { o ->
+                if(out.sent>0) o.put(TEST_SENT_DAY,today)
+                if(out.error?.startsWith(TOKEN_PREFIX)==true) o.put(PipelineSettingsKeys.KAKAO_LINKED,false).put(PipelineSettingsKeys.KAKAO_LAST_ERROR,out.error)
+            }
+            return@withLock out.error
+        }
         save(app) { o ->
             if(out.sent>0) o.put(PipelineSettingsKeys.REPORT_DAY,day).put(PipelineSettingsKeys.REPORT_SOURCE,source)
             if(out.error==null) {
@@ -393,13 +408,16 @@ object KakaoReport {
         return Outcome(sent,e)
     }
 
-    /** Settings [지금 보내 보기]: today's report if fetched, else the phone fallback. */
+    /** Settings [지금 보내 보기]: today's report if fetched, else the phone fallback, as a test send (once a day by
+     * [TEST_SENT_DAY]; the 05:30 report, its counters and the morning notice are left as they are). */
     suspend fun sendNow(app:Context):String? {
         if(!available()) return UNAVAILABLE
         val today=CallRecordStore.kstDay(clock())
         val report=ReportFetch.today(app,today)
-        return if(report!=null) send(app,report,SOURCE_ROUTINE) else send(app,ReportFetch.phoneReport(app,today),SOURCE_PHONE)
+        return if(report!=null) send(app,report,SOURCE_ROUTINE,test=true) else send(app,ReportFetch.phoneReport(app,today),SOURCE_PHONE,test=true)
     }
+    /** r15-4 (M1): settings key (inside this file, as [ReportFetch.REPORT_BODY]): the KST day of the last test send. */
+    const val TEST_SENT_DAY="kakaoTestSentDay"
     /** True when today's (KST) report already went out over KakaoTalk; the 06:00 app notice stays quiet then. */
     fun sentToday(app:Context,nowMs:Long=System.currentTimeMillis()):Boolean {
         val at=settings(app)?.optLong(PipelineSettingsKeys.KAKAO_LAST_SENT_MS,0) ?: 0

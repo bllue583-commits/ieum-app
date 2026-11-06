@@ -18,7 +18,8 @@ result commit did not go up (pushed=false).
 
 v3.5 (DESIGN_V5 2.2-4): two morning report rules. Past 05:30 KST without report/<today>.json (only whether the file is
 there; its text is never read), and KakaoTalk linked in the heartbeat but kakao.lastSentMs not from today past 09:00 KST
-for two days in a row.
+for two days in a row. r15-4: the second rule only while kakao.on is true (a heartbeat without the key counts as on), and
+"카카오톡 연결이 풀렸어요" when kakao.linked is false with an error code starting TOKEN_ (and kakao.on is not false).
 """
 import argparse, datetime, json, os, subprocess, sys, time
 
@@ -104,6 +105,9 @@ OLD_STATUS = "status/last-run.json"
 # tries until 09:00.
 T_REPORT_MISSING = "아침 보고서가 안 만들어졌어요"
 T_KAKAO_NOT_SENT = "카카오톡 보고가 안 갔어요"
+# v3.5 r15-4 (M2): the heartbeat says the link is down because Kakao no longer takes the token.
+T_KAKAO_UNLINKED = "카카오톡 연결이 풀렸어요"
+KAKAO_TOKEN_PREFIX = "TOKEN_"
 REPORT_DUE_MIN = 5 * 60 + 30
 KAKAO_DUE_MIN = 9 * 60
 REPORT_DIR = "report"
@@ -249,12 +253,23 @@ def report_rules(now_ms, phone, history, tidy, report_exists, add):
         add(T_REPORT_MISSING, f"한국 시각 05:30이 지났는데 report/{kst_date(now_ms)}.json이 없어요.\n" + why
             + "\n추정 원인: 새벽 정리(04:46)가 돌지 않았거나 늦게 끝났어요, 폰 자료가 오지 않아 \"정리할 것 없음\"이었어요, "
               "보고서가 검사(report_check.py)를 통과하지 못했어요. 폰은 06:00에 자기 자료로 짧은 보고를 보내요.")
-    if not isinstance(phone, dict) or now_ms < today0 + KAKAO_DUE_MIN * MINUTE:
+    if not isinstance(phone, dict):
         return
 
     def kakao(h):
         k = h.get("kakao") if isinstance(h, dict) else None
         return k if isinstance(k, dict) else {}
+    # r15-4 (M2): the switch [카카오톡으로 받기]; an older heartbeat without "on" counts as on.
+    if kakao(phone).get("on", True) is False:
+        return
+    err0 = w_code(kakao(phone).get("error"))
+    if kakao(phone).get("linked") is False and err0.startswith(KAKAO_TOKEN_PREFIX):
+        add(T_KAKAO_UNLINKED, f"카카오가 폰의 토큰을 더 받지 않아 카카오톡 연결이 풀렸어요 (오류 코드: {err0}).\n"
+            "그동안 아침 보고는 이음 앱 알림으로만 가요.\n"
+            "\n추정 원인: 카카오 토큰이 만료됐거나 동의가 철회됐어요. 앱 설정의 아침 보고 묶음에서 [다시 연결]을 눌러 주세요.")
+        return
+    if now_ms < today0 + KAKAO_DUE_MIN * MINUTE:
+        return
     if kakao(phone).get("linked") is not True:
         return
     last = num(kakao(phone).get("lastSentMs")) or 0

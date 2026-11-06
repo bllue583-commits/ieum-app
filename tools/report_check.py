@@ -40,7 +40,8 @@ STATE_WORDS = ("QUEUED", "FAILED", "FAILURE", "READY", "PENDING", "RUNNING", "SK
                "OPEN", "DONE", "WAITING", "MERGED", "NEEDS_CONFIRMATION", "TODO", "DONE_SUGGESTED")
 TASK_STATES = ("open", "done", "waiting", "merged", "needs_confirmation", "done_suggested", "tentative", "firm", "todo")
 STATE_RE = re.compile(r"(?<![A-Za-z_])(" + "|".join(STATE_WORDS + TASK_STATES) + r")(?![A-Za-z_])")
-SEP = r"[-.\s)]{0,2}"
+# r15-4 (L10): up to three separator signs ("010 - 1234 - 5678", "(031) 123-4567").
+SEP = r"[-.\s)]{0,3}"
 PHONE_RES = (
     # Mobile, Seoul, area codes and 070, with or without separators; +82 drops the leading 0.
     re.compile(r"(?<![\d])(?:\+?82[-.\s]?\(?0?|\(?0)(?:1[016789]|2|[3-6][1-5]|70|50\d)" + SEP + r"\d{3,4}" + SEP + r"\d{4}(?!\d)"),
@@ -49,8 +50,16 @@ PHONE_RES = (
 )
 
 
+# r15-4 (L10): a mail address is personal too (name@company.co.kr).
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+
+
 def has_phone(text):
     return any(p.search(text) for p in PHONE_RES)
+
+
+def has_email(text):
+    return EMAIL_RE.search(text) is not None
 
 
 def text_problems(path, value, style=True):
@@ -70,6 +79,8 @@ def text_problems(path, value, style=True):
         out.append(f"{path}: 해요체 대신 보고체(명사형 종결)")
     if has_phone(value):
         out.append(f"{path}: 전화번호로 보이는 숫자")
+    if has_email(value):
+        out.append(f"{path}: 메일 주소")
     return out
 
 

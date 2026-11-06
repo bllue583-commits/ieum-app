@@ -71,7 +71,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         /** [지금 보내 보기]'s result in one Korean line ([KakaoReport.sendNow]: null, a result constant or an error code). */
         fun sendWords(code:String?):String = when {
             code==null -> "카카오톡으로 보냈어요. 나와의 채팅을 확인해 주세요."
-            code==KakaoReport.ALREADY_SENT -> "오늘 보고는 이미 보냈어요. 내일 아침에 다시 보내요."
+            code==KakaoReport.ALREADY_SENT -> "오늘은 이미 보내 봤어요. 내일 다시 눌러 볼 수 있어요."
             code==KakaoReport.NOT_LINKED -> "카카오톡이 연결되어 있지 않아요. 먼저 연결해 주세요."
             code==KakaoReport.UNAVAILABLE -> "이 버전에서는 카카오톡으로 보낼 수 없어요."
             code==KakaoReport.NO_REPORT -> "보낼 내용이 아직 없어요."
@@ -482,7 +482,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
                         }
                     })
                     kakaoResult?.let { body.addView(aside(it).apply { tag="kakao_send_result" }) }
-                    body.addView(aside("하루에 한 번 보내요. 오늘 보고를 이미 보냈으면 다시 보내지 않아요.").apply { tag="kakao_send_note" })
+                    body.addView(aside("시험으로 하루에 한 번 보내요. 매일 5:30 보고는 그대로 가요.").apply { tag="kakao_send_note" })
                     body.addView(CallUi.linkButton(a,"연결 끊기") {
                         a.lifecycleScope.launch {
                             withContext(Dispatchers.IO) { runCatching { KakaoReport.unlink(a) } }
@@ -502,7 +502,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
                 }
             }
             part("이음 알림")
-            body.addView(aside(if(on && link==KakaoReport.Link.LINKED) "카카오톡으로 보내지 못한 날에만 이음 알림이 와요." else "매일 이 시각에 이음 알림으로 체크할 일을 알려 드려요.").apply { tag="morning_notice_note" })
+            body.addView(aside(if(on && link==KakaoReport.Link.LINKED) "카카오톡으로 보낸 날에는 이음 알림이 조용히 와요. 보내지 못한 날에는 평소처럼 와요." else "매일 이 시각에 이음 알림으로 체크할 일을 알려 드려요.").apply { tag="morning_notice_note" })
         }
         hourRow("아침 체크할 일",PipelineSettingsKeys.MORNING_HOUR,s.optInt(PipelineSettingsKeys.MORNING_HOUR,6),4..11)
     }
@@ -774,7 +774,8 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
             // v3.4 (4.1-1): the role is suggested only when calls going out came without their number.
             cardRole=!CallCardAsk.roleAvailable(a) || CallCardAsk.roleHeld(a) || !outgoingWithoutNumber(s),
             cardOn=s.optBoolean(PipelineSettingsKeys.CARD_INCOMING,true) || s.optBoolean(PipelineSettingsKeys.CARD_OUTGOING,true),
-            gap=RecordingGap.confirmed(s,now)) // r12-1 (DESIGN_V4 2.1-2)
+            gap=RecordingGap.confirmed(s,now), // r12-1 (DESIGN_V4 2.1-2)
+            textFailed=w?.textFailed ?: 0) // r15-4 (H1): read on the IO thread by StatusLights.read
     }
     /** v3.4: calls going out ended without their number ([kr.callbrief.pipeline.call.CardStats] noNumberOut). */
     private fun outgoingWithoutNumber(s:JSONObject)=runCatching { kr.callbrief.pipeline.call.CardStats.read(s).optInt(kr.callbrief.pipeline.call.CardStats.NO_NUMBER_OUT,0)>0 }.getOrDefault(false)

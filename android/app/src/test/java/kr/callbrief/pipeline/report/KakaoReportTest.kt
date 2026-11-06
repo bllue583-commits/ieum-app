@@ -209,8 +209,50 @@ class KakaoReportTest:ProtectedTextHostTestBase() {
         assertNull(KakaoReport.send(app,one,KakaoReport.SOURCE_ROUTINE))
         val n=fake.sent.size
         assertEquals(KakaoReport.ALREADY_SENT,KakaoReport.send(app,one,KakaoReport.SOURCE_ROUTINE))
-        assertEquals(KakaoReport.ALREADY_SENT,KakaoReport.sendNow(app))
         assertEquals(n,fake.sent.size);assertEquals(1L,settings().getLong(PipelineSettingsKeys.KAKAO_SENT_COUNT))
+    }
+    /** r15-4 (M1): [지금 보내 보기] is a test send: once a day by its own key, and the 05:30 report, its counters and the
+     * morning notice's "sent today" stay untouched. */
+    @Test fun aTestSendLeavesTheMorningReportAlone() = runBlocking {
+        val before=settings()
+        assertNull(KakaoReport.sendNow(app))
+        assertTrue(fake.sent.isNotEmpty())
+        val s=settings()
+        assertFalse(s.has(PipelineSettingsKeys.REPORT_DAY));assertFalse(s.has(PipelineSettingsKeys.KAKAO_LAST_SENT_MS))
+        assertEquals(before.optLong(PipelineSettingsKeys.KAKAO_SENT_COUNT,0),s.optLong(PipelineSettingsKeys.KAKAO_SENT_COUNT,0))
+        assertEquals(day.toString(),s.getString(KakaoReport.TEST_SENT_DAY))
+        assertFalse("the app notice is not covered by a test",KakaoReport.sentToday(app,at530))
+        // Once a day.
+        val n=fake.sent.size
+        assertEquals(KakaoReport.ALREADY_SENT,KakaoReport.sendNow(app));assertEquals(n,fake.sent.size)
+        // The 05:30 report still goes in full that day.
+        assertNull(KakaoReport.send(app,one,KakaoReport.SOURCE_ROUTINE))
+        assertTrue(KakaoReport.sentToday(app,at530+minute));assertEquals(1L,settings().getLong(PipelineSettingsKeys.KAKAO_SENT_COUNT))
+        // The next day the test button works again.
+        KakaoReport.clock={ at530+86_400_000L }
+        assertNull(KakaoReport.sendNow(app))
+    }
+    @Test fun aTestSendWithADeadTokenTakesTheLinkDown() = runBlocking {
+        fake=FakeSender(failFeed=true,failText=9,error="TOKEN_INVALID")
+        assertEquals("TOKEN_INVALID",KakaoReport.sendNow(app))
+        val s=settings()
+        assertFalse(s.getBoolean(PipelineSettingsKeys.KAKAO_LINKED));assertFalse(s.has(KakaoReport.TEST_SENT_DAY))
+        assertFalse(s.has(PipelineSettingsKeys.KAKAO_FAILED_COUNT))
+        assertEquals(KakaoReport.Link.BROKEN,KakaoReport.linkState(app))
+    }
+    /** r15-4 (L5): a cancelled try (the work stopped) is not swallowed as FAILED, and queues nothing. */
+    @Test fun aCancelledTryIsCancelledNotFailed() {
+        ReportFetch.sourceFactory={ object:ReportFetch.Source {
+            override fun get(path:String,etag:String?):ReportFetch.Response = throw kotlinx.coroutines.CancellationException("stopped") } }
+        plans.clear()
+        try { runBlocking { ReportFetch.run(app,day,0) };fail("expected the cancellation") } catch(_:kotlinx.coroutines.CancellationException) {}
+        assertTrue(plans.isEmpty())
+    }
+    @Test fun aHeartbeatTellsTheSwitch() {
+        assertTrue(PhoneStatus.v35(settings()).kakaoOn)
+        SecureSettings(app).update { it.put(PipelineSettingsKeys.MORNING_KAKAO,false) }
+        val o=PhoneStatus.build(PhoneStatus.Input(1_000L,"v3.5",1050,0,null,5,6,"READY","","",12,v35=PhoneStatus.v35(settings())))
+        assertFalse(o.getJSONObject("kakao").getBoolean("on"))
     }
     @Test fun uploadFailureSendsTheFourTexts() = runBlocking {
         fake=FakeSender(failUpload=true)
@@ -325,7 +367,7 @@ class KakaoReportTest:ProtectedTextHostTestBase() {
         val o=PhoneStatus.build(PhoneStatus.Input(1_000L,"v3.5",1050,0,null,5,6,"READY","","",12,v35=PhoneStatus.v35(settings())))
         val k=o.getJSONObject("kakao");val r=o.getJSONObject("report")
         assertTrue(k.getBoolean("linked"));assertEquals(1L,k.getLong("sent"));assertEquals(0L,k.getLong("failed"))
-        assertEquals(at530,k.getLong("lastSentMs"));assertTrue(k.isNull("error"))
+        assertEquals(at530,k.getLong("lastSentMs"));assertTrue(k.isNull("error"));assertTrue(k.getBoolean("on"))
         assertEquals("2026-11-07",r.getString("day"));assertEquals("routine",r.getString("source"))
         assertFalse(Regex("[가-힣]").containsMatchIn(o.getJSONObject("kakao").toString()+r.toString()))
     }

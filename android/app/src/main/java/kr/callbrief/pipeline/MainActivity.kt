@@ -61,8 +61,12 @@ class MainActivity:ComponentActivity() {
             if(uri==null || uri.host!=KAKAO_HOST || uri.scheme?.startsWith("kakao")!=true) return null
             val screen=runCatching { uri.getQueryParameter("screen") }.getOrNull()?.trim()?.lowercase()
             val day=runCatching { uri.getQueryParameter("dayMs")?.trim()?.toLongOrNull() }.getOrNull()?.takeIf { it>0 }
-            return when(screen) { "calls" -> Screen.CALLS to day;"tasks" -> Screen.TASKS to null;else -> Screen.HOME to null }
+            return when(screen) { "calls" -> Screen.CALLS to day?.let { kakaoDay(it,System.currentTimeMillis()) };"tasks" -> Screen.TASKS to null;else -> Screen.HOME to null }
         }
+        /** v3.5 r15-4 (L2): a button's day from the last five years up to tomorrow; anything else opens today ([now]). */
+        internal fun kakaoDay(dayMs:Long,now:Long):Long = if(dayMs in now-KAKAO_DAY_PAST_MS..now+KAKAO_DAY_AHEAD_MS) dayMs else now
+        internal const val KAKAO_DAY_PAST_MS=5L*366*86_400_000L
+        internal const val KAKAO_DAY_AHEAD_MS=2L*86_400_000L
     }
     /** A KakaoTalk button's link turned into the notification extras ([take] reads them); the link itself is dropped, so it is
      * read once. False when [i] carries no such link. */
