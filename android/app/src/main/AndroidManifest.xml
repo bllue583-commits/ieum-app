@@ -50,8 +50,9 @@
                 <data android:scheme="${kakaoScheme}" android:host="kakaolink" />
             </intent-filter>
         </activity>
-        <!-- v3.5 (DESIGN_V5 2.1-1): the Kakao login comes back to kakao<app key>://oauth. -->
-        <activity android:name="com.kakao.sdk.auth.AuthCodeHandlerActivity" android:exported="true">
+        <!-- v3.5 (DESIGN_V5 2.1-1): the Kakao login comes back to kakao<app key>://oauth. The class is the SDK's own
+             (an AppCompatActivity through CustomTabLauncherActivity); lint cannot see that far into the library. -->
+        <activity android:name="com.kakao.sdk.auth.AuthCodeHandlerActivity" android:exported="true" tools:ignore="Instantiatable">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
