@@ -14,6 +14,10 @@ class IeumApplication : Application() {
         super.onCreate()
         CallPipelineStartup.init(this)
         kr.callbrief.pipeline.CallUpdate.checkSoon(this)
+        // v3.5 (DESIGN_V5 2.1): the Kakao SDK learns the app key once, and the 05:30 morning report stays queued (every
+        // process start, so also after a boot or an update). Both do nothing in a build without a Kakao key.
+        kr.callbrief.pipeline.report.KakaoReport.init(this)
+        runCatching { kr.callbrief.pipeline.report.ReportFetch.ensure(this) }.onFailure { Log.w(TAG,"morning report not queued: ${it.javaClass.simpleName}") }
         // The schema check and migration run once, here, off the main thread; screens then only read (r8-1). A failure is
         // kept (STORE_OPEN_ERROR) and told once by [store] itself (r12-4).
         Thread({ runCatching { store(this) }.onFailure { Log.w(TAG,"store not opened: ${it.javaClass.simpleName}") }
