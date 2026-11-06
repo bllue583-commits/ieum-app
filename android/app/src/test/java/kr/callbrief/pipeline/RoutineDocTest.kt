@@ -110,8 +110,8 @@ class RoutineDocTest {
         listOf("mergePeople({\"from\",\"into\"}","unmergePeople({\"from\",\"into\"}","keepApart").forEach { assertTrue(it,prompt.contains(it)) }
     }
 
-    /** v8 (DESIGN_V4 4.3): the tidy routine's own self-report, the failure path, the number rule for rewrites and the watchdog. */
-    @Test fun tidyV6KeepsItsOwnReportAndTheNumbers() {
+    /** Tidy v6 on (DESIGN_V4 4.3): the tidy routine's own self-report, the failure path, the number rule for rewrites and the watchdog. */
+    @Test fun tidyKeepsItsOwnReportAndTheNumbers() {
         val text=File(doc().parentFile,"tidy.md").readText()
         val prompt=text.substringAfter("\n---\n")
         listOf("status/last-run-tidy.json","\"repoOk\":true","\"pushed\":true","\"확인 필요: 저장소 접근\"","renameCompany({\"from\",\"to\"}",
@@ -119,7 +119,40 @@ class RoutineDocTest {
             "python3 tools/watchdog.py --root . --apply bllue583-commits/ieum-inbox",
             "mergePeople({\"from\",\"into\"}","unmergePeople({\"from\",\"into\"}","keepApart","한 쌍은 [남겨 둔 체크할 일 id, 비슷한 일을 냈다가 빠진 기록 key]이다").forEach { assertTrue(it,prompt.contains(it)) }
         assertFalse("tidy no longer writes the shared file",prompt.contains("`status/last-run.json`을 새로 써서"))
-        assertTrue(text.contains("지시문 버전 6\n"))
+        assertTrue(text.contains("지시문 버전 $TIDY_VERSION\n"))
+    }
+
+    /** v3.5 (DESIGN_V5 1절, 2.2절, r15-2): prompt 7 writes the morning report after step 9 (section 9-1), checks it with
+     * tools/report_check.py, keeps 30 days, reports reportWritten, and starts at 04:46 so the phone can send it at 05:30. */
+    @Test fun tidyV7WritesTheMorningReport() {
+        val text=File(doc().parentFile,"tidy.md").readText()
+        val head=text.substringBefore("\n---\n");val prompt=text.substringAfter("\n---\n")
+        assertTrue(head.contains("지시문 버전 7\n"))
+        assertTrue("04:46",head.contains("`CRON_TZ=Asia/Seoul 46 4 * * *`") && prompt.contains("04:46"))
+        assertFalse("the old time is gone from the prompt",prompt.contains("05:16"))
+        val nine=prompt.indexOf("\n9. 기억 파일을 쓴다.");val nineOne=prompt.indexOf("\n9-1. 아침 보고서.");val ten=prompt.indexOf("\n10. 장부의 rev를 1 올리고")
+        assertTrue("9-1 sits between 9 and 10",nine in 0 until nineOne && nineOne<ten)
+        val section=prompt.substring(nineOne,ten)
+        // The format of DESIGN_V5 1절: every key the phone reads (r15-1 KakaoReport.compose).
+        val format=JSONObject(section.substringAfter("```json\n").substringBefore("\n```"))
+        assertEquals(listOf("day","generatedMs","tidyRev","head","yesterday","today","inProgress","check"),format.keys().asSequence().toList())
+        assertEquals(listOf("calls","newChecks","todayChecks","issues"),format.getJSONObject("head").keys().asSequence().toList())
+        assertEquals(listOf("who","what"),format.getJSONArray("yesterday").getJSONObject(0).keys().asSequence().toList())
+        assertEquals(listOf("id","what","who","since","status","check"),format.getJSONArray("today").getJSONObject(0).keys().asSequence().toList())
+        assertEquals(listOf("what","who"),format.getJSONArray("check").getJSONObject(0).keys().asSequence().toList())
+        listOf("`report/YYYY-MM-DD.json`","한국 시각 오늘","state의 records","매시간 결과 요약","업체(업체가 없으면 사람) 단위로 묶어",
+            "약속, 금액, 날짜가 있는 줄을 먼저 두고 최대 8줄","개인 통화(business가 false)는 넣지 않는다","빈 배열 `[]`",
+            "오늘과 어제 요청한 것(createdMs)과 확인 필요(status가 needs_confirmation)를 먼저","\"오늘 요청\", \"어제 요청\", \"3일 전 요청\"",
+            "흔적이 없으면 빈 문자열 `\"\"`","완료 처리는 하지 않는다","어제 움직임이 있던 것 먼저 최대 3줄","한 줄 60자",
+            "가운데 점, 말줄임표, 영어 상태값","\"기한\", \"지남\"","\"까지\"로 끝나는 기한 표현","전화번호는 절대 넣지 않는다",
+            "python3 tools/report_check.py report/YYYY-MM-DD.json","30일 넘게 지난 report 파일은 `git rm` 한다",
+            "10번의 \"tidy\" 커밋에 함께 넣는다").forEach { assertTrue(it,section.contains(it)) }
+        assertTrue(prompt.contains("아침 보고서(9-1번), 지운 파일을 한 커밋 \"tidy\"로 push한다"))
+        assertTrue(prompt.contains("\" | 확인 필요: 아침 보고서\""))
+        // The self-report: reportWritten, and prompt 7 in the line the watchdog compares with version.json's tidyVersion.
+        assertTrue(prompt.contains("\"promptVersion\":\"7\""));assertTrue(prompt.contains("\"reportWritten\":true}"))
+        assertTrue(prompt.contains("- `reportWritten`:"))
+        assertTrue(File(doc().parentFile,"self-report.md").readText().contains("reportWritten"))
     }
 
     /** v3.1: the watchdog compares the routine's self-reported promptVersion with version.json's tidyVersion (the head line), so the
@@ -152,6 +185,8 @@ class RoutineDocTest {
     private companion object {
         /** The version docs/routines/hourly.md is at (v7: DESIGN_V4 3.2-3, r13-2; v8: DESIGN_V4 4.3, r14-3, same rules and format). */
         const val DOC_VERSION=8
+        /** The version docs/routines/tidy.md is at (v7: DESIGN_V5 2.2, r15-2, the morning report). */
+        const val TIDY_VERSION=7
         /** True once ClaudeCallAnalyzer (r13-1's file) carries the doc's version (the orchestrator's integration step). */
         val codeAtDocVersion get()=ClaudeCallAnalyzer.PROMPT_VERSION>=DOC_VERSION
         /** Both routines find the inbox repository the same way. */

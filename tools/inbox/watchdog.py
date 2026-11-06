@@ -15,8 +15,12 @@ issues itself through the REST API (`gh api`), printing "watchdog: n opened, m c
 (status/last-run-hourly.json, status/last-run-tidy.json); the old shared status/last-run.json is read only when the new file
 is missing. New rules: the hourly self-report's status commit is missing for two scheduled slots in a row, and a run whose
 result commit did not go up (pushed=false).
+
+v3.5 (DESIGN_V5 2.2-4): two morning report rules. Past 05:30 KST without report/<today>.json (only whether the file is
+there; its text is never read), and KakaoTalk linked in the heartbeat but kakao.lastSentMs not from today past 09:00 KST
+for two days in a row.
 """
-import argparse, json, os, subprocess, sys, time
+import argparse, datetime, json, os, subprocess, sys, time
 
 HOUR = 3_600_000
 PHONE_SILENT_MS = 12 * HOUR
@@ -95,6 +99,15 @@ DEFAULT_CRON = "CRON_TZ=Asia/Seoul 34 7-22 * * *"
 ZONES_MS = {"Asia/Seoul": 9 * HOUR, "UTC": 0, "Etc/UTC": 0}
 STATUS_FILES = {"hourly": "status/last-run-hourly.json", "tidy": "status/last-run-tidy.json"}
 OLD_STATUS = "status/last-run.json"
+
+# v3.5 (DESIGN_V5 2.2-4): the morning report. The tidy (04:46) writes report/<today>.json; the phone sends it at 05:30 and
+# tries until 09:00.
+T_REPORT_MISSING = "아침 보고서가 안 만들어졌어요"
+T_KAKAO_NOT_SENT = "카카오톡 보고가 안 갔어요"
+REPORT_DUE_MIN = 5 * 60 + 30
+KAKAO_DUE_MIN = 9 * 60
+REPORT_DIR = "report"
+REPORT_PROMPT_VERSION = 7
 
 
 def cron_field(text, lo, hi):
@@ -202,6 +215,63 @@ def routine_rules(now_ms, hourly, tidy, status_commits, add):
     if names:
         add(T_NOT_PUSHED, f"{', '.join(names)}의 마지막 실행이 결과 커밋을 저장소에 올리지 못했어요 (pushed=false).\n\n"
             "추정 원인: 저장소 push 권한, 충돌이 풀리지 않음, 네트워크예요. 다음 실행이 다시 올리면 저절로 닫혀요.")
+
+
+def kst_day_start(ms_value):
+    """00:00 KST of the day ms_value falls in (epoch ms)."""
+    day = 24 * HOUR
+    return (ms_value + KST_OFFSET_MS) // day * day - KST_OFFSET_MS
+
+
+def kst_date(ms_value):
+    """YYYY-MM-DD of ms_value in Korea (the report file's name)."""
+    t = datetime.datetime.fromtimestamp((ms_value + KST_OFFSET_MS) / 1000, tz=datetime.timezone.utc)
+    return t.strftime("%Y-%m-%d")
+
+
+def report_rules(now_ms, phone, history, tidy, report_exists, add):
+    """v3.5 (DESIGN_V5 2.2-4). (1) Past 05:30 KST and report/<today>.json is not there (report_exists None: not checked), once
+    the tidy's self-report names prompt 7 or later; the body says what the tidy reported (reportWritten). The issue closes by
+    itself the next run before 05:30 or once the file is there. (2) The heartbeat says KakaoTalk is linked, it is past
+    09:00 KST and the last send is not from today, and the same held yesterday (two days in a row): lastSentMs before
+    yesterday's 00:00 while linked since yesterday's 09:00 at the latest. phone: the current heartbeat (12 hours at most)."""
+    today0 = kst_day_start(now_ms)
+    # Only once the tidy runs prompt 7 (the one that writes the report): on the release day the last tidy self-report is still
+    # prompt 6's, and a report missing that day is no fault.
+    writes_reports = isinstance(tidy, dict) and (num(tidy.get("promptVersion")) or 0) >= REPORT_PROMPT_VERSION
+    if writes_reports and report_exists is False and now_ms >= today0 + REPORT_DUE_MIN * MINUTE:
+        ended = num(tidy.get("endedMs"))
+        if ended and ended >= today0:
+            why = f"오늘 새벽 정리는 {kst(ended)}에 끝났고 보고서를 " + ("썼다고 했어요(reportWritten=true).\n"
+                  if tidy.get("reportWritten") is True else "쓰지 못했어요(reportWritten=false).\n")
+        else:
+            why = "오늘 새벽 정리의 자가 보고가 없어요" + (f"(마지막 실행 {hours(now_ms - ended)} 전).\n" if ended else ".\n")
+        add(T_REPORT_MISSING, f"한국 시각 05:30이 지났는데 report/{kst_date(now_ms)}.json이 없어요.\n" + why
+            + "\n추정 원인: 새벽 정리(04:46)가 돌지 않았거나 늦게 끝났어요, 폰 자료가 오지 않아 \"정리할 것 없음\"이었어요, "
+              "보고서가 검사(report_check.py)를 통과하지 못했어요. 폰은 06:00에 자기 자료로 짧은 보고를 보내요.")
+    if not isinstance(phone, dict) or now_ms < today0 + KAKAO_DUE_MIN * MINUTE:
+        return
+
+    def kakao(h):
+        k = h.get("kakao") if isinstance(h, dict) else None
+        return k if isinstance(k, dict) else {}
+    if kakao(phone).get("linked") is not True:
+        return
+    last = num(kakao(phone).get("lastSentMs")) or 0
+    yesterday0 = today0 - 24 * HOUR
+    if last >= yesterday0:
+        return  # sent today, or yesterday (one missed day only)
+    since = held_since(phone, history, lambda h: kakao(h).get("linked") is True)
+    if since is None or since > yesterday0 + KAKAO_DUE_MIN * MINUTE:
+        return  # linked too recently for two missed mornings
+    k = kakao(phone)
+    err = w_code(k.get("error"))
+    add(T_KAKAO_NOT_SENT, "카카오톡이 연결돼 있는데 어제와 오늘 아침 보고가 카카오톡으로 가지 않았어요 (기준 2일 연속, 09:00).\n"
+        + (f"마지막 전송: {hours(now_ms - last)} 전.\n" if last else "카카오톡으로 보낸 적이 없어요.\n")
+        + f"보낸 횟수 {num(k.get('sent')) or 0}, 실패 횟수 {num(k.get('failed')) or 0}.\n"
+        + (f"마지막 오류 코드: {err}.\n" if err else "")
+        + "\n추정 원인: 카카오 토큰이 만료됐거나 동의가 철회됐어요, 아침 보고서가 없었어요, 폰이 09:00까지 인터넷에 닿지 못했어요. "
+          "앱 설정의 아침 보고 묶음에서 연결 상태를 확인해 주세요.")
 
 
 def held_since(phone, history, pred):
@@ -391,12 +461,13 @@ def with_causes(text, phone, now_ms):
 
 
 def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count, version=None, version_ms=None, history=None, tidy_run=None,
-             status_commits=None):
+             status_commits=None, report_exists=None):
     """phone / last_run: dict or None (file missing); last_run is the hourly routine's self-report (v3.4), tidy_run the tidy's.
     inbox_oldest_ms: epoch ms of the oldest waiting request or None.
     version: app/version.json (dict or None), version_ms: when it last changed (commit time). history: earlier heartbeats
     (dicts) of about the last two days, for the rules that need a value to hold for a while. status_commits: times (ms) of
-    the commits that changed the hourly self-report in about the last day, or None to skip the missed-slot rule."""
+    the commits that changed the hourly self-report in about the last day, or None to skip the missed-slot rule.
+    report_exists: whether report/<today KST>.json is in the checkout (v3.5), or None to skip the missing-report rule."""
     out = []
 
     def add(title, body):
@@ -483,6 +554,7 @@ def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count, version=None
     fresh = phone if phone is not None and now_ms - ms(phone, "atMs") <= OLD_VERSION_FRESH_MS else None
     v31_rules(now_ms, fresh, [last_run, tidy_run], version, version_ms, history, add)
     routine_rules(now_ms, last_run, tidy_run, status_commits, add)
+    report_rules(now_ms, fresh, history, tidy_run, report_exists, add)
 
     if inbox_oldest_ms is not None:
         # Counted in the routine's hours only (07:00 to 23:00 KST): six missed 30-minute runs and more.
@@ -662,7 +734,8 @@ def main(argv=None, gh=gh_api):
     problems = evaluate(a.now_ms, read_json(os.path.join(a.root, "status/phone.json")), hourly,
                         min(times) if times else None, len(files),
                         version=read_json(os.path.join(a.root, "app/version.json")), version_ms=last_commit_ms(a.root, "app/version.json"),
-                        history=phone_history(a.root, a.now_ms), tidy_run=tidy, status_commits=commits)
+                        history=phone_history(a.root, a.now_ms), tidy_run=tidy, status_commits=commits,
+                        report_exists=os.path.isfile(os.path.join(a.root, REPORT_DIR, kst_date(a.now_ms) + ".json")))
     result = problems
     summary = None
     if a.apply:

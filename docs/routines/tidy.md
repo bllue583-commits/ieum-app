@@ -1,28 +1,31 @@
 # 이음 새벽 정리 (매일) 지시문
-지시문 버전 6
+지시문 버전 7
 
 이 파일이 예약 작업 "이음 새벽 정리 (매일)" 프롬프트의 원본이다(설계도 C2, "새벽 정리" 절). v3.4(11/6)부터 예약 작업 프롬프트는 짧은 안내다(ieum-inbox를 pull하고, 실패하면 "확인 필요: 저장소 접근"만 답하고 끝냄, 아니면 저장소의 `routines/tidy.md`를 읽고 첫 "---" 다음부터 끝까지를 지시문으로 따름). 이 파일이 원본이고 배포 때 ieum-inbox `routines/tidy.md`로 복사한다.
 지금 예약 작업에 들어 있는 판(11/4 2판: 중복 방지, 자가 보고 설계도 B3 포함)과 같다. 저장소 문장만 clone 안내를 더해 고쳤다.
 v3.1(r12-3): 폰이 처음 정리 중(firstPassDone이 false)이어도 최근 14일 records를 올린다. 1번에서 firstPassDone으로 멈추지 않고, 그동안은 3번 대신 최근 14일만 읽고 tidiedOnce를 쓰지 않는다(처음 정리가 끝난 뒤 10월부터 전체 정리가 한 번 일어난다).
+v3.5(11/6, DESIGN_V5 1절, 2.2절, 버전 7): 9번 뒤에 9-1 "아침 보고서"를 더했다. 1절 형식의 `report/YYYY-MM-DD.json`(한국 시각 오늘)을 쓰고 `tools/report_check.py`로 검사한 뒤 10번 "tidy" 커밋에 넣는다. 폰이 05:30에 그 파일을 받아 카카오톡 "나와의 채팅"으로 보낸다. 30일 지난 report 파일은 지운다. 자가 보고에 `reportWritten`. 루틴 시각은 05:16에서 04:46으로 옮겼다(05:30 전에 끝나게).
+루틴 시간: 매일 04:46 (`CRON_TZ=Asia/Seoul 46 4 * * *`, 예약 작업 시각은 오케스트레이터가 바꾼다).
 v3.4(11/6, DESIGN_V4 4.3-1, 4.3-2, 4.3-7, 버전 6): 저장소 접근 실패 길(`git pull`이나 push가 실패하면 고치지 않고 "확인 필요: 저장소 접근"으로 보고하고 끝냄), 2번에 업체 이름 고침(renameCompany), 6번 다시 쓰기에서 숫자를 바꾸지 않는 규칙(폰이 숫자가 달라진 다시 쓰기를 거부함), 자가 보고를 `status/last-run-tidy.json`으로 나눔(매시간 분석의 `status/last-run-hourly.json`을 덮어쓰지 않게)과 `repoOk`, `pushed`, 마지막에 워치독 실행(밤사이 빠진 매시간 실행을 아침에 한 번 더 본다). v3.3에서 넣은 합치기 장부 수정 규칙(mergePeople, unmergePeople, keepApart)과 mergeCandidates 형식은 그대로다.
 v2.6(11/5): state의 tasks에 rev, state에 mergeCandidates가 실린다. 6번에 "제안 항목에 rev를 그대로 적는다", 7번에 "없어지는 쪽은 지우지 않고 mergedInto만 적는다"를 보탰다. 폰은 rev가 지금과 다른 제안을 건너뛴다(밤사이 통화로 바뀐 일을 옛 판단으로 덮지 않는다). 바꿀 때는 이 파일을 먼저 고치고 ieum-inbox `routines/tidy.md`로 복사한 뒤(배포 때), 이름, 시각, 링크를 사용자에게 알린다.
 
 ---
 
 이음 새벽 정리 (매일).
-사용자(bllue583)가 아내의 업무 기록 정리를 위해 직접 만든 자동 작업이다. 아내도 이 정리와 보고를 알고 동의했다. 하루 한 번 06시 아침 보고 전에 돈다. 대화나 질문 없이 아래만 하고 끝낸다. 가능한 한 자세하고 꼼꼼하게 대조한다. 저장소는 bllue583-commits/ieum-inbox 이다. 작업 폴더에 없으면 ls /home/claude 로 찾고, 그래도 없으면 gh repo clone bllue583-commits/ieum-inbox 로 받는다.
+사용자(bllue583)가 아내의 업무 기록 정리를 위해 직접 만든 자동 작업이다. 아내도 이 정리와 보고를 알고 동의했다. 하루 한 번 04:46에 돌고, 폰이 05:30에 카카오톡으로 보내는 아침 보고(9-1번의 보고서) 전에 끝낸다. 대화나 질문 없이 아래만 하고 끝낸다. 가능한 한 자세하고 꼼꼼하게 대조한다. 저장소는 bllue583-commits/ieum-inbox 이다. 작업 폴더에 없으면 ls /home/claude 로 찾고, 그래도 없으면 gh repo clone bllue583-commits/ieum-inbox 로 받는다.
 
 작업 폴더는 ieum-inbox 저장소의 기본 브랜치다. 읽는 파일:
 - ledger/ledger.json: 장부 {rev, updatedMs, siteMemo, companies[{name, trade, memo}], people[{id, name, company, role, isStaff, aliases[], locked[]}], issues[{id, title, companies[], status, recordKeys[], taskIds[]}], issueSuggestions[], corrections[], tidiedOnce}
 - tidy/state.json: 폰이 밤에 올린 자료 {generatedMs, firstPassDone, tasks[{id, title, due, status, company, createdMs, locked, rev}], records[{key, atMs, kind, counterpartId, company, summary, keyPoints}], recentlyDone[], mergeCandidates[](있을 때만), personCandidates[](있을 때만)}
 - tidy/proposal.json: 이번에 쓸 제안(이전 것이 있으면 덮어쓴다)
 - tidy/project.md, tidy/history/YYYY-MM.md, tidy/briefing.md: 이 작업의 기억(9번)
+- report/YYYY-MM-DD.json: 아침 보고서(9-1번이 쓴다, 폰이 05:30에 받아 카카오톡으로 보낸다)
 
-중복 방지: `git pull` 직후, 기본 브랜치에 오늘(한국 시각) 날짜로 메시지가 "tidy"인 커밋이 이미 있으면 다른 정리 작업이 먼저 끝낸 것이다. 그때는 장부와 제안을 건드리지 않고 마지막 단계(자가 보고)만 한 뒤 11번 형식으로 "이미 정리됨"이라고 보고한다.
+중복 방지: `git pull` 직후, 기본 브랜치에 오늘(한국 시각) 날짜로 메시지가 "tidy"인 커밋이 이미 있으면 다른 정리 작업이 먼저 끝낸 것이다. 그때는 장부와 제안, 아침 보고서를 건드리지 않고 마지막 단계(자가 보고)만 한 뒤 11번 형식으로 "이미 정리됨"이라고 보고한다.
 
 저장소 접근 실패: 저장소를 찾거나 받지 못했거나 `git pull`이 실패하면(인증, 권한, 네트워크, 충돌) 아무것도 고치지 않고 자가 보고도 하지 않으며(push할 수 없다) 11번 형식의 첫 줄을 "확인 필요: 저장소 접근"으로 보고하고 끝낸다. 10번의 push가 `git pull --rebase` 뒤에도 실패해도 같다. 저장소에 닿지 못한 실행을 "정리할 것 없음"으로 보고하지 않는다.
 
-1. `git pull` 한다. tidy/state.json이 없거나 generatedMs가 지금보다 24시간 넘게 오래됐으면 아무것도 고치지 않고 마지막 단계(자가 보고)만 한 뒤 11번 형식으로 "정리할 것 없음: 이유"라고 보고한다(이유 예: "폰 자료가 이틀째 안 옴"). firstPassDone이 false여도 멈추지 않는다(폰이 아직 처음 정리 중이면 최근 14일 기록만 올라와 있다, 3번).
+1. `git pull` 한다. tidy/state.json이 없거나 generatedMs가 지금보다 24시간 넘게 오래됐으면 아무것도 고치지 않고(9-1번 아침 보고서도 쓰지 않는다, 폰이 06:00에 자기 자료로 짧은 보고를 보낸다) 마지막 단계(자가 보고)만 한 뒤 11번 형식으로 "정리할 것 없음: 이유"라고 보고한다(이유 예: "폰 자료가 이틀째 안 옴"). firstPassDone이 false여도 멈추지 않는다(폰이 아직 처음 정리 중이면 최근 14일 기록만 올라와 있다, 3번).
 2. ledger/edits/*.json(사용자 수정)이 있으면 먼저 장부에 반영한다. rename이면 그 id의 사람 이름을 바꾸고 예전 이름은 aliases에, locked에 "name"을 넣는다. mergePeople({"from","into"}, 사용자가 폰에서 두 사람을 합침)이면 from 사람에 mergedInto: into를 적고 from의 이름을 into의 aliases에 더한다. unmergePeople({"from","into"}, 사용자가 합치기를 되돌림)이면 from의 mergedInto를 지우고, 두 사람 모두의 keepApart 목록에 서로의 id를 넣는다. keepApart에 있는 두 사람은 다시 합치거나 합치자고 제안하지 않는다. renameCompany({"from","to"}, 사용자가 폰에서 업체 이름을 고침)이면 from 이름의 업체 name을 to로 바꾸고, 예전 이름은 그 업체의 aliases에, locked에 "name"을 넣는다. to 이름의 업체가 이미 있으면 from 업체에 mergedInto: to만 적는다. 사람의 company와 issues의 companies에 있는 from도 to로 고친다. 반영한 파일은 `git rm` 한다.
 3. 읽을 범위: state의 firstPassDone이 false이면(폰이 아직 처음 정리 중) state의 records(최근 14일)를 날짜순으로 전부 읽고 그 범위 안에서만 정리한다. 이때는 7번의 tidiedOnce를 쓰지 않는다(처음 정리가 끝나면 폰이 10월부터 전체를 올리고 그때 처음부터 다시 정리한다). firstPassDone이 true이고 장부의 tidiedOnce가 true가 아니면 10월 1일부터의 records를 날짜순으로 전부 읽고 서로 대조해 처음부터 다시 정리한다. 그 뒤로는 9번의 기억 파일을 먼저 읽고, 열린 issues에 묶인 기록(recordKeys)과 최근 7일 기록 전체를 읽는다.
 4. 진행 중인 일(issues): 지난 통화, 문자, 메일을 "진행 중인 일" 단위로 묶고 한 줄 현황을 쓴다(예: "철근 단가 재견적: 업체 회신 대기, 금요일 계약 예정"). 진행 중인 것만 최근 것부터 20개까지 둔다. 있던 일은 id를 유지하고, 새 일의 id는 "i_"와 8자다. 끝난 일은 뺀다(끝난 일의 경과는 project.md와 history에 남는다). issueSuggestions와 corrections를 판단해 반영한 뒤 비운다.
@@ -50,9 +53,25 @@ v2.6(11/5): state의 tasks에 rev, state에 mergeCandidates가 실린다. 6번�
      "## 끝났는지 확인할 일" — done_suggested로 제안한 것.
      "## 어제와 달라진 것" — 어제 briefing과 비교해 새로 생긴 일, 끝난 일, 바뀐 날짜.
      각 줄은 기록(records)과 장부, 기억 파일에 근거가 있어야 하며, 업체·사람 표기는 장부를 따른다. 전화번호, 녹음, 자막과 문자 원문은 넣지 않는다.
-10. 장부의 rev를 1 올리고 updatedMs를 지금 시각으로 쓴다. 장부, 제안, project.md, history 파일, briefing.md, 지운 파일을 한 커밋 "tidy"로 push한다. 충돌이 나면 `git pull --rebase` 후 다시 적용한다. 그래도 push가 실패하면 저장소 접근 실패로 끝낸다.
+9-1. 아침 보고서. 9번까지 정리한 장부, state, 기억 파일로 `report/YYYY-MM-DD.json`(날짜는 한국 시각 오늘 = 보고 날짜)을 쓴다. 폰이 05:30에 이 파일을 받아 그림 한 장과 글 한 통으로 아내의 카카오톡 "나와의 채팅"에 그대로 보내므로, 아내가 아침에 읽고 바로 움직일 수 있게 쓴다. "어제"는 한국 시각 어제 00:00부터 24:00까지다. 형식은 아래 한 줄 JSON이다(키 이름과 순서 그대로).
+
+```json
+{"day":"YYYY-MM-DD","generatedMs":0,"tidyRev":0,"head":{"calls":0,"newChecks":0,"todayChecks":0,"issues":0},"yesterday":[{"who":"","what":""}],"today":[{"id":"","what":"","who":"","since":"","status":"","check":false}],"inProgress":[{"what":""}],"check":[{"what":"","who":""}]}
+```
+
+   - `day`: 오늘 날짜(파일 이름과 같다). `generatedMs`: 쓰는 시각(`date +%s%3N`). `tidyRev`: 10번에서 올릴 장부의 rev(이번 실행 뒤의 값).
+   - `head`: `calls`는 어제 업무 기록 중 통화 수, `newChecks`는 state tasks 중 createdMs가 어제인 열린 체크할 일 수, `todayChecks`는 `today` 줄 수, `issues`는 장부의 진행 중인 issues 수. 모두 0 이상의 정수.
+   - `yesterday`: 어제 기록은 state의 records(atMs가 어제인 것)에서 읽고, records에 없는 어제 기록이 매시간 결과 요약(`story/today.json`의 day가 어제이면 그 text, `results/`에 폰이 아직 가져가지 않은 결과의 summary)에 보이면 보탠다(같은 일을 두 번 쓰지 않는다). 업무 통화, 문자, 메일을 **업체(업체가 없으면 사람) 단위로 묶어** 한 줄씩 쓴다. `who`는 장부 표기의 업체와 사람("△△철강 김민수 대표"), `what`은 무슨 일과 정해진 것("철근 단가 재협의, 견적서 금요일에 보내기로"). 약속, 금액, 날짜가 있는 줄을 먼저 두고 최대 8줄. 개인 통화(business가 false)는 넣지 않는다. 어제 업무 기록이 없으면 빈 배열 `[]`.
+   - `today`: state tasks의 열린 체크할 일 중 오늘과 어제 요청한 것(createdMs)과 확인 필요(status가 needs_confirmation)를 먼저, 그다음은 요청이 최근인 것부터 최대 8줄. `id`는 그 체크할 일의 id 그대로, `what`은 제목(숫자는 바꾸지 않는다), `who`는 업체(장부 표기, 없으면 빈 문자열), `since`는 요청 날짜 표현("오늘 요청", "어제 요청", "3일 전 요청"; 한국 시각 날짜 차이). `status`는 그 일 뒤의 문자, 메일, 후속 통화에서 이행 흔적이 보이면 맥락을 종합한 상태 글("메일 발송 확인 완료", "문자로 답 받음"), 흔적이 없으면 빈 문자열 `""`이다. 흔적이 있어도 완료 처리는 하지 않는다(6번의 done_suggested 제안과는 별개). `check`는 확인 필요 항목이면 `true`, 아니면 `false`.
+   - `inProgress`: 장부 issues 중 어제 움직임이 있던 것 먼저 최대 3줄, `what`은 "제목: 현황"(4번의 한 줄 현황). `check`: 확인이 필요한 것(확인 필요 체크할 일, 들린 숫자나 대상이 애매한 것) 최대 3줄, `what`은 무엇을 확인할지, `who`는 업체나 사람(없으면 빈 문자열).
+   - 한 줄 60자: 화면에 한 줄로 나오는 글이 60자를 넘지 않는다. 한 줄은 `yesterday`는 "who: what", `today`는 "what (who, since, status)"(빈 칸은 빼고), `inProgress`는 what, `check`는 "what (who)"이다. 넘치면 짧게 다시 쓴다(줄을 자르지 않는다).
+   - 글 규칙(화면과 같다): 가운데 점, 말줄임표, 영어 상태값(open, done, needs_confirmation, FAILED 같은 것), "기한", "지남", "지났어요", "까지"로 끝나는 기한 표현("금요일까지")을 쓰지 않는다. "~해요"체가 아니라 보고체(명사형 종결, "보내기로", "입회 요청"). 전화번호는 절대 넣지 않는다. 금액, 수량, 날짜는 적되 자막과 문자 원문은 옮기지 않는다. 업체와 사람 표기는 장부를 따르고 근거 없는 내용을 만들지 않는다.
+   - 쓴 뒤 `python3 tools/report_check.py report/YYYY-MM-DD.json`을 실행한다. 종료 코드가 0이 아니면 출력된 이유대로 고쳐 다시 검사한다(세 번까지). 세 번 뒤에도 통과하지 못하면 그 파일을 지우고 커밋하지 않으며(폰이 06:00에 자기 자료로 짧은 보고를 보낸다) 11번 첫 줄 끝에 " | 확인 필요: 아침 보고서"를 붙인다. `tools/report_check.py`가 저장소에 아직 없으면(앱 배포 전) 위 규칙을 직접 한 번 더 대조하고 넘어간다. 검사 출력에는 내용이 아니라 이유만 나온다.
+   - `report/` 안에서 파일 이름의 날짜가 오늘보다 30일 넘게 지난 report 파일은 `git rm` 한다.
+   - 통과한 보고서와 지운 파일은 10번의 "tidy" 커밋에 함께 넣는다.
+10. 장부의 rev를 1 올리고 updatedMs를 지금 시각으로 쓴다. 장부, 제안, project.md, history 파일, briefing.md, 아침 보고서(9-1번), 지운 파일을 한 커밋 "tidy"로 push한다. 충돌이 나면 `git pull --rebase` 후 다시 적용한다. 그래도 push가 실패하면 저장소 접근 실패로 끝낸다.
 11. 보고: briefing.md 전체를 이 세션 작업 폴더에 `이음_현황_YYYYMMDD.md`로도 쓰고, SendUserFile 도구가 있으면 사용자에게 보낸다. 마지막 답(알림으로 감)은 이 형식 그대로다(한국 시각).
-   [이음 새벽 정리 MM/DD HH:MM] 정리 완료 (정리할 것이 없었으면 "정리할 것 없음: 이유", 이미 정리됐으면 "이미 정리됨", 저장소에 닿지 못했으면 "확인 필요: 저장소 접근", 워치독이 새 이슈를 열었으면 끝에 " | 확인 필요: 감시 이슈 n건")
+   [이음 새벽 정리 MM/DD HH:MM] 정리 완료 (정리할 것이 없었으면 "정리할 것 없음: 이유", 이미 정리됐으면 "이미 정리됨", 저장소에 닿지 못했으면 "확인 필요: 저장소 접근", 워치독이 새 이슈를 열었으면 끝에 " | 확인 필요: 감시 이슈 n건", 9-1번 보고서가 검사를 통과하지 못했으면 끝에 " | 확인 필요: 아침 보고서")
    오늘 꼭 할 일 N개 | 전화할 곳 N곳 | 답 기다리는 일 N개 | 진행 중인 일 N개
    가장 급한 것: 오늘 꼭 할 일 중 맨 위 한 줄(없으면 "없음")
    전화: 전화해야 할 곳 앞의 세 곳을 "업체 사람(이유)"로 쉼표로(없으면 "없음")
@@ -62,7 +81,7 @@ v2.6(11/5): state의 tasks에 rev, state에 mergeCandidates가 실린다. 6번�
 마지막 단계(자가 보고). 모든 처리가 끝나면 (처리할 것이 없었어도, 일부가 실패했어도 항상) `status/last-run-tidy.json`을 새로 써서 그 파일만 커밋 "status"로 push한다(10번의 "tidy" 커밋을 push한 뒤 따로 하는 커밋이다). 파일이 이미 있으면 통째로 덮어쓴다. 매시간 분석의 `status/last-run-hourly.json`과 옛 `status/last-run.json`은 건드리지 않는다(옛 파일은 v3.3까지 두 작업이 함께 쓰던 것이라 새벽 정리가 매시간 분석의 상태를 가렸다). 형식은 아래 한 줄 JSON이다.
 
 ```json
-{"routine":"tidy","startedMs":0,"endedMs":0,"processed":0,"skipped":0,"failed":0,"batches":0,"model":"","limitHit":false,"ledgerRev":0,"promptVersion":"6","promptMismatch":false,"loggedTranscript":false,"repoOk":true,"pushed":true}
+{"routine":"tidy","startedMs":0,"endedMs":0,"processed":0,"skipped":0,"failed":0,"batches":0,"model":"","limitHit":false,"ledgerRev":0,"promptVersion":"7","promptMismatch":false,"loggedTranscript":false,"repoOk":true,"pushed":true,"reportWritten":true}
 ```
 
 - `routine`: 이 작업은 `tidy`.
@@ -70,9 +89,10 @@ v2.6(11/5): state의 tasks에 rev, state에 mergeCandidates가 실린다. 6번�
 - `processed`: 읽은 기록 수. `skipped`: 건너뛴 수. `failed`: 처리하려다 실패한 수. `batches`: 제안한 항목 수.
 - `model`: 이번 실행에 쓴 모델 이름.
 - `limitHit`: 사용 한도 오류를 만났으면 `true`, 아니면 `false`.
-- `ledgerRev`: 이번에 쓴 장부의 rev. `promptVersion`은 "6"(이 지시문의 버전, 문자열)로 적고, `promptMismatch`는 `false`로 둔다.
+- `ledgerRev`: 이번에 쓴 장부의 rev. `promptVersion`은 "7"(이 지시문의 버전, 문자열)로 적고, `promptMismatch`는 `false`로 둔다.
 - `loggedTranscript`: 원문을 출력하거나 로그에 남기지 않았으므로 항상 `false`.
 - `repoOk`: 시작할 때 `git pull`이 됐으면 `true`. `pushed`: 10번의 "tidy" 커밋을 push했으면 `true`, 고칠 것이 없어 그 커밋이 없었어도 `true`, push가 실패했으면 `false`.
+- `reportWritten`: 이 실행이 끝날 때 오늘 날짜의 `report/YYYY-MM-DD.json`이 저장소에 push되어 있으면 `true`(이번에 썼거나 먼저 끝난 정리가 썼거나), 쓰지 않았거나("정리할 것 없음") 검사를 통과하지 못했거나 push가 실패했으면 `false`. 워치독이 05:30에 보고서가 없을 때 이 값으로 원인을 적는다.
 
 이 파일에는 시각, 숫자, 모델 이름, 참/거짓만 쓴다. 자막 원문, 이름, 전화번호, 회사 이름, 요약, 오류 메시지 본문은 절대 쓰지 않는다. 실행이 중간에 막혀 결과를 못 썼더라도 이 파일은 `processed`를 실제 값(0이어도)으로 써서 커밋한다. 커밋 메시지에는 건수 외에 내용을 적지 않는다. status 커밋 push가 실패하면 `git pull --rebase` 뒤 한 번 더 하고, 그래도 실패하면 11번 형식의 첫 줄을 "확인 필요: 저장소 접근"으로 보고한다.
 
