@@ -146,7 +146,8 @@ class UiV2Test:ProtectedTextHostTestBase() {
         val pm=app.packageManager
         val info=pm.getPackageInfo(app.packageName,android.content.pm.PackageManager.GET_ACTIVITIES)
         // v3.3 (DESIGN_V4 3.2-4): besides the one screen Activity only the hidden golden measurement tool, not exported.
-        val activities=info.activities!!
+        // v3.5 (DESIGN_V5 2.1): the Kakao SDK's own login and bridge activities are merged in; they are not app screens.
+        val activities=info.activities!!.filter { !it.name.startsWith("com.kakao.sdk.") }
         assertEquals(listOf(MainActivity::class.java.name),activities.filter { it.name!=GoldenMeasureActivity::class.java.name }.map { it.name })
         activities.firstOrNull { it.name==GoldenMeasureActivity::class.java.name }?.let { assertFalse(it.exported) }
         activities.forEach { assertEquals(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,it.screenOrientation) }

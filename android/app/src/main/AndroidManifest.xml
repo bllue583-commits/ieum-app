@@ -25,6 +25,10 @@
     <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
     <!-- Registers the call pipeline again after a restart of the phone, without opening the app. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- v3.5 (DESIGN_V5): KakaoTalk, for the Kakao login and the morning report "나에게 보내기" (the SDK lists it too). -->
+    <queries>
+        <package android:name="com.kakao.talk" />
+    </queries>
     <application android:name=".IeumApplication" android:allowBackup="false" android:fullBackupContent="@xml/vault_full_backup_rules"
         android:dataExtractionRules="@xml/vault_data_extraction_rules"
         android:usesCleartextTraffic="false" android:networkSecurityConfig="@xml/network_security_config"
@@ -36,6 +40,24 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- v3.5 (DESIGN_V5 1절): the [이음에서 보기] button of the KakaoTalk morning report opens kakao<app key>://kakaolink
+                 with screen and dayMs; r15-3 reads them into the screen. kakaonone when the build has no Kakao key. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="${kakaoScheme}" android:host="kakaolink" />
+            </intent-filter>
+        </activity>
+        <!-- v3.5 (DESIGN_V5 2.1-1): the Kakao login comes back to kakao<app key>://oauth. The class is the SDK's own
+             (an AppCompatActivity through CustomTabLauncherActivity); lint cannot see that far into the library. -->
+        <activity android:name="com.kakao.sdk.auth.AuthCodeHandlerActivity" android:exported="true" tools:ignore="Instantiatable">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="${kakaoScheme}" android:host="oauth" />
             </intent-filter>
         </activity>
         <!-- v3.3 (DESIGN_V4 3.2-4): the hidden golden measurement, opened from 설정 "상태와 도움" only. -->

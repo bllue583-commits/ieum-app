@@ -23,6 +23,13 @@ android {
         require(inboxToken.matches(Regex("[A-Za-z0-9_]*"))) { "IEUM_INBOX_TOKEN format" }
         buildConfigField("String","IEUM_INBOX_TOKEN","\""+inboxToken+"\"")
         buildConfigField("String","IEUM_INBOX_REPO","\"bllue583-commits/ieum-inbox\"")
+        // v3.5 (DESIGN_V5): Kakao native app key (CI secret IEUM_KAKAO_APP_KEY, release-apk). Empty = the KakaoTalk morning
+        // report hides itself in settings. Not a secret in itself, but the repository is public, so it is never in the code.
+        val kakaoKey=(System.getenv("IEUM_KAKAO_APP_KEY") ?: "").trim()
+        require(kakaoKey.matches(Regex("[A-Za-z0-9]*"))) { "IEUM_KAKAO_APP_KEY format" }
+        buildConfigField("String","KAKAO_APP_KEY","\""+kakaoKey+"\"")
+        // The login redirect and the message button's scheme: kakao<key>://oauth, kakao<key>://kakaolink.
+        manifestPlaceholders["kakaoScheme"]=if(kakaoKey.isEmpty()) "kakaonone" else "kakao$kakaoKey"
         // Local design preview (IEUM_LOCAL_PREVIEW=1, never in CI): sample calls on first launch, nothing sent anywhere.
         buildConfigField("boolean","LOCAL_PREVIEW",(System.getenv("IEUM_LOCAL_PREVIEW")=="1").toString())
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -59,6 +66,11 @@ dependencies {
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("androidx.work:work-runtime-ktx:2.10.5")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    // v3.5 (DESIGN_V5): KakaoTalk "나에게 보내기" (login, talk_message, image upload). Only KakaoSdkSender uses it.
+    // 2.24.0, not the design's 2.26.0: Kakao's repository serves 2.24.0 as its latest release (11/6, r15-1).
+    implementation("com.kakao.sdk:v2-user:2.24.0")
+    implementation("com.kakao.sdk:v2-talk:2.24.0")
+    implementation("com.kakao.sdk:v2-share:2.24.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.17")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
