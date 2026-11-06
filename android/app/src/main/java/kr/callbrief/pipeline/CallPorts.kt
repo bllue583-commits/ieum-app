@@ -177,6 +177,23 @@ object PipelineSettingsKeys {
     const val RECORD_TIME="recordTime"
     /** r14-1: the optional outgoing-call role offer in settings ("거는 전화에 번호를 더 빨리 알기") was dismissed. */
     const val ROLE_OFFER_SEEN="roleOfferSeen"
+
+    // ---- v3.5 (DESIGN_V5, key commit): names only, each bundle writes its own value. ----
+    /** r15-1: the wife's Kakao account is linked (talk_message agreed); false after an invalid-token error. */
+    const val KAKAO_LINKED="kakaoLinked"
+    /** r15-1: when the morning report last went out in full over KakaoTalk (epoch ms). */
+    const val KAKAO_LAST_SENT_MS="kakaoLastSentMs"
+    /** r15-1: the last Kakao send error code (80 chars at most, no text from the report); empty after a success. */
+    const val KAKAO_LAST_ERROR="kakaoLastError"
+    /** r15-1: running counts of fully sent and failed morning reports. */
+    const val KAKAO_SENT_COUNT="kakaoSentCount"
+    const val KAKAO_FAILED_COUNT="kakaoFailedCount"
+    /** r15-1: the KST day ("YYYY-MM-DD") of the last report sent, so a day is never sent twice. */
+    const val REPORT_DAY="reportDay"
+    /** r15-1: where that report came from: "routine" (report/<day>.json) or "phone" (the 06:00 fallback). */
+    const val REPORT_SOURCE="reportSource"
+    /** r15-3: settings switch "카카오톡으로 받기" (default on once linked). */
+    const val MORNING_KAKAO="morningKakao"
 }
 
 /** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets

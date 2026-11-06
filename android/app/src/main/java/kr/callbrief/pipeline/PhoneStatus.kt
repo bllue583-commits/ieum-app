@@ -52,7 +52,12 @@ internal object PhoneStatus {
         /** DESIGN_V4 3절 (v3.3): the golden measurement and the number guard, numbers only. */
         val v33:V33=V33(),
         /** DESIGN_V4 4절 (v3.4, r14-1 makes the places, r14-3 writes the values): update, messages and record time. */
-        val v34:V34=V34())
+        val v34:V34=V34(),
+        /** DESIGN_V5 (v3.5, key commit makes the places, r15-1 writes the values): the KakaoTalk morning report. */
+        val v35:V35=V35())
+    /** v3.5: heartbeat `kakao{linked,sent,failed,lastSentMs,error}` and `report{day,source}`; numbers, dates and codes only. */
+    data class V35(val kakaoLinked:Boolean=false,val kakaoSent:Long=0,val kakaoFailed:Long=0,val kakaoLastSentMs:Long?=null,
+        val kakaoError:String?=null,val reportDay:String?=null,val reportSource:String?=null)
     /** v3.4 (DESIGN_V4 4.1-5, 4.3-4, 4.3-5, 4.3-8): [updateError] = [PipelineSettingsKeys.UPDATE_ERROR_CODE] (a code, heartbeat
      * `update.error`); [mailError] = [PipelineSettingsKeys.MAIL_ERROR_CODES] ({code: count}, `messages.mailError`); [recordTime] =
      * [PipelineSettingsKeys.RECORD_TIME] ({bucket: count}, `recordTime.fileVsRecordMin`). The two objects go through [counts]. */
@@ -140,6 +145,7 @@ internal object PhoneStatus {
         o.put("golden",i.v33.golden?.let(::counts) ?: JSONObject.NULL)
         o.put("guard",i.v33.guard?.let(::counts) ?: JSONObject.NULL)
         putV34(o,i.v34)
+        putV35(o,i.v35)
         return o
     }
     /** v3.4: always the three objects, so the watchdog reads a key test; inside, a code or counts only (null: nothing yet). */
@@ -147,6 +153,14 @@ internal object PhoneStatus {
         o.put("update",JSONObject().put("error",v.updateError?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL))
         o.put("messages",JSONObject().put("mailError",v.mailError?.let(::counts) ?: JSONObject.NULL))
         o.put("recordTime",JSONObject().put("fileVsRecordMin",v.recordTime?.let(::counts) ?: JSONObject.NULL))
+    }
+    /** v3.5: always both objects so the watchdog reads a key test. */
+    private fun putV35(o:JSONObject,v:V35) {
+        o.put("kakao",JSONObject().put("linked",v.kakaoLinked).put("sent",v.kakaoSent).put("failed",v.kakaoFailed)
+            .put("lastSentMs",v.kakaoLastSentMs ?: JSONObject.NULL)
+            .put("error",v.kakaoError?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL))
+        o.put("report",JSONObject().put("day",v.reportDay?.takeIf { Regex("""\d{4}-\d{2}-\d{2}""").matches(it) } ?: JSONObject.NULL)
+            .put("source",v.reportSource?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL))
     }
     private fun putV31(o:JSONObject,v:V31) {
         o.put("permissions",v.permissions?.let { p -> JSONObject().put("phoneState",p.phoneState).put("overlay",p.overlay)
@@ -262,11 +276,19 @@ internal object PhoneStatus {
                 runCatching { kr.callbrief.pipeline.call.CardStats.heartbeat(s,now) }.getOrNull()),
             v31 = v31(app,s),
             v33 = V33(jsonOf(s,PipelineSettingsKeys.GOLDEN),jsonOf(s,PipelineSettingsKeys.GUARD_STATS)),
-            v34 = v34(s))
+            v34 = v34(s),
+            v35 = v35(s))
     }
     /** The v3.4 keys r14-3 writes (read by name; absent until written). */
     internal fun v34(s:JSONObject):V34 = V34(s.optString(PipelineSettingsKeys.UPDATE_ERROR_CODE).takeIf { it.isNotBlank() },
         jsonOf(s,PipelineSettingsKeys.MAIL_ERROR_CODES),jsonOf(s,PipelineSettingsKeys.RECORD_TIME))
+    /** The v3.5 keys r15-1 writes. */
+    internal fun v35(s:JSONObject):V35 = V35(s.optBoolean(PipelineSettingsKeys.KAKAO_LINKED,false),
+        s.optLong(PipelineSettingsKeys.KAKAO_SENT_COUNT,0),s.optLong(PipelineSettingsKeys.KAKAO_FAILED_COUNT,0),
+        s.optLong(PipelineSettingsKeys.KAKAO_LAST_SENT_MS,0).takeIf { it>0 },
+        s.optString(PipelineSettingsKeys.KAKAO_LAST_ERROR).takeIf { it.isNotBlank() },
+        s.optString(PipelineSettingsKeys.REPORT_DAY).takeIf { it.isNotBlank() },
+        s.optString(PipelineSettingsKeys.REPORT_SOURCE).takeIf { it.isNotBlank() })
     private fun jsonOf(s:JSONObject,key:String):JSONObject? = when(val v=s.opt(key)) {
         is JSONObject -> v
         is String -> runCatching { JSONObject(v) }.getOrNull()
