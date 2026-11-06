@@ -156,7 +156,7 @@
 
 ### 3.8 새벽 정리(`docs/routines/tidy.md` 버전 6)
 - 폰: 정리 동의가 켜져 있고 21:00~04:59(KST), 마지막 전송 12시간 뒤면 `tidy/state.json`(열린 체크할 일과 rev·잠금, 기록 요약을 해시 키로, mergeCandidates, personCandidates)을 올린다. 처음 정리 완료 + `tidiedOnce` 거짓이면 10/1부터 전체, 아니면 최근 14일(`tidyAll`). 내용이 같으면 안 올린다.
-- 루틴(05:16, Opus): 오늘 "tidy" 커밋이 있으면 "이미 정리됨". state가 없거나 24시간 넘었으면 "정리할 것 없음: 이유". issues(진행 중인 일 최대 20, id `i_`+8자), 팔로업 create, `tidy/proposal.json` {rev, basedOnMs, tasks[rewrite·merge·done_suggested·create]}, 장부 정리(mergedInto만, 지우지 않음), 기억 파일 `tidy/project.md`·`tidy/history/YYYY-MM.md`·`tidy/briefing.md`, 자가 보고 `status/last-run-tidy.json`, 워치독. 완료 처리는 하지 않는다.
+- 루틴(04:46, Opus): 오늘 "tidy" 커밋이 있으면 "이미 정리됨". state가 없거나 24시간 넘었으면 "정리할 것 없음: 이유". issues(진행 중인 일 최대 20, id `i_`+8자), 팔로업 create, `tidy/proposal.json` {rev, basedOnMs, tasks[rewrite·merge·done_suggested·create]}, 장부 정리(mergedInto만, 지우지 않음), 기억 파일 `tidy/project.md`·`tidy/history/YYYY-MM.md`·`tidy/briefing.md`, 자가 보고 `status/last-run-tidy.json`, 워치독. 완료 처리는 하지 않는다.
 
 ### 3.9 알림
 | 알림 | 시각·조건 | 문구·동작 | 근거 |
