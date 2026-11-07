@@ -94,19 +94,20 @@
 | 규칙 | 값 | 근거 |
 | --- | --- | --- |
 | 모델 | large-v3-turbo q5_0(574MB), 정리 동의 직후 어떤 연결에서든 받기 시작, 크기·SHA-256 검증 | `PipelineModelManager`, `PipelineModelDownloadWork` |
-| 조건 | 배터리 부족 아님(WorkManager `requiresBatteryNotLow`). 처음 정리의 옛 녹음은 충전 중이거나 50% 이상일 때만 | `CallTranscriptionRunner.schedule`, `FirstPass.powerOk` |
+| 조건(v3.6 전력 정책) | 실행 작업에 WorkManager 제약 없음. 깰 때마다 앱이 배터리(sticky `ACTION_BATTERY_CHANGED`)를 읽어 `PowerPolicy.decide`로 판정. **전원 꽂힘**(`EXTRA_PLUGGED≠0`, 삼성 보호의 notCharging·full 포함, 끊김 2분 미만 유지, 꽂혀도 잔량이 10분에 2% 이상 내려가면 배터리로): 모든 녹음, 유선 6·무선 4스레드, 끝나면 바로 다음 실행, 달궈짐(headroom ≥ 0.85, 배터리 40℃, 20분 안 조각이 식은 중앙값의 1.5배)이면 10분 뒤, 05~07시 90% 미만이면 쉼. **배터리**(40% 이상, 절전·통화 중·달궈짐 아님): 오늘(KST) 20초~3분 통화만 최신순(SQL에서 거름, 길이는 해독 길이→통화기록→파일 크기 추정), 4스레드, 하루 20분 또는 소모 5%(화면 꺼진 실행만), 실행 사이 30분. 그 밖은 쉼. 스위치 [충전 중에만 글자로 바꾸기](기본 끔). SEVERE 이상은 20분 쉼. 지연은 별도 틱(`calls-transcription-later`), 전원 트리거 `ieum.calls.transcribe.plug`(`requiresCharging`, 배터리일 때만 걸어 둠). 처음 정리의 옛 녹음은 꽂혔을 때만 | `PowerPolicy`, `CallTranscriptionWork`, `FirstPass.powerOk`, DESIGN_V6 2절 |
+| 낭비 제거(v3.6) | W1 실행 9분 안에 안 들어갈 조각은 시작 안 함(예상 = 최근 조각 속도 × 1.25, 첫 조각은 예외, `Yield`로 시도 환불·멈춤 안 셈) · W2 예상이 432초(기한의 80%)를 넘을 조각은 미리 반으로(분할 표시 기록) · W3 한 실행 안 모델 세션 이어 쓰기(취소·오류 뒤엔 새로) · W4 `CodecException`(일시 오류 제외)·`ANDROID_STT_PCM_SIZE`는 바로 영구 실패, 기한 2회·INTERRUPTED는 `charging_only` · P7 스레드 ≤ `/proc/self/status` `Cpus_allowed_list` | `CallTranscriptionRunner`, `CallTranscriptionStore`, DESIGN_V6 2.3 |
 | 조각 | 최대 2분(`MAX_CHUNK_MS` 120,000), 자르는 점은 ±2초 안 100ms 창 중 가장 조용한 곳(10ms 격자), 끝 조각 0.1초 미만은 앞 조각에 붙임 | `PipelineAudioMath` |
 | 조각 저장 | 끝난 조각은 `call_transcription_parts`(조각 길이 `chunk_ms`가 다르면 무효)에 저장해 이어 한다. 같은 조각이 3번 연속 중지되면 반으로(10초 미만은 안 쪼갬) | `CallTranscriptionStore`, `SPLIT_AFTER_STOPS` |
 | 대기열 순서 | (처음 정리 중이면 옛 녹음은 맨 뒤, 그 안에서는 통화 시각 오름차순) ① 조각이 하나라도 저장됐거나 중지·기한으로 멈춘 녹음(대기열 진입순) ② 24시간 넘게 기다린 새 녹음(진입순) ③ 나머지 새 녹음 최신 통화순 | `CallTranscriptionStore.nextQueued` |
 | 시간 한도 | WorkManager 약 10분. 실행 6분이 지나면 새 녹음을 집지 않음(첫 녹음은 예외). 그 실행에서 조각을 못 끝낸 시간 한도 중지는 시도 환불(실행의 첫 녹음이 아닐 때만, 한 녹음 환불 6회까지). 이유 없는 중지는 시작 9분 뒤면 시간 한도로 본다 | `NEW_WORK_MS`, `MAX_REFUNDED_STALLS`, `TIME_LIMIT_NEAR_MS` |
 | 기한 | 네이티브 조각당 540초(`NATIVE_DEADLINE_SECONDS`). 넘기면 `ANDROID_STT_DEADLINE`으로 그 조각을 반으로 다시. 반 조각이 또 넘기면 일반 실패 | `CallTranscriptionRunner.deadline` |
 | 시도·실패 | 최대 3회(`MAX_ATTEMPTS`). RUNNING이 11분 넘으면 낡은 것으로 본다. 실패 사유 코드(예: `ANDROID_STT_PCM_SIZE`, `ANDROID_STT_NOT_COMPLETED`, `ANDROID_STT_CPU_UNSUPPORTED`, `EMPTY_TRANSCRIPT`)는 하트비트 `transcription.failReasons` | `STALE_RUNNING_MS` |
-| 실패 재큐(v3.5) | 저장소를 열 때마다 FAILED 줄을 새 빌드에서 한 번 더 대기열로(reason `REQUEUED`, attempts 0). 같은 빌드에서 실패했거나(`failed_build`) 이미 살린 줄(`retried_build`)은 건너뛰고, 줄마다 **총 2회**(`requeue_count`), 마지막 실패가 `INTERRUPTED`(네이티브 크래시 의심)면 **1회**까지. 이번 빌드가 살린 수는 하트비트 `transcription.requeuedFailed` | `CallTranscriptionStore.requeueFailedOnce`, `MAX_REQUEUES`, `MAX_REQUEUES_INTERRUPTED` |
+| 실패 재큐(v3.5, v3.6에서 바뀜) | **전원 꽂힘 실행의 시작에서만**(v3.6 W5, 영구 실패 제외, 멈춤 횟수·`deadline_count`·반 조각 없는 분할 표시도 초기화) FAILED 줄을 새 빌드에서 한 번 더 대기열로(reason `REQUEUED`, attempts 0). 같은 빌드에서 실패했거나(`failed_build`) 이미 살린 줄(`retried_build`)은 건너뛰고, 줄마다 **총 2회**(`requeue_count`), 마지막 실패가 `INTERRUPTED`(네이티브 크래시 의심)면 **1회**까지. 이번 빌드가 살린 수는 하트비트 `transcription.requeuedFailed` | `CallTranscriptionStore.requeueFailedOnce`, `MAX_REQUEUES`, `MAX_REQUEUES_INTERRUPTED` |
 | VAD | 30ms 창이 0.006 이상이고 조각 소리 90분위의 0.3 이상이면 말소리. 골든 변형 하한 0.0025/0.15는 스위치만 있음 | `SPEECH_FLOOR`, `LOUD_SHARE`, `*_LOW` |
-| 디코딩 | 기본 greedy, 온도 증가·best_of는 whisper.cpp 기본(0.2, 5), `no_context=true`, `token_timestamps=true`, `suppress_nst` 꺼짐, 언어 한국어, 스레드 = CPU 수 − 1(1~6, S26은 6). 초기 프롬프트 꺼짐(`PROMPT_ENABLED=false`) | `ieum_whisper.cpp`, `AndroidWhisperEngine`, `WhisperCallTranscriber.threads` |
+| 디코딩 | 기본 greedy, 온도 증가·best_of는 whisper.cpp 기본(0.2, 5), `no_context=true`, `token_timestamps=true`, `suppress_nst` 꺼짐, 언어 한국어, 스레드는 전력 정책(유선 6, 무선·배터리 4)과 쓸 수 있는 코어 수 중 작은 값(v3.6). 초기 프롬프트 꺼짐(`PROMPT_ENABLED=false`) | `ieum_whisper.cpp`, `AndroidWhisperEngine`, `WhisperCallTranscriber.threads` |
 | 불확실 숫자 | 토큰 확률 최솟값 0.5 미만인 숫자를 `Segment.uncertainNumbers`로(이어 받은 조각에서는 빠짐) | `AndroidWhisperEngine.UNCERTAIN_P` |
 | 후처리 | 반복 환각 제거, 세그먼트 줄바꿈 이음, 줄별 시각 `segments_json` `{"v":1,"s","d","u"}`(글은 없음) | `TranscriptClean`, `CallRecordStore` |
-| 속도 | S26 녹음 1분당 약 85초(6스레드), 침묵 건너뛰기 통화형 72초(10/30 측정, 옛 모델 기준일 수 있음(추정)) | HANDOFF_HISTORY |
+| 속도 | 아내 폰 S26 백그라운드 6스레드 실측(11/6~7): 2분 조각당 223초(식음)~330초(지속)~473초, 녹음 1분당 111~195초. 10/30의 85초/분은 앞쪽 측정. v3.6 뒤 하트비트 `power.chunk`로 다시 잰다(목표 식은 중앙값 ≤ 280초) | DESIGN_V6 1.1 |
 | 골든 측정 | 설정 "상태와 도움" 끝 [골든 측정](`GoldenMeasureActivity`, 충전 중 WorkManager). 사용자가 녹음과 정답을 넣으면 변형별 CER·업체명·숫자 적중·조각 ms만 하트비트 `golden`에. 음성·정답은 폰 밖으로 안 나감. B1~B7 상수는 기본값 그대로 | `GoldenMeasureActivity`, DESIGN_V4 3.5 |
 
 ### 3.3 통화기록 대조(`FirstPass.match`)
@@ -183,6 +184,7 @@
 | v3.1 | permissions{phoneState,overlay,redirectRole,installAllowed}, recordingGap{calls,withFile,matched,newestFileMs,sinceMs}, recordingGapVerdict, followup{noRecording} |
 | 카드·업데이트·기타 | callCard(4절 통계), updateAvailableCode, updateReadySinceMs, lastUpdateError, update{error}, messages{mailError}, golden |
 | v3.5 아침 보고 | kakao{on(스위치 "카카오톡으로 받기"), linked, sent(다 나간 날 누계), failed(실패 누계), lastSentMs(마지막으로 다 나간 시각), error(코드 80자, 없으면 null)}, report{day(마지막으로 보낸 보고 날짜 YYYY-MM-DD), source(`routine` 또는 `phone`)}. 두 객체는 늘 있다(워치독이 키로 판정). `transcription.requeuedFailed`(이번 빌드가 살린 실패 자막 수) |
+| v3.6 전력 | power{batteryPct,plugged,status,powerSave,thermal,headroom,tempDeciC,currentUa,cpuset,cpusAllowed,today·prev{day("yyyy-MM-dd"),battery{runs,ms,min,audioMin,mAhScreenOff},plugged{…},budgetMin,budgetHit,각종 Skips,plugDropped,killedChunkMs,deadlineMs,yieldCount,modelLoads,modelLoadMs,stopReasons},chunk{coldMedianMs,p50Ms,lastMs,threads,tokensLast(null)},waiting{n,oldestMin},chargingOnly}(전체 키는 OPERATIONS.md) |
 
 통화 목록 대조표 `status/calllog.txt`는 이름·번호 전체가 든 사람용 글이다(사용자 결정 11/4, 아내 동의, 비공개 우편함에만, 같은 내용이면 안 올림)(`CallLogReport`, OPERATIONS.md 4절).
 
@@ -248,6 +250,8 @@
 
 **설정 묶음 순서(v3.5):** (주황 불이면 지금 상태) → 지금 할 일과 진행 상황 → 연결 → 통화 카드 → 정리 → 아침 보고 → 상태와 도움.
 
+**"정리" 묶음의 "글자로 바꾸기"(v3.6):** "배터리를 아끼려고 긴 녹음은 충전 중에 글자로 바꿔요. 오늘 배터리로 n분 썼어요(한도 20분)" 줄과 스위치 [충전 중에만 글자로 바꾸기](`TRANSCRIBE_CHARGING_ONLY`, 기본 끔, 바꾸면 자막 작업을 다시 건다). "지금 할 일과 진행 상황"에 충전 대기가 있으면 "녹음 n개는 충전기에 꽂으면 글자로 바꿔요". 통화 탭 줄·통화별 알림은 통화 끝 10분 뒤부터 그 통화 녹음이 충전을 기다리면 "충전하면 이어서 정리해요", 저녁 알림 마지막 줄 "충전하면 n개를 이어서 정리해요"(`PowerText`).
+
 **"아침 보고" 묶음(`SettingsScreen.morningGroup`, 정리 묶음의 "아침 체크할 일" 시각을 옮겨 승격):**
 | 부분 | 보이는 것 |
 | --- | --- |
@@ -265,7 +269,7 @@
 | 줄 | 주황 조건(위에서부터 처음 맞는 것) |
 | --- | --- |
 | 녹음 가져오기 | 폴더 미연결 / 권한 풀림 / 발견 성공이 24시간 넘음 / 녹음 공백 판정 문구(확정된 `noRecording`·`partial`·`folder`, `tooMany`) / (v3.5) `noMatch`가 48시간 넘게 이어짐 "녹음이 2일 넘게 통화와 이어지지 않아요. 관리하는 분께 알려 주세요." `pendingText`는 초록 글 |
-| 글자로 바꾸기 | 모델 지원 안 됨·실패·없음 / 대기열이 있고 가장 오래된 진입이 6시간 넘고 마지막 자막도 6시간 넘음 / (v3.5) 지금 FAILED인 자막이 있음 "글자로 바꾸지 못한 녹음이 n건 있어요. 새 버전이 오면 한 번 더 바꿔 봐요."(수는 `StatusLights.read`가 IO 스레드의 같은 저장소 읽기에서 셈) |
+| 글자로 바꾸기 | 모델 지원 안 됨·실패·없음 / (v3.6) 충전을 기다리는 녹음의 가장 오래된 것이 36시간 넘음 "녹음 n개가 이틀째 충전을 기다려요. 밤에 충전기에 꽂아 두면 정리돼요"(그 전엔 초록 "충전하면 n개를 바꿔요"; "밀려 있어요"는 대기 수가 충전 대기 수보다 많을 때만) / 대기열이 있고 가장 오래된 진입이 6시간 넘고 마지막 자막도 6시간 넘음 / (v3.5) 지금 FAILED인 자막이 있음 "글자로 바꾸지 못한 녹음이 n건 있어요. 새 버전이 오면 한 번 더 바꿔 봐요."(수는 `StatusLights.read`가 IO 스레드의 같은 저장소 읽기에서 셈) |
 | 통화 정리 | 정리 동의 꺼짐 / 분석 루틴 예정 실행을 2회 놓침("분석이 n시간 안 돌았어요", 슬롯 뒤 40분이 지나도 자가 보고가 없으면 놓친 것, 받은편지함 오류가 더 늦으면 세지 않음) / 저장 공간 80% 이상 / 정리 못 한 통화(빈 자막 제외) / 기다리는 통화 |
 | 알림 | 알림 꺼짐 / (v3.5, 스위치 켬일 때) 카카오톡 연결이 풀림 "카카오톡 연결이 풀렸어요. 위 아침 보고 묶음에서 다시 연결해 주세요." / 연결·켬인데 실패가 있고 마지막 성공이 3일 넘음(성공한 적이 없으면 실패 3회 이상) "아침 보고가 3일 넘게 카카오톡으로 가지 않았어요. …지금 보내 보기를 눌러 주세요." 누르면 아침 보고 묶음 |
 | 업데이트 | 설치 오류 문구 / 준비된 지 24시간 넘음 / 준비됨 |
@@ -364,7 +368,10 @@
 | 폰이 조용해요 | phone.json 없음 또는 atMs 12시간 넘음 |
 | 녹음 가져오기가 멈췄어요 | 폰은 살아 있고 시도는 있는데 발견 성공이 12시간 넘음 |
 | 통화 목록을 빠뜨리고 있어요 | deviceTotal ≠ storedTotal이 2시간 넘음 |
-| 자막이 밀려요 | 새 녹음 대기열 진입이 6시간 넘음(처음 정리 중엔 남은 녹음이 있는데 마지막 자막이 24시간 넘을 때만) |
+| 자막이 밀려요 | 새 녹음 대기열 진입이 6시간 넘음(처음 정리 중엔 남은 녹음이 있는데 마지막 자막이 24시간 넘을 때만). v3.6: 새 대기 수가 충전 대기 수(`power.waiting.n`)보다 많을 때만 |
+| (v3.6) 폰 배터리를 많이 써요 | `power.today.battery.min` > 60이 다른 날에도(prev 또는 이전 하트비트) |
+| (v3.6) 충전을 기다리는 녹음이 쌓여요 | `power.waiting.oldestMin` > 2160(36시간) |
+| (v3.6) 자막 조각이 버려지고 있어요 | `killedChunkMs + deadlineMs`가 실행 시간의 20% 넘는 날이 today·prev 연속 |
 | 새 버전이 설치되지 않아요 | 폰이 받아 둔 새 버전이 24시간 넘게 미설치 |
 | 폰 저장 공간이 거의 찼어요 | dbPercent > 80 |
 | 우편함 오류가 계속돼요 | 같은 lastInboxError가 2시간 넘음 |
@@ -443,10 +450,12 @@
 | 11/6 09시(Claude, "편리함 중점") | 카톡 보고는 피드 이미지 1통 + 오늘 챙길 일 글 1통, 이미지 실패 시 글 최대 4통(DESIGN_V5 0-1절) |
 | 11/6 14시 | 보고 이미지가 카카오 CDN에 URL로 100일 남는 점을 사용자에게 알림(원하면 글 방식으로 전환) |
 | 11/6 17시 | **v3.5 배포, 빌드 1046**: 카톡 아침 보고(나에게 보내기, 피드 이미지 + 글), 새벽 정리 04:46·tidy.md v7·보고서 JSON, v3.4.x 묶음(실패 자막 재큐, 녹음 기준 숫자, 약속 문구, 신호등, 알림 묶음, 카드 상태 글, 업데이트 재알림), 독립 검토 반영. 구현에서 다르게 정한 것은 DESIGN_V5 6절 19줄(이 문서에 흡수) |
+| 11/7 15:49 | 배터리 문제(이음이 아내 폰 배터리의 약 60%)를 v3.6 큰 변화로. 분석·설계는 Opus 토론(DESIGN_V6) |
+| 11/7 17:27 | **v3.6 배포, 빌드 1047·1048**: 전력 정책(꽂힘에 몰아서, 배터리는 오늘 짧은 통화 하루 20분/5%), W1~W5, P7, 하트비트 `power`, 설정 스위치 [충전 중에만 글자로 바꾸기](기본 끔), 신호등·통화 상태 글·저녁 줄, 워치독 3규칙, 독립 검토 반영. 다르게 정한 것은 DESIGN_V6 8절(이 문서에 흡수) |
 | (Claude 결정, 설계 표) | 지키지 못할 약속 문구 금지, 마이그레이션 자동 합치기는 같은 번호+같은 이름만, 합치기 되돌리기와 keepApart, 숫자 확실성은 화면에 앰버 배지, 숫자만 다른 일은 합치지 않음, 자막 오인 교정은 이름·호칭·업체명만, 잠금 화면 카드 공개 범위는 설정(기본 켬), 발신 역할은 선택 항목, 처음 설정은 필수/선택, 포그라운드 서비스는 통화 중에만, CallScreeningService 안 씀, 분석은 구독 한도 방식(API 키 경로 삭제) |
 
 ## 11. 알려진 한계, 미구현, 보류
-- **배터리(11/7, 실사용 1순위 문제, 다음 버전 v3.6):** 아내 폰 배터리 사용량의 약 60%가 이음. 자막 작업이 배터리 상태를 "부족 아님"으로만 보고(3.2 조건 줄) 끝나면 바로 다음 실행을 걸어 v3.5 설치 뒤 20시간 동안 892분(가동률 87%) 돌았다. 2분 조각당 330초(녹음 1분당 165초, 코드 주석 85초의 2배 — 발열 스로틀링 추정)라 10분 실행에 조각 1개만 끝나고 둘째 조각은 버려지며, 실행마다 모델을 다시 읽고, 발열은 SEVERE만 본다. 설계는 [DESIGN_V6.md](DESIGN_V6.md): 충전 중에 몰아서, 배터리로는 오늘 짧은 통화만 하루 20분, 실행에 안 들어갈 조각은 시작하지 않기, 모델 컨텍스트 캐시, 영구 실패 제외, 하트비트 `power`, 발열 조절, 스레드·i8mm A/B. 이 문서의 3.2절은 구현 뒤에 고친다.
+- **배터리(v3.6, 11/7 배포):** 48시간 실측 전. 확인 기준은 DESIGN_V6 6절(배터리 자막 ≤ 25분/일, 배터리 화면 이음 ≤ 20%·목표 10%, 밤 처리, 조각 ≤ 280초). 아직 안 한 것: 꽂힘 중 `CURRENT_NOW` 부호 보정(지금은 잔량 하락만), device-test의 `dumpsys battery` 시나리오, r16-3 효율 A/B(q8_0·i8mm·스레드 4/6, 골든 전력 측정), 토큰 수(`tokensLast`). 아내가 밤에 꽂지 않으면 긴 통화가 밀린다(신호등 36시간).
 - **실측 중(11/7):** 아내 폰은 v3.5(1046). 통화기록 저장은 빠짐 없음, 녹음-통화 연결은 나아지는 중이나 절반 수준, 자막 실패 누적이 있다(숫자는 HANDOFF.md 4절). 카카오톡은 아직 연결 전이라 카톡 보고 실전송은 증명되지 않았다(9절 v3.5 확인 기준). `latency` p50이 수천 분인 것은 `started_ms` 오염으로 보이며 판단 근거로 쓰지 않는다(`recordTime`으로 진단 중).
 - **카톡 보고의 한계:** 텍스트 템플릿 200자, 피드 제목·본문 각 2줄(그래서 전체는 이미지). "나와의 채팅"은 카톡 푸시가 안 울릴 수 있어 06시 앱 알림을 조용히 남긴다. 09:00이 지나면 그날 카톡은 보내지 않는다. 아내 카카오 계정을 developers 앱 팀원으로 등록해야 하는지는 첫 연결 때 확인.
 - **자막 정확도:** 실녹음 골든(사용자 받아쓰기 3~5건) 전이라 B1(폴백 제한), B2(조각 간 문맥), B3(문장체 초기 프롬프트 ≤ 120토큰, `PROMPT_ENABLED`), B4~B7(beam, suppress_nst, 양자화·i8mm, VAD 하한)은 스위치만 있고 기본값 그대로. 합성 골든(base) CER 18%는 대표성이 없다.
@@ -491,10 +500,10 @@
 - `android/core` `RecordingPolicy.MAX_BYTES`=25,000,000 → 실제 한도는 금고 `AudioBinding.MAX_BYTES`=60,000,000이고 `RecordingPolicy.safeSize`는 앱에서 부르는 곳이 없다(남은 상수).
 - 문서 여러 곳의 "단위 시험 n건" → 최근 기록된 실행 건수는 v3.1의 582건이고, 지금 소스의 @Test는 816개(9절).
 - 자가 진단 "음성 인식 모델을 다시 받아야 해요"의 본문 "와이파이에 연결한 뒤"(`SelfCheckNotices`) → 결정은 "어떤 연결에서든 받음"(11/5). 코드 문구가 결정과 어긋남(PRODUCT.md 6절 5번).
-- 3.2 "속도" 줄과 `WhisperCallTranscriber` 주석의 "6스레드 녹음 1분당 85초" → 11/6~11/7 아내 폰(S26) 실측은 2분 조각당 223초(식음)~392초(지속 실행), 평균 330초 = 1분당 165초(DESIGN_V6 1절). 주석은 v3.6에서 고친다.
 
 옛 설계 기록(`history/`, DESIGN_V5.md)은 고치지 않으므로 그 문서와 다른 점은 아래처럼 코드가 기준이다.
 - DESIGN_V3 7.1: 카드 높이 화면의 40% 이하, 세로 38% → 코드는 벨 중 높이 34%, 아래 끝 72%, 기본 위쪽 끝 38%(`CallCardOverlay.MAX_HEIGHT`·`BOTTOM_LIMIT`·`DEFAULT_POS_Y`).
 - DESIGN_V4 4.2-3: 첫 줄 "줄당 18자 안팎, 2줄" → 코드는 36자 한도(`FIRST_CHARS`), 셋째·넷째 줄 14자(`ROW_CHARS`).
 - DESIGN_V3 6.2: 통화별 알림 잠금 화면 "통화 정리 중"만 → 코드는 상태별 "통화 정리됨 / 확인할 통화 / 통화 정리 중"(`CallFollowupNotice.publicTitle`).
+- DESIGN_V6 2~3절 → 구현은 8절 "다르게 정한 것"대로이고 이 문서 3.2·5.4·8.1·10에 반영했다.
 - DESIGN_V5 0~2절(SDK 2.26.0, "카톡 성공이면 앱 알림 없음", 폴백 "[진행 중·확인]", FAILED 재큐 빌드마다 1회 등) → 구현은 6절 "다르게 정한 것" 19줄대로이고 이 문서 3.2·3.9·3.12·8.1에 반영했다.
