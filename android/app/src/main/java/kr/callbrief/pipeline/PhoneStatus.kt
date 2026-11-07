@@ -54,7 +54,10 @@ internal object PhoneStatus {
         /** DESIGN_V4 4절 (v3.4, r14-1 makes the places, r14-3 writes the values): update, messages and record time. */
         val v34:V34=V34(),
         /** DESIGN_V5 (v3.5, key commit makes the places, r15-1 writes the values): the KakaoTalk morning report. */
-        val v35:V35=V35())
+        val v35:V35=V35(),
+        /** DESIGN_V6 3.1 (v3.6, r16-2): the power ledger r16-1 writes ([PipelineSettingsKeys.TRANSCRIPTION_POWER]) and the switch
+         * [충전 중에만 글자로 바꾸기]; the heartbeat's `power` block ([PowerText.heartbeat]), always there, numbers and codes only. */
+        val powerLedger:JSONObject?=null,val chargingOnly:Boolean=false)
     /** v3.5: heartbeat `kakao{on,linked,sent,failed,lastSentMs,error}` and `report{day,source}`; numbers, dates and codes only. */
     data class V35(val kakaoLinked:Boolean=false,val kakaoSent:Long=0,val kakaoFailed:Long=0,val kakaoLastSentMs:Long?=null,
         val kakaoError:String?=null,val reportDay:String?=null,val reportSource:String?=null,
@@ -148,6 +151,7 @@ internal object PhoneStatus {
         o.put("guard",i.v33.guard?.let(::counts) ?: JSONObject.NULL)
         putV34(o,i.v34)
         putV35(o,i.v35)
+        o.put("power",runCatching { PowerText.heartbeat(i.powerLedger,i.chargingOnly,i.nowMs) }.getOrElse { JSONObject.NULL })
         return o
     }
     /** v3.4: always the three objects, so the watchdog reads a key test; inside, a code or counts only (null: nothing yet). */
@@ -279,7 +283,9 @@ internal object PhoneStatus {
             v31 = v31(app,s),
             v33 = V33(jsonOf(s,PipelineSettingsKeys.GOLDEN),jsonOf(s,PipelineSettingsKeys.GUARD_STATS)),
             v34 = v34(s),
-            v35 = v35(s))
+            v35 = v35(s),
+            powerLedger = runCatching { PowerText.ledger(s) }.getOrNull(),
+            chargingOnly = PowerText.chargingOnly(s))
     }
     /** The v3.4 keys r14-3 writes (read by name; absent until written). */
     internal fun v34(s:JSONObject):V34 = V34(s.optString(PipelineSettingsKeys.UPDATE_ERROR_CODE).takeIf { it.isNotBlank() },

@@ -627,5 +627,71 @@ class V35ReportTest(unittest.TestCase):
         self.assertEqual([], self.report(at(9, 30), exists=True, ph=old, history=[phone(atMs=at(5, 0, day=-3), kakao=kakao())]))
 
 
+def pw(today=None, prev=None, waiting=None, **kw):
+    """A v3.6 power block (DESIGN_V6 3.1)."""
+    p = {"batteryPct": 70, "plugged": "none", "today": dict({"day": 20270115}, **(today or {})),
+         "prev": dict({"day": 20270114}, **prev) if prev is not None else None,
+         "waiting": waiting or {"n": 0, "oldestMin": None}, "chargingOnly": False}
+    p.update(kw)
+    return p
+
+
+class V36PowerTest(unittest.TestCase):
+    """DESIGN_V6 3.3: the battery, the charger wait and the wasted pieces."""
+    POWER = (w.T_BATTERY_HEAVY, w.T_CHARGER_WAIT, w.T_PIECES_WASTED)
+
+    def got(self, ph, history=None):
+        return [p for p in w.evaluate(NOW, ph, {"processed": 1}, None, 0, history=history) if p["title"] in self.POWER]
+
+    def test_older_heartbeats_and_a_quiet_phone_say_nothing(self):
+        self.assertEqual([], self.got(phone()))
+        self.assertEqual([], self.got(phone(power=pw())))
+        self.assertEqual([], self.got(phone(power={"today": None, "waiting": "x"})))
+        # A silent phone (over 12 hours) is told by its own rule only.
+        self.assertEqual([], self.got(phone(atMs=NOW - 13 * H, power=pw(today={"battery": {"min": 90}}, prev={"battery": {"min": 90}}))))
+
+    def test_battery_heavy_two_days(self):
+        heavy = {"battery": {"min": 75, "mAhScreenOff": 640}}
+        got = self.got(phone(power=pw(today=heavy, prev={"battery": {"min": 61}})))
+        self.assertEqual([w.T_BATTERY_HEAVY], [p["title"] for p in got])
+        self.assertIn("75분", got[0]["body"]);self.assertIn("640mAh", got[0]["body"])
+        # One day only, or exactly 60.
+        self.assertEqual([], self.got(phone(power=pw(today=heavy, prev={"battery": {"min": 20}}))))
+        self.assertEqual([], self.got(phone(power=pw(today={"battery": {"min": 60}}, prev={"battery": {"min": 90}}))))
+        # prev missing, an earlier heartbeat of another day was heavy too.
+        old = phone(atMs=NOW - 20 * H, power=pw(today=dict(heavy, day=20270114)))
+        self.assertEqual([w.T_BATTERY_HEAVY], [p["title"] for p in self.got(phone(power=pw(today=heavy)), history=[old])])
+        # An earlier heartbeat of the same day does not make two days.
+        same = phone(atMs=NOW - 3 * H, power=pw(today=heavy))
+        self.assertEqual([], self.got(phone(power=pw(today=heavy)), history=[same]))
+
+    def test_charger_wait_over_36_hours(self):
+        got = self.got(phone(power=pw(waiting={"n": 4, "oldestMin": 37 * 60})))
+        self.assertEqual([w.T_CHARGER_WAIT], [p["title"] for p in got])
+        self.assertIn("4개", got[0]["body"]);self.assertIn("37시간", got[0]["body"])
+        self.assertEqual([], self.got(phone(power=pw(waiting={"n": 4, "oldestMin": 36 * 60}))))
+        self.assertEqual([], self.got(phone(power=pw(waiting={"n": 0, "oldestMin": 40 * 60}))))
+
+    def test_charger_waiting_is_not_a_queue_stuck(self):
+        late = dict(newQueuedCount=2, newOldestQueuedMs=NOW - 8 * H)
+        self.assertEqual([w.T_QUEUE], titles(phone=phone(**late)))
+        self.assertEqual([], titles(phone=phone(power=pw(waiting={"n": 2, "oldestMin": 8 * 60}), **late)))
+        self.assertEqual([w.T_QUEUE], titles(phone=phone(power=pw(waiting={"n": 1, "oldestMin": 8 * 60}), **late)))
+
+    def test_wasted_pieces_two_days(self):
+        bad = {"battery": {"ms": 20 * w.MINUTE, "min": 20}, "plugged": {"ms": 80 * w.MINUTE, "min": 80}, "killedChunkMs": 15 * w.MINUTE, "deadlineMs": 6 * w.MINUTE}
+        got = self.got(phone(power=pw(today=bad, prev=bad)))
+        self.assertEqual([w.T_PIECES_WASTED], [p["title"] for p in got])
+        self.assertIn("21%", got[0]["body"])
+        ok = dict(bad, killedChunkMs=10 * w.MINUTE, deadlineMs=0)
+        self.assertEqual([], self.got(phone(power=pw(today=bad, prev=ok))))
+        self.assertEqual([], self.got(phone(power=pw(today=bad))))
+        # Minutes only (no ms): run time from the minutes.
+        mins = {"battery": {"min": 10}, "plugged": {"min": 40}, "killedChunkMs": 11 * w.MINUTE}
+        self.assertEqual([w.T_PIECES_WASTED], [p["title"] for p in self.got(phone(power=pw(today=mins, prev=mins)))])
+        # No run time at all.
+        self.assertEqual([], self.got(phone(power=pw(today={"killedChunkMs": 5}, prev={"killedChunkMs": 5}))))
+
+
 if __name__ == "__main__":
     unittest.main()

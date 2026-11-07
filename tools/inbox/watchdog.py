@@ -20,6 +20,10 @@ v3.5 (DESIGN_V5 2.2-4): two morning report rules. Past 05:30 KST without report/
 there; its text is never read), and KakaoTalk linked in the heartbeat but kakao.lastSentMs not from today past 09:00 KST
 for two days in a row. r15-4: the second rule only while kakao.on is true (a heartbeat without the key counts as on), and
 "카카오톡 연결이 풀렸어요" when kakao.linked is false with an error code starting TOKEN_ (and kakao.on is not false).
+
+v3.6 (DESIGN_V6 3.3): three rules on the heartbeat's power block: battery runs over 60 minutes two days running, a recording
+waiting for the charger over 36 hours, and killed plus deadline piece time over 20% of the run time two days running. The
+recordings waiting for the charger by design are not counted in "자막이 밀려요".
 """
 import argparse, datetime, json, os, subprocess, sys, time
 
@@ -112,6 +116,14 @@ REPORT_DUE_MIN = 5 * 60 + 30
 KAKAO_DUE_MIN = 9 * 60
 REPORT_DIR = "report"
 REPORT_PROMPT_VERSION = 7
+
+# v3.6 (DESIGN_V6 3.3): the heartbeat's power block (numbers and codes only).
+T_BATTERY_HEAVY = "폰 배터리를 많이 써요"
+T_CHARGER_WAIT = "충전을 기다리는 녹음이 쌓여요"
+T_PIECES_WASTED = "자막 조각이 버려지고 있어요"
+BATTERY_HEAVY_MIN = 60
+CHARGER_WAIT_MIN = 36 * 60
+PIECES_WASTED_SHARE = 0.2
 
 
 def cron_field(text, lo, hi):
@@ -287,6 +299,77 @@ def report_rules(now_ms, phone, history, tidy, report_exists, add):
         + (f"마지막 오류 코드: {err}.\n" if err else "")
         + "\n추정 원인: 카카오 토큰이 만료됐거나 동의가 철회됐어요, 아침 보고서가 없었어요, 폰이 09:00까지 인터넷에 닿지 못했어요. "
           "앱 설정의 아침 보고 묶음에서 연결 상태를 확인해 주세요.")
+
+
+def power(h):
+    p = h.get("power") if isinstance(h, dict) else None
+    return p if isinstance(p, dict) else {}
+
+
+def sub(o, *keys):
+    for k in keys:
+        o = o.get(k) if isinstance(o, dict) else None
+    return o if isinstance(o, dict) else {}
+
+
+def charger_waiting(phone):
+    """Recordings the heartbeat says wait for the charger (power.waiting.n), 0 without the block."""
+    return num(sub(power(phone), "waiting").get("n")) or 0
+
+
+def wasted_share(day):
+    """(killedChunkMs + deadlineMs) / run ms of one power day ({today|prev}), None without run time."""
+    if not day:
+        return None
+    run = 0
+    for mode in ("battery", "plugged"):
+        m = sub(day, mode)
+        run += num(m.get("ms")) or (num(m.get("min")) or 0) * MINUTE
+    if run <= 0:
+        return None
+    return ((num(day.get("killedChunkMs")) or 0) + (num(day.get("deadlineMs")) or 0)) / run
+
+
+def power_rules(now_ms, phone, history, add):
+    """v3.6 (DESIGN_V6 3.3). phone: the current heartbeat (12 hours at most). (1) Battery runs over 60 minutes on the phone's
+    today in this heartbeat and in an earlier one of another day (two days; the budget is 20). (2) The oldest recording
+    waiting for the charger waits over 36 hours. (3) Killed and deadline piece time over 20% of the run time on today and on
+    prev (two days in a row: W1 and W2 are not working)."""
+    if not isinstance(phone, dict) or not power(phone):
+        return
+    p = power(phone)
+    today = sub(p, "today")
+
+    def heavy(day):
+        return (num(sub(day, "battery").get("min")) or 0) > BATTERY_HEAVY_MIN
+
+    if heavy(today):
+        # The other day: prev of this heartbeat, or an earlier heartbeat whose today was another day.
+        day0 = num(today.get("day"))
+        other = sub(p, "prev") if heavy(sub(p, "prev")) else None
+        if other is None:
+            for h in history or []:
+                t = sub(power(h), "today")
+                if t and num(t.get("day")) != day0 and heavy(t):
+                    other = t
+                    break
+        if other is not None:
+            add(T_BATTERY_HEAVY, f"이틀 연속 배터리로 자막을 오래 돌렸어요: 오늘 {num(sub(today, 'battery').get('min'))}분, "
+                f"전날 {num(sub(other, 'battery').get('min'))}분 (기준 60분, 하루 예산 20분).\n"
+                + (f"오늘 화면 꺼진 실행의 소모 {num(sub(today, 'battery').get('mAhScreenOff'))}mAh.\n"
+                   if num(sub(today, 'battery').get('mAhScreenOff')) else "")
+                + "\n추정 원인: 배터리 예산(20분)이 지켜지지 않아요. 실행 시간 계산이나 30분 간격, 예산 판정을 확인해 주세요.")
+    waiting = sub(p, "waiting")
+    oldest = num(waiting.get("oldestMin"))
+    if (num(waiting.get("n")) or 0) > 0 and oldest is not None and oldest > CHARGER_WAIT_MIN:
+        add(T_CHARGER_WAIT, f"충전을 기다리는 녹음 {num(waiting.get('n'))}개 중 가장 오래된 것이 {oldest // 60}시간 기다렸어요 (기준 36시간).\n"
+            + (f"마지막 배터리 {num(p.get('batteryPct'))}%, 충전 {w_code(p.get('plugged')) or '?'}.\n" if num(p.get("batteryPct")) is not None else "")
+            + "\n추정 원인: 폰을 밤에 충전기에 꽂지 않았거나, 충전 중에도 발열이나 아침 휴식으로 쉬었어요. 폰 신호등이 주황으로 알려요.")
+    a, b = wasted_share(today), wasted_share(sub(p, "prev"))
+    if a is not None and b is not None and a > PIECES_WASTED_SHARE and b > PIECES_WASTED_SHARE:
+        add(T_PIECES_WASTED, f"자막 실행 시간 중 버려진 조각의 몫이 오늘 {round(a * 100)}%, 전날 {round(b * 100)}%예요 (기준 20%, 2일 연속).\n"
+            f"오늘 버린 조각 {(num(today.get('killedChunkMs')) or 0) // 1000}초, 기한 초과 {(num(today.get('deadlineMs')) or 0) // 1000}초.\n"
+            "\n추정 원인: 실행에 안 들어갈 조각을 시작하지 않기(W1)나 미리 반으로 나누기(W2)가 작동하지 않아요.")
 
 
 def held_since(phone, history, pred):
@@ -530,8 +613,9 @@ def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count, version=None
                     "추정 원인: 충전하지 않아 폰이 작업을 미루거나, 음성 인식 모델이 없거나, 절전 모드예요.")
         elif "newQueuedCount" in phone:
             # v2.6: only new recordings, by when they entered the queue (old first-pass ones may rightly wait for the charger).
+            # v3.6: recordings waiting for the charger by design (power.waiting) are not counted; their own rule is below.
             nq = phone.get("newOldestQueuedMs")
-            if ms(phone, "newQueuedCount") > 0 and nq and now_ms - int(nq) > QUEUE_STUCK_MS:
+            if ms(phone, "newQueuedCount") > charger_waiting(phone) and nq and now_ms - int(nq) > QUEUE_STUCK_MS:
                 add(T_QUEUE, f"글자로 바꾸기를 기다리는 새 녹음 중 가장 오래된 것이 대기열에 들어온 지 {hours(now_ms - int(nq))} 됐어요 (기준 6시간). "
                     f"기다리는 새 녹음 {ms(phone, 'newQueuedCount')}개.\n\n추정 원인: 배터리가 부족하거나, 음성 인식 모델이 없거나, 절전 모드예요.")
         elif oq:
@@ -570,6 +654,7 @@ def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count, version=None
     v31_rules(now_ms, fresh, [last_run, tidy_run], version, version_ms, history, add)
     routine_rules(now_ms, last_run, tidy_run, status_commits, add)
     report_rules(now_ms, fresh, history, tidy_run, report_exists, add)
+    power_rules(now_ms, fresh, history, add)
 
     if inbox_oldest_ms is not None:
         # Counted in the routine's hours only (07:00 to 23:00 KST): six missed 30-minute runs and more.

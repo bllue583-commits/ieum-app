@@ -80,7 +80,7 @@
 | `folder` | 녹음 폴더가 골라져 있고 읽기 권한이 살아 있는가 | false면 새 녹음을 못 가져옴(앱에서 폴더 다시 고르기) |
 | `notifyAllowed` | 알림 권한과 앱 알림이 켜져 있는가 | false면 저녁·아침 보고와 자가 진단 알림이 안 보임 |
 | `batteryFree` | 배터리 최적화 예외인가 | false면 작업이 자주 미뤄짐 |
-| `power` (v3.6 예정, DESIGN_V6 3.1) | 배터리 잔량·충전·절전·발열, 그날 배터리/충전 중 자막 실행 수·분·녹음 분·mAh, 예산, 버린 조각 ms, 모델 로드 수, 조각 p50 ms | `today.battery.min` > 60이면 배터리를 많이 씀, `killedChunkMs`가 실행 ms의 20% 넘으면 조각 낭비 |
+| `power` (v3.6, DESIGN_V6 3.1) | 자막 전력 장부(`transcriptionPower`, r16-1이 씀)를 숫자·코드로: `batteryPct`, `plugged`(ac, usb, wireless, none), `status`, `powerSave`, `thermal`, `headroom`, `tempDeciC`, `currentUa`, `cpuset`, `cpusAllowed`; `today`·`prev`{`day`(KST yyyymmdd), `battery`{runs, ms, min, audioMin, mAhScreenOff}, `plugged`{runs, ms, min, audioMin}, `budgetMin`(20), `budgetHit`(min, pct, none), `gapSkips`, `hotSkips`, `inCallSkips`, `morningSkips`, `lowSkips`, `powerSaveSkips`, `chargingOnlySkips`, `budgetSkips`, `plugDropped`, `levelFallingSkips`, `killedChunkMs`, `deadlineMs`, `yieldCount`, `yieldMs`, `modelLoads`, `modelLoadMs`, `decodeAudioMs`, `stopReasons`{코드: 수}}; `chunk`{coldMedianMs, p50Ms, lastMs, threads, tokensLast(null, r16-3 전), perTokenMsLast(null)}; `waiting`{n: 충전을 기다리는 녹음 수, oldestMin: 가장 오래 기다린 분}; `chargingOnly`(스위치 [충전 중에만 글자로 바꾸기]). 장부가 없으면 null·0으로 채워 늘 있음 | `today.battery.min` > 60이 2일이면 배터리를 많이 씀(예산 20분), `waiting.oldestMin` > 2160(36시간)이면 충전 대기가 쌓임, `killedChunkMs + deadlineMs`가 실행 ms의 20% 넘음이 2일이면 조각 낭비. `chunk.coldMedianMs` ≤ 280,000, `cpusAllowed` = `threads`가 확인 기준(DESIGN_V6 6절) |
 | `standbyBucket` | 앱 대기 버킷: `EXEMPTED`(배터리 제한 없음, 가장 좋음), `ACTIVE`, `WORKING_SET`, `FREQUENT`, `RARE`, `RESTRICTED`, `NEVER`, 그 밖은 `B<번호>`, 못 읽으면 `UNKNOWN`(Android 9 미만은 `NONE`) | `RARE`/`RESTRICTED`/`NEVER`면 작업이 하루 몇 번만 돎. 앱을 한 번 열면 풀림 |
 | `lastDiscoveryMs` | 녹음 폴더를 마지막으로 다 살펴본 시각(0: v2.4 전 앱이거나 아직 없음) | 폰은 살아 있는데 12시간 넘게 그대로면 녹음 찾기가 멈춤 |
 | `lastUploadMs` | 정리 요청을 우편함에 마지막으로 올린 시각(0: 없음) | 통화가 있었는데 오래 그대로면 동의, 토큰, 네트워크 확인 |
@@ -156,7 +156,7 @@ v3.4(11/6)부터 워치독은 Actions가 아니라 두 예약 작업 안에서 �
 | 폰이 조용해요 | `status/phone.json`이 없거나 `atMs`가 12시간 넘음. 본문에 마지막 하트비트의 `consent`, `folder`, `batteryFree`, `standbyBucket`(RARE, RESTRICTED, NEVER), `notifyAllowed`, `lastDiscoveryMs`로 짐작한 원인을 붙인다 |
 | 녹음 가져오기가 멈췄어요 | 폰은 살아 있는데 마지막으로 끝까지 살펴본 시각(`lastDiscoveryMs`)이 12시간 넘음. `lastDiscoveryAttemptMs`가 있으면(v2.6~) 한 번도 성공 못 한 0도 셈, 없으면 0은 건너뜀 |
 | 통화 목록을 빠뜨리고 있어요 | 폰은 살아 있는데 `callLog.deviceTotal`과 `storedTotal`이 다르고 `mismatchSinceMs`가 2시간 넘음(권한 없으면 건너뜀) |
-| 자막이 밀려요 | 처음 정리 중(`firstPass.done=false`)이면 남은 자막이 있는데 마지막 자막(`lastTranscribedMs`)이 24시간 넘었을 때만. 아니면 `newQueuedCount`가 있는 하트비트(v2.6~)는 새 녹음의 `newOldestQueuedMs`가, 옛 하트비트는 `oldestQueuedMs`가 6시간 넘음 |
+| 자막이 밀려요 | 처음 정리 중(`firstPass.done=false`)이면 남은 자막이 있는데 마지막 자막(`lastTranscribedMs`)이 24시간 넘었을 때만. 아니면 `newQueuedCount`가 있는 하트비트(v2.6~)는 새 녹음의 `newOldestQueuedMs`가, 옛 하트비트는 `oldestQueuedMs`가 6시간 넘음. v3.6부터 충전을 기다리는 녹음(`power.waiting.n`)은 빼고 센다 |
 | 새 버전이 설치되지 않아요 | 폰이 받아 둔 새 버전(`updateAvailableCode` > `versionCode`)이 `updateReadySinceMs`부터 24시간 넘게 그대로 |
 | 폰 저장 공간이 거의 찼어요 | `dbPercent`가 80 넘음 |
 | 우편함 오류가 계속돼요 | 같은 `lastInboxError`가 `lastInboxErrorSinceMs`부터 2시간 넘음 |
@@ -177,8 +177,11 @@ v3.4(11/6)부터 워치독은 Actions가 아니라 두 예약 작업 안에서 �
 | 아침 보고서가 안 만들어졌어요 (v3.5) | 한국 시각 05:30이 지났는데 `report/<오늘>.json`이 없음(파일이 있는지만 봄). 새벽 정리 자가 보고 `promptVersion`이 7 이상일 때만. 04:46 워치독은 05:30 전이라 실제로는 07:34부터의 매시간 워치독이 본다. 본문에 `reportWritten` |
 | 카카오톡 보고가 안 갔어요 (v3.5) | 하트비트 `kakao.on`이 참(키가 없으면 참으로 봄), `kakao.linked=true`, 09:00이 지났는데 `lastSentMs`가 어제 00:00 전(두 아침 연속), 어제 09:00 전부터 연결돼 있었을 때만 |
 | 카카오톡 연결이 풀렸어요 (v3.5) | `kakao.on`이 거짓이 아니고 `kakao.linked=false`, `kakao.error`가 `TOKEN_`으로 시작 |
+| 폰 배터리를 많이 써요 (v3.6) | 하트비트 `power.today.battery.min`이 60분 넘고, 같은 하트비트의 `power.prev`나 다른 날의 이전 하트비트 `today`도 60분 넘음(2일, 하루 예산 20분의 3배) |
+| 충전을 기다리는 녹음이 쌓여요 (v3.6) | `power.waiting.n` > 0이고 `power.waiting.oldestMin`이 36시간(2160분) 넘음. 이 녹음들은 "자막이 밀려요"에서 빼고 센다(`newQueuedCount`가 `waiting.n`보다 많을 때만) |
+| 자막 조각이 버려지고 있어요 (v3.6) | `power.today`와 `power.prev` 모두 `killedChunkMs + deadlineMs`가 실행 ms(`battery.ms + plugged.ms`, 없으면 분 × 60,000)의 20% 넘음 |
 
-위가 `tools/inbox/watchdog.py`의 규칙 전부다(11/7, v3.5 규칙 3개 포함 이슈 제목 28개).
+위가 `tools/inbox/watchdog.py`의 규칙 전부다(11/7, v3.5 규칙 3개와 v3.6 규칙 3개 포함 이슈 제목 31개).
 
 토큰 이슈가 열리면: 새 토큰을 만들어 앱 저장소 비밀 `IEUM_INBOX_TOKEN`을 바꾸고 배포한다. 만료 뒤에는 폰이 업데이트도 못 받으므로 만료 전에 해야 한다. `IEUM_SIGNING_SEED` 비밀이 없으면 서명 키가 토큰에서 나오므로 토큰을 바꾸면 서명이 바뀌어 업데이트가 막힌다. 먼저 확인한다. 폰이 새 버전을 받고 다음 하트비트를 올리면 이슈는 저절로 닫힌다.
 

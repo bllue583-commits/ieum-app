@@ -57,7 +57,10 @@ internal object StatusLights {
         /** v3.5 r15-3 (DESIGN_V5 2.3-3), filled by [withPhone]: the KakaoTalk link ([KakaoReport.linkState]), the settings switch
          * [카카오톡으로 받기] ([PipelineSettingsKeys.MORNING_KAKAO]), the last full send and the failed sends so far. */
         val kakao:KakaoReport.Link=KakaoReport.Link.UNAVAILABLE,
-        val kakaoOn:Boolean=true,val kakaoLastSentMs:Long=0,val kakaoFailed:Long=0)
+        val kakaoOn:Boolean=true,val kakaoLastSentMs:Long=0,val kakaoFailed:Long=0,
+        /** v3.6 (DESIGN_V6 3.2, r16-2), filled by [withPhone]: recordings waiting for the charger and since when the oldest of them
+         * waits ([PowerText.waiting], from the power ledger r16-1 writes; null: not known). */
+        val chargeWaiting:Int=0,val chargeWaitOldestMs:Long?=null)
 
     const val TRANSCRIBE_LATE_MS=6*3_600_000L
     const val ANALYZE_LATE_MS=3*3_600_000L
@@ -109,8 +112,11 @@ internal object StatusLights {
             i.modelState=="UNSUPPORTED" -> "이 휴대폰에서는 통화를 글자로 바꿀 수 없어요."
             i.modelState=="FAILED" -> "음성 인식 모델을 받지 못했어요. 아래 [모델 받기]를 눌러 주세요. 어떤 연결에서든 받아요."
             i.modelState!="READY" -> "음성 인식 모델을 아직 받지 않았어요. 아래 [모델 받기]를 눌러 주세요. 어떤 연결에서든 받아요."
-            i.transcribeBacklog>0 && (i.oldestQueuedMs?.let { i.now-it>TRANSCRIBE_LATE_MS } ?: true) && i.now-i.lastTranscribedMs>TRANSCRIBE_LATE_MS ->
+            // v3.6: recordings that wait for the charger by design are not "밀려 있어요"; only the others count here.
+            i.transcribeBacklog>i.chargeWaiting && (i.oldestQueuedMs?.let { i.now-it>TRANSCRIBE_LATE_MS } ?: true) && i.now-i.lastTranscribedMs>TRANSCRIBE_LATE_MS ->
                 "녹음 ${i.transcribeBacklog}개가 밀려 있어요. 충전기에 꽂아 두면 밤에 끝나요."
+            // v3.6 (DESIGN_V6 3.2): the oldest recording waiting for the charger has waited over a day and a half.
+            chargeLong(i) -> PowerText.lightLong(i.chargeWaiting)
             // v3.5 r15-0: failed texts are told too (each build tries them once more, CallTranscriptionStore.requeueFailedOnce).
             i.textFailed>0 -> textFailedWords(i.textFailed)
             else -> null }
@@ -140,16 +146,22 @@ internal object StatusLights {
         // Where each fix lives: the folder in 연결 (above), the consent in 정리 (above), the model, the retry and the update in
         // 상태와 도움 (below the lights); the notification switch is in the phone's settings, so that line has no target.
         val analyzeTarget=if(!i.consent) GROUP_SUMMARY else if(i.routineMissed>=ROUTINE_AMBER || (i.dbPercent ?: 0)>=SelfCheckNotices.STORAGE_SHARE_PERCENT) null else GROUP_STATUS
-        val transcribeTarget=if(i.modelState=="UNSUPPORTED") null else GROUP_STATUS
+        // The charger wait is fixed outside the app (plug it in): no target.
+        val transcribeTarget=if(i.modelState=="UNSUPPORTED" || transcribe==PowerText.lightLong(i.chargeWaiting)) null else GROUP_STATUS
         // v3.4: recordings that are there but still waiting for their text are said in green on the recording line.
         val importLight=if(import==null && i.pendingText!=null) Light("status_import","녹음 가져오기",true,i.pendingText) else light("status_import","녹음 가져오기",import,importTarget)
-        val all=listOf(importLight,light("status_transcribe","글자로 바꾸기",transcribe,transcribeTarget),
+        // v3.6: recordings waiting for the charger (not yet long) are said in green on the text line.
+        val transcribeLight=if(transcribe==null && i.chargeWaiting>0) Light("status_transcribe","글자로 바꾸기",true,PowerText.lightGreen(i.chargeWaiting))
+            else light("status_transcribe","글자로 바꾸기",transcribe,transcribeTarget)
+        val all=listOf(importLight,transcribeLight,
             light("status_analyze","통화 정리",analyze,analyzeTarget),light("status_notify","알림",notify,notifyTarget),light("status_update","업데이트",update,GROUP_STATUS),
             card(i))
         // v3.5 r15-0: an amber light puts the lights at the top of the page (v3.3), so every group is below them then; without
         // one they sit in 상태와 도움 near the end, below 연결, 정리 and 통화 카드.
         return if(all.any { !it.ok }) all.map { it.copy(words=below(it.words)) } else all
     }
+    /** v3.6: recordings wait for the charger and the oldest of them for more than [TranscriptionPower.CHARGING_WAIT_WARN_MS]. */
+    fun chargeLong(i:Input)=i.chargeWaiting>0 && i.chargeWaitOldestMs!=null && i.now-i.chargeWaitOldestMs>TranscriptionPower.CHARGING_WAIT_WARN_MS
     /** The settings groups the words name, said as below the lights (they lead the page). */
     fun below(words:String)=listOf("연결","정리","통화 카드","아침 보고").fold(words) { w,g -> w.replace("위 $g 묶음","아래 $g 묶음") }
 
@@ -223,7 +235,9 @@ internal object StatusLights {
             noMatchLong=noMatchLong(s,i.now),
             kakao=runCatching { kakaoLink(s) }.getOrDefault(KakaoReport.Link.UNAVAILABLE),
             kakaoOn=s.optBoolean(PipelineSettingsKeys.MORNING_KAKAO,true),kakaoLastSentMs=s.optLong(PipelineSettingsKeys.KAKAO_LAST_SENT_MS,0),
-            kakaoFailed=s.optLong(PipelineSettingsKeys.KAKAO_FAILED_COUNT,0))
+            kakaoFailed=s.optLong(PipelineSettingsKeys.KAKAO_FAILED_COUNT,0)).let { j ->
+                val w=runCatching { PowerText.waiting(PowerText.ledger(s)) }.getOrNull() ?: return@let j
+                j.copy(chargeWaiting=w.n,chargeWaitOldestMs=w.oldestMs) }
     }
     /** v3.5 r15-0: the last recording-gap verdict is noMatch, fresh, and has held for more than [NO_MATCH_MS]. */
     fun noMatchLong(s:JSONObject,now:Long):Boolean {

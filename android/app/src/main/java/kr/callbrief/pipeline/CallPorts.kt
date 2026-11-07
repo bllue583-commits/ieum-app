@@ -194,6 +194,14 @@ object PipelineSettingsKeys {
     const val REPORT_SOURCE="reportSource"
     /** r15-3: settings switch "카카오톡으로 받기" (default on once linked). */
     const val MORNING_KAKAO="morningKakao"
+
+    // ---- v3.6 (DESIGN_V6 5, r16-0 key commit): names only, each bundle writes its own value. ----
+    /** r16-2 settings switch "충전 중에만 글자로 바꾸기" (default off): transcription runs only while plugged in. */
+    const val TRANSCRIBE_CHARGING_ONLY="transcribeChargingOnly"
+    /** r16-1: the transcription power ledger, a JSON object ([PowerStats]): the heartbeat's `power` block is made from it
+     * (today/prev runs and minutes on battery and plugged in, the battery budget, skips, killed/yield ms, model loads, piece
+     * speed, the last battery snapshot, plug debounce and level samples, and the power-waiting queue). Numbers and codes only. */
+    const val TRANSCRIPTION_POWER="transcriptionPower"
 }
 
 /** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets

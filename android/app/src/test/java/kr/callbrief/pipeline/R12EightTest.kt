@@ -71,13 +71,13 @@ class R12EightTest:ProtectedTextHostTestBase() {
     private val model=object:PipelineSttModel { override val modelSha256="a".repeat(64);override val runtimeSha256="b".repeat(64);override val modelName="m";override fun verifiedModelFile()=File("m") }
     private val sunk=mutableListOf<String>()
     private val sink=object:CallTranscriptSink { override fun onTranscript(transcript:CallTranscript){ sunk+=transcript.recordingId } }
-    private fun runner(s:CallTranscriptionStore,transcriber:CallTranscriber,stopped:()->Boolean={false},timeLimited:()->Boolean={false})=
+    private fun runner(s:CallTranscriptionStore,transcriber:CallTranscriber,stopped:()->Boolean={false},timeLimited:()->Boolean={false},rate:Double?=null)=
         CallTranscriptionRunner(s,model,PipelineAudioDecoder(),transcriber,read={ c -> PipelineBytesInput(wavs.getValue(c.key.recordingId).copyOf()) },
-            skipReason={null},sink={sink},stopped=stopped,now={clock},timeLimited=timeLimited)
+            skipReason={null},sink={sink},stopped=stopped,now={clock},timeLimited=timeLimited,rate={ rate })
     private fun state(s:CallTranscriptionStore,id:String)=s.rows().single { it.first.recordingId==id }.let { it.second to it.third }
 
     // ---- 확인 기준 1: short new calls and one long recording; the long one is done within two or three runs ----
-    @Test fun aLongRecordingFinishesWithinThreeRunsWhileNewCallsKeepComing() {
+    @Test fun aLongRecordingFinishesWithinFourRunsWhileNewCallsKeepComing() {
         recording("long",base-2*hour,9*60.0)                                   // 9 minutes: five pieces
         repeat(8) { recording("short$it",base-hour+it*minute,30.0) }
         // About 1.4 x real time per piece (the S26 measures 85 s per audio minute); WorkManager stops a run at 10 minutes.
@@ -85,14 +85,16 @@ class R12EightTest:ProtectedTextHostTestBase() {
         var runStart=0L
         var runs=0
         CallTranscriptionStore(context,{ clock },{}).use { s ->
-            val r=runner(s,transcriber,stopped={ clock-runStart>=10*minute },timeLimited={ true })
-            for(i in 0 until 3) {
+            // v3.6 W1: a run ends itself at 9 minutes before a piece that would not fit (the measured speed, 1.4 here), so a
+            // run holds two such pieces instead of three and a cut-off fourth: four runs, none of them throwing a piece away.
+            val r=runner(s,transcriber,stopped={ clock-runStart>=10*minute },timeLimited={ true },rate=1.4)
+            for(i in 0 until 4) {
                 if(i>0) repeat(3) { recording("new$i$it",clock+it*minute,30.0) } // calls that came in meanwhile
                 clock+=hour;runStart=clock;r.run();runs++
                 if(state(s,"long").first=="DONE") break
             }
             assertEquals("DONE",state(s,"long").first)
-            assertTrue("runs $runs",runs<=3)
+            assertTrue("runs $runs",runs<=4)
             assertEquals(0,s.totalStalls(CallTranscriptionStore.Key("long",1,"%064x".format(1))))
             assertTrue(s.rows().none { it.second=="FAILED" })
         }

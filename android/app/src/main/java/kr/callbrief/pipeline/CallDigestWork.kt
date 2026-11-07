@@ -127,6 +127,14 @@ internal object CallDigestText {
             runCatching { store.day(d) }.getOrDefault(emptyList()).count { r -> r.recordId !in ids && (r.startedMs ?: r.createdMs)>=at && r.kind=="통화" && done(r) } } ?: 0
         return waited+after
     }
+    /** v3.6 (DESIGN_V6 3.2, r16-2): [m] with "충전하면 n개를 이어서 정리해요" at its end while [n] recordings wait for the charger
+     * (the title and the short text stay; the lines stay within [MAX_LINES]). */
+    fun withCharger(m:Message,n:Int):Message {
+        if(n<=0) return m
+        val line=PowerText.eveningLine(n)
+        val lines=if(m.lines.size>=MAX_LINES) m.lines.take(MAX_LINES-1) else m.lines
+        return m.copy(lines=lines+line)
+    }
     /** [m] with the late line at its end (the lines stay within [MAX_LINES]). */
     fun withLate(m:Message,n:Int):Message {
         val line=lateLine(n) ?: return m
@@ -224,7 +232,8 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
             val late=if(kind==CallDigestSchedule.MORNING) runCatching { CallDigestText.lateDone(store,settings.snapshot().optString(CallDigestText.EVENING_WAITING_KEY)) }.getOrDefault(0) else 0
             // v3.5 r15-0: the morning report also says when a new version waits for its install (the home banner stays as it is).
             val update=kind==CallDigestSchedule.MORNING && runCatching { CallUpdate.installWaiting(applicationContext) }.getOrDefault(false)
-            val message=if(kind==CallDigestSchedule.MORNING) CallDigestText.withUpdate(CallDigestText.withLate(CallDigestText.morning(store,plan.day),late),update) else CallDigestText.evening(store,plan.day)
+            val message=if(kind==CallDigestSchedule.MORNING) CallDigestText.withUpdate(CallDigestText.withLate(CallDigestText.morning(store,plan.day),late),update)
+                else CallDigestText.withCharger(CallDigestText.evening(store,plan.day),runCatching { PowerText.waiting(PowerText.ledger(settings.snapshot())).n }.getOrDefault(0))
             // The evening report carries its day, so a tap the next morning still opens that day's calls.
             // v3.5 r15-3: the morning notice stays away when today's report went out in full over KakaoTalk.
             val posted=if(kind==CallDigestSchedule.MORNING) CallDigestKakao.postMorning(applicationContext,message,waitForSend=true)
@@ -275,7 +284,10 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
         val readable=StatusLights.folderReadable(app,s)
         // B4 (review data #4): the queue by entry time, recent recordings only, and the store's real sealed file and row count.
         val store=StatusLights.read(app,s,now)
-        val queued=store.queue?.newCount ?: 0;val oldestQueued=store.queue?.newOldestMs
+        // v3.6 (DESIGN_V6 3.2): recordings waiting for the charger are normal (the budget, the switch); the 글자로 바꾸기 light
+        // tells a wait over 36 hours. Only the others count as "밀려 있어요".
+        val charger=runCatching { PowerText.waiting(PowerText.ledger(s)).n }.getOrDefault(0)
+        val queued=((store.queue?.newCount ?: 0)-charger).coerceAtLeast(0);val oldestQueued=store.queue?.newOldestMs
         // Recent calls only: old first-pass records may rightly wait for the charger (as the stall notice counts them).
         val oldestWaiting=runCatching { kr.callbrief.IeumApplication.store(app).pending().filter { !FirstPass.isOld(it.dayMs,s) }.minOfOrNull { it.createdMs } }.getOrNull()
         val dbBytes=store.dbBytes

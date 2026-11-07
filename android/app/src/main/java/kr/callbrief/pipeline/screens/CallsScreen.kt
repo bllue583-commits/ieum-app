@@ -68,11 +68,12 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
          * only while a transcription job's recording falls in the call's window ([RecordingGap.window]); without one, still
          * being looked for up to [SEARCH_MS] after the call ended, then no recording. Null for lines this does not cover
          * (personal, missed, not connected, blocked). The call list puts it after "받은 전화 3분, " (r12-5). */
-        internal fun stateWords(e:LoggedCall,now:Long,jobStarts:List<Long>):String? {
+        internal fun stateWords(e:LoggedCall,now:Long,jobStarts:List<Long>,waitsForCharger:(LoggedCall)->Boolean={ false }):String? {
             if(e.personal || e.kind!=FirstPass.LogKind.NO_RECORDING) return null
             val w=RecordingGap.window(e.startMs,e.durationMs)
             return when {
-                jobStarts.any { it in w } -> TRANSCRIBING
+                // v3.6 (DESIGN_V6 3.2): from 10 minutes after the call, a recording that waits for the charger says so.
+                jobStarts.any { it in w } -> if(now>=e.startMs+e.durationMs+PowerText.SAY_AFTER_MS && waitsForCharger(e)) PowerText.CHARGER_WORDS else TRANSCRIBING
                 now<e.startMs+e.durationMs+SEARCH_MS -> SEARCHING
                 else -> NO_RECORDING
             }
@@ -102,6 +103,8 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
     /** When the recordings still waiting for their words were made (this day), and whether the folder is connected. */
     private var jobStarts:List<Long> =emptyList()
     private var folder=false
+    /** v3.6: the power ledger and the switch [충전 중에만 글자로 바꾸기], read with the day (a recording waiting for the charger). */
+    private var power=org.json.JSONObject();private var chargingOnly=false
     /** True from a day change (or the first opening) until that day is read: the list shows "불러오는 중이에요". */
     private var reading=true
     /** Where the list was scrolled when a detail page opened from it; put back once the list is drawn again (design G1). */
@@ -155,12 +158,14 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
                 val dayCalls=s.day(target)
                 Read(dayCalls,runCatching { s.dayLog(target) }.getOrDefault(emptyList()),
                     runCatching { s.transcribingStarts(from-NEAR_MS,to+NEAR_MS) }.getOrDefault(emptyList()),
-                    runCatching { SecureSettings(storage).snapshot().optString("treeUri").isNotBlank() }.getOrDefault(false),
+                    runCatching { SecureSettings(storage).snapshot() }.getOrDefault(org.json.JSONObject()),
                     runCatching { s.personIdsOf(dayCalls.map { it.recordId }) }.getOrDefault(emptyMap()),
                     runCatching { s.openItems().associateBy { it.id } }.getOrDefault(emptyMap()))
             } }
             if(!live()||target!=day)return@launch
-            result.onSuccess { calls=it.calls;logs=it.logs;jobStarts=it.jobs;folder=it.folder;people=people+it.people;open=it.open;reading=false;pool=null;render() }
+            result.onSuccess { calls=it.calls;logs=it.logs;jobStarts=it.jobs;folder=it.settings.optString("treeUri").isNotBlank()
+                power=runCatching { PowerText.ledger(it.settings) }.getOrDefault(org.json.JSONObject());chargingOnly=PowerText.chargingOnly(it.settings)
+                people=people+it.people;open=it.open;reading=false;pool=null;render() }
             result.onFailure {
                 reading=false
                 body.removeAllViews();CallUi.band(body,"${CallUi.dayWord(day)}의 통화")
@@ -168,7 +173,7 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
             }
         }
     }
-    private class Read(val calls:List<CallRecord>,val logs:List<LoggedCall>,val jobs:List<Long>,val folder:Boolean,val people:Map<String,String>,val open:Map<String,OpenItem>)
+    private class Read(val calls:List<CallRecord>,val logs:List<LoggedCall>,val jobs:List<Long>,val settings:org.json.JSONObject,val people:Map<String,String>,val open:Map<String,OpenItem>)
     /** The open check items by id, read with the day: a call's detail page puts [다 됐어요] on those still open (v3.3, DESIGN_V4 3.3-4). */
     private var open:Map<String,OpenItem> =emptyMap()
     /** The transcript of the detail page is open ([전체 보기] became [접기]); kept while the same call is drawn again. */
@@ -225,11 +230,11 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
         val who=e.name ?: e.numberKey?.let(CallUi::who) ?: "모르는 번호"
         val time=CallUi.time(e.startMs)
         // v3.1 (DESIGN_V4 2.1-4): being turned into text only with a job in the call's window, else looked for, then none.
-        val words=stateWords(e,now,jobStarts)
-        val pending=words==TRANSCRIBING
+        val words=stateWords(e,now,jobStarts) { l -> PowerText.waitsForCharger(l.startMs,l.durationMs,now,power,chargingOnly) }
+        val pending=words==TRANSCRIBING || words==PowerText.CHARGER_WORDS
         val row=when {
             e.personal -> CallUi.logRow(a,time,who,"개인 통화",CallUi.SUBTLE)
-            pending -> CallUi.logRow(a,time,who,TRANSCRIBING,CallUi.SUBTLE)
+            pending -> CallUi.logRow(a,time,who,words ?: TRANSCRIBING,CallUi.SUBTLE)
             else -> when(e.kind) {
                 FirstPass.LogKind.MISSED -> CallUi.logRow(a,time,who,"부재중 전화",CallUi.AMBER,trailing=CallUi.redialButton(a,e.numberKey,e.name ?: who))
                 FirstPass.LogKind.NOT_CONNECTED -> CallUi.logRow(a,time,who,"건 전화, 연결 안 됨",CallUi.SUBTLE,trailing=CallUi.redialButton(a,e.numberKey,e.name ?: who))

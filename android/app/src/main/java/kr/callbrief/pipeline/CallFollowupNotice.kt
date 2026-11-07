@@ -44,6 +44,9 @@ internal object CallFollowupNotice {
     const val MAX_ENTRIES=40
     const val MAX_AGE_MS=36*3_600_000L
     const val WORKING="working";const val DONE="done";const val LATE="late"
+    /** v3.6 (DESIGN_V6 3.2, r16-2): the call's recording is in the transcription queue and waits for the charger
+     * ([PowerText.waitsForCharger]): "충전하면 이어서 정리해요" from [PowerText.SAY_AFTER_MS] after the call, ahead of [LATE_MS]. */
+    const val CHARGER="charger"
     /** v3.4 (DESIGN_V4 4.2-4 가): a call that went out, kept without a notice until the call log says it was connected (its
      * length > 0); a call the log says was 0 seconds goes without a word. */
     const val HOLD="hold"
@@ -154,8 +157,10 @@ internal object CallFollowupNotice {
         if(e.record==null && e.items.isNotEmpty()) runCatching { (db ?: store(context)).bindUserItems(e.items,record.recordId) }
         if(record.analysis?.business==false) { cancel(context,e.id);save(context) { list -> list.filter { it.id!=e.id } };return }
         if(record.state!=CallRecordStore.ANALYZED || record.summary.isNullOrBlank()) {
-            // Linked, the result is not in yet: only remember which record it is.
-            if(e.record==null) save(context) { list -> list.map { if(it.id==e.id) it.copy(record=record.recordId) else it } }
+            // Linked, the result is not in yet: only remember which record it is. v3.6: its text is made, so it no longer waits
+            // for the charger.
+            if(e.record==null) save(context) { list -> list.map { if(it.id==e.id) it.copy(record=record.recordId,state=if(it.state==CHARGER) WORKING else it.state) else it } }
+            if(e.state==CHARGER) post(context,e.copy(record=record.recordId,state=WORKING),record)
             return
         }
         val done=e.copy(record=record.recordId,state=DONE)
@@ -186,15 +191,44 @@ internal object CallFollowupNotice {
             val none=entries.filter { e -> e.state==WORKING && e.record==null && passStartedMs>=e.endedMs+NO_RECORDING_AFTER_MS && now-e.endedMs<MAX_AGE_MS &&
                 RecordingGap.window(e.startedMs,e.endedMs-e.startedMs).let { w -> !hasFile(w.first,w.last) } }
             entries.filter { it.id in confirmed && none.none { n -> n.id==it.id } }.forEach { post(context,it,null) }
-            if(none.isEmpty()) return confirmed.size
+            if(none.isEmpty()) { runCatching { chargerPass(context,settings(context),now) };return confirmed.size }
             val ids=none.map { it.id }.toSet()
             save(context) { list -> list.map { if(it.id in ids && it.state==WORKING) it.copy(state=NO_RECORDING) else it } }
             runCatching { SecureSettings(CallPipelineStartup.storage(context)).update {
                 it.put(PipelineSettingsKeys.FOLLOWUP_NO_RECORDING,it.optLong(PipelineSettingsKeys.FOLLOWUP_NO_RECORDING,0)+none.size) } }
             none.forEach { post(context,it.copy(state=NO_RECORDING),null) }
+            runCatching { chargerPass(context,settings(context),now) }
             none.size
         } catch(t:Throwable) { Log.w(LOG,"no-recording check failed: ${t.javaClass.simpleName}");0 }
     }
+
+    // ---- 2c. waiting for the charger (v3.6) --------------------------------------------------------------------------
+    /** After each discovery pass and in [sweep]: a call without its record whose recording is in the transcription queue
+     * ([CallRecordStore.transcribingStarts] in the call's window: so never said of a call without a recording) and waits for
+     * the charger ([waitsForCharger]) says so from [PowerText.SAY_AFTER_MS] after it ended; once it no longer waits it is
+     * "정리하고 있어요" again (or late after [LATE_MS]). Returns how many notices changed. */
+    internal fun chargerPass(context:Context,s:JSONObject,now:Long):Int {
+        val open=entries(context).filter { (it.state==WORKING || it.state==CHARGER) && it.record==null }
+        if(open.isEmpty()) return 0
+        val power=PowerText.ledger(s);val only=PowerText.chargingOnly(s)
+        val db=runCatching { store(context) }.getOrNull()
+        val changed=open.mapNotNull { e ->
+            val waits=now-e.endedMs>=PowerText.SAY_AFTER_MS && waitsForCharger(e,now,power,only) &&
+                RecordingGap.window(e.startedMs,e.endedMs-e.startedMs).let { w -> runCatching { db?.transcribingStarts(w.first,w.last+1) }.getOrNull()?.isNotEmpty()==true }
+            when {
+                waits && e.state==WORKING -> e.copy(state=CHARGER)
+                !waits && e.state==CHARGER -> e.copy(state=if(now-e.endedMs>=LATE_MS) LATE else WORKING)
+                else -> null }
+        }
+        if(changed.isEmpty()) return 0
+        val byId=changed.associateBy { it.id }
+        save(context) { list -> list.map { byId[it.id]?.takeIf { _ -> it.state==WORKING || it.state==CHARGER } ?: it } }
+        changed.forEach { post(context,it,null) }
+        return changed.size
+    }
+    /** [PowerText.waitsForCharger] for the call of [e] (its length from the call's start and end). */
+    internal fun waitsForCharger(e:Entry,now:Long,power:JSONObject?,chargingOnly:Boolean)=
+        PowerText.waitsForCharger(e.startedMs,(e.endedMs-e.startedMs).coerceAtLeast(0),now,power,chargingOnly)
 
     // ---- 3. the hourly tick and the evening report ------------------------------------------------------------------
     /** The hourly pass and the evening report call this. Notices of calls before an evening report that went out are taken away;
@@ -214,13 +248,15 @@ internal object CallFollowupNotice {
             if(goneIds.isNotEmpty()) save(context) { list -> list.filter { it.id !in goneIds } }
             val open=entries.filter { it.id !in goneIds && it.state!=DONE }
             if(open.isEmpty()) return
+            chargerPass(context,s,now)
             // A result that came in by another way (the report's own pass, a notice posted after the result).
             val db=runCatching { store(context) }.getOrNull()
             for(e in open) {
                 val record=db?.let { d -> e.record?.let(d::record) ?: runCatching { d.day(CallRecordStore.kstDay(e.startedMs)) }.getOrDefault(emptyList()).firstNotNullOfOrNull { r -> r.takeIf { match(listOf(e),it)!=null } } }
                 if(record!=null) { finish(context,e,record,db);if(record.state==CallRecordStore.ANALYZED) continue }
-                if(e.state==WORKING && now-e.endedMs>=LATE_MS) {
-                    val late=(entries(context).firstOrNull { it.id==e.id } ?: e).copy(state=LATE)
+                val current=entries(context).firstOrNull { it.id==e.id } ?: e
+                if(current.state==WORKING && now-e.endedMs>=LATE_MS) {
+                    val late=current.copy(state=LATE)
                     save(context) { list -> list.map { if(it.id==e.id) late else it } }
                     post(context,late,null)
                 }
@@ -285,6 +321,8 @@ internal object CallFollowupNotice {
             // v3.5 r15-0: facts only, no promise of a report or a time. A call with its record shows up in the call list once done.
             LATE -> if(e.record!=null) Words("${withParticle(e.who)} 통화",LATE_WORDS,"$LATE_WORDS$memo")
                 else Words("${withParticle(e.who)} 통화","정리가 늦어지고 있어요","정리가 늦어지고 있어요$memo")
+            // v3.6: facts only; the recording is there and goes on once the phone is plugged in.
+            CHARGER -> Words("${withParticle(e.who)} 통화",PowerText.CHARGER_WORDS,"${PowerText.CHARGER_WORDS}$memo")
             NO_RECORDING -> Words("${withParticle(e.who)} 통화","이 통화는 녹음이 없어 정리할 수 없어요",
                 "이 통화는 녹음이 없어 정리할 수 없어요. 메모를 남기면 체크할 일에 넣어 드려요$memo")
             else -> Words("${withParticle(e.who)} 통화를 정리하고 있어요",WORKING_WORDS,"$WORKING_WORDS$memo")

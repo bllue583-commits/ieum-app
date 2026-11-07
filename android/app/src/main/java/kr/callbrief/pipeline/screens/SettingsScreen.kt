@@ -373,6 +373,13 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         body.addView(switchRow("consent_switch",s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false),PipelineSettingsKeys.CONSENT_GRANTED) { on ->
             if(on) "켜짐: 통화 내용을 정리해요" else "꺼짐: 정리하지 않아요" })
 
+        // v3.6 (DESIGN_V6 3.2, r16-2): the battery, in one line and one switch.
+        sub("글자로 바꾸기")
+        val now=System.currentTimeMillis()
+        body.addView(CallUi.text(a,PowerText.settingsLine(PowerText.batteryMinToday(PowerText.ledger(s),now)),CallUi.BODY).apply { tag="power_line";fontFeatureSettings="tnum" })
+        body.addView(switchRow("charging_only_switch",PowerText.chargingOnly(s),PipelineSettingsKeys.TRANSCRIBE_CHARGING_ONLY,
+            done={ runCatching { CallTranscriptionWork.enqueue(a) } }) { PowerText.SWITCH })
+
         sub("알림 시각")
         hourRow("저녁 통화 정리",PipelineSettingsKeys.EVENING_HOUR,s.optInt(PipelineSettingsKeys.EVENING_HOUR,19),15..23)
         body.addView(CallUi.divider(a));body.addView(switchRow("followup_switch",s.optBoolean(PipelineSettingsKeys.FOLLOWUP_NOTICE,true),PipelineSettingsKeys.FOLLOWUP_NOTICE) { "통화마다 알림" })
@@ -636,6 +643,11 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         }
         setupPart(s)?.let { part("처음 설정");body.addView(it) }
         firstPass?.let { f -> part("지난 통화 정리");firstPassRows(f) }
+        // v3.6 (DESIGN_V6 3.2): recordings waiting for the charger, in the same words as 처음 정리's rest line.
+        PowerText.waiting(PowerText.ledger(s)).n.takeIf { it>0 }?.let { n ->
+            part("글자로 바꾸기")
+            body.addView(CallUi.text(a,PowerText.nowLine(n),CallUi.BODY,true).apply { tag="now_charger";fontFeatureSettings="tnum" })
+        }
         modelNow=modelInNow(s,modelState)
         if(modelNow) { part("음성 인식 모델");modelRows(modelState) }
         if(first) body.addView(CallUi.text(a,"지금 할 일이 없어요. 모두 잘 되고 있어요 ✓",CallUi.BODY,true,CallUi.OK).apply { tag="now_none" })
@@ -706,12 +718,12 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
     }
 
     /** A switch that shows its own state: changed, it saves [key] and changes only its words (and the status lights), no redraw. */
-    private fun switchRow(tag:String,on:Boolean,key:String,words:(Boolean)->String)=Switch(a).apply {
+    private fun switchRow(tag:String,on:Boolean,key:String,done:()->Unit={},words:(Boolean)->String)=Switch(a).apply {
         text=words(on);textSize=CallUi.SUMMARY;isChecked=on
         minHeight=CallUi.dp(a,64);this.tag=tag;setTextColor(CallUi.INK)
         val tint=android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_checked),intArrayOf()),intArrayOf(CallUi.ACCENT,CallUi.FAINT))
         thumbTintList=tint;trackTintList=tint.withAlpha(120)
-        setOnCheckedChangeListener { v,checked -> v.text=words(checked);save(redraw=false) { it.put(key,checked) } }
+        setOnCheckedChangeListener { v,checked -> v.text=words(checked);save(redraw=false,done=done) { it.put(key,checked) } }
     }
 
     /** v3.0 r11-1 (design 7.3): "통화 카드": the overlay permission, three switches, and the card's place back to the start. */

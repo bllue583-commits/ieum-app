@@ -86,7 +86,7 @@ class R15FourTest:ProtectedTextHostTestBase() {
         CallTranscriptionStore(app).use { s -> s.offer(candidate("x"),true,"");s.offer(candidate("i"),true,"");failOnce(s,"x");failOnce(s,"i","INTERRUPTED") }
         for(build in 3001..3004) {
             CallTranscriptionStore.buildCode={ build }
-            CallTranscriptionStore(app).use { s ->
+            CallTranscriptionStore(app).use { s -> s.requeueFailed() // v3.6 W5: at the start of a plugged-in run
                 val x=state(s,"x");val i=state(s,"i")
                 when(build) {
                     3001 -> { assertEquals("QUEUED",x);assertEquals("QUEUED",i) }
@@ -106,7 +106,7 @@ class R15FourTest:ProtectedTextHostTestBase() {
             assertNull(p.query("SELECT requeue_count FROM call_transcription_jobs WHERE recording_id='o'").single()["requeue_count"])
         }
         CallTranscriptionStore.buildCode={ 4001 }
-        CallTranscriptionStore(app).use { s -> assertEquals("QUEUED",state(s,"o")) }
+        CallTranscriptionStore(app).use { s -> s.requeueFailed();assertEquals("QUEUED",state(s,"o")) }
     }
 
     // ---- L2 ----

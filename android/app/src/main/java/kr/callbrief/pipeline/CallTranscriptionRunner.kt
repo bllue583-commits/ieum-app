@@ -32,15 +32,21 @@ internal fun interface CallTranscriber {
         override fun transcribe(pcm:FloatArray,stopped:()->Boolean)=this@CallTranscriber.transcribe(model,pcm,stopped)
         override fun close() {}
     }
-    interface Session:AutoCloseable { fun transcribe(pcm:FloatArray,stopped:()->Boolean):List<CallTranscript.Segment> }
+    interface Session:AutoCloseable {
+        fun transcribe(pcm:FloatArray,stopped:()->Boolean):List<CallTranscript.Segment>
+        /** v3.6 W3: the session goes on to another recording: forget what the previous recording said (B2 context). */
+        fun nextRecording() {}
+    }
 }
 
-/** F2: 6 threads while charging or with at least half the battery, otherwise 4 (below 20 % nothing runs: see [FirstPass.powerOk] and the work constraint). */
+/** F2: 6 threads while charging or with at least half the battery, otherwise 4. v3.6: the background run takes its count from
+ * [PowerPolicy] (wired 6, wireless and battery 4), capped by the cores the process may use (P7, [CpuSet]); this stays for the
+ * golden measurement screen, with the same cap. */
 internal object TranscriptionThreads {
     fun threadsFor(charging:Boolean,percent:Int)=if(charging||percent>=50) 6 else 4
     fun current(context:Context):Int {
         val b=context.getSystemService(android.os.BatteryManager::class.java) ?: return 4
-        return threadsFor(b.isCharging,b.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY))
+        return PowerPolicy.threads(threadsFor(b.isCharging,b.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)),CpuSet.readAllowed())
     }
 }
 
@@ -61,7 +67,9 @@ internal class WhisperCallTranscriber(private val engine:AndroidWhisperEngine,pr
     private val carryContext:Boolean=false,
     /** v3.3 (3.2-1): numbers of each finished piece (ms, fallbacks, repaired and dropped segments, uncertain numbers). */
     private val pieceStats:(SttPieceStats)->Unit={}):CallTranscriber {
-    private fun threads()=threadCount ?: threadSource?.invoke() ?: (Runtime.getRuntime().availableProcessors()-1).coerceIn(1,6) // S26: 6 threads 85 s/min, 8 threads ~3x slower
+    // S26 (DESIGN_V6 1.1): a 2-minute piece took 223 s cold and 330-470 s hot on 6 threads in the background (111-195 s per
+    // audio minute, not the 85 s/min measured in the foreground on 10/30); 8 threads ~3x slower.
+    private fun threads()=threadCount ?: threadSource?.invoke() ?: (Runtime.getRuntime().availableProcessors()-1).coerceIn(1,6)
     private fun segmentsOf(raw:ByteArray):List<CallTranscript.Segment> {
         val output=AndroidWhisperEngine.decodeOutput(raw) // no segments = silence; a malformed segment is dropped alone
         if(output.dropped>0)android.util.Log.w("ieum.stt","dropped ${output.dropped} malformed segment(s) of ${output.dropped+output.segments.length()}")
@@ -81,6 +89,7 @@ internal class WhisperCallTranscriber(private val engine:AndroidWhisperEngine,pr
                 if(carryContext) previous=out.joinToString(" ") { it.text.trim() }.trim()
                 return out
             }
+            override fun nextRecording() { previous="" }
             override fun close()=session.close()
         }
     }
@@ -139,12 +148,36 @@ internal class CallTranscriptionRunner(
     private val timeLimited:()->Boolean={false},
     /** r12-8 A3: past this much of the run (by [now]) no new recording is begun; the one under way is finished. */
     private val newWorkMs:Long=NEW_WORK_MS,
+    /** v3.6 (DESIGN_V6 2.2): on battery, only today's short calls, newest first (null: plugged in, every recording). */
+    private val battery:CallTranscriptionStore.BatteryWindow?=null,
+    /** v3.6 W1: how long this run may go (9 minutes, or what is left of the day's battery budget). */
+    private val runLimitMs:Long=TranscriptionPower.SELF_END_MS,
+    /** v3.6 W1/W2: work ms per audio ms of recent pieces (null: none measured yet). */
+    private val rate:()->Double?={null},
+    /** v3.6: the power still allows another piece (checked between pieces; the plug pulled on a plugged-in run ends it). */
+    private val keepGoing:()->Boolean={true},
+    /** v3.6 (DESIGN_V6 3.1): what the run did, for the power ledger. */
+    private val events:Events=Events.NONE,
+    /** v3.6: the first piece of this run counts as cold (the phone rested before it). */
+    private val coldStart:Boolean=false,
 ) {
+    /** v3.6 (DESIGN_V6 3.1): numbers only, for the power ledger. */
+    interface Events {
+        fun piece(ms:Long,audioMs:Long,cold:Boolean) {}
+        fun killed(ms:Long) {}
+        fun deadline(ms:Long) {}
+        fun yielded() {}
+        fun modelLoad(ms:Long) {}
+        companion object { val NONE=object:Events {} }
+    }
     data class Pass(val state:String,val done:Int,val failed:Int,val pieces:Int=0)
     /** The worker was told to stop; finished pieces are kept for the next run. */
     internal class Stopped:RuntimeException("ANDROID_STT_STOPPED")
     /** r12-8 A4: a piece ran into the native deadline; it is marked to be done as two halves and the attempt is given back. */
     internal class Deadline:RuntimeException(CallTranscriptionStore.DEADLINE)
+    /** v3.6 W1: the next piece would not fit in the run (or the power changed): the run ends itself before the piece is begun.
+     * The attempt is given back and no stop is counted against the piece (stop() would count it, DESIGN_V6 함정 ①). */
+    internal class Yield:RuntimeException("ANDROID_STT_YIELD")
     /** Pieces finished in this run (also when it ends stopped). */
     private var pieces=0
     /** Pieces of the current recording finished in this run: a time-limit stop after progress is no stall (review #12). */
@@ -153,14 +186,25 @@ internal class CallTranscriptionRunner(
     private var laterInRun=false
     /** The last stop of [transcribeRecording] came after progress at the time limit (an hour-long call needs ~10 runs). */
     internal var lastStopHarmless=false;private set
+    /** v3.6 W3: the model session, kept from one recording to the next within [run] (closed at its end, or after a stop). */
+    private var shared:CallTranscriber.Session?=null
+    /** v3.6: pieces begun in this run (W1: the first one always starts; the battery budget counts runs that began one). */
+    internal var startedPieces=0;private set
+    /** v3.6: audio ms of the pieces finished in this run. */
+    internal var doneAudioMs=0L;private set
+    private var runStartedMs=0L
+    private fun closeShared() { runCatching { shared?.close() };shared=null }
 
     /** One recording through the model. F6: pieces come one at a time from the decoder and each is transcribed before the
      * next is decoded, so a long call never sits in memory whole. Pieces finished earlier ([CallTranscriptionStore.parts])
      * are taken as they are; a stop throws [Stopped] after saving every finished piece. Device tests call this directly. */
-    internal fun transcribeRecording(key:CallTranscriptionStore.Key,input:PipelineAudioInput,mime:String,file:File):Pair<PipelineAudioInfo,List<CallTranscript.Segment>> {
+    internal fun transcribeRecording(key:CallTranscriptionStore.Key,input:PipelineAudioInput,mime:String,file:File,
+                                     /** v3.6 W3: [run] keeps the session for the next recording; a direct call closes it at the end. */
+                                     keepSession:Boolean=false):Pair<PipelineAudioInfo,List<CallTranscript.Segment>> {
         val segments=mutableListOf<CallTranscript.Segment>()
         val finished=store.parts(key) // pieces finished before the worker was stopped last time
-        var session:CallTranscriber.Session?=null // the model is loaded on the first piece that needs it and closed below, whatever happens
+        shared?.nextRecording()
+        if(runStartedMs==0L) runStartedMs=now()
         recordingPieces=0;lastStopHarmless=false
         // r12-8 A3: a recording that was not the first of its run and is stopped by the time limit had no fair chance: no stall
         // either. The first one of a run that cannot finish a piece still counts (else it could loop for ever).
@@ -177,22 +221,36 @@ internal class CallTranscriptionRunner(
             // r12-8 A5: under 0.1 s there is nothing to hear and the runtime would refuse it (ANDROID_STT_PCM_SIZE).
             if(pcm.size<MIN_PIECE_SAMPLES)return emptyList()
             if(stopped()){lastStopHarmless=harmlessStop(timeLimited(),recordingPieces,startedLate);throw Stopped()} // not started: no stall
-            val raw=try { (session ?: transcriber.open(file,stopped).also{session=it}).transcribe(pcm,stopped) }
-                catch(e:Exception) {
-                    if(stopped())stop(stallId) // cancel() ends the native run with an error
+            // v3.6 W1: a piece that would not fit in what is left of the run is not begun (the first one of a run always is).
+            val audioMs=pcm.size*1000L/PipelineAudioMath.TARGET_RATE
+            val first=startedPieces==0
+            if(!first && !keepGoing() || !PowerPolicy.startPiece(first,now()-runStartedMs,PowerPolicy.expectedPieceMs(audioMs,rate()),runLimitMs)) throw Yield()
+            startedPieces++
+            val began=now()
+            val raw=try {
+                    val session=shared ?: run { val t=now();transcriber.open(file,stopped).also { shared=it;events.modelLoad(now()-t) } }
+                    session.transcribe(pcm,stopped)
+                } catch(e:Exception) {
+                    closeShared() // a handle that was cancelled or failed is not used again (W3)
+                    if(stopped()){events.killed(now()-began);stop(stallId)} // cancel() ends the native run with an error
                     // r12-8 A4: the native run ended by its own deadline (not a stop): a whole piece is halved next time.
-                    if(deadline(e) && partId>=0 && pcm.size>=MIN_SPLIT_SAMPLES){store.askSplit(key,stallId);throw Deadline()}
+                    if(deadline(e) && partId>=0 && pcm.size>=MIN_SPLIT_SAMPLES){events.deadline(now()-began);store.noteDeadline(key);store.askSplit(key,stallId);throw Deadline()}
+                    if(deadline(e)) { events.deadline(now()-began);store.noteDeadline(key) }
                     throw e
                 }
-            if(stopped())stop(stallId) // a piece cut short is not kept
+            if(stopped()){events.killed(now()-began);closeShared();stop(stallId)} // a piece cut short is not kept
+            events.piece(now()-began,audioMs,first && coldStart)
             val shifted=raw.map { it.copy(startMs=it.startMs+offset,endMs=it.endMs+offset) } // v3.3: uncertain numbers go along
-            store.savePart(key,partId,shifted);pieces++;recordingPieces++;return shifted
+            store.savePart(key,partId,shifted);pieces++;recordingPieces++;doneAudioMs+=audioMs;return shifted
         }
         try {
             val info=audio.decode(input,mime) { index,offset,pcm ->
                 val kept=finished[index]
                 if(kept!=null) segments+=kept
-                else if(pcm.size>=MIN_SPLIT_SAMPLES && (store.splitAsked(key,index) || store.stalls(key,index)>=SPLIT_AFTER_STOPS)) {
+                else if(pcm.size>=MIN_SPLIT_SAMPLES && (store.splitAsked(key,index) || store.stalls(key,index)>=SPLIT_AFTER_STOPS ||
+                        // v3.6 W2: expected to run into the native deadline: halved before it is begun, and marked so the next
+                        // run (perhaps cooler) does not take it whole again and throw the saved halves away.
+                        PowerPolicy.splitAhead(PowerPolicy.expectedPieceMs(pcm.size*1000L/PipelineAudioMath.TARGET_RATE,rate()),NATIVE_DEADLINE_SECONDS).also { if(it) store.askSplit(key,index) })) {
                     // Ran into the native deadline (r12-8 A4), or stopped three times in a row on this piece: do it as two
                     // halves (saved separately, ids -1,-2,-3...).
                     val mid=PipelineAudioMath.halfPoint(pcm)
@@ -201,7 +259,7 @@ internal class CallTranscriptionRunner(
                 } else segments+=piece(index,index,offset,pcm)
             }
             return info to segments
-        } finally { runCatching { session?.close() } }
+        } finally { if(!keepSession) closeShared() }
     }
 
     /** A stopped run gives its attempt back, unless the recording keeps stalling: then the attempt counts and, at the limit, it fails. */
@@ -211,26 +269,28 @@ internal class CallTranscriptionRunner(
         if(!refund&&store.attempts(k)>=MAX_ATTEMPTS)store.finish(k,"FAILED","STALLED") else store.finish(k,"QUEUED","STOPPED",refundAttempt=refund)
     }
 
-    fun run(maxJobs:Int=10):Pass {
+    fun run(maxJobs:Int=10):Pass = try { runJobs(maxJobs) } finally { closeShared() }
+    private fun runJobs(maxJobs:Int):Pass {
         store.recoverRunning(MAX_ATTEMPTS);store.skipSuperseded()
         store.offerAll(store.candidates(),skipReason,stopped) // one transaction for the whole list (r7-1)
         if(stopped())return Pass("STOPPED",0,0)
         val target=sink() ?: return Pass("NO_SINK",0,0)
         val file=model.verifiedModelFile() ?: return Pass("NO_MODEL",0,0)
-        var done=0;var failed=0;pieces=0
-        val runStarted=now();var taken=0
+        var done=0;var failed=0;pieces=0;startedPieces=0;doneAudioMs=0
+        val runStarted=now();var taken=0;runStartedMs=runStarted
         repeat(maxJobs) {
             if(stopped())return Pass("STOPPED",done,failed,pieces)
             // r12-8 A3: late in the run no new recording is begun (it would only be cut off by the time limit); the next run takes it.
-            if(taken>0 && now()-runStarted>=newWorkMs)return Pass("MORE",done,failed,pieces)
-            val job=store.nextQueued(oldBefore()) ?: return Pass("IDLE",done,failed)
+            if(taken>0 && now()-runStarted>=minOf(newWorkMs,runLimitMs))return Pass("MORE",done,failed,pieces)
+            if(taken>0 && !keepGoing())return Pass("YIELD",done,failed,pieces)
+            val job=store.nextQueued(oldBefore(),battery) ?: return Pass("IDLE",done,failed,pieces)
             val c=job.candidate
             if(holdOld(c))return Pass("WAIT_POWER",done,failed) // new ones come first: everything after this is old too
             if(!store.claim(c.key))return@repeat
             lastStopHarmless=false;laterInRun=taken++>0
             try {
                 val started=now()
-                val (decoded,segments)=read(c).use { input -> transcribeRecording(c.key,input,c.mime,file) }
+                val (decoded,segments)=read(c).use { input -> transcribeRecording(c.key,input,c.mime,file,keepSession=true) }
                 store.clearParts(c.key)
                 if(decoded.durationMs>0)store.noteLength(c.key,decoded.durationMs)
                 val cleaned=TranscriptClean.clean(segments) // A9: just before saving; the pieces kept in the store stay raw
@@ -245,15 +305,19 @@ internal class CallTranscriptionRunner(
                 if(decoded.durationMs>0)speed((now()-started)*60000/decoded.durationMs)
                 done++
             } catch(e:Stopped) { endStopped(c.key);return Pass("STOPPED",done,failed,pieces) }
+            // v3.6 W1: the run ends itself before a piece that would not fit; the recording is first in line next time.
+            catch(e:Yield) { events.yielded();store.finish(c.key,"QUEUED","STOPPED",refundAttempt=true);return Pass("YIELD",done,failed,pieces) }
             // r12-8 A4: not a used-up attempt; the piece is halved next time. The rest of the run goes on.
             catch(e:Deadline) { store.finish(c.key,"QUEUED",CallTranscriptionStore.DEADLINE,refundAttempt=true) }
             catch(e:Exception) {
                 if(stopped()){endStopped(c.key);return Pass("STOPPED",done,failed,pieces)}
                 val code=e.message?.takeIf{it.matches(Regex("[A-Z0-9_]{1,80}"))} ?: e.javaClass.simpleName
-                if(store.attempts(c.key)>=MAX_ATTEMPTS){store.finish(c.key,"FAILED",code);failed++} else store.finish(c.key,"QUEUED",code)
+                // v3.6 W4: a failure in the recording itself comes back the same: failed for good at once, never revived.
+                if(CallTranscriptionStore.permanent(code)){store.failPermanently(c.key,code);failed++}
+                else if(store.attempts(c.key)>=MAX_ATTEMPTS){store.finish(c.key,"FAILED",code);failed++} else store.finish(c.key,"QUEUED",code)
             }
         }
-        return Pass("MORE",done,failed)
+        return Pass("MORE",done,failed,pieces)
     }
 
     companion object {
@@ -273,7 +337,7 @@ internal class CallTranscriptionRunner(
         /** Without a stop reason (before Android 12): a stop this long after the start is taken as the 10 minute limit. */
         const val TIME_LIMIT_NEAR_MS=9*60_000L
         /** Queue the next pass at once only when this one made progress; otherwise the hourly job takes over. */
-        fun requeueNow(state:String,pieces:Int)=state=="MORE"||(state=="STOPPED"&&pieces>0)
+        fun requeueNow(state:String,pieces:Int)=state=="MORE"||state=="YIELD"||(state=="STOPPED"&&pieces>0)
         /** The same piece stopped this many times in a row is halved; not worth halving under ten seconds. */
         const val SPLIT_AFTER_STOPS=3
         const val MIN_SPLIT_SAMPLES=PipelineAudioMath.TARGET_RATE*10
@@ -298,48 +362,128 @@ internal class CallTranscriptionRunner(
     }
 }
 
-/** Hourly safety net: only queues the one-time work under the one name [CallTranscriptionWork] uses (KEEP), so two transcription
- * passes never run side by side and `recoverRunning` never meets another worker's RUNNING row. */
+/** Hourly safety net (and v3.6's delayed retry, [CallTranscriptionWork.later]): only queues the one-time work under the one
+ * name [CallTranscriptionWork] uses (KEEP), so two transcription passes never run side by side and `recoverRunning` never
+ * meets another worker's RUNNING row. */
 class CallTranscriptionTick(context:Context,params:WorkerParameters):Worker(context,params) {
     override fun doWork():Result { CallTranscriptionWork.enqueue(applicationContext,ExistingWorkPolicy.KEEP);return Result.success() }
 }
 
-/** WorkManager entry: runs soon after new recordings are imported; [CallTranscriptionTick] queues it hourly. */
+/** v3.6 (DESIGN_V6 2.2-5): the charger trigger. WorkManager starts it once the phone is plugged in and charging; it only
+ * queues the run (which has no constraints, so Samsung's battery protection pausing the charge does not stop it). */
+class CallTranscriptionPlug(context:Context,params:WorkerParameters):Worker(context,params) {
+    override fun doWork():Result { CallTranscriptionWork.enqueue(applicationContext);return Result.success() }
+}
+
+/** WorkManager entry: runs soon after new recordings are imported; [CallTranscriptionTick] queues it hourly.
+ * v3.6 (DESIGN_V6 2): no WorkManager constraint; each wake reads the battery and asks [PowerPolicy] whether and how to run. */
 class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(context,params) {
     @Volatile private var engine:AndroidWhisperEngine?=null
-    /** The system asks us to stop (time limit, constraints, replaced): end the native run now, not after the piece. */
+    /** The system asks us to stop (time limit, replaced): end the native run now, not after the piece. */
     override fun onStopped() { runCatching { engine?.cancel() };super.onStopped() }
+
+    private fun power(settings:SecureSettings)=PowerStats.parse(settings.snapshot().optString(PipelineSettingsKeys.TRANSCRIPTION_POWER))
+    private fun savePower(settings:SecureSettings,change:(JSONObject)->JSONObject)=runCatching {
+        settings.update { s -> s.put(PipelineSettingsKeys.TRANSCRIPTION_POWER,change(PowerStats.parse(s.optString(PipelineSettingsKeys.TRANSCRIPTION_POWER))).toString()) }
+    }
+    private fun chargingOnly(settings:SecureSettings)=settings.snapshot().optBoolean(PipelineSettingsKeys.TRANSCRIBE_CHARGING_ONLY,false)
+    private fun decide(settings:SecureSettings,s:BatterySnapshot,now:Long)=PowerPolicy.decide(s,PowerStats.budget(power(settings),s,now,chargingOnly(settings)),now)
+
     override fun doWork():Result {
         val storage=applicationContext
-        val thermal=(applicationContext.getSystemService(Context.POWER_SERVICE) as? PowerManager)
-        val tooHot={ android.os.Build.VERSION.SDK_INT>=29 && thermal!=null && thermal.currentThermalStatus>=PowerManager.THERMAL_STATUS_SEVERE }
-        if(tooHot())return Result.retry()
         val model=PipelineModelManager(storage)
         if(model.verifiedModelFile()==null){PipelineModelDownloadWork.enqueue(applicationContext);return Result.success()}
         val settings=SecureSettings(storage)
+        val now=System.currentTimeMillis()
+        val start=BatterySnapshot.read(storage)
+        val cores=CpuSet.readAllowed()
+        savePower(settings) { o -> PowerStats.noteSnapshot(PowerStats.notePlug(o,start,now),start,cores,CpuSet.readCode()) }
+        val budget=PowerStats.budget(power(settings),start,now,chargingOnly(settings))
+        val decision=PowerPolicy.decide(start,budget,now)
+        if(start.isPlugged && budget.levelFalling) savePower(settings) { PowerStats.add(it,now,"levelFallingRuns") }
+        if(start.isPlugged) armPlug(storage,false) else armPlug(storage,true)
+        if(decision is PowerPolicy.Decision.Wait) {
+            // Only decided: no run counted, no budget used (DESIGN_V6 함정 ⑥). An explicit delay, not WorkManager's backoff.
+            savePower(settings) { o -> var x=PowerStats.noteSkip(o,now,decision.reason)
+                if(decision.reason=="budget") PowerPolicy.budgetHit(budget)?.let { x=PowerStats.noteBudgetHit(x,now,it) };x }
+            decision.retryInMs?.let { later(storage,it) }
+            // The waiting count opens the store: at most every half hour from a wake that only decided.
+            if(decision.reason!="gap" && decision.reason!="inCall" && now-(power(settings).optJSONObject("waiting")?.optLong("atMs",0) ?: 0)>=TranscriptionPower.BATTERY_RUN_GAP_MS) noteWaiting(settings,now)
+            return Result.success()
+        }
+        val run=decision as PowerPolicy.Decision.Run
+        val threads=PowerPolicy.threads(run.threads,cores)
+        val severe={ BatterySnapshot.read(storage).thermal>=PowerManager.THERMAL_STATUS_SEVERE }
         val began=android.os.SystemClock.elapsedRealtime()
+        val coldStart=now-power(settings).optLong("lastRunEndMs",0)>=TranscriptionPower.COLD_AFTER_MS
+        var lastCheck=0L;var lastOk=true
+        // Between pieces: the same mode still applies (a plug pulled mid-run hands the rest to the battery rules, and a plug
+        // put in on battery hands it to the plugged rules); read at most every 20 seconds.
+        val keepGoing={ val t=System.currentTimeMillis()
+            if(t-lastCheck>=20_000L) { lastCheck=t;val d=decide(settings,BatterySnapshot.read(storage).also { s -> savePower(settings) { PowerStats.notePlug(it,s,t) } },t)
+                lastOk=d is PowerPolicy.Decision.Run && d.mode==run.mode }
+            lastOk }
+        val events=object:CallTranscriptionRunner.Events {
+            override fun piece(ms:Long,audioMs:Long,cold:Boolean) { savePower(settings) { PowerStats.notePiece(it,ms,audioMs,threads,cold) } }
+            override fun killed(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"killedChunkMs",ms) } }
+            override fun deadline(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"deadlineMs",ms) } }
+            override fun yielded() { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"yieldCount") } }
+            override fun modelLoad(ms:Long) { savePower(settings) { o -> PowerStats.add(PowerStats.add(o,System.currentTimeMillis(),"modelLoads"),System.currentTimeMillis(),"modelLoadMs",ms) } }
+        }
         return try {
             GeneralLocalStore(storage).use { local -> CallTranscriptionStore(storage).use { store ->
-                val pass=CallTranscriptionRunner(store,model,PipelineAudioDecoder(channels={ r -> settings.update{ PipelineAudioDecoder.accumulate(it,r) } }),WhisperCallTranscriber(AndroidWhisperEngine(storage).also { engine=it },model,threadSource={ TranscriptionThreads.current(storage) },
+                // v3.6 W5: failed rows get their new-build try only while plugged in.
+                if(run.mode==PowerPolicy.Mode.PLUGGED) runCatching { store.requeueFailed() }
+                val window=if(run.mode==PowerPolicy.Mode.BATTERY) CallTranscriptionStore.BatteryWindow(PowerPolicy.dayStartMs(now),store.bytesPerMs()) else null
+                val runner=CallTranscriptionRunner(store,model,PipelineAudioDecoder(channels={ r -> settings.update{ PipelineAudioDecoder.accumulate(it,r) } }),WhisperCallTranscriber(AndroidWhisperEngine(storage).also { engine=it },model,threadCount=threads,
                         pieceStats={ st -> runCatching { settings.update { s -> s.put(PhoneStatus.STT_DECODE,SttPieceStats.add(runCatching { JSONObject(s.optString(PhoneStatus.STT_DECODE)) }.getOrNull(),st).toString()) } } }),
                     read={ c -> readAudio(local,c) },
                     skipReason={ c -> skipReason(c,settings) },
                     // The app may not have been opened since the phone restarted: the sink is made here then (review 11/4, round 2).
                     sink={ CallTranscriptSinks.factory?.invoke(applicationContext) ?: CallSinkImpl(applicationContext) },
-                    stopped={ isStopped || tooHot() },
+                    stopped={ isStopped },
                     cleanedCount={ n -> settings.update{ it.put(PipelineSettingsKeys.TRANSCRIPT_CLEANED,it.optLong(PipelineSettingsKeys.TRANSCRIPT_CLEANED,0)+n) } },
                     speed={ ms -> settings.update{ it.put(PipelineSettingsKeys.LAST_MS_PER_AUDIO_MINUTE,ms).put(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,System.currentTimeMillis()) } },
-                    // Old = more than 7 days ago while the first pass runs (r7-1): today's calls never wait for the charger.
-                    holdOld={ c -> FirstPass.isOld(c.startedAtMs ?: c.modifiedMs,settings.snapshot(),System.currentTimeMillis()) && !FirstPass.powerOk(applicationContext) },
+                    // v3.6: old recordings (처음 정리) go only on a plugged-in run; a battery run takes today's calls only (in SQL).
+                    holdOld={ false },
                     oldBefore={ FirstPass.liveFrom(settings.snapshot(),System.currentTimeMillis()) },
-                    timeLimited={ timeLimitStop(began) }
-                ).run()
+                    timeLimited={ timeLimitStop(began) },
+                    battery=window,
+                    runLimitMs=run.runLimitMs,
+                    rate={ PowerStats.rate(power(settings)) },
+                    // SEVERE heat ends the run after the piece under way (it was a stop before; now the piece is kept).
+                    keepGoing={ keepGoing() && !severe() },
+                    events=events,
+                    coldStart=coldStart)
+                val pass=runner.run()
+                val end=System.currentTimeMillis()
                 noteRun(settings,began,pass.state)
-                // Stopped part way: queue the next pass at once (the finished pieces are kept) instead of waiting for the hourly one.
-                if(CallTranscriptionRunner.requeueNow(pass.state,pass.pieces))enqueue(applicationContext)
+                if(runner.startedPieces>0) {
+                    val endSnap=BatterySnapshot.read(storage)
+                    // Charge used: battery runs with the screen off at both ends only (the phone's whole use, an upper bound).
+                    val uah=if(run.mode==PowerPolicy.Mode.BATTERY && !start.screenOn && !endSnap.screenOn) start.chargeUah?.let { a -> endSnap.chargeUah?.let { b -> (a-b).takeIf { it>0 } } } else null
+                    savePower(settings) { o -> var x=PowerStats.noteRun(o,end,run.mode,end-now,runner.doneAudioMs,uah)
+                        if(pass.state=="STOPPED") x=PowerStats.noteStop(x,end,if(timeLimitStop(began)) "timeout" else "other");x }
+                }
+                runCatching { val (n,oldest)=store.powerWaiting(CallTranscriptionStore.BatteryWindow(PowerPolicy.dayStartMs(end),store.bytesPerMs()),chargingOnly(settings))
+                    savePower(settings) { PowerStats.noteWaiting(it,n,oldest) } }
+                // Stopped part way: queue the next pass (the finished pieces are kept) instead of waiting for the hourly one:
+                // at once while plugged in, after the gap on battery (the next wake decides again either way).
+                if(CallTranscriptionRunner.requeueNow(pass.state,pass.pieces) || severe()) {
+                    if(severe()) later(applicationContext,TranscriptionPower.HOT_DELAY_MS*2)
+                    else if(run.mode==PowerPolicy.Mode.PLUGGED) enqueue(applicationContext) else later(applicationContext,TranscriptionPower.BATTERY_RUN_GAP_MS)
+                }
                 Result.success()
             } }
         } catch(_:Exception) { noteRun(settings,began,"ERROR");if(runAttemptCount<3)Result.retry() else Result.failure() }
+    }
+
+    /** The queue as the battery rules see it, for the settings line, the light and the heartbeat (opens the store). */
+    private fun noteWaiting(settings:SecureSettings,now:Long) = runCatching {
+        CallTranscriptionStore(applicationContext).use { store ->
+            val (n,oldest)=store.powerWaiting(CallTranscriptionStore.BatteryWindow(PowerPolicy.dayStartMs(now),store.bytesPerMs()),chargingOnly(settings))
+            savePower(settings) { PowerStats.noteWaiting(it,n,oldest) }
+        }
     }
 
     /** r12-8 A1: one more run of the day for the heartbeat (runs, minutes, how it ended). A failure loses only the count. */
@@ -375,18 +519,32 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
     companion object {
         private const val ONCE="calls-transcription"
         const val PERIODIC="calls-transcription-hourly"
-        private val constraints get()=Constraints.Builder().setRequiresBatteryNotLow(true).build()
-        /** After new recordings arrive. A pass already running is followed by one more. */
+        /** v3.6: the delayed retry (heat, battery gap) and the charger trigger, each under its own name. */
+        const val LATER="calls-transcription-later"
+        const val PLUG="ieum.calls.transcribe.plug"
+        /** After new recordings arrive. A pass already running is followed by one more. No constraints (v3.6): the run decides. */
         fun enqueue(context:Context,policy:ExistingWorkPolicy=ExistingWorkPolicy.APPEND_OR_REPLACE) {
-            WorkManager.getInstance(context).enqueueUniqueWork(ONCE,policy,
-                OneTimeWorkRequestBuilder<CallTranscriptionWork>().setConstraints(constraints).build())
+            WorkManager.getInstance(context).enqueueUniqueWork(ONCE,policy,OneTimeWorkRequestBuilder<CallTranscriptionWork>().build())
+        }
+        /** v3.6: wake again after [delayMs] (a tick that queues the run), never holding the run's own chain. */
+        fun later(context:Context,delayMs:Long) {
+            WorkManager.getInstance(context).enqueueUniqueWork(LATER,ExistingWorkPolicy.REPLACE,
+                OneTimeWorkRequestBuilder<CallTranscriptionTick>().setInitialDelay(delayMs.coerceAtLeast(60_000L),TimeUnit.MILLISECONDS).build())
+        }
+        /** v3.6: the charger trigger, armed while on battery (KEEP), dropped while plugged in (it would only queue one more run). */
+        fun armPlug(context:Context,on:Boolean) = runCatching {
+            val wm=WorkManager.getInstance(context)
+            if(on) wm.enqueueUniqueWork(PLUG,ExistingWorkPolicy.KEEP,OneTimeWorkRequestBuilder<CallTranscriptionPlug>()
+                .setConstraints(Constraints.Builder().setRequiresCharging(true).build()).build())
+            else wm.cancelUniqueWork(PLUG)
         }
         /** App start: hourly safety net, one pass now, and the model download if it is missing. */
         fun schedule(context:Context) {
-            // UPDATE: a phone from before this change has the periodic work registered with the old worker class (a full pass); it is replaced by the tick.
+            // UPDATE: the tick of older builds carried the battery-not-low constraint; v3.6 decides inside the run.
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(PERIODIC,ExistingPeriodicWorkPolicy.UPDATE,
-                PeriodicWorkRequestBuilder<CallTranscriptionTick>(1,TimeUnit.HOURS).setConstraints(constraints).build())
+                PeriodicWorkRequestBuilder<CallTranscriptionTick>(1,TimeUnit.HOURS).build())
             enqueue(context,ExistingWorkPolicy.KEEP)
+            armPlug(context,true)
         }
     }
 }

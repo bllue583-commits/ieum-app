@@ -52,6 +52,8 @@ class R15ZeroTest:ProtectedTextHostTestBase() {
         clock+=hour
         CallTranscriptionStore.buildCode={ 1046 }
         CallTranscriptionStore(app,{ clock }).use { s ->
+            assertEquals("v3.6 W5: nothing is revived when the store opens",2,s.failedCount())
+            assertEquals(2,s.requeueFailed()) // the start of a plugged-in run
             assertEquals(CallTranscriptionStore.REQUEUED to 0,state(s,"old").let { it.second });assertEquals("QUEUED",state(s,"old").first)
             assertEquals("QUEUED",state(s,"now").first);assertEquals(0,s.attempts(candidate("now").key))
             assertEquals("the queue age starts now",clock,s.oldestQueuedMs())
@@ -66,7 +68,7 @@ class R15ZeroTest:ProtectedTextHostTestBase() {
         }
         // The build after that tries it once more.
         CallTranscriptionStore.buildCode={ 1047 }
-        CallTranscriptionStore(app,{ clock }).use { s ->
+        CallTranscriptionStore(app,{ clock }).use { s -> s.requeueFailed()
             assertEquals("QUEUED",state(s,"old").first);assertEquals(1,s.heartbeat(clock).getInt("requeuedFailed"))
         }
     }

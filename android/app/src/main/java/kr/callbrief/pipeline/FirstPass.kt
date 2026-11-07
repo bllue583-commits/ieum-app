@@ -49,11 +49,9 @@ internal object FirstPass {
      * (work only from the last 7 days, the ledger only gains facts). Sending mode is [isOld]. */
     fun stale(dayMs:Long,now:Long)=now-dayMs>LIVE_MS
 
-    /** Old recordings are transcribed only while charging or with at least half the battery (no heat during work calls). */
-    fun powerOk(context:Context):Boolean {
-        val b=context.getSystemService(BatteryManager::class.java) ?: return true
-        return b.isCharging || b.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)>=50
-    }
+    /** Old recordings are transcribed only while plugged in (v3.6, DESIGN_V6 2.2-6: the "half the battery" branch is gone;
+     * a battery run takes today's short calls only). */
+    fun powerOk(context:Context):Boolean = BatterySnapshot.read(context).isPlugged
 
     /** An old record's result keeps its summary and names; old work is not listed. Memos come from the repository ledger. */
     fun restrict(a:ClaudeCallAnalysis,dayMs:Long,now:Long):ClaudeCallAnalysis {

@@ -50,8 +50,11 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
                 // v3.5 r15-0: the build (versionCode) a row last failed under, and the build that last gave a FAILED row another try.
                 // v3.5 r15-4 (M4): how often a FAILED row was given another try (NULL: never), capped by [requeueFailedOnce].
                 for(col in listOf("failed_build","retried_build","requeue_count")) if(db.query("PRAGMA table_info(call_transcription_jobs)").none { it["name"]==col }) db.execute("ALTER TABLE call_transcription_jobs ADD COLUMN $col INTEGER")
-                // Rows that failed under an older build (or before v3.5) go back to the queue once for this build.
-                requeueFailedOnce(buildCode());null
+                // v3.6 r16-0 (DESIGN_V6 W4): charging_only = taken only while plugged in (deadline twice, or interrupted once);
+                // permanent = a failure that comes back the same however often it is tried (never revived); deadline_count for the first.
+                for(col in listOf("charging_only","permanent","deadline_count")) if(db.query("PRAGMA table_info(call_transcription_jobs)").none { it["name"]==col }) db.execute("ALTER TABLE call_transcription_jobs ADD COLUMN $col INTEGER NOT NULL DEFAULT 0")
+                // v3.6 W5: failed rows are no longer revived here but at the start of a plugged-in run ([requeueFailed]).
+                null
             }
         } catch(e:Exception){db.close();throw e}
     }
@@ -65,13 +68,20 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
      * Returns how many rows were revived now. */
     internal fun requeueFailedOnce(build:Int):Int {
         if(build<=0) return 0
-        val where="state='FAILED' AND coalesce(failed_build,0)!=CAST(? AS INTEGER) AND coalesce(retried_build,0)!=CAST(? AS INTEGER)"+
+        val where="state='FAILED' AND permanent=0 AND coalesce(failed_build,0)!=CAST(? AS INTEGER) AND coalesce(retried_build,0)!=CAST(? AS INTEGER)"+
             " AND coalesce(requeue_count,0)<(CASE WHEN reason='INTERRUPTED' THEN $MAX_REQUEUES_INTERRUPTED ELSE $MAX_REQUEUES END)"
         val n=db.query("SELECT count(*) AS n FROM call_transcription_jobs WHERE $where",build,build).single()["n"].let { (it as Number).toInt() }
-        if(n>0) db.execute("UPDATE call_transcription_jobs SET state='QUEUED',reason='$REQUEUED',attempts=0,updated_ms=?,queued_ms=?,retried_build=CAST(? AS INTEGER),requeue_count=coalesce(requeue_count,0)+1 WHERE $where",
-            now(),now(),build,build,build)
+        if(n>0) db.transaction {
+            // v3.6 W5: the stop counts and halving marks of a revived row start again too (its finished pieces stay).
+            for(t in listOf("call_transcription_stalls","call_transcription_splits"))
+                db.execute("DELETE FROM $t WHERE EXISTS(SELECT 1 FROM call_transcription_jobs WHERE call_transcription_jobs.recording_id=$t.recording_id AND call_transcription_jobs.source_version=$t.source_version AND call_transcription_jobs.audio_sha=$t.audio_sha AND $where)",build,build)
+            db.execute("UPDATE call_transcription_jobs SET state='QUEUED',reason='$REQUEUED',attempts=0,deadline_count=0,updated_ms=?,queued_ms=?,retried_build=CAST(? AS INTEGER),requeue_count=coalesce(requeue_count,0)+1 WHERE $where",
+                now(),now(),build,build,build);null
+        }
         return n
     }
+    /** v3.6 W5: [requeueFailedOnce] for the running build; called at the start of a plugged-in run. */
+    fun requeueFailed()=requeueFailedOnce(buildCode())
     /** Recordings whose text failed (FAILED now): the "글자로 바꾸기" light. */
     fun failedCount():Int = db.query("SELECT count(*) AS n FROM call_transcription_jobs WHERE state='FAILED'").single()["n"].let { (it as Number).toInt() }
 
@@ -136,7 +146,8 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
             val limit=now()-staleMs
             val n=db.query("SELECT count(*) AS n FROM call_transcription_jobs WHERE state='RUNNING' AND attempts>=? AND updated_ms<?",maxAttempts,limit).single()["n"].let { (it as Number).toInt() }
             db.execute("UPDATE call_transcription_jobs SET state='FAILED',reason='INTERRUPTED',updated_ms=?,failed_build=CAST(? AS INTEGER) WHERE state='RUNNING' AND attempts>=? AND updated_ms<?",now(),buildCode(),maxAttempts,limit)
-            db.execute("UPDATE call_transcription_jobs SET state='QUEUED',reason='INTERRUPTED',updated_ms=? WHERE state='RUNNING' AND updated_ms<?",now(),limit);n
+            // v3.6 W4: a recording the process died under is taken again only while plugged in.
+            db.execute("UPDATE call_transcription_jobs SET state='QUEUED',reason='INTERRUPTED',charging_only=1,updated_ms=? WHERE state='RUNNING' AND updated_ms<?",now(),limit);n
         }
         if(n>0) failed(n)
     }
@@ -148,7 +159,8 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
      * 3. new calls, newest first.
      * With [oldBefore] (처음 정리) recordings before it come after all newer ones, in the same steps, except that old ones
      * not under way go oldest call first, so they reach the analysis in time order. */
-    fun nextQueued(oldBefore:Long?=null):Job? {
+    fun nextQueued(oldBefore:Long?=null,battery:BatteryWindow?=null):Job? {
+        if(battery!=null) return nextShort(battery)
         val at="coalesce(x.original_started_at_ms,x.modified_at_ms,0)"
         val queued="coalesce(j.queued_ms,j.updated_ms)"
         val started="(EXISTS(SELECT 1 FROM call_transcription_parts p WHERE p.recording_id=j.recording_id AND p.source_version=j.source_version AND p.audio_sha=j.audio_sha) OR j.reason IN('STOPPED','$DEADLINE'))"
@@ -164,6 +176,53 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
             job_updated_ms LIMIT 1""".trimIndent(),oldBefore ?: Long.MIN_VALUE,now()-WAITED_MS,GeneralLocalStore.OWNER)
             .singleOrNull()?.let{Job(candidate(it),it["state"].toString(),it["reason"].toString(),(it["attempts"] as Number).toInt())}
     }
+
+    /** v3.6 (DESIGN_V6 2.1): what a battery run may take: calls from [fromMs] (KST midnight) whose length is between
+     * [TranscriptionPower.SHORT_MIN_MS] and [TranscriptionPower.SHORT_MAX_MS]. The length is the decoded one, else the call
+     * log's, else the file size over [bytesPerMs] (null: unknown, not taken). Never charging_only rows. */
+    data class BatteryWindow(val fromMs:Long,val bytesPerMs:Double?)
+    /** SQL for a job's length (j = the job row); takes two arguments, bytes per ms twice (bound as text, hence the casts). */
+    private fun lengthSql(byteCount:String):String {
+        val records=db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='call_records'").isNotEmpty()
+        val record=if(records) "(SELECT MAX(c.duration_ms) FROM call_records c WHERE c.recording_id=j.recording_id AND c.duration_ms>0)" else "NULL"
+        return "coalesce(j.audio_ms,$record,CASE WHEN CAST(? AS REAL)>0 AND $byteCount>0 THEN CAST($byteCount/CAST(? AS REAL) AS INTEGER) END)"
+    }
+    /** Short calls of today, newest first: the filter is in SQL, so a long call at the top never ends a battery run (DESIGN_V6 함정 ③). */
+    private fun nextShort(w:BatteryWindow):Job? {
+        val at="coalesce(x.original_started_at_ms,x.modified_at_ms,0)"
+        val bpm=w.bytesPerMs ?: 0.0
+        return db.query("""SELECT * FROM (SELECT j.state,j.reason,j.attempts,j.updated_ms AS job_updated_ms,x.*,$at AS q_at,${lengthSql("x.byte_count")} AS q_len
+            FROM call_transcription_jobs j JOIN ($select WHERE r.owner_key=? AND gone.ciphertext_sha256 IS NULL) x
+            ON x.recording_id=j.recording_id AND x.source_version=j.source_version AND x.audio_sha256=j.audio_sha
+            WHERE j.state='QUEUED' AND j.charging_only=0) WHERE q_at>=CAST(? AS INTEGER) AND q_len>=CAST(? AS INTEGER) AND q_len<=CAST(? AS INTEGER)
+            ORDER BY q_at DESC,job_updated_ms LIMIT 1""".trimIndent(),bpm,bpm,GeneralLocalStore.OWNER,w.fromMs,TranscriptionPower.SHORT_MIN_MS,TranscriptionPower.SHORT_MAX_MS)
+            .singleOrNull()?.let{Job(candidate(it),it["state"].toString(),it["reason"].toString(),(it["attempts"] as Number).toInt())}
+    }
+    /** Bytes per ms of the recordings whose decoded length is known (for [BatteryWindow]); null without any. */
+    fun bytesPerMs():Double? = db.query("SELECT sum(r.byte_count) AS b,sum(j.audio_ms) AS ms FROM call_transcription_jobs j JOIN recordings r ON r.recording_id=j.recording_id AND r.source_version=j.source_version WHERE j.audio_ms>0 AND r.byte_count>0")
+        .singleOrNull()?.let { r -> val b=(r["b"] as? Number)?.toDouble() ?: 0.0;val ms=(r["ms"] as? Number)?.toDouble() ?: 0.0;if(b>0 && ms>0) b/ms else null }
+    /** v3.6 (DESIGN_V6 3.2): queued recordings a battery run would not take (they wait for the charger), and the oldest
+     * queue entry among them. With [chargingOnly] every queued row waits. */
+    fun powerWaiting(w:BatteryWindow,chargingOnly:Boolean):Pair<Int,Long?> {
+        val bpm=w.bytesPerMs ?: 0.0
+        val cond=if(chargingOnly) "1=1" else "(charging_only=1 OR q_at<CAST(? AS INTEGER) OR q_len IS NULL OR q_len<CAST(? AS INTEGER) OR q_len>CAST(? AS INTEGER))"
+        val args=mutableListOf<Any?>(bpm,bpm);if(!chargingOnly) args.addAll(listOf(w.fromMs,TranscriptionPower.SHORT_MIN_MS,TranscriptionPower.SHORT_MAX_MS))
+        val r=db.query("""SELECT count(*) AS n,min(q_entered) AS m FROM (SELECT j.charging_only AS charging_only,coalesce(j.queued_ms,j.updated_ms) AS q_entered,
+            coalesce(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0) AS q_at,${lengthSql("r.byte_count")} AS q_len
+            FROM call_transcription_jobs j LEFT JOIN recordings r ON r.recording_id=j.recording_id AND r.source_version=j.source_version LEFT JOIN local_files l ON l.recording_id=j.recording_id
+            WHERE j.state='QUEUED') WHERE $cond""".trimIndent(),*args.toTypedArray()).single()
+        return ((r["n"] as Number).toInt()) to (r["m"] as? Number)?.toLong()
+    }
+    /** v3.6 W4: the piece ran into the native deadline once more; from the second time the recording waits for the charger. */
+    fun noteDeadline(k:Key)=db.execute("UPDATE call_transcription_jobs SET charging_only=CASE WHEN deadline_count+1>=$DEADLINES_TO_CHARGER THEN 1 ELSE charging_only END,deadline_count=deadline_count+1 WHERE recording_id=? AND source_version=? AND audio_sha=?",
+        k.recordingId,k.sourceVersion,k.audioSha)
+    /** v3.6 W4: the failure is in the recording itself: FAILED for good, never revived. */
+    fun failPermanently(k:Key,code:String) {
+        db.execute("UPDATE call_transcription_jobs SET permanent=1 WHERE recording_id=? AND source_version=? AND audio_sha=?",k.recordingId,k.sourceVersion,k.audioSha)
+        finish(k,"FAILED",code)
+    }
+    fun chargingOnly(k:Key):Boolean = db.query("SELECT charging_only FROM call_transcription_jobs WHERE recording_id=? AND source_version=? AND audio_sha=?",k.recordingId,k.sourceVersion,k.audioSha)
+        .singleOrNull()?.let { (it["charging_only"] as Number).toInt()==1 } ?: false
 
     /** Finished pieces made with piece length [chunkMs]. Rows of any other length (or unknown, NULL) are deleted, with the stop counters
      * that were counted against those piece numbers: the same id then means a different stretch of audio. */
@@ -266,6 +325,10 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         /** r12-8 A4: the reason of a job whose piece ran into the native deadline (the piece is halved, the attempt given back). */
         const val DEADLINE="ANDROID_STT_DEADLINE"
         const val STALE_RUNNING_MS=11*60_000L
+        /** v3.6 W4: this many native deadlines on one recording send it to the charger. */
+        const val DEADLINES_TO_CHARGER=2
+        /** v3.6 W4: failures that come back the same however often they are tried (the m4a cannot be read, too short, nothing in it). */
+        fun permanent(code:String)=code=="CodecException" || code=="ANDROID_STT_PCM_SIZE" || code=="EMPTY_TRANSCRIPT"
         /** Queued recordings whose time (start or filename time, else the file's modified time) is before 10/1 become
          * SKIPPED with BEFORE_START, the reason the offer pass gives them. Arguments: updated_ms, [FirstPass.FROM_MS]. */
         const val SKIP_BEFORE_START_SQL="""UPDATE call_transcription_jobs SET state='SKIPPED',reason='BEFORE_START',updated_ms=? WHERE state='QUEUED' AND recording_id IN(
