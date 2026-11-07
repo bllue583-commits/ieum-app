@@ -1,22 +1,22 @@
-# 이음 v3.6 「배터리를 녹이지 않는 자막」 설계도 (2026-11-07 17시, Fable 초안 → Opus 토론 반영)
+# 이음 v3.6 「배터리를 녹이지 않는 자막」 설계도 (2026-11-07 17시, Fable 초안 → Opus 2차 토론 반영 확정)
 
-> **사용자 보고(11/7 15:49):** 아내 폰(실사용)의 배터리 사용량 약 60%가 이음(다른 앱은 1% 수준), 충전해 두어도 금방 닳음. **사용자 지시:** 원인 분석·해결안·설계도까지만(이번에는 코드 수정·배포 없음), 문서는 Opus 워커와 토론하며 작성. 기준 코드 `feature/lean-calls` 3b4ebcd(v3.5 빌드 1046). 현재 동작은 [DESIGN.md](DESIGN.md), 코드 감사 원문은 [reviews/v36_battery_audit_20261107.md](reviews/v36_battery_audit_20261107.md), 토론 원문은 [reviews/v36_design_debate_20261107.md](reviews/v36_design_debate_20261107.md). 구현하면서 다르게 정한 것은 8절에 적고, 배포 뒤 이 문서는 기록용이 되며 DESIGN.md에 흡수한다.
+> **사용자 보고(11/7 15:49):** 아내 폰(실사용)의 배터리 사용량 약 60%가 이음(다른 앱은 1% 수준), 충전해 두어도 금방 닳음. **사용자 지시:** 원인 분석·해결안·설계도까지만(이번에는 코드 수정·배포 없음), 문서는 Opus 워커와 토론하며 작성. 기준 코드 `feature/lean-calls` 3b4ebcd(v3.5 빌드 1046). 현재 동작은 [DESIGN.md](DESIGN.md), 코드 감사 원문은 [reviews/v36_battery_audit_20261107.md](reviews/v36_battery_audit_20261107.md), 토론 원문(1·2차)은 [reviews/v36_design_debate_20261107.md](reviews/v36_design_debate_20261107.md). 구현하면서 다르게 정한 것은 8절에 적고, 배포 뒤 이 문서는 기록용이 되며 DESIGN.md에 흡수한다.
 >
-> 실측은 우편함 `status/phone.json`의 git 이력(11/6 19:41~11/7 14:57 KST, 숫자·코드만)에서 읽었다. 통화 내용·이름·번호 파일은 읽지 않았다.
+> 실측은 우편함 `status/phone.json`의 git 이력(11/6 19:41~11/7 14:57 KST, 숫자·코드만)에서 읽었다. 통화 내용·이름·번호 파일은 읽지 않았다. 근거는 `파일:줄`(R=`pipeline/CallTranscriptionRunner.kt`, S=`pipeline/CallTranscriptionStore.kt`, E=`AndroidWhisperEngine.kt`, N=`cpp/ieum_whisper.cpp`), 확인 못 한 것은 "(추정)".
 
 ## 0. 한 줄 결론
 
-**배터리의 범인은 폰 안 Whisper 자막이고, 모델이 무거워서라기보다 "배터리 상태를 거의 보지 않고 하루 종일 돌면서 CPU의 절반 이상을 버리는 스케줄" 때문이다.** v3.5 설치(11/6 17시) 뒤 20시간 동안 자막 작업이 892분(가동률 86~87%) 돌았고, 2분 조각 하나에 평균 330초가 걸려 10분 실행에 조각이 1개밖에 안 들어가며, 두 번째 조각은 매번 시간 한도로 죽어 버려진다. 하루 통화 2시간을 지금 속도로 배터리로 바꾸면 그것만으로 배터리 한 통이 비는 양이므로, **긴 녹음과 밀린 녹음은 충전 중에 몰아서 하고, 배터리로는 오늘의 짧은 통화만 예산 안에서 한다.** 여기에 낭비 제거(실행에 안 들어갈 조각은 시작하지 않기, 모델 재로드 없애기, 같은 이유로 반복 실패하는 녹음 제외), 전력 계측(하트비트 `power`), 발열 조절, 스레드·빌드 A/B를 더한다.
+**배터리의 범인은 폰 안 Whisper 자막이고, 모델이 무거워서라기보다 "배터리 상태를 거의 보지 않고 하루 종일 돌면서 CPU의 절반 이상을 버리는 스케줄" 때문이다.** v3.5 설치(11/6 17시) 뒤 20시간 동안 자막 작업이 892분(가동률 86~87%) 돌았고, 2분 조각 하나에 평균 330초가 걸려 10분 실행에 조각이 1개밖에 안 들어가며, 두 번째 조각은 매번 시간 한도로 죽어 버려진다. 녹음마다 574MB 모델을 다시 읽는다. 하루 통화 2시간을 지금 속도로 배터리로 바꾸면 그것만으로 배터리 한 통이 비는 양이므로, **긴 녹음과 밀린 녹음은 전원이 꽂혀 있을 때 몰아서 하고, 배터리로는 오늘의 짧은 통화만 예산 안에서 한다.** 여기에 낭비 제거(실행에 안 들어갈 조각은 시작하지 않기, 세션 이어 쓰기, 같은 이유로 반복 실패하는 녹음 제외), 속도 회복(스레드 수를 실제 쓸 수 있는 코어 수에 맞추기 — 느림의 유력 원인), 전력 계측(하트비트 `power`), 발열 조절, 빌드·양자화 A/B를 더한다.
 
 | 항목 | 내용 |
 | --- | --- |
-| 사용자에게 보이는 변화 | 배터리가 하루 종일 간다. 낮에는 짧은 통화만 바로 정리되고, 긴 통화와 밀린 녹음은 충전기에 꽂았을 때(보통 밤) 정리돼 **아침 카톡 보고**에 들어온다. 설정 › 정리에 "충전 중에만 글자로 바꾸기" 스위치 하나(기본 끔)와 "오늘 배터리로 n분 썼어요" 한 줄 |
-| 왜 이렇게 하나 | 하루 2시간 통화 × 녹음 1분당 165초 = 6스레드 CPU 330분. 어떤 스케줄 묘기로도 배터리로 감당할 양이 아니다(1절). 아내가 밤에 충전한다면 아침 보고는 지금과 같고, 낮에 바뀌는 것은 "긴 통화의 정리됐어요 알림이 밤으로 미뤄짐"뿐이다 |
-| 기대 효과(추정) | 낮 배터리 자막 892분×6스레드 → 하루 20분×4스레드 이하(2~3%). 안드로이드 배터리 사용량 화면의 이음 비중 60% → 10% 미만. 밤 충전 중에는 낭비가 사라져 같은 양을 절반 시간에 끝냄 |
-| 바꾸지 않는 것 | 모델(large-v3-turbo q5_0)과 정확도 정책(v3.3 B1~B7 스위치), 녹음은 폰 밖으로 안 나감(원칙 2), 2분 조각과 이어 하기, 결과 받기·루틴·카톡 보고 |
-| 묶음 | r16-0 키 커밋 → r16-1 전력 정책·낭비 제거 ∥ r16-2 계측·화면·감시 → 배포 v3.6 → 48시간 실측 → r16-3 효율 A/B(측정 뒤 채택) |
+| 사용자에게 보이는 변화 | 배터리가 하루 종일 간다. 낮에는 방금 끝난 짧은 통화만 바로 정리되고, 긴 통화와 밀린 녹음은 전원을 꽂았을 때(보통 밤) 정리돼 **아침 카톡 보고**에 들어온다. 설정 › 정리에 "충전 중에만 글자로 바꾸기" 스위치 하나(기본 끔)와 "오늘 배터리로 n분 썼어요" 한 줄 |
+| 왜 이렇게 하나 | 하루 2시간 통화 × 녹음 1분당 165초 = 6스레드 CPU 330분. 어떤 스케줄 묘기로도 배터리로 감당할 양이 아니다(1절). 아내가 밤에 꽂아 둔다면 아침 보고는 지금과 같고, 낮에 바뀌는 것은 "긴 통화의 정리됐어요 알림이 밤으로 미뤄짐"뿐이다 |
+| 기대 효과(추정, 토론 6-1) | 낮 배터리 자막 892분×6스레드 → 하루 20분×4스레드 이하. 안드로이드 배터리 사용량 화면의 이음 비중 **60% → 15% 안팎**(4스레드 Whisper 3~4W면 20분 = 6~8%, 발견·네트워크 1~2%). 10% 아래로 내리려면 낮 예산을 10분으로 줄이거나 "충전 중에만"을 켠다(48시간 실측 뒤 결정). 밤 전원 중에는 낭비가 사라져 같은 양을 절반 시간에 끝냄 |
+| 바꾸지 않는 것 | 모델(large-v3-turbo)과 정확도 정책(v3.3 B1~B7 스위치), 녹음은 폰 밖으로 안 나감(원칙 2), 2분 조각과 이어 하기, 결과 받기·루틴·카톡 보고 |
+| 묶음 | r16-0 키 커밋 → r16-1 전력 정책·낭비 제거·스레드·계측 생산 ∥ r16-2 화면·감시·계측 표시 → 배포 v3.6 → 48시간 실측 → r16-3 빌드·양자화 A/B(같은 주, 측정 뒤 채택) |
 
-**문서만 쓰는 이번 작업의 한계(사실대로):** 설계만으로는 폰이 바뀌지 않는다. 남은 대기 녹음 104분은 오늘 밤 충전 중에 대부분 처리되겠지만(낭비 포함 9~17시간, 추정), 내일 낮에도 새 통화를 지금 방식으로 바꾸므로 소모는 계속된다. r16-0·r16-1은 코드량이 작으니(2개 파일 중심) 가능한 한 빨리 v3.6으로 배포할 것을 권한다(5절). 코드 없이 당장 줄일 방법은 없다 — 안드로이드 "앱 배터리 사용 제한"은 발견·결과 받기·카드까지 막고, 정리 동의를 끄면 파이프라인 전체가 선다.
+**문서만 쓰는 이번 작업의 한계(사실대로):** 설계만으로는 폰이 바뀌지 않는다. 남은 대기 녹음 104분은 오늘 밤 전원 중에 대부분 처리되겠지만(낭비 포함 9~17시간, 추정), 내일 낮에도 새 통화를 지금 방식으로 바꾸므로 소모는 계속된다. r16-0·r16-1은 두 파일 중심이니 가능한 한 빨리 v3.6으로 배포할 것을 권한다(5절). 코드 없이 당장 줄일 방법은 없다 — 안드로이드 "앱 배터리 사용 제한"은 발견·결과 받기·카드까지 막고, 정리 동의를 끄면 파이프라인 전체가 선다.
 
 ## 1. 실측과 원인
 
@@ -30,155 +30,175 @@
 | 11/7 11:58 | 64 | 628 | TIMEOUT 20, MORE 37 | 330 | 102 | 63 |
 | 11/7 14:57 | 68 | 669 | TIMEOUT 21, MORE 40, OTHER 7 | 334 | 104 | 64 |
 
-- **가동률:** 11/7 00~12시 64회·628분 = 87%. 출근 시간대 07~12시만 봐도 4시간에 143분(60%). 11/6 19:41~24시 19회·223분(86%). 설치 뒤 20시간 합계 **892분**.
-- **조각 속도:** 식은 상태(11/6 20시, 3조각) 223초 → 지속 실행 뒤 349~392초 → 평균 330초, 마지막 조각 473초(encode 124 + decode 349). 2분 조각이므로 녹음 1분당 111초(식음)~195초(달궈짐). 코드 주석의 "6스레드 85초/분"(10/30)과 2배 이상 차이 — **발열 스로틀링 정황**(추정). decode(220초)가 encode(113초)의 2배인 것은 원인 미확인(1.3).
-- **버려진 CPU:** 실행 892분 중 끝난 조각(timed 36개)의 encode+decode 합은 200분뿐. 나머지 약 690분은 시간 한도·기한으로 죽은 조각, 모델 재로드, m4a 해독·VAD, 실패 시도에 들어갔고 계측이 없다. 감사 추정: **Whisper CPU의 70% 이상이 버려졌다.**
+- **가동률:** 11/7 00~12시 64회·628분 = 87%. 출근 시간대 07~12시만 봐도 4시간에 143분(60%). 11/6 19:41~24시 19회·223분(86%). 설치 뒤 20시간 합계 **892분**. 669분÷68회 = 9.8분 → 실행은 거의 모두 10분 한도까지 간다.
+- **조각 속도:** 식은 상태(11/6 20시, 3조각) 223초 → 지속 실행 뒤 349~392초 → 평균 330초, 마지막 조각 473초(encode 124 + decode 349). 2분 조각이므로 녹음 1분당 111초(식음)~195초(달궈짐). 코드 주석의 "6스레드 85초/분"(10/30, `WhisperCallTranscriber` 주석)과 2배 이상 차이. 발열 스로틀링(추정)과 **백그라운드 cpuset·스레드 과다 배정(추정, 1.3)**이 유력하다.
+- **버려진 CPU:** 실행 892분 중 끝난 조각(timed 36개)의 encode+decode 합은 200분뿐. 나머지 약 690분은 시간 한도·기한으로 죽은 조각, 녹음마다 모델 로드, m4a 해독·VAD, 실패 시도에 들어갔고 계측이 없다. 감사 추정: **Whisper CPU의 70% 이상이 버려졌다.**
 - **결과:** 48시간에 끝낸 녹음은 lt1m 54·m1to3 12·m3to10 1(약 56분 어치). 100초 넘는 통화 8건 중 2건 완료(25%). 대기 31건(가장 오래된 1,660분), 실패 누계 41→64(+23: CodecException 14, 기한 초과 5, INTERRUPTED 2, STALLED 2), v3.5 재큐 70건.
-- **OS는 막지 않는다:** `batteryFree=true`, `standbyBucket=EXEMPTED`. 처음 설정에서 "배터리 제한 풀기"를 시켰으므로 앱이 스스로 아껴야 한다. 하트비트에는 배터리 잔량·충전 여부·온도·전류가 없다.
+- **OS는 막지 않는다:** `batteryFree=true`, `standbyBucket=EXEMPTED`. 처음 설정에서 "배터리 제한 풀기"를 시켰으므로 앱이 스스로 아껴야 한다. 하트비트에는 배터리 잔량·꽂힘·온도·전류가 없다.
 
-### 1.2 코드 원인(감사 보고 요약, 근거는 reviews 원문)
+### 1.2 코드 원인(감사·토론 요약)
 | # | 사실 | 영향 |
 | --- | --- | --- |
-| C1 | 자막 작업 제약은 `requiresBatteryNotLow` 하나(`CallTranscriptionRunner.kt:378`). 충전·유휴 조건 없음. 끝나면 `MORE`이거나 조각을 하나라도 끝낸 `STOPPED`면 **곧바로 다음 실행**(`:276`, `:339`) | 가동률 87% |
-| C2 | `FirstPass.powerOk`(충전 중이거나 50% 이상)는 처음 정리 중 **7일 넘은 녹음에만**(`FirstPass.kt:44-56`, Runner `:333`). 7일 안 녹음은 15% 안팎까지 돎 | 낮에도 멈추지 않음 |
-| C3 | 조각 330~470초 vs 실행 10분 → 조각 1개만 끝남. `NEW_WORK_MS` 6분은 새 녹음만 막고 진행 중 녹음의 다음 조각은 막지 않음(`:225`, `:269`). 끝나지 않은 조각은 저장 안 됨(`:179-187`) | 실행당 2~4분 낭비, 21회 |
-| C4 | 실행마다 모델 574MB 재로드(`:180`, `AndroidWhisperEngine.kt:105`) | 68회 × 10~20초(추정) + 저장소 읽기 |
-| C5 | 발열은 `THERMAL_STATUS_SEVERE`부터만 반응(`:314-316`, `:329`). LIGHT·MODERATE 무시 | 달궈진 채 계속 → 조각이 느려짐 → 더 달궈짐 |
-| C6 | 스레드는 충전·50% 이상 6, 아니면 4(`:40`). 우선순위·친화도 없음. 빌드 i8mm 없음(`CMakeLists.txt:15`) | 10코어(1+3+6, 추정) 중 작은 코어까지 쓰면 균등 분할 때문에 느린 코어 속도에 묶일 수 있음(추정, A/B) |
-| C7 | 실패 재큐(v3.5): 빌드마다 시도 0으로, 줄당 2회. CodecException은 원인이 고정이라 재큐해도 같은 실패. 기한 초과는 540초를 다 쓰고 실패. 최악: 기한 녹음 81분, STALLED 150분(`Store:66-74`, Runner `:260-265`) | 23건이 다시 실패하며 CPU 소모 |
+| C1 | 자막 작업 제약은 `requiresBatteryNotLow` 하나(R:378). 끝나면 `MORE`이거나 조각을 하나라도 끝낸 `STOPPED`면 **곧바로 다음 실행**(R:276, :339) | 가동률 87% |
+| C2 | `FirstPass.powerOk`(충전 중이거나 50% 이상)는 처음 정리 중 **7일 넘은 녹음에만**(`FirstPass.kt:44-56`, R:333). 7일 안 녹음은 15% 안팎까지 돎 | 낮에도 멈추지 않음 |
+| C3 | 조각 330~470초 vs 실행 10분 → 조각 1개만 끝남. `NEW_WORK_MS` 6분은 새 녹음만 막고 진행 중 녹음의 다음 조각은 막지 않음(R:225, :269). 끝나지 않은 조각은 저장 안 됨(R:179-187) | 실행당 2~4분 낭비, 21회. 시간 초과가 잦으면 안드로이드 14+에서 restricted 버킷 위험 |
+| C4 | **녹음마다** 모델 574MB 로드(R:163, :180, :204; `transcribeRecording`의 finally가 세션을 닫음) | 짧은 통화 여러 건이 들어가는 실행에서 가장 큰 낭비 |
+| C5 | 발열은 `THERMAL_STATUS_SEVERE`부터만(R:314-316, :329). LIGHT·MODERATE 무시. `Result.retry()`는 백오프라 "n분 뒤"가 안 됨 | 달궈진 채 계속 → 조각이 느려짐 → 더 달궈짐 |
+| C6 | 스레드는 충전·50% 이상 6, 아니면 4(R:40). 우선순위·친화도 없음. "8스레드 약 3배 느림" 주석(R:64). 빌드 i8mm 없음(`CMakeLists.txt:15`) | 작업 프로세스가 background cpuset에 묶여 쓸 수 있는 코어가 스레드 수보다 적으면 ggml 스핀 배리어가 다투어 decode가 특히 느려짐(추정, 1.3) |
+| C7 | 실패 재큐(v3.5): 저장소를 열 때마다(S:59-62) 시도 0으로, 줄당 2회. CodecException은 원인이 고정이라 재큐해도 같은 실패. 기한 초과는 540초를 다 쓰고 실패. 최악: 기한 녹음 81분, STALLED 150분(S:66-74, R:260-265) | 23건이 다시 실패하며 CPU 소모 |
 | C8 | 그 밖(발견 15분 주기 전체 SAF 나열 + 전체 스냅샷 쓰기, 하트비트, 결과 체인, 메일 30분, 프로세스 시작 때 DB 복원)은 합쳐 하루 10~30분(추정) | 2순위 이하, 작음 |
 
-### 1.3 모르는 것(계측으로 풀 것)
-- decode가 encode의 2배인 이유(토큰당 ms, 세그먼트 수, 창당 prompt 길이, 스레드 수 영향).
-- 발열 단계와 조각 시간의 관계(온도를 기록한 적이 없음).
+### 1.3 계측으로 풀 것(지금은 모름)
+- decode(220초)가 encode(113초)의 2배인 이유. 토론 결론: `no_context=true`(N:143)라 조각 사이 문맥은 없고 224토큰은 한 조각 안 창 사이만, prompt 1.5초·폴백 0·`token_timestamps`는 후처리라 **디코딩 설정은 원인이 아니다**. 유력 가설은 **백그라운드 cpuset에서 쓸 수 있는 코어 수 < 스레드 수**(ggml 스핀 배리어 다툼, 잘게 쪼개지는 decode에서 더 심함). 계측: `/proc/self/cpuset`, `/proc/self/status`의 `Cpus_allowed_list`, `sched_getaffinity` 코어 수, 조각당 토큰 수.
+- 발열 단계·배터리 온도와 조각 시간의 관계(온도를 기록한 적이 없음).
 - 한 실행 안의 시간 배분(모델 로드 / m4a 해독·VAD / 조각 / 죽은 조각 / DB 쓰기).
-- 배터리에서 한 조각이 실제로 쓰는 전하량(mAh). 삼성이 `BATTERY_PROPERTY_CHARGE_COUNTER`를 제대로 주는지.
+- 배터리에서 한 조각이 실제로 쓰는 전하량(화면 꺼진 실행만, 폰 전체 소모의 상한). 삼성 `BATTERY_PROPERTY_CHARGE_COUNTER`의 갱신 단위, `CURRENT_NOW`의 부호·단위.
 
 ## 2. 전력 정책(r16-1 핵심)
 
 ### 2.1 녹음 등급과 전원 상태
 | 녹음 등급 | 정의 |
 | --- | --- |
-| 오늘·짧음 | 통화 시각이 KST 오늘이고 녹음 길이 ≤ 3분(`audio_ms`, 모르면 파일 크기 추정) |
-| 오늘·긺 | 오늘이지만 3분 초과 |
+| 오늘·짧음 | 통화 시각이 KST 오늘이고 길이 20초~3분(`audio_ms`는 해독 뒤에야 생기므로(S:195) 그 전에는 통화기록 길이, 없으면 파일 바이트로 추정; **SQL에서** 거른다 — Kotlin에서 거르면 안 맞는 첫 줄에서 실행이 끝남(R:228)) |
+| 오늘·긺 | 오늘이지만 3분 초과, 또는 20초 미만(바꿔도 쓸모가 적어 전원 때로) |
 | 밀림 | 어제 이전(처음 정리 old 포함), 24시간 넘게 기다린 것 |
-| 다시 시도 | FAILED 재큐(v3.5), 기한 초과·INTERRUPTED 이력이 있는 녹음(`charging_only=1`) |
+| 다시 시도 | FAILED 재큐, 기한 초과·INTERRUPTED 이력이 있는 녹음(`charging_only=1`) |
 
-| 전원 상태 | 판정 |
+| 전원 상태 | 판정(조각마다 `registerReceiver(null, ACTION_BATTERY_CHANGED)`의 sticky 값으로 앱이 직접; WorkManager 제약이 아님) |
 | --- | --- |
-| 충전 중 | `BatteryManager.isCharging()` 또는 `EXTRA_PLUGGED≠0`(AC·USB·무선 모두). WorkManager `requiresCharging`과 같은 뜻 |
-| 배터리 넉넉 | 충전 아님, 잔량 ≥ 40%(`BATTERY_MIN_PCT`), 절전 모드 아님(`isPowerSaveMode`), 발열 ≤ LIGHT |
-| 배터리 아낌 | 그 밖(40% 미만, 절전 모드, 발열 MODERATE 이상) |
+| 전원 꽂힘 | `EXTRA_PLUGGED≠0`(AC·USB·무선). **status가 `NOT_CHARGING`(4)·`FULL`(5)여도 꽂힘**(삼성 배터리 보호 80·85%·적응형 충전 중에도 전원은 들어옴). 무선 패드는 잠깐 끊겼다 이어지므로 **끊김 2분 미만은 꽂힘 유지**(디바운스). 단 꽂혔는데 **잔량이 내려가면**(PC USB 500mA, 차량 등: `CURRENT_NOW` 부호가 방전 쪽이거나 10분에 잔량 1% 이상 하락) 배터리 규칙으로. `CURRENT_NOW`는 삼성 기종마다 부호·단위가 달라(추정) 첫 꽂힘 실행 때 "오르는 중"의 부호로 보정 |
+| 배터리 넉넉 | 꽂힘 아님, 잔량 ≥ 40%(`BATTERY_MIN_PCT`), 절전 모드 아님(`isPowerSaveMode`), 달궈짐 아님(2.2-2), 통화 중 아님(`TelecomManager.isInCall`, `call/CallCardService.kt:146`) |
+| 배터리 아낌 | 그 밖(40% 미만, 절전 모드, 달궈짐, 통화 중). 15% 미만(옛 `requiresBatteryNotLow`)도 여기서 판정 — 실행 작업에 제약이 없어지므로 |
 
-### 2.2 규칙(위에서부터 처음 맞는 것)
-1. **스위치 "충전 중에만 글자로 바꾸기"**(`TRANSCRIBE_CHARGING_ONLY`, 기본 끔)가 켜져 있으면 충전 중에만 돈다. 끔이 기본인 이유: 짧은 통화는 바로 정리돼야 통화별 알림과 카드가 그날 의미가 있다.
-2. **충전 중:** 모든 등급, 순서는 지금 `nextQueued` 그대로(조각 있는 것 → 24시간 넘은 것 → 새 것 최신순, 처음 정리 old는 맨 뒤). 6스레드. 한 실행이 끝나면 바로 다음 실행(지금처럼). 단 **발열 조절**: 실행 시작 때 MODERATE 이상이면 10분 뒤로 미룸, 실행 중 SEVERE면 그 조각을 끝내고 멈춰 20분 뒤로(지금의 SEVERE 중단은 유지). 충전이 끊기면 그 조각을 끝내고 배터리 규칙으로.
-3. **배터리 넉넉:** **오늘·짧음만**, 짧은 것부터(건수를 늘리기 위해). 4스레드(지금 값). 하루 예산 **실행 20분**(`BATTERY_BUDGET_MIN`, KST 날짜별 누적 `BATTERY_RUN_MS`·`BATTERY_RUN_DAY`), 실행 사이 **30분 간격**(`BATTERY_RUN_GAP_MS`, 바로 다시 걸지 않음), 예산을 다 쓰면 그날은 충전 때까지 쉼. 예산 계산은 실행 시작~끝의 경과 시간(모델 로드·해독 포함, 공정하게 전부).
-4. **배터리 아낌:** 아무것도 하지 않음. 대기열은 그대로 두고 충전을 기다림.
-5. **충전 시작 즉시:** `requiresCharging` 제약을 건 고유 작업(`ieum.calls.transcribe.charging`)이 플러그를 꽂는 순간 시작된다(WorkManager가 전원 변화를 감지, 수신기 등록 불필요). 배터리 작업은 다른 고유 이름(`ieum.calls.transcribe.battery`, 제약 `requiresBatteryNotLow`)으로 두어 둘이 서로 REPLACE하지 않게 한다. 두 작업은 같은 `CallTranscriptionRunner`를 쓰고, 어느 쪽이든 실행 중이면 다른 쪽은 시작하지 않는다(저장소 RUNNING 잠금 그대로).
-6. `FirstPass.powerOk`의 "50% 이상" 분기는 지운다(old 녹음은 충전 중에만).
+### 2.2 규칙(위에서부터 처음 맞는 것, 전부 순수 함수 `PowerPolicy.decide(state, budget, now)`)
+1. **스위치 "충전 중에만 글자로 바꾸기"**(`TRANSCRIBE_CHARGING_ONLY`, 기본 끔)가 켜져 있으면 꽂혔을 때만 돈다. 끔이 기본인 이유: 짧은 통화는 바로 정리돼야 통화별 알림·카드·홈 이야기가 그날 의미가 있다.
+2. **전원 꽂힘:** 모든 등급, 순서는 지금 `nextQueued` 그대로(조각 있는 것 → 24시간 넘은 것 → 새 것 최신순, 처음 정리 old는 맨 뒤). 유선이면 6스레드, **무선이면 4스레드**(배터리 40℃ 넘으면 충전이 3~5W로 줄어 순충전 0 안팎 → 아침에 60~80%, 추정). 한 실행이 끝나면 바로 다음 실행(지금처럼). **발열 조절:** 달궈짐(= `getThermalHeadroom(30)` ≥ 0.85(API 30+, 1초에 한 번만 호출) **또는** 최근 조각 ms ≥ 식은 중앙값의 1.5배 **또는** `EXTRA_TEMPERATURE` ≥ 40.0℃)이면 조각을 시작하지 않고 **명시 지연 10분**으로 다시 건다(`Result.retry()`가 아니라 `initialDelay` enqueue). 실행 중 SEVERE면 그 조각을 끝내고 20분 뒤(지금의 SEVERE 중단은 유지). **05:00~07:00에는 잔량 90% 미만이면 쉰다**(출근 전 충전 우선). 꽂힘이 풀리면 그 조각은 끝까지 하고(제약이 없으니 OS가 끊지 않음) 다음 조각부터 배터리 규칙.
+3. **배터리 넉넉:** **오늘·짧음만, 최신 통화부터**(방금 끝난 통화가 먼저 정리되는 체감). 4스레드(지금 값, P7이 더 작으면 그 값). 하루 예산 = **실행 20분 또는 그날 배터리 자막 소모 5%(배터리 용량 대비, CHARGE_COUNTER를 믿을 수 있을 때만) 중 먼저 닿는 것**(`BATTERY_BUDGET_MIN`, KST 날짜별 누적 `BATTERY_RUN_MS`·`BATTERY_RUN_DAY`). 예산은 **조각을 시작한 실행**의 시작~끝 경과 시간(모델 로드·해독 포함)만 센다(정책 판정만 하고 끝난 기동은 세지 않음, R:337 `noteRun` 분리). 실행 사이 **30분 간격**(`BATTERY_RUN_GAP_MS`; 발견·모델 받기·매시간 틱 등 enqueue 경로 4곳(`AutomaticRecordingDiscovery.kt:110`, `PipelineModelDownloadWork.kt:21`, R:304, R:389)이 작업을 다시 걸어도 `doWork` 안에서 간격을 보고 바로 끝낸다). 예산을 다 쓰면 그날은 꽂힐 때까지 쉼.
+4. **배터리 아낌:** 아무것도 하지 않음. 대기열은 그대로 두고 전원을 기다림.
+5. **작업 구조:** 실행 작업은 고유 이름 **하나**(`calls-transcription`, 지금처럼 APPEND_OR_REPLACE, **제약 없음**). 전원 트리거는 별도 고유 작업 `ieum.calls.transcribe.plug`(`requiresCharging`)이 **실행 작업을 걸기만** 한다(꽂으면 WorkManager가 잔량이 오르기 시작할 때 시작, `BATTERY_CHARGING_STATE_UPDATE_DELAY`만큼 늦을 수 있음; 배터리 보호로 충전이 멈춰도 실행 작업은 제약이 없어 계속 돈다). 고유 작업 둘이 같이 돌면 `claim`이 줄 단위 잠금이라(S:208) 서로 다른 녹음을 집어 `EXECUTION_LOCK`(E:91)에서 한쪽이 웨이크락만 쥔 채 시간 초과로 끝나므로, 실행 작업은 하나뿐이어야 한다(R:301-302 주석도 같은 전제).
+6. `FirstPass.powerOk`의 "50% 이상" 분기는 지운다(old 녹음은 꽂혔을 때만).
 
-**통화 끝 직후의 체감:** 짧은 통화(대부분 1분 미만)는 지금처럼 통화 끝 3분 뒤 자막이 시작돼 다음 루틴에 들어간다. 긴 통화는 통화 상태 글이 "녹음을 찾는 중" → 10분 뒤 **"충전하면 이어서 정리해요"**(사실대로, 지키는 약속)로 바뀌고, 충전되면 정리돼 "늦게 정리된 통화"로 아침 알림·카톡 보고에 들어간다.
+**통화 끝 직후의 체감:** 짧은 통화(대부분 1분 미만)는 지금처럼 통화 끝 3분 뒤 자막이 시작돼 다음 루틴에 들어간다(하루 예산 안에서 8~12건, 추정). 긴 통화는 통화 상태 글이 "녹음을 찾는 중" → 10분 뒤 **"충전하면 이어서 정리해요"**(사실대로, 지키는 약속)로 바뀌고, 꽂히면 정리돼 "늦게 정리된 통화"로 아침 알림·카톡 보고에 들어간다.
 
-### 2.3 낭비 제거(같은 묶음)
+### 2.3 낭비 제거와 속도(같은 묶음)
 | # | 규칙 | 근거 |
 | --- | --- | --- |
-| W1 | **실행에 안 들어갈 조각은 시작하지 않는다.** 조각 시작 전에 `예상 = 최근 조각 ms 중앙값(같은 스레드 수, 없으면 300초) × 1.25`를 구해 `남은 실행 시간(10분 − 경과)`보다 크면 그 실행을 끝낸다(중지 환불 규칙은 그대로). 충전 중이면 바로 다음 실행이 이어받으므로 손해가 없다 | C3 |
-| W2 | **기한 540초를 넘길 것 같은 조각은 미리 반으로.** 예상이 540초 × 0.8을 넘으면 그 조각만 60초 조각 두 개로(지금의 "넘긴 뒤 반 쪼개기"는 유지, 다만 예방이 먼저). 조각 길이 기본은 2분 그대로(정확도·조각 경계 유지) | C3, C7 |
-| W3 | **모델 컨텍스트 캐시.** `WhisperContext`를 프로세스 안 정적 참조로 두고 실행 사이에 유지. 15분 넘게 안 쓰거나 `onTrimMemory(TRIM_MEMORY_RUNNING_LOW 이상)`이면 해제. 같은 모델 파일(SHA)일 때만 재사용 | C4 |
-| W4 | **영구 실패:** `CodecException`(m4a 해독 실패)·`ANDROID_STT_PCM_SIZE`·`EMPTY_TRANSCRIPT`는 `PERMANENT`로 표시해 재큐·재시도하지 않는다(신호등 "글자로 바꾸지 못한 녹음 n건" 수에는 그대로). 기한 초과(`ANDROID_STT_DEADLINE`·`NOT_COMPLETED`) 2회 또는 INTERRUPTED 1회면 그 녹음은 `charging_only=1`(배터리에서는 집지 않음) | C7 |
-| W5 | 재큐는 **충전 중 작업에서만** 되살린다(저장소를 열 때가 아니라 충전 실행 시작 때). 재큐할 때 멈춤 횟수·분할 표시도 함께 지운다 | C7 |
+| W1 | **실행에 안 들어갈 조각은 시작하지 않는다.** 조각 시작 전에 `예상 = 최근 조각 ms 중앙값(같은 스레드 수, 없으면 300초) × 1.25`를 구해 **9분 − 경과**(10분 한도보다 1분 앞, restricted 버킷 예방)보다 크면 그 실행을 스스로 끝낸다. **실행의 첫 조각은 예외로 항상 시작**(달궈진 폰에서 473초가 예상 한도를 넘어도 조각 0개로 끝나면 `requeueNow`가 거짓(R:276)이라 매시간 기동만 반복하므로). 끝낼 때는 `stop()`이 아니라 별도 예외(`Yield`)를 `run()`에서 잡아 QUEUED·STOPPED로 시도를 환불(`stop()`은 `noteStall`을 불러 환불 6회 제한에 걸림, R:169-171, :210) — `nextQueued` 진행 중 1순위(S:154)와 `requeueNow`가 유지된다. 꽂혀 있으면 바로 다음 실행이 이어받으므로 손해가 없다 | C3 |
+| W2 | **기한 540초를 넘길 것 같은 조각은 미리 반으로.** 예상이 540초 × 0.8 = 432초를 넘으면 그 조각만 60초 둘로. 예방 분할도 반드시 `askSplit`으로 `_splits`에 먼저 기록(S:191) — 안 하면 다음 실행에서 식었을 때 통째 조각으로 돌아가 저장한 반 조각(id `-(2i+1)`)을 버린다(R:193-201). 지금 중앙값 330×1.25=412 < 432라 W2는 달궈진 때만 작동한다. 조각 길이 기본은 2분 그대로(정확도·조각 경계 유지) | C3, C7 |
+| W3 | **세션 이어 쓰기.** 한 실행(`run()`) 안에서 whisper 세션 하나를 녹음 사이에 이어 쓴다(세션 소유를 `transcribeRecording`의 finally(R:204)에서 `run()`으로). 조건: 같은 스레드 수(스레드는 open 때 고정, N:105·:141), `onStopped`가 온 핸들은 재사용 금지(네이티브 `cancel`이 취소 표시를 되돌리지 않음, N:86), 익명 세션의 `previous`(R:76, B2 문맥)는 녹음마다 비움. 실행이 끝나면 닫는다. **프로세스 정적 캐시는 하지 않는다**(574MB 상주 프로세스는 LMK 1순위, 안드로이드 14+는 `TRIM_MEMORY_RUNNING_LOW`를 안 보냄(추정)) | C4 |
+| W4 | **영구 실패:** `CodecException`(m4a 해독 실패)·`ANDROID_STT_PCM_SIZE`·`EMPTY_TRANSCRIPT`는 `permanent=1`로 표시해 재큐·재시도하지 않는다(신호등 "글자로 바꾸지 못한 녹음 n건" 수에는 그대로). 기한 초과(`ANDROID_STT_DEADLINE`·`NOT_COMPLETED`) 2회 또는 INTERRUPTED 1회면 그 녹음은 `charging_only=1`(배터리에서는 집지 않음) | C7 |
+| W5 | 재큐는 **전원 꽂힘 실행의 시작에서만** 되살린다(`requeueFailedOnce`의 호출 자리를 저장소 열기(S:59-62)에서 옮김). 재큐할 때 멈춤 횟수·분할 표시도 함께 지운다 | C7 |
+| P7 | **스레드 수 = 실제 쓸 수 있는 코어 수.** open 때 `sched_getaffinity`로 코어 수를 읽어 그보다 많이 쓰지 않는다(상한은 지금처럼 유선 6·배터리/무선 4). `/proc/self/cpuset`·`Cpus_allowed_list`를 조각 시작 때 기록. 토론 추정: cpuset이 원인이면 식은 조각 223초가 10/30의 170초(85초/분)에 가까워진다 | C6, 1.3 |
 | W6 | 발견 패스의 전체 seenRound UPDATE는 바뀐 행만(선택, 효과 작음). 프로세스 시작 때 업데이트 확인은 6시간 주기와 합쳐 하루 4회로 | C8 |
 
-### 2.4 왜 이 숫자인가(토론 대상)
-- **40%:** 15%(배터리 부족)는 너무 늦다. 40% 아래면 아내가 "곧 충전해야 할" 상태라 자막이 체감 소모의 주범이 된다. 50%는 오후에 너무 일찍 멈춘다.
-- **20분/일:** 식은 폰에서 짧은 통화(40초) 하나 ≈ 조각 1개 ≈ 1~2분 실행. 하루 10~15통의 짧은 통화를 그날 정리할 수 있는 양이고, 4스레드 20분은 배터리의 2~3%(추정, 계측 뒤 조정).
+### 2.4 왜 이 숫자인가(토론 1-2·1-3·C)
+- **40%:** 15%(배터리 부족)는 너무 늦다. 40% 아래면 아내가 "곧 충전해야 할" 상태라 자막이 체감 소모의 주범이 된다. 실제 상한은 예산이 정하므로 40%는 보조 장치.
+- **20분/일 또는 5%:** 식은 폰 4스레드에서 모델 로드·해독까지 넣으면 20분에 녹음 5~6분, 40초 통화 8~9건(검토자 추정). 3분 이하 통화가 하루 30~40건이면 그날 정리는 20~30%뿐이다 — 그래서 **최신 통화부터** 해 "방금 통화가 정리됨" 체감을 지킨다. 4스레드 Whisper 3~4W면 20분 = 1.0~1.3Wh = 배터리(약 16.7Wh, 추정)의 6~8%. 그래서 5% 상한을 함께 둔다(mAh는 화면 꺼진 실행만 합산, 1.3).
 - **30분 간격:** 발열을 식히고 "한 통화 끝나면 바로 돈다"는 체감 패턴을 깨지 않는 선. 짧은 통화는 대개 한 실행에 여러 개 들어간다.
-- **3분:** 3분 녹음 = 2분 조각 2개 ≈ 5~8분 실행. 그 이상은 한 통화가 하루 예산의 절반을 먹는다.
+- **3분·20초:** 3분 녹음 = 2분 조각 2개 ≈ 5~8분 실행이라 한 통화가 예산의 절반을 먹는다. 20초 미만은 바꿔도 쓸모가 적다.
+- **밤 처리량(검토자 C):** 하루 120분을 밤 7시간(420분)에 끝내려면 조각당 420초가 한계, 모델 로드·해독·발열 여유 20%와 짧은 충전(3.5시간)까지 보면 **조각당 210~280초가 목표**. 식은 실측 223초라 P7·W1·W3가 들어가면 유선 밤 충전으로 하루치가 끝난다. 지속 발열(330초+)이 계속되면 r16-3(q8_0·i8mm)까지 필요하다.
 
-## 3. 계측·화면·감시(r16-2)
+## 3. 계측·화면·감시
 
-### 3.1 하트비트 `power`(`PhoneStatus`, 숫자·코드만)
+### 3.1 하트비트 `power`(생산은 r16-1 Runner·`SttPieceStats`, 표시는 r16-2 `PhoneStatus`; 숫자·코드만)
 ```
-power{ batteryPct, charging, plugged(ac|usb|wireless|none), powerSave, thermal(none|light|moderate|severe|critical|…),
-       today{ day, battery{runs, min, audioMin, mAh}, charging{runs, min, audioMin}, budgetMin, gapSkips, thermalSkips,
-              killedChunkMs, deadlineMs, modelLoads, modelLoadMs, decodeAudioMs },
+power{ batteryPct, plugged(ac|usb|wireless|none), status(charging|discharging|notCharging|full|unknown), powerSave,
+       thermal(none|light|moderate|severe|…), headroom, tempDeciC, cpuset(코드), cpusAllowed(코어 수),
+       today{ day, battery{runs, min, audioMin, mAhScreenOff}, plugged{runs, min, audioMin}, budgetMin, budgetHit(min|pct|none),
+              gapSkips, hotSkips, inCallSkips, morningSkips, plugDropped(2분 넘는 끊김), levelFallingSkips,
+              killedChunkMs, deadlineMs, yieldCount, modelLoads, modelLoadMs, decodeAudioMs, stopReasons{timeout, constraint, other} },
        prev{같은 구조},
-       chunk{p50Ms, lastMs, threads, tokensPerSecLast, perTokenMsLast} }
+       chunk{coldMedianMs, p50Ms, lastMs, threads, tokensLast, perTokenMsLast} }
 ```
-- `mAh`: 실행 시작·끝의 `BATTERY_PROPERTY_CHARGE_COUNTER`(µAh) 차이를 충전 아닐 때만 합산. 기기가 0이나 음수만 주면 null.
-- `thermal`: `PowerManager.getCurrentThermalStatus()`를 실행 시작·끝에 기록, 하루 최고 단계도.
-- 지금 `transcription.decode`(누적, 날짜별 초기화 없음)는 `today/prev`로 나누고 killed·deadline 시간을 더한다. `transcription.runs`는 그대로.
+- `mAhScreenOff`: 실행 시작·끝의 `BATTERY_PROPERTY_CHARGE_COUNTER`(µAh) 차이를 **꽂힘 아니고 화면 꺼진 실행만** 합산(폰 전체 소모의 상한). 기기가 0·음수만 주면 null. `CURRENT_NOW` 표본은 `chunk`에 마지막 값·부호 보정값.
+- `thermal`·`headroom`·`tempDeciC`(`EXTRA_TEMPERATURE`, 신뢰 높음)는 실행 시작·끝에 기록, 하루 최고도.
+- `tokensLast`·`perTokenMsLast`: 네이티브 타이밍에 토큰 수가 없으므로(N:175) JNI가 `whisper_full_n_tokens` 합을 돌려준다(r16-3의 N 수정 전에는 null).
+- 지금 `transcription.decode`(누적, 날짜별 초기화 없음)는 `today/prev`로 나누고 killed·deadline·yield 시간을 더한다. `transcription.runs`는 그대로(단 정책 판정만 하고 끝난 기동은 `runs`에 세지 않는다).
 - 1.3의 "모르는 것"이 모두 이 블록 하나로 풀린다.
 
 ### 3.2 화면·알림(50대 기준 문구, 원칙 4 "지키지 못할 약속 금지")
 | 자리 | 문구·동작 |
 | --- | --- |
 | 설정 › 정리 | 줄 "배터리를 아끼려고 긴 녹음은 충전 중에 글자로 바꿔요. 오늘 배터리로 n분 썼어요(한도 20분)" + 스위치 [충전 중에만 글자로 바꾸기](기본 끔) |
-| 설정 › 지금 할 일과 진행 상황 | 충전을 기다리는 녹음이 있으면 "녹음 n개는 충전기에 꽂으면 글자로 바꿔요"(처음 정리 줄의 "충전기에 꽂으면 이어서 정리해요"와 같은 결) |
-| 신호등 "글자로 바꾸기" | 충전 대기 녹음의 가장 오래된 것이 36시간 넘으면 주황 "녹음 n개가 이틀째 충전을 기다려요. 밤에 충전기에 꽂아 두면 정리돼요". 그 전에는 초록 글 "충전하면 n개를 바꿔요" |
-| 통화 탭 상태 글·통화별 알림 | 오늘 통화가 충전 대기면 통화 끝 10분 뒤부터 "충전하면 이어서 정리해요"(기존 "정리가 늦어지고 있어요" 대신, 6시간 규칙보다 앞섬) |
+| 설정 › 지금 할 일과 진행 상황 | 전원을 기다리는 녹음이 있으면 "녹음 n개는 충전기에 꽂으면 글자로 바꿔요"(처음 정리 줄의 "충전기에 꽂으면 이어서 정리해요"와 같은 결) |
+| 신호등 "글자로 바꾸기" | 전원 대기 녹음의 가장 오래된 것이 36시간 넘으면 주황 "녹음 n개가 이틀째 충전을 기다려요. 밤에 충전기에 꽂아 두면 정리돼요". 그 전에는 초록 글 "충전하면 n개를 바꿔요" |
+| 통화 탭 상태 글·통화별 알림 | 오늘 통화가 전원 대기면 통화 끝 10분 뒤부터 "충전하면 이어서 정리해요"(기존 "정리가 늦어지고 있어요" 대신, 6시간 규칙보다 앞섬) |
 | 저녁 19시 알림 | 본문 마지막 줄 "충전하면 n개를 이어서 정리해요"(있을 때만). 제목은 녹음 기준 그대로 |
-| 자가 진단(저녁) | "배터리로 글자 바꾸기가 한도에 걸렸어요"는 띄우지 않는다(정상 동작). 충전 대기 36시간 넘음은 신호등으로 충분 |
+| 자가 진단(저녁) | "배터리로 글자 바꾸기가 한도에 걸렸어요"는 띄우지 않는다(정상 동작). 전원 대기 36시간 넘음은 신호등으로 충분 |
 
 ### 3.3 워치독 규칙(`tools/inbox/watchdog.py`)
 | 이슈 제목 | 조건 |
 | --- | --- |
-| 폰 배터리를 많이 써요 | `power.today.battery.min` > 60 또는 `battery.mAh` > 800이 2회 연속(하루 예산의 3배) |
-| 충전을 기다리는 녹음이 쌓여요 | `charging_only`·충전 대기 녹음의 가장 오래된 진입이 36시간 넘음(기존 "자막이 밀려요"는 충전 대기를 빼고 센다) |
+| 폰 배터리를 많이 써요 | `power.today.battery.min` > 60 또는 `battery.mAhScreenOff`가 용량의 15% 넘음이 2회 연속(예산의 3배) |
+| 충전을 기다리는 녹음이 쌓여요 | `charging_only`·전원 대기 녹음의 가장 오래된 진입이 36시간 넘음(기존 "자막이 밀려요"는 전원 대기를 빼고 센다) |
 | 자막 조각이 버려지고 있어요 | `killedChunkMs + deadlineMs` > 실행 ms의 20%가 2일 연속(W1·W2가 깨졌다는 뜻) |
 
-## 4. 효율 A/B(r16-3, 측정 뒤 채택 — 스위치만 먼저)
-골든 측정 화면(`GoldenMeasureActivity`)에 **"전력 측정" 모드**: 사용자가 고른 녹음 1건(정답 없어도 됨)을 변형별로 돌려 조각 ms·토큰당 ms·발열 단계·(배터리 상태일 때만) mAh를 하트비트 `golden.power`에 올린다. 정답이 있으면 CER도. 충전 중이면 ms만 의미가 있다.
+## 4. 효율 A/B(r16-3, 배포 직후 같은 주 — 스위치만 먼저, 측정 뒤 채택)
+골든 측정 화면(`GoldenMeasureActivity`)에 **"전력 측정" 모드**: 사용자가 고른 녹음 1건(정답 없어도 됨)을 변형별로 돌려 조각 ms·토큰당 ms·발열 단계·배터리 온도·(배터리 상태·화면 꺼짐일 때만) mAh를 하트비트 `golden.power`에 올린다. 정답이 있으면 CER도. 꽂힘이면 ms만 의미가 있다.
 
 | # | 변형 | 기대 | 위험 | 채택 조건 |
 | --- | --- | --- | --- | --- |
-| P1 | 스레드 4(1 prime + 3 big만, 추정) vs 6 | 작은 코어가 발목을 잡지 않아 **더 빠르고 덜 먹을 수** 있음(ggml 균등 분할) | 느려질 수도 | 조각 ms 10% 이상 감소 또는 mAh 20% 이상 감소 |
-| P2 | i8mm 빌드(`armv8.2-a+dotprod+fp16+i8mm`, 별도 `.so`, 런타임 `HWCAP2_I8MM` 확인 뒤 선택) | q5 행렬 곱 가속(추정) | 미지원 CPU는 기존 .so | 같음 |
+| P1 | 스레드 4 vs 6(P7 적용 뒤, 같은 cpuset에서) | 작은 코어가 발목을 잡지 않아 더 빠르고 덜 먹을 수 있음(ggml 균등 분할, 추정) | 느려질 수도 | 조각 ms 10% 이상 감소 또는 mAh 20% 이상 감소 |
+| P2 | i8mm 빌드(`armv8.2-a+dotprod+fp16+i8mm`, 별도 `.so`, 런타임 `HWCAP2_I8MM` 확인 뒤 선택) | q5·q8 행렬 곱 가속(추정) | 미지원 CPU는 기존 .so | 같음 |
 | P3 | 배터리 모드에서 `THREAD_PRIORITY_BACKGROUND`(네이티브 스레드 nice) | OS가 작은 코어·낮은 클럭으로 보내 전력 절감(삼성 cpuset 동작에 달림, 추정) | 느려져 예산 안에 통화 수가 줄 수 있음 | mAh 30% 이상 감소하고 ms 2배 이하 |
-| P4 | `flash_attn=true` | 메모리·속도(CPU 백엔드 효과는 작을 수 있음) | 없음 | ms 10% |
 | P5 | 조각 1분 | 실행 맞추기 쉬움 | 조각 경계 증가로 CER 악화 | CER 악화 ≤ 1%p일 때만, W1·W2로 충분하면 안 함 |
-| P6 | decode 원인 조사: `token_timestamps` 끄기, 창당 prompt 224토큰 → 64 | decode 220초의 정체 확인 | 시각·문맥 손실 | 원인 설명이 먼저 |
+| P6 | decode 계측: 조각당 토큰 수·ms/토큰(설정 변경은 아님 — `no_context`·prompt·`token_timestamps`는 원인이 아님, 토론 4-1) | decode 220초의 정체 확인 | 없음 | 계측만 |
+| P8 | **q8_0**(같은 가중치를 더 정밀하게 저장, 정확도 같거나 나음, 약 0.87GB) | dotprod·i8mm 커널이 q5_0보다 빠른 경우 많음(추정) | 모델 받기 300MB 추가, 저장 공간 | ms 15% 이상 감소, CER 같음 |
+| P9 | q4_0 + 재배열(i8mm) | 가장 빠를 수 있음 | 정확도 | 골든 CER 악화 ≤ 1%p일 때만 |
+| P10 | `n_max_text_ctx` 64 | 반복 폭주 상한 | 긴 창에서 문맥 손실 | 반복 환각 수 감소, CER 같음 |
 
-채택은 v3.6.x에서 기본값만 바꾼다(코드 경로는 r16-3에서 미리). 기각: 작은 모델로 낮 초안(정확도, 사용자 v3.3 결정), 서버·Actions 자막(원칙 2), 포그라운드 장시간 실행(dataSync/mediaProcessing은 안드로이드 15+ 24시간에 6시간 한도, 알림 상시 노출, 아내가 최근 앱을 밀어 지우는 습관과 충돌 — W1·W3로 10분 한도 낭비가 사라지면 필요 없음), GPU(Vulkan) 백엔드(v3.7 실험 후보, 삼성 Xclipse에서 ggml Vulkan 검증 없음).
+채택은 v3.6.x에서 기본값만 바꾼다(코드 경로는 r16-3에서 미리). **기각:** `flash_attn`(S26 CPU에서 약 1.7배 느림, N:100 주석 — 이미 측정), `audio_ctx` 축소(정확도), 배치 디코딩(greedy 단일 디코더라 해당 없음), 작은 모델로 낮 초안(정확도, 사용자 v3.3 결정), 서버·Actions 자막(원칙 2), `requiresDeviceIdle`(화면이 켜지면 중지돼 조각을 버림), JobScheduler 직접(같은 10분 한도), 포그라운드 장시간 실행(dataSync/mediaProcessing은 안드로이드 15+ 24시간에 6시간 한도, 알림 상시 노출, 아내가 최근 앱을 밀어 지우는 습관과 충돌 — W1·W3로 10분 한도 낭비가 사라지면 필요 없음), GPU(Vulkan) 백엔드(v3.7 실험 후보, 삼성 Xclipse에서 ggml Vulkan 검증 없음).
 
 ## 5. 묶음과 순서
-통합 브랜치 `feature/r16-v36`. **키 커밋(오케스트레이터, r16-0):** `PipelineSettingsKeys`에 `TRANSCRIBE_CHARGING_ONLY`(기본 false), `BATTERY_RUN_MS`·`BATTERY_RUN_DAY`, `TranscriptionPower` 상수 객체(`BATTERY_MIN_PCT=40`, `BATTERY_BUDGET_MIN=20`, `BATTERY_RUN_GAP_MS=30분`, `BATTERY_SHORT_MS=3분`, `CHARGING_WAIT_WARN_MS=36시간`), `PhoneStatus` `power` 자리(null), `call_transcription_jobs`에 `charging_only INTEGER DEFAULT 0`·`permanent INTEGER DEFAULT 0`(addColumns, MIGRATION_VERSION 유지).
+통합 브랜치 `feature/r16-v36`. **키 커밋(오케스트레이터, r16-0):** `PipelineSettingsKeys`에 `TRANSCRIBE_CHARGING_ONLY`(기본 false), `BATTERY_RUN_MS`·`BATTERY_RUN_DAY`·`BATTERY_MAH_DAY`, `CURRENT_SIGN`(부호 보정), `TranscriptionPower` 상수 객체(`BATTERY_MIN_PCT=40`, `BATTERY_BUDGET_MIN=20`, `BATTERY_BUDGET_PCT=5`, `BATTERY_RUN_GAP_MS=30분`, `SHORT_MIN_MS=20초`, `SHORT_MAX_MS=3분`, `PLUG_DEBOUNCE_MS=2분`, `HOT_HEADROOM=0.85`, `HOT_RATIO=1.5`, `HOT_TEMP_DECI_C=400`, `MORNING_REST=05:00~07:00`, `MORNING_REST_PCT=90`, `CHARGING_WAIT_WARN_MS=36시간`, `SELF_END_MS=9분`), **`PowerPolicy.decide(state, budget, now)` 순수 함수의 서명과 결과형**, `power` 블록의 키·계약(3.1, `PhoneStatus` 자리 null), `call_transcription_jobs`에 `charging_only INTEGER DEFAULT 0`·`permanent INTEGER DEFAULT 0`(addColumns, MIGRATION_VERSION 유지).
 
 **파일 소유(겹치지 않게):**
-- **r16-1 전력 정책·낭비 제거(앱, 작업자 1):** `pipeline/CallTranscriptionRunner.kt`(제약 2종·고유 작업 2개·체인 규칙·예산·간격·발열·W1·W2), `pipeline/CallTranscriptionStore.kt`(배터리 모드 `nextQueued`, `charging_only`·`permanent`, 재큐 시점·초기화), `pipeline/FirstPass.kt`(powerOk → 충전만), `AndroidWhisperEngine.kt`·`WhisperCallTranscriber.kt`(컨텍스트 캐시 W3), `IeumApplication.kt`(`onTrimMemory`), 시험 `R16OneTest`(Robolectric `ShadowBatteryManager`·`ShadowPowerManager`: 배터리 60%는 오늘·짧음만·예산 뒤 멈춤·30분 간격, 충전이면 전부·즉시 체인, 40% 미만 0건, MODERATE 미룸, W1이 조각을 시작하지 않음, PERMANENT 재큐 금지, 캐시 재사용·해제).
-- **r16-2 계측·화면·감시(앱·도구, 작업자 1):** `pipeline/PhoneStatus.kt`(power 블록, decode today/prev), `pipeline/StatusLights.kt`, `pipeline/screens/SettingsScreen.kt`(정리 묶음 줄·스위치), `pipeline/CallFollowupNotice.kt`·`screens/CallsScreen.kt`(상태 글), `pipeline/CallDigestText.kt`(저녁 마지막 줄), `pipeline/SelfCheckNotices.kt`(변경 없음 확인), `tools/inbox/watchdog.py`·`test_watchdog.py`(규칙 3개), `docs/OPERATIONS.md` 하트비트 표. 시험 `R16TwoTest`(power 블록 키·숫자만, 신호등 36시간, 상태 글 10분).
-- **r16-3 효율 A/B(앱·네이티브, 배포 뒤 작업자 1):** `pipeline/GoldenMeasureActivity.kt`(전력 측정 모드), `cpp/CMakeLists.txt`·`tools/build_android_whisper.py`(i8mm 변형 .so), `cpp/ieum_whisper.cpp`(스레드 nice 옵션, flash_attn 옵션), `PipelineModelManager`(변형 .so 선택).
-- **오케스트레이터:** 키 커밋 → r16-1 ∥ r16-2 → 통합 → ci → device-test(에뮬레이터 `dumpsys battery unplug`·`set level 60`에서 오늘·짧음만 돌고 예산 뒤 멈춤, `set ac 1`에서 체인 재개 — `tools/device/` 시나리오 추가) → lean-calls 배포. `docs/VERSION` 3.6, `UPDATE_NOTE` 첫 줄 "v3.6: 배터리를 아껴요. 긴 통화와 밀린 녹음은 충전 중에 글자로 바꾸고, 짧은 통화는 바로 정리해요".
-- **배포 뒤 48시간:** 6절 기준 확인 → r16-3 측정(아내 폰에서 골든 전력 측정 1회는 사용자, 에뮬레이터는 ms만) → 채택은 v3.6.x.
+- **r16-1 전력 정책·낭비 제거·스레드·계측 생산(앱, 작업자 1):** `pipeline/CallTranscriptionRunner.kt`(제약 제거, 전원 트리거 작업, `PowerPolicy` 호출, 예산·간격·발열·통화 중·아침 휴식, W1 `Yield`·W2·W3·W5, 명시 지연 enqueue, `noteRun` 분리, `SttPieceStats`에 killed·deadline·yield·modelLoad·cpuset·mAh), `pipeline/PowerPolicy.kt`(신설, 순수 함수 + `BatterySnapshot` 읽기), `pipeline/CallTranscriptionStore.kt`(배터리 모드 `nextQueued` SQL, `charging_only`·`permanent`, 재큐 시점·초기화), `pipeline/FirstPass.kt`(powerOk → 꽂힘만), `AndroidWhisperEngine.kt`·`WhisperCallTranscriber.kt`(세션 이어 쓰기 W3, P7 스레드 수), `cpp/ieum_whisper.cpp`(스레드 수 상한만 — cpuset 읽기는 Kotlin). 시험 `R16OneTest`(`PowerPolicy` 고정 사례 20개 이상: 배터리 60% → 오늘·짧음 최신순·예산 20분/5% 뒤 멈춤·30분 간격, 꽂힘 → 전부·즉시 체인, 상태 4·5는 꽂힘, 끊김 2분 디바운스, 잔량 하락 → 배터리 규칙, 40% 미만·절전·통화 중 0건, 달궈짐 3조건 → 10분 미룸, 05~07시 90% 미만 쉼, 무선 4스레드; Runner: W1이 둘째 조각을 시작하지 않고 `Yield`로 환불, 첫 조각은 항상, W2가 `_splits`에 기록, PERMANENT 재큐 금지, 세션 재사용·onStopped 뒤 재사용 금지). Robolectric `ShadowBatteryManager`(setIsCharging·setIntProperty)·`ShadowPowerManager` 발열은 스냅숏 읽기 시험에만(추정, headroom은 불확실 → 순수 함수가 주).
+- **r16-2 화면·감시·계측 표시(앱·도구, 작업자 1):** `pipeline/PhoneStatus.kt`(power 블록 조립, decode today/prev — 값은 r16-1 통계를 읽기만), `pipeline/StatusLights.kt`, `pipeline/screens/SettingsScreen.kt`(정리 묶음 줄·스위치), `pipeline/CallFollowupNotice.kt`·`screens/CallsScreen.kt`(상태 글), `pipeline/CallDigestText.kt`(저녁 마지막 줄), `pipeline/SelfCheckNotices.kt`(변경 없음 확인), `tools/inbox/watchdog.py`·`test_watchdog.py`(규칙 3개), `docs/OPERATIONS.md` 하트비트 표. 시험 `R16TwoTest`(power 블록 키·숫자만, 신호등 36시간, 상태 글 10분, 저녁 마지막 줄).
+- **r16-3 빌드·양자화 A/B(앱·네이티브, 배포 직후 작업자 1):** `pipeline/GoldenMeasureActivity.kt`(전력 측정 모드), `cpp/CMakeLists.txt`·`tools/build_android_whisper.py`(i8mm 변형 .so), `cpp/ieum_whisper.cpp`(토큰 수 반환, nice 옵션, `n_max_text_ctx` 옵션), `PipelineModelManager`(변형 .so·q8_0 모델 선택).
+- **오케스트레이터:** 키 커밋 → r16-1 ∥ r16-2 → 통합 → ci → device-test(에뮬레이터 `dumpsys battery unplug`·`set level 60`에서 오늘·짧음만 돌고 예산 뒤 멈춤, `set ac 1` + **`set status 2`**(ac만으로는 "충전 중"이 아님)에서 체인 재개, `set status 4`(보호 중)에서도 계속 — `tools/device/` 시나리오 추가) → lean-calls 배포. `docs/VERSION` 3.6, `UPDATE_NOTE` 첫 줄 "v3.6: 배터리를 아껴요. 긴 통화와 밀린 녹음은 충전 중에 글자로 바꾸고, 짧은 통화는 바로 정리해요". `WhisperCallTranscriber` 주석의 85초/분을 실측으로 고친다.
+- **배포 뒤 48시간:** 6절 기준 확인 → r16-3 측정(아내 폰에서 골든 전력 측정 1회는 사용자, 에뮬레이터는 ms만) → 채택은 v3.6.x. 48시간 뒤 이음 비중이 15%를 넘으면 `BATTERY_BUDGET_MIN`을 10으로(설정 노출은 안 함, 아내가 설정을 싫어함).
+
+**구현 함정(토론 E, 작업자가 꼭 읽을 것):** ① W1은 `stop()` 금지(`noteStall` 환불 6회 제한) → `Yield` 예외 ② 세션 소유를 `run()`으로, `previous` 녹음마다 비움, 스레드 수·P7 값은 open 때 ③ 배터리 모드 대기열은 SQL에서(Kotlin 거르기는 R:228에서 실행이 끝남) ④ `audio_ms`는 해독 뒤에야 생김 → 통화기록 길이·바이트로 추정 ⑤ `requeueFailedOnce` 호출 자리 이동 ⑥ 정책 판정만 한 기동은 `runs`·예산에 세지 않음, `Result.retry()` 대신 명시 지연 enqueue ⑦ 실행 작업의 `requiresBatteryNotLow`를 없애므로 15% 미만 판정은 `PowerPolicy` ⑧ `CURRENT_NOW` 부호·단위는 첫 꽂힘 실행에서 보정하고 보정 전에는 잔량 하락 규칙만.
 
 ## 6. 확인 기준(배포 뒤 48시간, 아내 폰)
 | 지표 | 기준 | 어디서 |
 | --- | --- | --- |
-| 배터리 자막 시간 | `power.today.battery.min` ≤ 25/일, `gapSkips` > 0(간격 규칙이 작동) | 하트비트 |
-| 안드로이드 배터리 사용량 | 이음 ≤ 10%(사용자가 아내 폰 배터리 화면 스크린샷 1장) | 사용자 |
-| 밤 처리 | 매일 06시 하트비트에서 충전 대기 녹음 0, `killedChunkMs + deadlineMs` < 실행 ms의 10% | 하트비트 |
+| 배터리 자막 시간 | `power.today.battery.min` ≤ 25/일(예산 20 + 첫 조각 예외), `budgetHit`가 매일 기록됨 | 하트비트 |
+| 안드로이드 배터리 사용량 | **21시(충전 전) 기준** 이음 ≤ 20%, 목표 10%(사용자가 아내 폰 배터리 화면 스크린샷 1장). 15% 넘으면 예산 10분으로 | 사용자 |
+| 밤 처리 | 매일 06시 하트비트에서 **전날 21시 이전 녹음**의 전원 대기 0(밤사이 새 통화는 제외), `killedChunkMs + deadlineMs + yield 손실` < 실행 ms의 10% | 하트비트 |
+| 조각 속도 | `chunk.coldMedianMs` ≤ 280,000(목표 210,000), `cpusAllowed`와 `threads`가 같음 | 하트비트 |
 | 긴 통화 | `long48h.ratePct` ≥ 80(v3.2 기준 유지, 밤에 처리) | 하트비트 |
 | 아침 보고 | 어제 업무 통화 중 보고서에 들어간 비율 ≥ 90%(`report.head.calls` vs 통화기록 업무 통화) | 우편함 `report/` 머리 숫자만 |
-| 낮 체감 | 짧은 통화의 통화별 알림 "정리됐어요"가 다음 루틴에 옴(`latency` p50이 처음 정리 제외 ≤ 90분) | 하트비트 |
+| 낮 체감 | 예산 안에서 처리한 오늘·짧음 건수 ≥ 8/일(통화가 있는 날), 가장 최근 짧은 통화가 다음 루틴에 들어감 | 하트비트 `battery.audioMin`·`runs` |
+| 아침 충전 | 07시 하트비트 `batteryPct` ≥ 90(유선), 무선이면 ≥ 80 | 하트비트 |
 | 워치독 | 3개 규칙이 조용함 | 이슈 |
 
 ## 7. 위험과 대책(사실대로)
 | 위험 | 대책 |
 | --- | --- |
-| 아내가 밤에 충전하지 않으면 긴 통화가 며칠 밀림 | 신호등 36시간 주황 + 워치독. 예산을 40분으로 올리는 것은 사용자 결정 |
+| 아내가 밤에 꽂지 않으면 긴 통화가 며칠 밀림 | 신호등 36시간 주황 + 워치독. 예산을 40분으로 올리는 것은 사용자 결정 |
 | 낮에 긴 통화의 "정리됐어요"가 안 와 앱이 멈춘 것처럼 보임 | 상태 글 "충전하면 이어서 정리해요"(10분 뒤), 저녁 알림 마지막 줄, 카드는 이전 통화 맥락이라 영향 없음 |
-| `CHARGE_COUNTER`를 삼성이 안 주거나 거칠게 줌 | null 허용, 분(min) 기준이 1차 지표 |
-| 발열 단계 API가 삼성에서 둔함 | 30분 간격과 예산이 발열과 무관하게 소모를 묶음 |
-| 컨텍스트 캐시로 574MB가 상주 → OS가 프로세스를 더 자주 죽임(INTERRUPTED 증가) | 15분 유휴 해제, `onTrimMemory`, INTERRUPTED면 다음 실행은 캐시 없이. 하트비트 `modelLoads`로 관찰 |
-| 두 고유 작업(충전·배터리)이 동시에 잡힘 | 저장소 RUNNING 잠금 + 11분 STALE 규칙 그대로, 시험으로 고정 |
-| 재큐를 충전 중으로 미루면 새 빌드 뒤 실패 복구가 늦음 | 밤에 복구되는 것으로 충분(사용자가 보는 것은 아침 보고) |
-| 예산 20분이 너무 적어 낮 정리가 너무 비면 | 48시간 실측 뒤 `BATTERY_BUDGET_MIN` 조정(설정 노출은 안 함, 아내가 설정을 싫어함) |
+| 삼성 배터리 보호(80·85%)로 충전이 멈추면 `requiresCharging` 작업이 OS에 끊김 | 실행 작업은 제약 없음, 꽂힘(PLUGGED)을 앱이 판정, 상태 4·5는 꽂힘 유지 |
+| 무선 충전 중 발열로 아침에 충전이 덜 됨(60~80%, 추정) | 무선이면 4스레드, 40℃ 이상 조각 시작 안 함, 05~07시 90% 미만 쉼, 07시 `batteryPct` 확인 기준 |
+| 낮의 짧은 충전(차량 USB, PC)에 큰 작업이 붙어 오히려 닳음 | 잔량이 내려가면(전류 부호·10분 1%) 배터리 규칙. 디바운스 2분 |
+| `CHARGE_COUNTER`를 삼성이 안 주거나 거칠게 줌, 화면 켜진 사용이 섞임 | null 허용, 화면 꺼진 실행만 합산, 분(min) 기준이 1차 지표 |
+| 발열 API가 삼성에서 둔함(클럭을 먼저 낮추고 status는 늦게) | 자기 측정(조각 ms 1.5배)과 배터리 온도가 함께 판정, 30분 간격과 예산이 발열과 무관하게 소모를 묶음 |
+| 시간 초과가 잦으면 안드로이드 14+ restricted 버킷 | W1 9분 자가 종료, `stopReasons.timeout` 감시 |
+| 세션 이어 쓰기로 실행 중 메모리 574MB+ 유지 | 실행 끝에 닫음, `onStopped` 뒤 재사용 금지, `modelLoads`로 관찰 |
+| 전원 트리거와 실행 작업이 같이 잡힘 | 트리거는 걸기만, 실행 작업 이름 하나 + RUNNING 11분 STALE 규칙, 시험으로 고정 |
+| 재큐를 꽂힘 실행으로 미루면 새 빌드 뒤 실패 복구가 늦음 | 밤에 복구되는 것으로 충분(사용자가 보는 것은 아침 보고) |
+| 예산 20분이 너무 적어 낮 정리가 너무 비면 | 48시간 실측 뒤 `BATTERY_BUDGET_MIN` 조정 |
+| 밤 처리량 여유가 1.27배뿐(120분 vs 152분 어치) | P7·W1·W3로 조각당 280초 이하 확보, 안 되면 r16-3(q8_0·i8mm)을 같은 주에 |
 
 ## 8. 다르게 정한 것(구현 때 오케스트레이터가 채움)
 | 묶음 | 설계 | 구현 | 이유 |
 | --- | --- | --- | --- |
 | | | | |
 
-## 9. Opus 토론 기록(요지, 원문은 reviews/v36_design_debate_20261107.md)
-(토론 뒤 채움)
+## 9. Opus 토론 요지(원문은 reviews/v36_design_debate_20261107.md)
+- **받아들인 것(초안 대비 바뀜):** 배터리 모드는 "짧은 것부터"가 아니라 **오늘·3분 이하 중 최신 통화부터**, 20초 미만 제외 / 예산은 20분 **또는 5%** / 모델 로드는 실행마다가 아니라 **녹음마다**였고, 정적 캐시 대신 **한 실행 안 세션 이어 쓰기** / **고유 작업 2개 → 실행 작업 하나 + 전원 트리거** / `requiresCharging`(잔량 오를 때)과 **꽂힘(PLUGGED)**은 다르며 삼성 배터리 보호에서 끊기므로 실행 작업은 제약 없이 앱이 판정 / 달궈짐은 headroom·조각 ms 1.5배·배터리 40℃ 세 조건 / W1 첫 조각 예외·9분 자가 종료·`Yield` 예외 / W2는 `askSplit` 기록 / **P7 스레드 = 쓸 수 있는 코어 수와 cpuset 계측을 r16-1로**(느림의 유력 원인) / P4 flash_attn 삭제(이미 측정·기각), P6은 계측만, P8 q8_0·P9·P10 추가 / 확인 기준에서 latency·gapSkips 삭제, "전날 21시 이전 녹음 0", 배터리 화면은 21시 기준 ≤ 20% / 무선 4스레드·40℃·05~07시 휴식 / mAh는 화면 꺼진 실행만 / 구현 함정 8개.
+- **유지한 것:** 스위치 기본 끔(낮 짧은 통화 즉시 정리 가치), 40%·30분·3분·36시간, 2분 조각, 모델 유지.
+- **좁힌 것:** 검토자의 "07시 이후 쉼"은 낮 책상 충전을 막으므로 "05~07시 잔량 90% 미만이면 쉼"으로.
+- **효과 추정(검토자, Fable 동의):** 60% → 15% 안팎. 10% 아래는 예산 10분 또는 "충전 중에만".
+- **가장 큰 반대와 답:** "진짜 병목은 밤 처리량(여유 1.27배)인데 효율을 뒤로 미뤘다" → P7·계측을 r16-1로 당기고, q8_0·i8mm은 배포 직후 같은 주에.
