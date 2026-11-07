@@ -1,7 +1,7 @@
-# 이음 앱 인수인계 (2026-11-07 15시 기준, v3.5 빌드 1046 배포·아내 폰 v3.5)
+# 이음 앱 인수인계 (2026-11-07 18시 기준, v3.5 빌드 1046 배포·아내 폰 v3.5, v3.6 「배터리」 설계 완료·미구현)
 
 > **읽는 순서:** 이 파일(규칙 → 지금 상태 → 다음 할 일 → 함정) → [DESIGN.md](DESIGN.md)(현재 설계, 구현된 그대로) → [OPERATIONS.md](OPERATIONS.md)(예약 작업·우편함·워치독). 앱의 목적·기능·UX는 [PRODUCT.md](PRODUCT.md), 작업 방식·로컬 환경은 [DEVELOPMENT.md](DEVELOPMENT.md).
-> 버전별 설계와 구현 대조, 10/30~11/6 세션 기록은 `docs/history/`([DESIGN_V3.md](history/DESIGN_V3.md) v2.6~v3.0, [DESIGN_V4.md](history/DESIGN_V4.md) v3.1~v3.4, [HANDOFF_HISTORY.md](history/HANDOFF_HISTORY.md))와 v3.5 설계 기록 [DESIGN_V5.md](DESIGN_V5.md)(구현 완료, 기록용). 묶음 지시문·작업자 보고서·검토 원문은 `docs/orchestration/`, `docs/reviews/`.
+> 버전별 설계와 구현 대조, 10/30~11/6 세션 기록은 `docs/history/`([DESIGN_V3.md](history/DESIGN_V3.md) v2.6~v3.0, [DESIGN_V4.md](history/DESIGN_V4.md) v3.1~v3.4, [HANDOFF_HISTORY.md](history/HANDOFF_HISTORY.md))와 v3.5 설계 기록 [DESIGN_V5.md](DESIGN_V5.md)(구현 완료, 기록용). **다음 버전 v3.6 「배터리를 녹이지 않는 자막」의 설계는 [DESIGN_V6.md](DESIGN_V6.md)(11/7, 구현 전 — 이 설계대로 개발한다).** 묶음 지시문·작업자 보고서·검토 원문은 `docs/orchestration/`, `docs/reviews/`.
 
 ## 0. 작업 규칙 (꼭 지킬 것)
 - **보고는 항상 한국어로.** 중간 보고, 최종 보고, 질문, 마무리 문구까지 예외 없음.
@@ -54,7 +54,8 @@
 - 수동 실행(Run workflow)은 **main에 있는 워크플로만** 버튼이 보인다. 다른 것은 REST `gh api repos/<owner>/<repo>/actions/workflows/<file>/dispatches -f ref=feature/lean-calls`.
 - 로컬 빌드·시험 환경(클라우드 세션·Windows·Mac)은 [DEVELOPMENT.md](DEVELOPMENT.md).
 
-## 4. 지금 상태 (11/7 15시)
+## 4. 지금 상태 (11/7 18시)
+- **배터리 문제(11/7 15:49 사용자 보고, 실사용 1순위 문제):** 아내 폰 배터리 사용량의 약 60%가 이음(다른 앱 1% 수준). 원인은 자막 작업 스케줄 — v3.5 설치 뒤 20시간 동안 자막 작업 892분(가동률 87%), 2분 조각당 330초라 10분 실행에 조각 1개만 끝나고 둘째 조각은 매번 버려짐, 실행마다 모델 재로드, 배터리 상태는 "부족 아님"만 봄, 발열은 SEVERE만 봄, v3.5 재큐 70건이 방아쇠. 설계는 [DESIGN_V6.md](DESIGN_V6.md)(충전 중에 몰아서, 배터리로는 오늘 짧은 통화만 하루 20분, 낭비 제거, 하트비트 `power`, 발열 조절, 스레드·i8mm A/B). **코드는 아직 그대로라 소모가 계속된다** — 5절 1번.
 - **배포본 v3.5 「카톡으로 오는 아침 보고」 빌드 1046**(11/6 17시, 서명 e4ee1db4…2c586 그대로, 카카오 키 주입·키 해시 일치 확인; update-smoke는 1차에 AVD 이미지 생성 70분 초과로 취소돼 재실행 통과. device-test는 에뮬레이터가 잠기지 않아 lockedNotice만 실패 — 키 커밋에서도 같음, 5절 4번). 묶음 r15-0(v3.4.x 선행: 실패 자막 재큐, 녹음 기준 숫자, 약속 문구, 신호등, 알림 묶음, 카드 기한 표현 제거, 업데이트 재알림)·r15-1(카카오 SDK 2.24.0, `pipeline/report/`)·r15-2(새벽 정리 v7·`report_check.py`·워치독)·r15-3(설정 "아침 보고" 묶음, 실행 파라미터)·r15-4(독립 검토 반영). 구현 그대로의 설계는 [DESIGN.md](DESIGN.md)(11/7 v3.5 반영, 아침 보고는 3.12절), 설계 기록 [DESIGN_V5.md](DESIGN_V5.md) 6절에 다르게 정한 것 19가지.
 - **아내 폰(11/7 검증):** v3.5 최신(1046)으로 올라옴 — 1045 업데이트 대기는 해결됨. 통화기록 983/983 저장, 빠짐 0. **카카오톡 미연결**(아내가 설정 › 아침 보고 › [카카오톡 연결하기]를 한 번 눌러야 함, 그 전에는 06시 앱 알림만).
 - **파이프라인 실측(11/7):**
@@ -80,15 +81,17 @@
 | v3.3 | 1043 | 11/6 03시 | 숫자 가드·확인 필요 배지, 토큰 확률, 골든 측정 화면, 지시문 v7, 합치기 되돌리기, 18sp 강제 |
 | v3.4 | 1044·1045 | 11/6 06시·07시 | 모든 전화에 카드(역할 조건 제거), 콜드 캐시, 잠금 창+알림, 카드 글 알고리즘, 루틴 실패 알림 길·워치독 자립, 결과 받기 시각 맞춤, 버전 1시간 안 확인, 지시문 v8 |
 | v3.5 | 1046 | 11/6 17시 | 카톡 아침 보고(나에게 보내기, 피드 이미지+글), 새벽 정리 04:46·tidy.md v7·보고서 JSON, v3.4.x 묶음, 검토 반영 |
+| v3.6 | (미배포) | 설계 11/7 | 배터리: 자막 전력 정책(충전 중 몰아서, 배터리는 오늘 짧은 통화 예산), 낭비 제거, 하트비트 `power`, 발열 조절, 효율 A/B — [DESIGN_V6.md](DESIGN_V6.md) |
 세션별 상세는 `docs/history/HANDOFF_HISTORY.md`, 설계·구현 대조는 `docs/history/DESIGN_V3.md`·`DESIGN_V4.md`.
 
 ## 5. 다음 할 일 (우선순위순)
-1. **아내 폰 카카오 연결.** 아내가 설정 › 아침 보고 › [카카오톡 연결하기](아내 계정)를 한 번 누르면 다음 날 05:30부터 "나와의 채팅"으로 온다. 확인: 하트비트 `kakao.linked=true`, 다음 날 `kakao.sent` 증가·`report.source="routine"`, 06시 앱 알림은 조용한 것. 3일 연속이면 v3.5 확인 끝(DESIGN.md 9절). 권한 오류가 나면 developers 앱에 아내 계정 팀원 등록.
-2. **녹음-통화 연결률과 자막 실패 원인 조사(v3.6 후보).** 연결 59건은 절반 수준, 1분 넘는 업무 통화 녹음 없음 21건, 자막 실패 누적 58. 하트비트 `callLogMatch`(못 이은 이유 계수)·`recordingGap`·`transcription.failReasons`·`requeuedFailed`로 원인을 나눈다. 처음 정리 남은 분량(126분)이 재큐 두 바퀴 뒤에도 늘면 실패 사유부터 본다.
-3. **대조표 "10/1 이후 전체" 빈 목록 원인.** `status/calllog.txt`의 그 구역은 KST 날짜가 바뀐 뒤 첫 틱에만 채운다(`CallLogReport`, OPERATIONS.md 4절). 2일째 비어 있으니 날짜 바뀜 판정이나 그 틱의 업로드 생략(같은 내용 해시) 쪽을 본다. 파일 내용은 읽지 말고 커밋 이력의 크기·시각으로 확인.
-4. **device-test lockedNotice:** 에뮬레이터가 잠기지 않으면(lock screen on=false) 실패 대신 판정 보류(null)로 바꾸기(`tools/device/call_card_test.sh`).
-5. **cleanup-branches(r15-* 5개):** main의 `cleanup-branches` 워크플로를 수동 실행(세션 자동 권한 검사가 원격 삭제를 막음).
-6. **`IEUM_SIGNING_SEED`:** GitHub 비밀에 현재 우편함 토큰 값을 복사한 뒤에만 토큰 교체(서명 키가 토큰에서 파생됨, 사용자 할 일).
+1. **v3.6 배터리 구현·배포([DESIGN_V6.md](DESIGN_V6.md) 5절 순서대로).** 키 커밋 r16-0 → r16-1(전력 정책·낭비 제거, `CallTranscriptionRunner`·`CallTranscriptionStore`·`FirstPass`·`AndroidWhisperEngine`) ∥ r16-2(하트비트 `power`·화면·워치독) → ci → device-test(에뮬레이터 `dumpsys battery` 시나리오) → 배포. `docs/VERSION` 3.6, `UPDATE_NOTE` 첫 줄은 설계 5절. 배포 뒤 48시간은 6절 확인 기준(하트비트 `power.today.battery.min` ≤ 25, 아내 폰 배터리 화면 이음 ≤ 10% — 사용자 스크린샷 1장). 그 뒤 r16-3 효율 A/B(골든 "전력 측정" 모드)는 측정 결과로 채택. 구현 중 다르게 정한 것은 DESIGN_V6 8절에.
+2. **아내 폰 카카오 연결.** 아내가 설정 › 아침 보고 › [카카오톡 연결하기](아내 계정)를 한 번 누르면 다음 날 05:30부터 "나와의 채팅"으로 온다. 확인: 하트비트 `kakao.linked=true`, 다음 날 `kakao.sent` 증가·`report.source="routine"`, 06시 앱 알림은 조용한 것. 3일 연속이면 v3.5 확인 끝(DESIGN.md 9절). 권한 오류가 나면 developers 앱에 아내 계정 팀원 등록.
+3. **녹음-통화 연결률과 자막 실패 원인 조사(v3.7 후보).** 연결 59건은 절반 수준, 1분 넘는 업무 통화 녹음 없음 21건, 자막 실패 누적 58. 하트비트 `callLogMatch`(못 이은 이유 계수)·`recordingGap`·`transcription.failReasons`·`requeuedFailed`로 원인을 나눈다. 처음 정리 남은 분량(126분)이 재큐 두 바퀴 뒤에도 늘면 실패 사유부터 본다.
+4. **대조표 "10/1 이후 전체" 빈 목록 원인.** `status/calllog.txt`의 그 구역은 KST 날짜가 바뀐 뒤 첫 틱에만 채운다(`CallLogReport`, OPERATIONS.md 4절). 2일째 비어 있으니 날짜 바뀜 판정이나 그 틱의 업로드 생략(같은 내용 해시) 쪽을 본다. 파일 내용은 읽지 말고 커밋 이력의 크기·시각으로 확인.
+5. **device-test lockedNotice:** 에뮬레이터가 잠기지 않으면(lock screen on=false) 실패 대신 판정 보류(null)로 바꾸기(`tools/device/call_card_test.sh`).
+6. **cleanup-branches(r15-* 5개):** main의 `cleanup-branches` 워크플로를 수동 실행(세션 자동 권한 검사가 원격 삭제를 막음).
+7. **`IEUM_SIGNING_SEED`:** GitHub 비밀에 현재 우편함 토큰 값을 복사한 뒤에만 토큰 교체(서명 키가 토큰에서 파생됨, 사용자 할 일).
 - 그 밖(전과 같음): S26 체크리스트(`docs/REAL_DEVICE_CHECKLIST.md`, 10분)·실녹음 골든 받아쓰기 3~5건(사용자), 저장소 비공개 복귀 전 Actions 분량 조정(DESIGN.md 11절), 예약 작업 알림 조정, Claude Docs 설계도를 `docs/DESIGN.md` 기준으로 갱신(옮길 목록은 `history/DESIGN_V4.md` 6절), 옛 `status/last-run.json` 정리.
 - **완료:** 아내 폰 1045 업데이트 대기(11/7 v3.5 1046으로 올라옴, 업데이트 재알림은 v3.5에 들어감), v3.5 배포(11/6 17시), 새벽 정리 cron 04:46 변경, 카카오 developers 설정, 매시간 분석 저장소 연결 복구(11/6 07:36).
 
@@ -100,6 +103,7 @@
 - **로컬 빌드:** 클라우드 세션은 CPU 2개 — Gradle은 `flock /home/claude/gradle.lock python3 run_gradle.py …`로 하나씩, 작업자는 컴파일·자기 시험만 로컬, 전체 시험·lint는 ci로. repo.maven.apache.org가 429를 자주 내면 `$GRADLE_USER_HOME/init.d/mirror.gradle`에 구글 미러. Windows는 Robolectric 대부분이 `TEXT_STORE_RECOVERY_REVIEW_REQUIRED`로 실패(앱 문제 아님, 판정은 ci로)하고 `make`가 없어 네이티브 빌드 불가. 통화 카드 창은 FLAG_SECURE라 카드 그림 캡처는 device-test 산출물(`CallUi.allowCaptureForTests`)로.
 - **작업자(Agent worktree):** 가끔 main(67fac72)에서 시작된다 → 지시문에 "HEAD가 기준 브랜치와 다르면 `git fetch origin && git reset --hard origin/<기준>`". 작업자는 worktree 밖에 못 쓰므로 보고서는 마지막 답으로 받아 `docs/orchestration/reports/`에 저장.
 - **업데이트·서명:** v2.4는 Wi-Fi에서만 APK를 받았고(v3.1부터 네트워크 무관), 사이드로드한 폰은 처음 한 번 "이 앱의 설치 허용"을 켜야 한다. 서명 시드가 비어 있어 서명 키가 우편함 토큰에서 파생된다 — 토큰을 바꾸면 서명이 달라져 설치가 실패한다(먼저 `IEUM_SIGNING_SEED` 고정). release-apk가 `certSha256`을 version.json에 넣고 이전 APK와 비교한다.
+- **배터리(11/7):** 자막 작업은 `requiresBatteryNotLow`만 보고 끝나면 바로 다음 실행을 건다(`CallTranscriptionRunner.kt:339,378`). 실패 재큐(v3.5)처럼 대기열을 한꺼번에 늘리는 변경은 폰이 하루 종일 Whisper를 돌리게 만든다 — v3.6 전력 정책이 들어가기 전에는 대기열을 늘리는 배포를 하지 말 것. 조각당 시간이 540초에 가까우면 둘째 조각이 매번 버려진다. `transcription.decode`는 누적 통계(날짜별 초기화 없음)라 그날 양으로 읽지 말 것.
 - **하트비트:** 20:46 같은 시각에 `consent:false`·저장 13%인 1039 하트비트가 오면 시험기가 같은 `status/phone.json`을 덮어쓴 것(워치독 오독 가능). `latency` p50이 수천 분이면 `started_ms` 오염이지 실제 지연이 아니다.
 - **우편함:** `results/selftest-*.json`은 inbox-e2e가 검증 후 지우고 폰은 무시한다. `status/calllog.txt`에는 이름·번호가 있다(아내 동의, 비공개) — 작업자 지시문에 "읽지 말 것"을 넣는다. 루틴 실행 로그에 통화 내용이 남지 않게 프롬프트에 명시돼 있다.
 - **코드 버릇:** `CallRecordStore`의 이름 매칭은 공백 무시(`REPLACE(name,' ','')`), 별칭도 공백 제거 키. 화면은 XML/Compose가 아니라 코드로 View를 만든다(`CallUi.kt`) — 디자인을 바꾸려면 `CallUi`부터. `ContextLedgerTest`·`CallUiSeniorTest`가 버튼 외 글자 18sp 이상, 영어 상태값 노출 금지를 검사한다.

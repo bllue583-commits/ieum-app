@@ -80,6 +80,7 @@
 | `folder` | 녹음 폴더가 골라져 있고 읽기 권한이 살아 있는가 | false면 새 녹음을 못 가져옴(앱에서 폴더 다시 고르기) |
 | `notifyAllowed` | 알림 권한과 앱 알림이 켜져 있는가 | false면 저녁·아침 보고와 자가 진단 알림이 안 보임 |
 | `batteryFree` | 배터리 최적화 예외인가 | false면 작업이 자주 미뤄짐 |
+| `power` (v3.6 예정, DESIGN_V6 3.1) | 배터리 잔량·충전·절전·발열, 그날 배터리/충전 중 자막 실행 수·분·녹음 분·mAh, 예산, 버린 조각 ms, 모델 로드 수, 조각 p50 ms | `today.battery.min` > 60이면 배터리를 많이 씀, `killedChunkMs`가 실행 ms의 20% 넘으면 조각 낭비 |
 | `standbyBucket` | 앱 대기 버킷: `EXEMPTED`(배터리 제한 없음, 가장 좋음), `ACTIVE`, `WORKING_SET`, `FREQUENT`, `RARE`, `RESTRICTED`, `NEVER`, 그 밖은 `B<번호>`, 못 읽으면 `UNKNOWN`(Android 9 미만은 `NONE`) | `RARE`/`RESTRICTED`/`NEVER`면 작업이 하루 몇 번만 돎. 앱을 한 번 열면 풀림 |
 | `lastDiscoveryMs` | 녹음 폴더를 마지막으로 다 살펴본 시각(0: v2.4 전 앱이거나 아직 없음) | 폰은 살아 있는데 12시간 넘게 그대로면 녹음 찾기가 멈춤 |
 | `lastUploadMs` | 정리 요청을 우편함에 마지막으로 올린 시각(0: 없음) | 통화가 있었는데 오래 그대로면 동의, 토큰, 네트워크 확인 |
@@ -204,6 +205,7 @@ v3.4(11/6)부터 워치독은 Actions가 아니라 두 예약 작업 안에서 �
 | 통화가 정리되지 않음 | `status/last-run-hourly.json`(`endedMs`, `repoOk`, `pushed`, `leftover`), 예약 작업 실행 기록("확인 필요" 답), inbox 파일 개수와 가장 오래된 시각 | 구독 한도, 예약 작업 소스에서 ieum-inbox 빠짐, 저장소 접근 실패, 지시문 교체 누락 |
 | 결과는 있는데 폰에 안 보임 | `status/phone.json`의 `atMs`, `lastResultMs`, `lastInboxError`; `results/`와 `bad/` | 폰 절전이나 네트워크, 토큰 만료, 결과 형식 오류 |
 | 자막이 밀림 | `status/phone.json`의 `queuedCount`, `oldestQueuedMs`, `modelState` | 충전 안 함, 모델 문제, 처음 정리 중 |
+| 폰 배터리가 빨리 닳음(이음이 배터리 사용량 상위) | `transcription.runs`(그날 실행 수·분; 60% 넘으면 자막이 하루 종일 돈 것), `transcription.decode`(조각당 ms, 누적), v3.6부터 `power` | 대기열이 한꺼번에 늘어남(재큐·처음 정리), 조각당 시간이 540초에 가까워 둘째 조각이 버려짐, 발열 스로틀링. v3.6 전력 정책 전에는 앱이 배터리 상태를 거의 보지 않음(DESIGN_V6 1절) |
 | 업데이트가 안 됨 | GitHub Actions의 release-apk와 update-smoke 실행, `app/version.json`, 하트비트의 `lastUpdateError` | ci 또는 smoke 실패, 서명 지문 불일치, 설치 권한 |
 | 장부 이름이나 업체가 이상함 | `ledger/ledger.json`의 rev와 updatedMs(내용은 옮기지 않고 앱에서 확인), `ledger/edits/` | 수정 반영 대기, 새벽 정리 전 |
 | CI 실패 | 실행의 "Summarize results" 요약과 `android-test-results` 산출물 | 단위 테스트, lint, 내보내기 검사 |
