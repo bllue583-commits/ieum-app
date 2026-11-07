@@ -116,6 +116,10 @@ object KakaoReport {
         // r15-4 (L7): the encrypted settings are written off the main thread (link runs from a button's coroutine).
         if(code==null) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             save(activity) { it.put(PipelineSettingsKeys.KAKAO_LINKED,true).put(PipelineSettingsKeys.KAKAO_LAST_ERROR,"") } }
+        // v3.6.1: a failed login keeps its reason for the heartbeat (`kakao.error`), so a Kakao console problem (login off,
+        // key hash, consent, member) shows as a code instead of nothing. "LINK_" keeps it from reading as a broken token.
+        else if(code!="CANCELLED") kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            save(activity) { it.put(PipelineSettingsKeys.KAKAO_LINKED,false).put(PipelineSettingsKeys.KAKAO_LAST_ERROR,code("LINK_"+code)) } }
         return code?.let(::code)
     }
     /** Turns the link off on this phone (the SDK token is dropped too). */

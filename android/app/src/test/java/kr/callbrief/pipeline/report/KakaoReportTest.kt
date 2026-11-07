@@ -292,6 +292,12 @@ class KakaoReportTest:ProtectedTextHostTestBase() {
         assertNull(KakaoReport.link(app));assertEquals(KakaoReport.Link.LINKED,KakaoReport.linkState(app))
         KakaoReport.linker={ "CANCELLED" };link(false)
         assertEquals("CANCELLED",KakaoReport.link(app));assertEquals(KakaoReport.Link.NOT_LINKED,KakaoReport.linkState(app))
+        KakaoReport.linker={ "LOGIN_AUTH_Misconfigured" }
+        assertEquals("LOGIN_AUTH_Misconfigured",KakaoReport.link(app))
+        assertEquals(KakaoReport.Link.NOT_LINKED,KakaoReport.linkState(app))
+        assertEquals("LINK_LOGIN_AUTH_Misconfigured",settings().getString(PipelineSettingsKeys.KAKAO_LAST_ERROR))
+        KakaoReport.linker={ "TOKEN_NOTREGISTEREDUSER" };KakaoReport.link(app)
+        assertEquals(KakaoReport.Link.NOT_LINKED,KakaoReport.linkState(app))
         KakaoReport.appKey={ "" }
         assertFalse(KakaoReport.available());assertEquals(KakaoReport.Link.UNAVAILABLE,KakaoReport.linkState(app))
         assertEquals(KakaoReport.UNAVAILABLE,KakaoReport.send(app,one,KakaoReport.SOURCE_ROUTINE))
