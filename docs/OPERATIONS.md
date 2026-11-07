@@ -9,8 +9,9 @@
 예약 작업(매시간): 요청 분석 → results/ 에 결과, ledger/ledger.json 장부 고침, status/last-run-hourly.json 자가 보고 → 워치독(루틴 안)
 폰(결과 받기: 루틴 cron의 다음 예정 실행 +3, +8, +15분, 그리고 매시간 틱): 장부·story/today.json·app/version.json 받기 → 결과 적용 후 결과 파일 지움
 폰(매시간 틱): 새 요청 올림 → status/phone.json 하트비트 → status/calllog.txt
-폰(밤 21~05시, 하루 한 번): tidy/state.json 올림(처음 정리 중이면 최근 14일만)
-예약 작업(새벽): 장부 정리 + tidy/proposal.json 제안 → 폰이 받아 체크할 일에 반영 → 워치독(루틴 안)
+폰(밤 21:00~04:59, 하루 한 번): tidy/state.json 올림(처음 정리 중이면 최근 14일만)
+예약 작업(새벽 04:46): 장부 정리 + tidy/proposal.json 제안 + report/YYYY-MM-DD.json 아침 보고서 → 폰이 받아 체크할 일에 반영 → 워치독(루틴 안)
+폰(05:30, 없으면 05:35·05:45·06:00, 09:00까지): report/<오늘>.json 받기 → 카카오톡 "나와의 채팅"으로 전송(v3.5) → 06:00 앱 알림
 ```
 
 우편함은 비공개 저장소 `bllue583-commits/ieum-inbox`이다. 앱 저장소는 `bllue583-commits/ieum-app`이다.
@@ -20,10 +21,10 @@
 | 이름 | 시각(한국) | 모델 | 지시문 원본 | 기억 파일 | 하는 일 |
 |---|---|---|---|---|---|
 | 이음 통화 분석 (매시간) | 07:34~22:34 매시 34분(하루 16번) | Sonnet 5.5 | `docs/routines/hourly.md`(v8)의 "---" 아래 | `status/last-run-hourly.json` | inbox 요청 분석(한 실행 20건까지), 결과 쓰기, 장부 고치기, 자가 보고, 워치독, 세 줄 보고 |
-| 이음 새벽 정리 (매일) | 05:16 | Opus 5.5 | `docs/routines/tidy.md`(v6)의 "---" 아래 | `tidy/project.md`, `tidy/history/YYYY-MM.md`, `tidy/briefing.md`, 자가 보고 `status/last-run-tidy.json` | 진행 중인 일 묶기, 팔로업 제안, 중복 합치기, 현황 파일과 다섯 줄 알림, 워치독. 폰이 밤에 올린 `tidy/state.json`(24시간 안)이 있어야 일을 한다. v3.1부터 폰이 처음 정리 중이어도 최근 14일 기록을 올리므로 처음 정리를 기다리지 않는다(state가 없거나 오래됐으면 "정리할 것 없음: 이유"가 정상, 같은 날 이미 "tidy" 커밋이 있으면 "이미 정리됨") |
+| 이음 새벽 정리 (매일) | 04:46(v3.5, 전에는 05:16) | Opus 5.5 | `docs/routines/tidy.md`(v7)의 "---" 아래 | `tidy/project.md`, `tidy/history/YYYY-MM.md`, `tidy/briefing.md`, 자가 보고 `status/last-run-tidy.json`(`reportWritten`) | 진행 중인 일 묶기, 팔로업 제안, 중복 합치기, 아침 보고서 `report/YYYY-MM-DD.json`(9-1번, `tools/report_check.py` 통과 뒤 커밋, 30일 지난 것은 지움), 현황 파일과 다섯 줄 알림, 워치독. 폰이 밤에 올린 `tidy/state.json`(24시간 안)이 있어야 일을 한다. v3.1부터 폰이 처음 정리 중이어도 최근 14일 기록을 올리므로 처음 정리를 기다리지 않는다(state가 없거나 오래됐으면 "정리할 것 없음: 이유"가 정상, 같은 날 이미 "tidy" 커밋이 있으면 "이미 정리됨") |
 | 이음 통화 목록 검증 (매일) | 09:00 | Opus 5.5 | 예약 작업 프롬프트가 원본 | `status/verify-log.md`(숫자만) | 폰 통화기록(`status/calllog.txt`)과 저장·분석 결과 대조, 검증 파일과 다섯 줄 알림. 프롬프트는 아직 옛 `status/last-run.json`을 읽는다(새 루틴별 파일로 바꾸지 않았음) |
 
-- 매시간·새벽 예약 작업 프롬프트(11/6부터)는 짧은 안내다: ieum-inbox를 pull(실패하면 "[이음 분석 HH:MM] 확인 필요: 저장소 접근", 새벽은 "[이음 새벽 정리 MM/DD HH:MM] 확인 필요: 저장소 접근"만 답함) → 우편함의 `routines/hourly.md`(또는 `routines/tidy.md`)를 Read로 끝까지 읽고 첫 "---" 아래를 지시문으로 따른다. cron은 매시간 `CRON_TZ=Asia/Seoul 34 7-22 * * *`, 새벽 `CRON_TZ=Asia/Seoul 16 5 * * *`, 검증 `CRON_TZ=Asia/Seoul 0 9 * * *`. ID는 매시간 `trig_016vQxos9z6p1pdPJ28MjrsV`, 새벽 `trig_01Sp6piuvasw52ZR1KPupumB`, 검증 `trig_01KyuDNZWkmrQpJj8e8cr661`.
+- 매시간·새벽 예약 작업 프롬프트(11/6부터)는 짧은 안내다: ieum-inbox를 pull(실패하면 "[이음 분석 HH:MM] 확인 필요: 저장소 접근", 새벽은 "[이음 새벽 정리 MM/DD HH:MM] 확인 필요: 저장소 접근"만 답함) → 우편함의 `routines/hourly.md`(또는 `routines/tidy.md`)를 Read로 끝까지 읽고 첫 "---" 아래를 지시문으로 따른다. cron은 매시간 `CRON_TZ=Asia/Seoul 34 7-22 * * *`, 새벽 `CRON_TZ=Asia/Seoul 46 4 * * *`, 검증 `CRON_TZ=Asia/Seoul 0 9 * * *`. ID는 매시간 `trig_016vQxos9z6p1pdPJ28MjrsV`, 새벽 `trig_01Sp6piuvasw52ZR1KPupumB`, 검증 `trig_01KyuDNZWkmrQpJj8e8cr661`.
 - 지시문을 바꿀 때: 이 저장소의 원본 파일(`docs/routines/*.md`)을 고치고 배포한다. release-apk가 version.json보다 먼저 우편함 `routines/`와 `tools/watchdog.py`에 바뀐 것만 올린다. 배포 없이 급히 바꿀 때만 우편함 `routines/`에 직접 커밋한다. 매시간 지시문의 [분석 규칙]과 [결과 형식]은 앱 코드(`ClaudeCallAnalyzer.SYSTEM`, `SCHEMA`)와 같아야 하며 `RoutineDocTest`가 검사한다. 규칙을 바꾸면 `ClaudeCallAnalyzer.PROMPT_VERSION`과 지시문 버전을 함께 올린다.
 - 실행 확인: claude.ai의 예약 작업 화면에서 실행 기록을 본다. 실행 로그에는 통화 내용이 남지 않게 지시돼 있다. 빈 실행은 "새 기록 없음" 한 줄로 끝나는 것이 정상이다.
 - 우편함에서 확인: 매시간 작업이 처리하면 커밋 "analyze N calls", 새벽 정리는 "tidy"가 생기고, 어느 경우든(할 일이 없었어도) 그 뒤에 자가 보고만 담은 "status" 커밋이 따로 생긴다(매시간 `status/last-run-hourly.json`, 새벽 `status/last-run-tidy.json`). 루틴이 저장소에 닿지 못하면 처리하지 않고 "확인 필요: 저장소 접근"으로 답하고 끝난다. 예약 작업 알림은 "확인 필요" 답일 때만 의미가 있다.
@@ -43,6 +44,7 @@
 | `ledger/edits/*.json` | 폰 | 사용자가 앱에서 고친 이름 등. 예약 작업이 장부에 반영하고 지운다 |
 | `tidy/state.json`, `tidy/proposal.json` | 폰 / 새벽 정리 | 새벽 정리의 입력과 제안 |
 | `tidy/project.md`, `tidy/history/YYYY-MM.md`, `tidy/briefing.md` | 새벽 정리 | 새벽 정리의 기억(공사 전체, 날짜별 일지, 오늘 현황판) |
+| `report/YYYY-MM-DD.json` | 새벽 정리(v3.5) | 아침 보고서(한국 시각 오늘). 폰이 05:30부터 ETag로 읽어 카카오톡으로 보낸다. 이름·업체·요약이 들어 있으니 내용은 옮기지 않는다 |
 | `story/today.json` | 매시간 분석 | 오늘 통화 이야기(v3.2, 홈 맨 위) {day, text, calls, atMs}. 폰이 결과 받기 때 가져감 |
 | `status/phone.json` | 폰 | 하트비트 |
 | `status/calllog.txt` | 폰 | 통화 목록 대조표(이름·번호 포함, 4절) |
@@ -50,8 +52,8 @@
 | `status/last-run.json` | 예약 작업(옛) | v3.3까지 두 루틴이 함께 쓰던 자가 보고. 지우지 않고 남아 있으며, 새 파일이 없을 때만 워치독과 폰이 읽는다. 11/6 05:16 새벽 정리는 아직 이 파일에 지시문 5로 썼다(`last-run-tidy.json`은 11/7 05:16부터 생길 예정) |
 | `status/verify-log.md` | 통화 목록 검증 | 검증 작업의 기억(숫자만) |
 | `routines/hourly.md`, `routines/tidy.md` | release-apk | 예약 작업이 읽는 지시문 사본(원본 `docs/routines/`, 바뀐 것만 올림) |
-| `tools/watchdog.py` | release-apk | 루틴 안 워치독 사본(원본 `tools/inbox/watchdog.py`) |
-| `app/version.json`, 릴리스 | release-apk | 최신 APK 정보와 파일(최근 3개만 남김). 11/6 기준 versionCode 1045, versionName v3.4, promptVersion "8", tidyVersion "6", certSha256 |
+| `tools/watchdog.py`, `tools/report_check.py` | release-apk | 루틴 안 워치독과 아침 보고서 검사기 사본(원본 `tools/inbox/watchdog.py`, `tools/report_check.py`) |
+| `app/version.json`, 릴리스 | release-apk | 최신 APK 정보와 파일(최근 3개만 남김). 11/6 17시부터 versionCode 1046, versionName 3.5, promptVersion "8", tidyVersion "7", certSha256 |
 | `README.md` | release-apk | 빈 저장소에 처음 한 번 만드는 안내 한 줄 |
 
 `.github/` 폴더는 없다(Actions 워치독을 지웠음). `bad/`는 11/6 아침 체크아웃에는 없고 필요할 때 생긴다.
@@ -100,6 +102,7 @@
 | `transcription` (v3.2) | 자막 실패 사유별 수, 길이 구간별 대기·완료, `long48h`(100초 넘는 통화 완료율), `oldestWaitMin`, 실행 수 | `long48h.ratePct` 80 미만 24시간이면 워치독 이슈 |
 | `golden`, `guard` (v3.3) | 골든 측정 점수, 숫자 가드 계수(숫자만, 측정 전 null) | |
 | `messages.mailError`, `recordTime.fileVsRecordMin` (v3.4) | 메일 오류 코드별 수, 기록 시각 차이 구간별 수 | |
+| `kakao`, `report` (v3.5) | `kakao{on, linked, sent, failed, lastSentMs, error}`: 스위치 "카카오톡으로 받기", 연결, 다 나간 날 누계, 실패 누계, 마지막으로 다 나간 시각, 오류 코드. `report{day, source}`: 마지막으로 보낸 보고 날짜와 출처(`routine` 새벽 정리 보고서, `phone` 06:00 폰 폴백) | `linked=true`인데 `lastSentMs`가 이틀 아침 연속 오늘이 아니면, 또는 `linked=false`에 `error`가 `TOKEN_*`이면 워치독 이슈 |
 
 v3.1 이전 앱(11/6 아침 폰은 v3.1, 1040)은 v3.2 이후 키(`transcription`, `update`, `messages`, `recordTime`, `golden`, `guard`)를 보내지 않는다. 워치독은 키가 없으면 그 규칙을 건너뛴다.
 
@@ -170,8 +173,11 @@ v3.4(11/6)부터 워치독은 Actions가 아니라 두 예약 작업 안에서 �
 | 매시간 분석이 예정 시각에 돌지 않았어요 | `status/last-run-hourly.json`(또는 옛 `last-run.json`)의 "status" 커밋이 자가 보고 cron상 2슬롯 연속 없음(슬롯 40분 뒤부터 셈, analyze 커밋 기준이 아니다. 조용한 날엔 원래 없다). 매시간 자가 보고가 한 번도 없으면 건너뜀 |
 | 루틴이 결과를 저장소에 올리지 못했어요 | 매시간·새벽 자가 보고의 `pushed`가 false |
 | 우편함 토큰이 곧 만료돼요 | 폰이 올린 `tokenExpiresMs`가 14일 안(없으면 건너뜀) |
+| 아침 보고서가 안 만들어졌어요 (v3.5) | 한국 시각 05:30이 지났는데 `report/<오늘>.json`이 없음(파일이 있는지만 봄). 새벽 정리 자가 보고 `promptVersion`이 7 이상일 때만. 04:46 워치독은 05:30 전이라 실제로는 07:34부터의 매시간 워치독이 본다. 본문에 `reportWritten` |
+| 카카오톡 보고가 안 갔어요 (v3.5) | 하트비트 `kakao.on`이 참(키가 없으면 참으로 봄), `kakao.linked=true`, 09:00이 지났는데 `lastSentMs`가 어제 00:00 전(두 아침 연속), 어제 09:00 전부터 연결돼 있었을 때만 |
+| 카카오톡 연결이 풀렸어요 (v3.5) | `kakao.on`이 거짓이 아니고 `kakao.linked=false`, `kakao.error`가 `TOKEN_`으로 시작 |
 
-위가 `tools/inbox/watchdog.py`의 규칙 전부다(11/6, 이슈 제목 25개).
+위가 `tools/inbox/watchdog.py`의 규칙 전부다(11/7, v3.5 규칙 3개 포함 이슈 제목 28개).
 
 토큰 이슈가 열리면: 새 토큰을 만들어 앱 저장소 비밀 `IEUM_INBOX_TOKEN`을 바꾸고 배포한다. 만료 뒤에는 폰이 업데이트도 못 받으므로 만료 전에 해야 한다. `IEUM_SIGNING_SEED` 비밀이 없으면 서명 키가 토큰에서 나오므로 토큰을 바꾸면 서명이 바뀌어 업데이트가 막힌다. 먼저 확인한다. 폰이 새 버전을 받고 다음 하트비트를 올리면 이슈는 저절로 닫힌다.
 

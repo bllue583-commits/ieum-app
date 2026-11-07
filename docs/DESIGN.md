@@ -1,17 +1,17 @@
-# 이음 설계도 — 지금 배포된 v3.4(빌드 1045), 구현된 그대로
+# 이음 설계도 — 지금 배포된 v3.5(빌드 1046), 구현된 그대로
 
-> 이 문서는 "앱이 지금 어떻게 동작하는가"의 기준이다. 버전별 지시와 변경 이력은 넣지 않는다(그것은 `history/`의 DESIGN_V3.md(v2.6~v3.0), DESIGN_V4.md(v3.1~v3.4), HANDOFF_HISTORY.md). 설계와 구현이 달랐던 항목은 각 버전 "다르게 정한 것"·"구현 대조"의 최종 결정을 사실로 적었다. 숫자는 코드 상수에서 확인했고, 문서와 코드가 달랐던 곳은 13절에 모았다. 근거는 괄호 안에 파일명이나 `함수명`으로 적는다. 확인하지 못한 것은 "(추정)".
+> 이 문서는 "앱이 지금 어떻게 동작하는가"의 기준이다. 버전별 지시와 변경 이력은 넣지 않는다(그것은 `history/`의 DESIGN_V3.md(v2.6~v3.0), DESIGN_V4.md(v3.1~v3.4), HANDOFF_HISTORY.md, 그리고 v3.5 설계 기록 [DESIGN_V5.md](DESIGN_V5.md)). 설계와 구현이 달랐던 항목은 각 버전 "다르게 정한 것"·"구현 대조"의 최종 결정을 사실로 적었다(v3.5는 DESIGN_V5 6절 19줄). 숫자는 코드 상수에서 확인했고, 문서와 코드가 아직 다른 곳은 13절에 모았다. 근거는 괄호 안에 파일명이나 `함수명`으로 적는다. 확인하지 못한 것은 "(추정)".
 >
-> 기준 코드: `feature/lean-calls`, `docs/VERSION` 3.4, 우편함 `app/version.json` versionCode 1045. 작성 2026-11-06.
+> 기준 코드: `feature/lean-calls` ece7db9, `docs/VERSION` 3.5, 우편함 `app/version.json` versionCode 1046. 작성 2026-11-06, v3.5 반영 2026-11-07.
 
 ## 1. 한눈에 보기
 
 | 항목 | 내용 |
 | --- | --- |
-| 목적 | 건설사 직원(부장, 현장 하나)인 아내가 하루 약 2시간 하는 업무 통화를 자동으로 정리해 체크할 일, 요약, 업체·사람 맥락을 보여 주고, 전화가 오거나 걸 때 그 상대와 약속한 일을 통화 화면 위 카드로 띄운다(PRODUCT.md 1절, HANDOFF.md 1절) |
+| 목적 | 건설사 직원(부장, 현장 하나)인 아내가 하루 약 2시간 하는 업무 통화를 자동으로 정리해 체크할 일, 요약, 업체·사람 맥락을 보여 주고, 전화가 오거나 걸 때 그 상대와 약속한 일을 통화 화면 위 카드로 띄운다. 매일 아침 5:30에는 어제 통화 정리와 오늘 챙길 일을 아내 카카오톡 "나와의 채팅"으로 보낸다(v3.5)(PRODUCT.md 1절, HANDOFF.md 1절) |
 | 사용자 | 실사용자 아내(앱 설정 만지기를 싫어함), 관리자 남편. 개발·시험·판단은 Claude가 한다 |
 | 기기 | Galaxy S26, 안드로이드 16. 삼성 통화 녹음(자동, `Recordings/Call`, m4a) |
-| 현재 버전 | v3.4, 빌드 1045(1044에서 안 쓰는 코드만 지운 빌드). 서명 인증서 SHA-256 `e4ee1db4…2c586`(1039~1045 같음, `app/version.json` `certSha256`) |
+| 현재 버전 | v3.5, 빌드 1046(11/6 17시, 카톡 아침 보고 + v3.4.x 묶음). 서명 인증서 SHA-256 `e4ee1db4…2c586`(1039~1046 같음, `app/version.json` `certSha256`). 카카오 네이티브 앱 키는 빌드 때 `BuildConfig.KAKAO_APP_KEY`로 주입(GitHub 비밀 `IEUM_KAKAO_APP_KEY`, 비어 있으면 카톡 기능이 설정에서 숨고 로그인 Activity도 꺼짐) |
 | 버전 규칙 | 이름은 `docs/VERSION` 한 줄. 사용자에게 보이는 변경을 배포할 때마다 0.1씩 올린다. 문서만 바꾸거나 같은 회차 재배포는 그대로. 빌드 번호는 `1000 + GITHUB_RUN_NUMBER`이고 업데이트 순서에만 쓴다. 폰 알림 문구는 `docs/UPDATE_NOTE.txt` 첫 줄(최대 120자)(release-apk.yml, HANDOFF.md 0절) |
 
 **원칙(사용자 결정, 10절 표에 날짜)**
@@ -29,7 +29,8 @@
 
 | 구성 요소 | 어디 | 하는 일 |
 | --- | --- | --- |
-| 폰 앱 | `android/app/src/main/java/kr/callbrief/`(패키지 `kr.callbrief`), 파이프라인 `pipeline/`, 화면 `pipeline/screens/`, 카드 `pipeline/call/` | 녹음 발견, 자막, 대조, 요청 구성·업로드, 결과 받기·적용, 알림, 카드, 하트비트, 업데이트 |
+| 폰 앱 | `android/app/src/main/java/kr/callbrief/`(패키지 `kr.callbrief`), 파이프라인 `pipeline/`, 화면 `pipeline/screens/`, 카드 `pipeline/call/`, 아침 보고 `pipeline/report/` | 녹음 발견, 자막, 대조, 요청 구성·업로드, 결과 받기·적용, 알림, 카드, 하트비트, 업데이트, 카톡 아침 보고 |
+| 카카오 SDK | Kakao Android SDK v2 **2.24.0**(`v2-user`·`v2-talk`·`v2-share`, 저장소 `devrepo.kakao.com`은 `com.kakao.sdk` 그룹에만), `KakaoSdkSender` | 로그인(동의 항목 `talk_message`만), 이미지 업로드(`ShareClient.uploadImage`), "나에게 보내기"(`TalkApiClient.sendDefaultMemo`) |
 | Whisper 네이티브 | `android/app/src/main/cpp/ieum_whisper.cpp`(whisper.cpp 1.7.6, JNI open/transcribeChunk/close) | 폰 안 음성 인식. 모델 `ggml-large-v3-turbo-q5_0` 574,041,195바이트(`PipelineModelManager.DEFAULT`) |
 | 우편함 | 비공개 저장소 `bllue583-commits/ieum-inbox` | 요청·결과·장부·새벽 정리·상태·지시문·워치독·릴리스 APK |
 | 예약 작업 3개 | claude.ai 예약 작업(Claude Code 원격 세션) | 매시간 분석, 새벽 정리, 통화 목록 검증(2.3) |
@@ -55,8 +56,9 @@
 [폰, 예정 실행 +3·+8·+15분]                            ▼
  장부 받기(applyLedger) ─▶ 결과 검증·필터·적용 ─▶ 결과 파일 삭제 ─▶ 통화별 알림 "정리됐어요" ─▶ 상대 카드 갱신
                                                       │
-[폰, 밤 21~04시 하루 한 번] tidy/state.json ─▶ [새벽 정리 05:16, Opus 5.5] issues·합치기·tidy/proposal.json
- ─▶ [폰] applyTidy ─▶ 아침 06시 보고 알림, 저녁 19시 정리 알림
+[폰, 밤 21:00~04:59 하루 한 번] tidy/state.json ─▶ [새벽 정리 04:46, Opus 5.5] issues·합치기·tidy/proposal.json·report/<오늘>.json
+ ─▶ [폰 05:30 ReportFetch, 없으면 05:35·05:45·06:00] 카카오 "나에게 보내기": 피드 이미지 1통 + 오늘 챙길 일 글 1통
+ ─▶ [폰] applyTidy ─▶ 아침 06시 앱 알림(카톡 성공 날은 조용히), 저녁 19시 정리 알림
 [릴리스] lean-calls push ─▶ ci ─▶ release-apk ─▶ 우편함 릴리스·app/version.json ─▶ 폰 1시간 안 확인·무인 설치
 ```
 
@@ -67,10 +69,10 @@
 | 앱 저장소 | `github.com/bllue583-commits/ieum-app`, 11/5 08시부터 공개(비밀 없음). 작업 브랜치이자 원본 `feature/lean-calls`. `main`은 옛 코드 + `cleanup-branches.yml`(HANDOFF.md 3절) |
 | 우편함 | `ieum-inbox`(비공개) 기본 브랜치 |
 | 매시간 분석 | `trig_016vQxos9z6p1pdPJ28MjrsV`, `CRON_TZ=Asia/Seoul 34 7-22 * * *`(하루 16번), Sonnet 5.5, 지시문 `routines/hourly.md` 버전 8 |
-| 새벽 정리 | `trig_01Sp6piuvasw52ZR1KPupumB`, 05:16, Opus 5.5, 지시문 `routines/tidy.md` 버전 6 |
+| 새벽 정리 | `trig_01Sp6piuvasw52ZR1KPupumB`, `CRON_TZ=Asia/Seoul 46 4 * * *`(04:46, v3.5에서 05:16에서 옮김), Opus 5.5, 지시문 `routines/tidy.md` 버전 7 |
 | 통화 목록 검증 | `trig_01KyuDNZWkmrQpJj8e8cr661`, 09:00, Opus 5.5, 프롬프트가 원본, 기억 `status/verify-log.md`(숫자만) |
 | 예약 작업 프롬프트 | 짧은 안내만: 우편함 pull(실패하면 "확인 필요: 저장소 접근"만 답) → `routines/*.md`의 첫 "---" 아래를 따른다. 예약 작업은 1시간보다 짧은 간격을 허용하지 않는다(OPERATIONS.md 2절) |
-| 배포 경로 | lean-calls push → ci 통과 대기(40분) → (시작·빌드 파일이 바뀌었으면) update-smoke 통과 대기(70분) → 서명 APK → 서명 인증서 비교 → `docs/routines/*.md`·`tools/inbox/watchdog.py`를 우편함에 먼저(바뀐 것만) → 릴리스 `v<빌드>`와 `app/version.json`(versionCode, versionName, apk, sha256, size, notes, promptVersion, tidyVersion, certSha256), 릴리스는 3개만 남김(release-apk.yml, `tools/release/version_fields.py`) |
+| 배포 경로 | lean-calls push → ci 통과 대기(40분) → (시작·빌드 파일이 바뀌었으면) update-smoke 통과 대기(70분) → 서명 APK → 서명 인증서 비교(카카오 키 해시도 실행 요약에 찍음) → `docs/routines/*.md`·`tools/inbox/watchdog.py`·`tools/report_check.py`를 우편함에 먼저(바뀐 것만) → 릴리스 `v<빌드>`와 `app/version.json`(versionCode, versionName, apk, sha256, size, notes, promptVersion, tidyVersion, certSha256), 릴리스는 3개만 남김(release-apk.yml, `tools/release/version_fields.py`) |
 
 ## 3. 통화 → 보고 흐름
 
@@ -86,7 +88,7 @@
 | 시도 기록 | 시도마다 `lastDiscoveryAttemptMs`·`lastDiscoveryOutcome`(코드), 성공은 `lastDiscoveryMs`. 트리거는 finally에서 재등록 | `AutomaticRecordingDiscovery` |
 | 제외 | 사용자의 제외 번호·이름 규칙(`LocalPrivacy`)은 `EXCLUDED`로 저장하지 않는다 | `CallTranscriptionRunner` |
 
-**녹음 공백 판정**(`RecordingGap.judge`, 발견이 성공할 때마다): 대상 = 최근 24시간 받은·건 통화, 길이 ≥ 30초, 개인 아님, 통화 끝이 마지막 발견 성공보다 15분 이상 앞. 통화마다 창 [시작 − 2분, 끝 + 5분]에 폴더 파일이 있으면 withFile, 그중 기록과 이어진 것이 matched. 판정 순서: 폴더 오류 `folder` → 목록 잘림 `tooMany` → 대상 < 3 `ok` → withFile < 0.3n `noRecording` → < 0.7n `partial` → matched < 0.5·withFile인데 자막 대기·진행 중까지 더하면 0.5 이상 `pendingText` → `noMatch` → `ok`. 아내에게는 `noRecording`·`partial`·`folder`만, 6시간 넘게 떨어진 두 번 연속 판정부터 말한다(`CONFIRM_MS`). 48시간 넘은 판정은 보이지 않는다(`STALE_MS`). `noMatch`는 하트비트·워치독에만, `pendingText`는 녹음 줄에 초록 글로만.
+**녹음 공백 판정**(`RecordingGap.judge`, 발견이 성공할 때마다): 대상 = 최근 24시간 받은·건 통화, 길이 ≥ 30초, 개인 아님, 통화 끝이 마지막 발견 성공보다 15분 이상 앞. 통화마다 창 [시작 − 2분, 끝 + 5분]에 폴더 파일이 있으면 withFile, 그중 기록과 이어진 것이 matched. 판정 순서: 폴더 오류 `folder` → 목록 잘림 `tooMany` → 대상 < 3 `ok` → withFile < 0.3n `noRecording` → < 0.7n `partial` → matched < 0.5·withFile인데 자막 대기·진행 중까지 더하면 0.5 이상 `pendingText` → `noMatch` → `ok`. 아내에게는 `noRecording`·`partial`·`folder`만, 6시간 넘게 떨어진 두 번 연속 판정부터 말한다(`CONFIRM_MS`). 48시간 넘은 판정은 보이지 않는다(`STALE_MS`). `noMatch`는 하트비트·워치독, 그리고 48시간 넘게 이어지면 신호등 녹음 줄 주황(v3.5, `StatusLights.noMatchLong`)에만, `pendingText`는 녹음 줄에 초록 글로만.
 
 ### 3.2 자막
 | 규칙 | 값 | 근거 |
@@ -99,6 +101,7 @@
 | 시간 한도 | WorkManager 약 10분. 실행 6분이 지나면 새 녹음을 집지 않음(첫 녹음은 예외). 그 실행에서 조각을 못 끝낸 시간 한도 중지는 시도 환불(실행의 첫 녹음이 아닐 때만, 한 녹음 환불 6회까지). 이유 없는 중지는 시작 9분 뒤면 시간 한도로 본다 | `NEW_WORK_MS`, `MAX_REFUNDED_STALLS`, `TIME_LIMIT_NEAR_MS` |
 | 기한 | 네이티브 조각당 540초(`NATIVE_DEADLINE_SECONDS`). 넘기면 `ANDROID_STT_DEADLINE`으로 그 조각을 반으로 다시. 반 조각이 또 넘기면 일반 실패 | `CallTranscriptionRunner.deadline` |
 | 시도·실패 | 최대 3회(`MAX_ATTEMPTS`). RUNNING이 11분 넘으면 낡은 것으로 본다. 실패 사유 코드(예: `ANDROID_STT_PCM_SIZE`, `ANDROID_STT_NOT_COMPLETED`, `ANDROID_STT_CPU_UNSUPPORTED`, `EMPTY_TRANSCRIPT`)는 하트비트 `transcription.failReasons` | `STALE_RUNNING_MS` |
+| 실패 재큐(v3.5) | 저장소를 열 때마다 FAILED 줄을 새 빌드에서 한 번 더 대기열로(reason `REQUEUED`, attempts 0). 같은 빌드에서 실패했거나(`failed_build`) 이미 살린 줄(`retried_build`)은 건너뛰고, 줄마다 **총 2회**(`requeue_count`), 마지막 실패가 `INTERRUPTED`(네이티브 크래시 의심)면 **1회**까지. 이번 빌드가 살린 수는 하트비트 `transcription.requeuedFailed` | `CallTranscriptionStore.requeueFailedOnce`, `MAX_REQUEUES`, `MAX_REQUEUES_INTERRUPTED` |
 | VAD | 30ms 창이 0.006 이상이고 조각 소리 90분위의 0.3 이상이면 말소리. 골든 변형 하한 0.0025/0.15는 스위치만 있음 | `SPEECH_FLOOR`, `LOUD_SHARE`, `*_LOW` |
 | 디코딩 | 기본 greedy, 온도 증가·best_of는 whisper.cpp 기본(0.2, 5), `no_context=true`, `token_timestamps=true`, `suppress_nst` 꺼짐, 언어 한국어, 스레드 = CPU 수 − 1(1~6, S26은 6). 초기 프롬프트 꺼짐(`PROMPT_ENABLED=false`) | `ieum_whisper.cpp`, `AndroidWhisperEngine`, `WhisperCallTranscriber.threads` |
 | 불확실 숫자 | 토큰 확률 최솟값 0.5 미만인 숫자를 `Segment.uncertainNumbers`로(이어 받은 조각에서는 빠짐) | `AndroidWhisperEngine.UNCERTAIN_P` |
@@ -154,18 +157,18 @@
 - **applyTidy:** 제안 rev가 저장된 TIDY_REV보다 클 때 한 번. 항목 rev(workflow_items.revision)가 다르면 건너뜀, AI가 만든 그대로인 항목에만, 숫자가 달라진 rewrite는 거부, merge는 상태 `merged`로 모든 목록에서 빠짐.
 - 적용 뒤 바뀐 번호의 상대 카드를 다시 계산(`ContactCards.touch`, 매시간 틱 끝 `warm`).
 
-### 3.8 새벽 정리(`docs/routines/tidy.md` 버전 6)
-- 폰: 정리 동의가 켜져 있고 21:00~04:59(KST), 마지막 전송 12시간 뒤면 `tidy/state.json`(열린 체크할 일과 rev·잠금, 기록 요약을 해시 키로, mergeCandidates, personCandidates)을 올린다. 처음 정리 완료 + `tidiedOnce` 거짓이면 10/1부터 전체, 아니면 최근 14일(`tidyAll`). 내용이 같으면 안 올린다.
-- 루틴(04:46, Opus): 오늘 "tidy" 커밋이 있으면 "이미 정리됨". state가 없거나 24시간 넘었으면 "정리할 것 없음: 이유". issues(진행 중인 일 최대 20, id `i_`+8자), 팔로업 create, `tidy/proposal.json` {rev, basedOnMs, tasks[rewrite·merge·done_suggested·create]}, 장부 정리(mergedInto만, 지우지 않음), 기억 파일 `tidy/project.md`·`tidy/history/YYYY-MM.md`·`tidy/briefing.md`, 자가 보고 `status/last-run-tidy.json`, 워치독. 완료 처리는 하지 않는다.
+### 3.8 새벽 정리(`docs/routines/tidy.md` 버전 7)
+- 폰: 정리 동의가 켜져 있고 21:00~04:59(KST), 마지막 전송 12시간 뒤면 `tidy/state.json`(열린 체크할 일과 rev·잠금, 기록 요약을 해시 키로, mergeCandidates, personCandidates)을 올린다. 처음 정리 완료 + `tidiedOnce` 거짓이면 10/1부터 전체, 아니면 최근 14일(`tidyAll`). 내용이 같으면 안 올린다. 04:46 실행은 그 전날 밤 올린 자료를 읽는다.
+- 루틴(04:46, Opus, 폰의 05:30 전송 전에 끝내도록 v3.5에서 05:16에서 옮김): 오늘 "tidy" 커밋이 있으면 "이미 정리됨". state가 없거나 24시간 넘었으면 "정리할 것 없음: 이유"(보고서도 쓰지 않음, 폰이 06:00에 자기 자료로 보냄). issues(진행 중인 일 최대 20, id `i_`+8자), 팔로업 create, `tidy/proposal.json` {rev, basedOnMs, tasks[rewrite·merge·done_suggested·create]}, 장부 정리(mergedInto만, 지우지 않음), 기억 파일 `tidy/project.md`·`tidy/history/YYYY-MM.md`·`tidy/briefing.md`, **9-1 아침 보고서**(3.12), 자가 보고 `status/last-run-tidy.json`(v3.5 `reportWritten`), 워치독. 완료 처리는 하지 않는다.
 
 ### 3.9 알림
 | 알림 | 시각·조건 | 문구·동작 | 근거 |
 | --- | --- | --- | --- |
-| 통화별 | 업무 상대로 확인된(상대 카드나 전화부 이름이 있는) 연결 통화가 끝나면. 발신은 통화기록 길이 > 0일 때만, 길이를 모르면 HOLD 10분 | "○○와 통화를 정리하고 있어요 / 끝나면 여기에 요약이 와요" + [메모 남기기](RemoteInput → 사용자 체크할 일). 결과가 오면 "정리됐어요" + 첫 문장 + 체크할 일 1줄. 6시간 넘으면 "정리가 늦어지고 있어요"(기록이 있을 때만 "저녁 보고에 넣어 드릴게요"). 통화 끝 2분 뒤 발견이 성공했는데 창 안에 파일이 없으면 "이 통화는 녹음이 없어 정리할 수 없어요". `noRecording` 판정 중에는 띄우지 않음. 잠금 화면 글 "통화 정리됨 / 확인할 통화 / 통화 정리 중". 저녁 보고 전에 끝난 통화와 36시간 넘은 것은 지움. 채널 `ieum.calls.followup`(소리 없음), 스위치 "통화마다 알림"(기본 켬) | `CallFollowupNotice` |
-| 저녁 정리 | 19시(설정 가능). 시작하면 결과 받기를 같은 작업 안에서 최대 3분 | 제목 "오늘 통화 n건, 새 체크할 일 m개"(정리된 통화 0이면 "오늘 통화 n건, 녹음된 통화 0건"), 통화 수는 홈과 같은 `CallsScreen.callCount`, 줄 최대 7개("외 n개"). 누르면 그날 통화(dayMs) | `CallDigestText.evening`, `CallDigestPrefetch.TIMEOUT_MS` |
-| 아침 보고 | 06시(설정 가능) | 제목 "체크할 일 n개", 첫 줄 "지금 할 일: …"에 [다 됐어요] 액션(누르면 다음 항목으로, 다 끝나면 "체크할 일을 다 끝냈어요"), 진행 중인 일 최대 3줄, 저녁 보고 뒤 정리된 통화가 있으면 "늦게 정리된 통화 n건". 기한·"지남" 없음, 요청 날짜순 | `CallDigestText.morning`, `NotificationActions` |
-| 자가 진단 | 저녁 보고 작업 끝(밤중 건너뜀) | 자막 밀림, 모델 실패, 폴더 풀림, 결과 없음, 저장 80%, 녹음 공백(1일째, 2일째, 그 뒤 7일마다), 업데이트 하루 미설치, 분석 루틴 4슬롯 놓침(`routine_late`) | `SelfCheckNotices` |
-| 업데이트 | 확인이 필요할 때 | 문구는 version.json notes, [지금 업데이트] | `CallUpdate` |
+| 통화별 | 업무 상대로 확인된(상대 카드나 전화부 이름이 있는) 연결 통화가 끝나면. 발신은 통화기록 길이 > 0일 때만, 길이를 모르면 HOLD 10분 | "○○와 통화를 정리하고 있어요 / 정리하고 있어요, 끝나면 통화 목록에 보여요" + [메모 남기기](RemoteInput → 사용자 체크할 일). 결과가 오면 "정리됐어요" + 첫 문장 + 체크할 일 1줄. 6시간 넘으면(기록이 있을 때) "정리가 늦어지고 있어요, 끝나면 통화 목록에 보여요"(v3.5: 보고·시각 약속 없음). 통화 끝 2분 뒤 발견이 성공했는데 창 안에 파일이 없으면 "이 통화는 녹음이 없어 정리할 수 없어요". `noRecording` 판정 중에는 띄우지 않음. 잠금 화면 글 "통화 정리됨 / 확인할 통화 / 통화 정리 중". 저녁 보고 전에 끝난 통화와 36시간 넘은 것은 지움. **알림 그룹 묶음(v3.5):** 모든 통화별 알림이 그룹 `ieum.calls.followup.group` 하나로 묶이고, 2개 이상이면 요약 알림 "통화 알림 n개 / 정리됨 a건, 정리 중 b건, 확인할 통화 c건"(소리 없음, 누르면 오늘 통화). 채널 `ieum.calls.followup`(소리 없음), 스위치 "통화마다 알림"(기본 켬) | `CallFollowupNotice`, `GROUP`, `summaryWords` |
+| 저녁 정리 | 19시(설정 가능). 시작하면 결과 받기를 같은 작업 안에서 최대 3분 | 제목 "녹음 n개 중 정리 m개, 새 체크할 일 k개"(v3.5, 홈과 같은 녹음 기준 `TodayStory.countLine`; 녹음 수 = 그날 통화 기록 + 아직 기록이 없는 자막 대기·실패 녹음 `CallTranscriptionStore.withoutRecord`). 통화기록에는 통화가 있는데 녹음이 하나도 없으면 "오늘은 녹음된 통화가 없어요 / 녹음이 없어 정리한 통화가 없어요". 줄 최대 7개("외 n개"). 누르면 그날 통화(dayMs) | `CallDigestText.evening`, `CallDigestPrefetch.TIMEOUT_MS` |
+| 아침 보고(앱 알림) | 06시(설정 "아침 보고 › 이음 알림", 4~11시) | 제목 "체크할 일 n개", 첫 줄 "지금 할 일: …"에 [다 됐어요] 액션(누르면 다음 항목으로, 다 끝나면 "체크할 일을 다 끝냈어요"), 진행 중인 일 최대 3줄, 저녁 보고 뒤 정리된 통화가 있으면 "늦게 정리된 통화 n건", 받아 둔 새 버전이 설치를 기다리면 "새 버전 설치가 기다리고 있어요"(v3.5). 기한·"지남" 없음. **순서(v3.5, 카톡 보고와 같음):** 확인 필요(`needs_confirmation`·tentative) → 오늘·어제 요청 → 나머지, 각 묶음 안은 최근 요청 먼저. **카톡과의 관계(v3.5):** 오늘 보고가 카톡으로 다 나갔으면(`KakaoReport.sentToday`, 스위치 켬) 첫 줄 "카카오톡 나와의 채팅에 아침 보고를 보냈어요"를 단 **조용한** 알림(조용한 그룹 `ieum.calls.quiet`), 단 업데이트 대기·"늦게 정리된 통화" 줄이 있으면 소리 있게. 카톡 전송이 진행 중이면 최대 2분 기다린다. 실패·일부만·미연결·스위치 끔·키 없는 빌드면 예전 알림 그대로 | `CallDigestText.morning`·`ranked`·`withUpdate`, `CallDigestKakao.postMorning`, `NotificationActions` |
+| 자가 진단 | 저녁 보고 작업 끝(밤중 건너뜀) | 자막 밀림, 모델 실패, 폴더 풀림, 결과 없음, 저장 80%, 녹음 공백(1일째, 2일째, 그 뒤 7일마다), 업데이트 하루 미설치(하루 안이면 "새 버전 설치가 기다리고 있어요" `update_waiting`, v3.5), 분석 루틴 4슬롯 놓침(`routine_late`), 카톡 연결·켬인데 오늘 다 나가지 않음 "아침 보고가 카카오톡으로 안 갔어요"(`kakao_missed`, v3.5) | `SelfCheckNotices` |
+| 업데이트 | 확인이 필요할 때 | 문구는 version.json notes, [지금 업데이트]. 확인 대기 24시간이면 세션을 버리고 다시 커밋해 알림을 새로 띄운다(v3.5, 3.11) | `CallUpdate` |
 
 ### 3.10 하트비트(`status/phone.json`, `PhoneStatus`)
 매시간 틱 끝과 [문제 알리기]에서 덮어쓴다. 숫자·코드·참거짓만, 이름·번호·파일 이름·통화 내용 없음(`PhoneStatusTest`). 문자열 값은 `code()`로 최상위에 두고 나머지 객체는 `counts()`로 숫자만 남긴다.
@@ -178,15 +181,30 @@
 | 처음 정리 | firstPass{done,toTranscribe,audioMinutesLeft,waitingForSummary,batchesToday,bound,blockedBy} |
 | 통화기록 | callLog{allowed,fromMs,todayFromMs,since,today(total,incoming,outgoing,missed,rejected,other,recorded,unrecordedCalls,personal),latestDeviceLogMs,latestStoredLogMs,deviceTotal(최대 20,000),storedTotal,mismatchSinceMs}, callLogMatch |
 | v3.1 | permissions{phoneState,overlay,redirectRole,installAllowed}, recordingGap{calls,withFile,matched,newestFileMs,sinceMs}, recordingGapVerdict, followup{noRecording} |
-| 카드·업데이트·기타 | callCard(4.5), updateAvailableCode, updateReadySinceMs, lastUpdateError, update{error}, messages{mailError}, golden |
+| 카드·업데이트·기타 | callCard(4절 통계), updateAvailableCode, updateReadySinceMs, lastUpdateError, update{error}, messages{mailError}, golden |
+| v3.5 아침 보고 | kakao{on(스위치 "카카오톡으로 받기"), linked, sent(다 나간 날 누계), failed(실패 누계), lastSentMs(마지막으로 다 나간 시각), error(코드 80자, 없으면 null)}, report{day(마지막으로 보낸 보고 날짜 YYYY-MM-DD), source(`routine` 또는 `phone`)}. 두 객체는 늘 있다(워치독이 키로 판정). `transcription.requeuedFailed`(이번 빌드가 살린 실패 자막 수) |
 
 통화 목록 대조표 `status/calllog.txt`는 이름·번호 전체가 든 사람용 글이다(사용자 결정 11/4, 아내 동의, 비공개 우편함에만, 같은 내용이면 안 올림)(`CallLogReport`, OPERATIONS.md 4절).
 
 ### 3.11 업데이트(`CallUpdate`)
 - 확인: 앱을 열 때 바로, 6시간 주기 작업(`ieum.update`), 그리고 결과 받기마다 `app/version.json`을 ETag로 읽어 처음 보는 높은 versionCode면 즉시. 네트워크 종류 무관(모바일 데이터도).
 - 받기: 1초마다 진행률(설정 "앱 버전" 줄 "받는 중 n%"), 3분 멈추면 멈춤 처리, sha·크기 불일치면 지우고 다시.
-- 무인 설치 조건(모두 맞아야 함): API 31 이상, 매니페스트 `UPDATE_PACKAGES_WITHOUT_USER_ACTION`, 자기 자신을 업데이트하는 세션 + `USER_ACTION_NOT_REQUIRED`, `canRequestPackageInstalls()` 참(아니면 `INSTALL_SOURCE_NOT_ALLOWED`와 선택 처음 설정 단계), 새 APK targetSdk ≥ 기기 최소(안드로이드 16: 34, 우리 36), 다른 스토어가 소유권을 갖지 않음. 하나라도 어긋나면 `STATUS_PENDING_USER_ACTION` → `USER_ACTION_REQUIRED`, 알림 한 번 누름. 스위치 "새 버전은 자동으로 설치"(기본 켬).
+- 무인 설치 조건(모두 맞아야 함): API 31 이상, 매니페스트 `UPDATE_PACKAGES_WITHOUT_USER_ACTION`, 자기 자신을 업데이트하는 세션 + `USER_ACTION_NOT_REQUIRED`, `canRequestPackageInstalls()` 참(아니면 `INSTALL_SOURCE_NOT_ALLOWED`와 선택 처음 설정 단계), 새 APK targetSdk ≥ 기기 최소(안드로이드 16: 34, 우리 36), 다른 스토어가 소유권을 갖지 않음. 하나라도 어긋나면 `STATUS_PENDING_USER_ACTION` → `USER_ACTION_REQUIRED`, 알림 한 번 누름. 스위치 "새 버전은 자동으로 설치"(기본 켬). 사이드로드한 앱의 첫 자가 설치도 이 확인이 한 번 필요하다(11/6 아내 폰).
+- 재알림(v3.5): 같은 versionCode의 세션이 열려 있으면 결과를 기다리지만, 확인 대기(`wait_since_ms`, 없으면 세션 시작 `session_ms`)가 24시간(`CONFIRM_AGAIN_MS`)을 넘으면 세션을 abandon하고 다시 커밋해 안드로이드 확인 알림을 새로 띄운다(알림을 밀어 지운 경우 대비). 받아 둔 새 버전이 기다리는 동안 아침 앱 알림과 저녁 자가 진단에 "새 버전 설치가 기다리고 있어요" 한 줄(`installWaiting`), 홈 배너는 그대로.
 - 서명: release-apk가 직전 릴리스와 인증서를 비교하고 version.json `certSha256`과도 비교, 다르면 배포하지 않는다. "서명이 다르다"면 앱을 지우지 않는다(지우면 저장된 통화가 사라짐).
+
+### 3.12 아침 보고(카카오톡, v3.5, `pipeline/report/`)
+**보고서(새벽 정리 9-1번):** 04:46 새벽 정리가 `report/YYYY-MM-DD.json`(한국 시각 오늘)을 쓴다. 한 줄 JSON `{day, generatedMs, tidyRev, head{calls,newChecks,todayChecks,issues}, yesterday[{who,what}]×8, today[{id,what,who,since,status,check}]×8, inProgress[{what}]×3, check[{what,who}]×3}`. `yesterday`는 어제 업무 통화·문자·메일을 업체(없으면 사람) 단위로 묶어 약속·금액·날짜가 있는 줄 먼저. `today`는 확인 필요·오늘·어제 요청 먼저, 그다음 최근 요청순. `since`는 "오늘 요청"·"어제 요청"·"3일 전 요청", `status`는 뒤의 문자·메일·통화에서 보인 이행 흔적("메일 발송 확인 완료", 없으면 빈 문자열, 완료 처리는 안 함). 한 줄 60자, 보고체, 가운데 점·말줄임표·영어 상태값·"기한"·"지남"·칸 끝 "까지" 금지, 전화번호 금지. `tools/report_check.py`(형식·줄 수·금지어·전화번호·"~해요"체 검사, 내용은 출력하지 않음)를 세 번 안에 통과해야 "tidy" 커밋에 넣고, 못 하면 파일을 지우고 답 첫 줄에 " | 확인 필요: 아침 보고서". 30일 지난 report 파일은 지운다.
+
+| 단계 | 동작 | 근거 |
+| --- | --- | --- |
+| 연결 | 설정 "아침 보고"의 [카카오톡 연결하기] → 카카오 SDK 로그인(카카오톡 앱이 있으면 앱, 없으면 계정) → 동의 항목 `talk_message`만(프로필·친구 목록 안 받음). 성공하면 `KAKAO_LINKED`, SDK가 토큰을 갱신. 토큰 오류(`TOKEN_*`)면 `KAKAO_LINKED=false`로 내리고 "연결이 풀렸어요" | `KakaoReport.link`·`linkState`, `KakaoSdkSender` |
+| 받기 | 고유 작업 `ieum.report.morning`이 매일 05:30 KST(`REPORT_SEND_HOUR`·`MINUTE`, 앱 알림 시각 `MORNING_HOUR`와 별개)에 `report/<오늘>.json`을 GitHub contents API로 ETag 읽기(304는 저장본). 없거나(404) 날짜가 다르면 05:35·05:45·06:00 재시도(`TRIES` 0·5·15·30분). 06:00에도 없으면 **폰 폴백**: 폰의 열린 체크할 일(홈 `firstLook` 규칙 먼저)로 만든 짧은 보고 1통, `report.source="phone"`. 네트워크 연결 제약으로 기다리되 **09:00이 지나면 보내지 않는다**(`CUTOFF`, 그날은 앱 알림만). 한 날의 사슬이 끝나면 다음 날 05:30을 건다. 앱 시작·부팅·매시간 틱이 KEEP으로 다시 건다. 키 없는 빌드, 스위치 끔, 미연결이면 아무것도 안 함 | `ReportFetch`, `ReportMorningWork` |
+| 조립 | ① **피드 1통:** 보고서 전체를 세로 PNG 한 장으로 그림(폭 1080px, 420dpi 기준 제목 28sp·절 22sp·본문 20sp, Pretendard, 높이 2400px·5MB 안) + 제목 "[이음 아침 보고] 11/7(금)" + 본문 "어제 통화 n건, 새 체크 m개, 오늘 챙길 일 k개" + 버튼 [이음에서 보기](통화 탭, 어제) ② **글 1통:** "[오늘 챙길 일] 11/7(금)" + 상위 4개 번호 목록 + "외 n건", 200자 안, 버튼은 체크 탭(오늘 챙길 일이 없으면 생략) ③ **폴백 글 최대 4통**(각 200자, 줄 단위로 끊음): "[이음 아침 보고]"+머리+어제 정리 / "[어제 정리 계속]"(①에 다 못 들어갔을 때만, 남은 수 "외 n건"은 여기서) / "[오늘 챙길 일]" / "[진행 중과 확인 필요]". 폰 폴백은 글 1통 "[이음 아침 보고] 11/7(금) (새벽 정리 없이 폰에서 만든 보고)" + 상위 4개 | `KakaoReport.compose`·`render`, `LIMIT` 200 |
+| 보내기 | 이미지 업로드(`uploadImage`) → 피드 → 1초 → 글. 업로드나 피드가 실패하면(토큰 오류가 아니면) 폴백 글을 1초 간격으로, 각 통 실패하면 한 번 더. 토큰 오류는 바로 멈춤. 받는 사람은 **아내 본인 "나와의 채팅"뿐**(친구 보내기·`friends` 동의 안 씀) | `KakaoReport.deliver` |
+| 기록 | 한 통이라도 나가면 `REPORT_DAY`·`REPORT_SOURCE`를 써서 **같은 날 다시 보내지 않는다**. 전부 성공이면 `KAKAO_LAST_SENT_MS`, `KAKAO_SENT_COUNT`+1, 오류 지움. 하나라도 실패면 `KAKAO_FAILED_COUNT`+1, `KAKAO_LAST_ERROR`(코드 80자). 한 통도 못 나갔고 토큰 오류가 아니면 다음 재시도가 다시 보낸다 | `KakaoReport.send` |
+| 시험 전송 | 설정 [지금 보내 보기]: 오늘 받은 보고서가 있으면 그것, 없으면 폰 폴백. 하루 1회(`kakaoTestSentDay`), `REPORT_DAY`·카운터·마지막 전송은 안 건드림(새벽에 눌러도 05:30 정식 보고가 막히지 않음) | `KakaoReport.sendNow` |
+| 버튼 | 메시지 버튼은 `kakao<앱 키>://kakaolink?screen=calls&dayMs=…` 또는 `screen=tasks`. `MainActivity`가 intent-filter로 받아 알림 extra와 같은 길로 연다. `dayMs`는 최근 5년~이틀 뒤만, 그 밖은 오늘. 그 밖의 값은 홈 | `MainActivity.kakaoTarget`·`kakaoDay`, AndroidManifest |
 
 ## 4. 통화 카드
 
@@ -205,7 +223,7 @@
 | 위치 상수 | 기본 위쪽 끝 38%, 벨 중 높이 한도 34%, 아래 끝 ≤ 72%(끌어 옮긴 위치도 이 안으로), 통화 중 띠 위쪽 8~20%(기본 10%) | `DEFAULT_POS_Y`, `MAX_HEIGHT`, `BOTTOM_LIMIT`, `STRIP_TOP*` |
 | 창 | `TYPE_APPLICATION_OVERLAY`, 포커스 없음, 터치는 카드 영역만, `FLAG_LAYOUT_IN_SCREEN`, **`FLAG_SECURE`**(스크린샷에 검게 나오는 것이 정상). 1단계 이름 줄 → 16ms 뒤 나머지 | `CallCardOverlay` |
 
-**카드 글(3초용, `CallCardView.Lines`)**: 입력은 상대 카드 v2와 지금 시각(KST). 첫 줄 고르는 순서 ① `dueMs`가 지났거나 7일 안인 열린 체크할 일("견적서, 금요일까지") ② `checkReason`이 있는 일(배지 "확인 필요") ③ 14일 안 지난 통화 요약 첫 문장 ④ 진행 중인 일(기한을 해석할 수 없는 일 포함) ⑤ thin("3일 전 통화, 30일간 5번") ⑥ 모르는 번호("아직 정리된 통화가 없는 번호예요"). 같은 순위면 기한 빠른 것, 그다음 최근 요청. 첫 줄 20sp 굵게, 36자(2줄 × 18자) 안 띄어쓰기 경계, 말줄임표 없음. 둘째 줄 "김민수 대표, ○○철강, 3일 전"(쉼표 구분, 가운데 점 없음). 셋째 줄 체크할 일 14자 + "외 n개", 넷째 진행 중인 일 14자. 전화번호만 가리고 금액·날짜·수량은 보인다(잠금 알림 한 줄은 금액도 지움). 띠·잠금 알림(`noticeLines`, `strip`)도 같은 순서. 모르는 번호 카드는 최근 문자 대신 통화기록 한 줄(벨 경로에서 큰 DB를 열지 않으려고).
+**카드 글(3초용, `CallCardView.Lines`)**: 입력은 상대 카드 v2와 지금 시각(KST). 첫 줄 고르는 순서 ① `dueMs`가 지났거나 7일 안인 열린 체크할 일 ② `checkReason`이 있는 일(배지 "확인 필요") ③ 14일 안 지난 통화 요약 첫 문장 ④ 진행 중인 일(기한을 해석할 수 없는 일 포함) ⑤ thin("3일 전 통화, 30일간 5번") ⑥ 모르는 번호("아직 정리된 통화가 없는 번호예요"). 같은 순위면 기한 빠른 것, 그다음 최근 요청. `dueMs`는 순서를 정하는 데만 쓰고 글에는 쓰지 않는다. **체크할 일 줄의 상태 글(v3.5, 기한 표현 없음, `statusWords`):** "제목, 상태" 꼴로, 상태는 ⓐ 끝났는지 확인 중(`needs_confirmation`)이면 "끝났는지 확인" ⓑ 뒤의 문자·메일·통화가 남긴 메모("11/5 메일: 끝난 것으로 보여요")가 있고 숫자 경고 메모가 아니면 "메일에서 끝난 것으로 보여요" ⓒ 아니면 요청 날짜("오늘 요청", "어제 요청", "3일 전 요청"). "금요일까지"·"n일 지났어요"는 쓰지 않는다. 첫 줄 20sp 굵게, 36자(2줄 × 18자) 안 띄어쓰기 경계, 말줄임표 없음. 둘째 줄 "김민수 대표, ○○철강, 3일 전"(쉼표 구분, 가운데 점 없음). 셋째 줄 체크할 일 14자 + "외 n개", 넷째 진행 중인 일 14자. 전화번호만 가리고 금액·날짜·수량은 보인다(잠금 알림 한 줄은 금액도 지움). 띠·잠금 알림(`noticeLines`, `strip`)도 같은 순서. 모르는 번호 카드는 최근 문자 대신 통화기록 한 줄(벨 경로에서 큰 DB를 열지 않으려고).
 
 **통계(`CardStats` → 하트비트 `callCard`)**: 누계와 `today`(KST 하루). 키 calls, shown, shownOutgoing, eligibleOutgoing, noCard, thin, noNumber, noNumberIn, noNumberOut, noRole, ignored, off, locked(잠금이면 창·알림을 함께 띄워도 locked), cold(프로세스 시작 5초 안 첫 방송), fgsRefused, noPermission(`canDrawOverlays` 거짓일 때만), noNotify, expanded, closedUnder2s(2초 안 닫음). 시간 ringToCardMs·ringToCardMsCold {p50,max,n}(최근 50통화, 수신기 elapsedRealtime → 창 추가나 알림 게시), cardOpenMs. 번호 없음은 통화가 끝날 때만 센다. v3.x가 통화를 하나라도 보면 null 대신 0.
 
@@ -214,19 +232,27 @@
 ## 5. 화면
 
 ### 5.1 구조
-- Activity 하나 `MainActivity`(singleTop, 세로 고정) + `enum Screen { HOME, CALLS, TASKS, COMPANIES, SETTINGS, PERSON }`, 화면은 `screens/*Screen.kt`. 하단 탭 다섯(홈, 통화, 체크, 업체, 설정), 사람 화면은 탭이 없고 연 화면의 탭이 켜진 채. 현재 탭을 다시 누르면 상세를 닫고 목록 맨 위. 뒤로: 상세 닫기 → 홈 → 종료. 알림은 `screen`·`dayMs`·`callId` extra로 연다. 화면 전환 120ms 페이드, 시작 화면 `LaunchIntro`(약 2초, 누르면 건너뜀). 골든 측정만 별도 숨김 Activity.
+- Activity 하나 `MainActivity`(singleTop, 세로 고정) + `enum Screen { HOME, CALLS, TASKS, COMPANIES, SETTINGS, PERSON }`, 화면은 `screens/*Screen.kt`. 하단 탭 다섯(홈, 통화, 체크, 업체, 설정), 사람 화면은 탭이 없고 연 화면의 탭이 켜진 채. 현재 탭을 다시 누르면 상세를 닫고 목록 맨 위. 뒤로: 상세 닫기 → 홈 → 종료. 알림은 `screen`·`dayMs`·`callId` extra로 연다(카톡 보고 버튼의 실행 파라미터도 같은 extra로 바꿔 연다, 3.12). 화면 전환 120ms 페이드, 시작 화면 `LaunchIntro`(약 2초, 누르면 건너뜀). 골든 측정만 별도 숨김 Activity.
 - 즉시 반응: 600ms 두 번 누름 방지(`CallUi.once`), 누르는 즉시 busy 글, [다 됐어요]는 바로 흐려지고 "끝낸 일로 옮겼어요 [되돌리기]" 띠. 저장소는 프로세스 수명 동안 한 번 열고(`IeumApplication.store`) 메인 스레드 접근은 예외.
 - 화면은 XML·Compose 없이 코드로 View를 만든다(`CallUi.kt`).
 
 ### 5.2 화면별
 | 화면 | 보이는 것(위부터) |
 | --- | --- |
-| 홈 | 인사·날짜 → (설정에서 할 일이 있을 때만) "설정에서 확인할 일이 있어요 ›"(녹음 공백 확정, 업데이트가 사람 확인 대기·실패, 필수 처음 설정 남음, 모델 받기 실패; 누르면 설정의 그 줄) → **오늘 통화 이야기**("오늘 통화 n건", `story/today.json` text 최대 4줄 자르지 않음, 없거나 날짜가 다르면 오늘 정리된 업무 통화 "상대: 첫 문장" 최신 3개, 정리된 통화 0이면 "오늘은 아직 정리된 통화가 없어요" 한 줄) → 먼저 볼 체크할 일 5개("외 n개 보기 ›") → 오늘 통화 메모 → "오늘 한눈에" 숫자 셋(오늘 통화, 오늘 생긴 체크, 남은 체크할 일) → 업체별 체크할 일 → 이번 주 통화 막대 |
+| 홈 | 인사·날짜 → (설정에서 할 일이 있을 때만) "설정에서 확인할 일이 있어요 ›"(녹음 공백 확정, 업데이트가 사람 확인 대기·실패, 필수 처음 설정 남음, 모델 받기 실패; 누르면 설정의 그 줄) → **오늘 통화 이야기**(제목 "녹음 n개 중 정리 m개"(v3.5, 녹음 기준 `TodayStory.countLine`), `story/today.json` text는 문장 단위로 120자 안(`TodayStory.clip`, 문장 중간에서 자르지 않음, maxLines 7은 안전망), 없거나 날짜가 다르면 오늘 정리된 업무 통화 "상대: 첫 문장" 최신 3개, 정리된 통화 0이면 "오늘은 아직 정리된 통화가 없어요" 한 줄) → 먼저 볼 체크할 일 5개("외 n개 보기 ›") → 오늘 통화 메모(정리 전이면 "오늘 녹음 n개를 정리하고 있어요") → "오늘 한눈에" 숫자 셋(오늘 녹음, 오늘 생긴 체크, 남은 체크할 일)과 알약 "녹음 n개 중 정리 m개" → 업체별 체크할 일 → 이번 주 통화 막대. 녹음 수 = 오늘 통화 기록 + 아직 기록이 없는 자막 대기·실패 녹음(`CallTranscriptionStore.withoutRecord`), 통화기록 총수는 쓰지 않음 |
 | 통화 | 날짜 넘기기(전날/오늘로/다음날), 그날 모든 통화기록이 한 줄씩(받은·건·부재중·개인 통화 "개인 내용" 포함), 문자·메일 기록, 검색(250ms, 사람 절 최대 5명). 상태 글: 자막 작업과 창이 맞으면 "녹음을 글자로 바꾸는 중이에요", 통화 뒤 10분까지 "녹음을 찾는 중이에요", 그 뒤 "녹음 없음", 6시간 넘으면 "정리가 늦어지고 있어요". 빈 자막은 "녹음에서 말소리를 찾지 못했어요"(버튼 없음), `RESULT_NOT_APPLIED`는 "정리 결과를 적용하지 못했어요" + [다시 정리하기](보낸 기록을 지워 바로 재전송). 상세: 요약, 중요한 내용, 체크할 일([다 됐어요], 접기), [통화 내용 전체 보기](14일) |
 | 체크 | 남은 체크할 일을 요청 날짜 묶음(오늘 요청한 일, 어제 요청한 일, 그전에 요청한 일, 오래된 일), 진행 중, 끝낸 일. 행(G3): 업체 배지 → 제목(META 이름과 같은 "○○ 님께" 접두는 지움) → META "김민수 님, 오늘 요청"(16sp, 이름 누르면 사람 화면) → AI 메모 → "확인 필요"·"끝났는지 확인" 배지 → [다 됐어요]. 통화에서 온 항목만 눌림. 30개 먼저 그리고 나눠 그림. [직접 적기] |
 | 업체 | 업체 목록(최근 통화순, 공종 배지, 열린 일 수), 업체 없는 사람(우리 직원 등). 상세: 업체 메모, 사람(누르면 사람 화면), 진행 중인 일, 체크할 일, 최근 통화 10건, [업체 이름 고치기] |
 | 사람 | 이름(30) + 직책·업체, [전화 걸기] [문자 보내기](번호는 화면에 안 씀), 공유 번호면 "이 번호를 쓰는 사람" 칩, 마지막 통화, 체크할 일, 진행 중인 일, 최근 통화와 문자 10건, [이름 고치기], [이 번호는 개인으로 두기](카드 즉시 삭제) |
-| 설정 | (주황 불이 있으면 "지금 상태"가 맨 위) → **지금 할 일과 진행 상황**(처음 설정 단계, 처음 정리 진행·쉬는 이유, 모델 받기 %, 녹음 공백 안내; 할 일이 없으면 "지금 할 일이 없어요. 모두 잘 되고 있어요") → 연결(녹음 폴더, 문자, 통화기록, 통화 끝 알아차리기, 메일 IMAP 네이버·다음·Gmail·직접 입력) → 통화 카드(카드 보기 허용, 전화 올 때, 전화 걸 때, 거는 전화 역할, 아직 정리된 통화가 없는 번호도, 잠금 화면에서도 이름과 한 줄 보기, [카드 위치 처음으로]) → 정리(정리 동의, 알림 시각, 통화마다 알림, 새 버전은 자동으로 설치, 설치 허용, 내 정보 세 칸, 개인으로 둔 번호) → 상태와 도움(신호등, 앱 버전 줄·[지금 확인]·[지금 업데이트], 저장 공간 %, 음성 인식 모델, 현장 상황 메모, 처리한 통화 수, [기다리는 통화 다시 정리하기], [합친 사람 되돌리기], [상대 카드 다시 만들기], [문제 알리기], [골든 측정]) |
+| 설정 | (주황 불이 있으면 "지금 상태"가 맨 위) → **지금 할 일과 진행 상황**(처음 설정 단계, 처음 정리 진행·쉬는 이유, 모델 받기 %, 녹음 공백 안내; 할 일이 없으면 "지금 할 일이 없어요. 모두 잘 되고 있어요") → 연결(녹음 폴더, 문자, 통화기록, 통화 끝 알아차리기, 메일 IMAP 네이버·다음·Gmail·직접 입력) → 통화 카드(카드 보기 허용, 전화 올 때, 전화 걸 때, 거는 전화 역할, 아직 정리된 통화가 없는 번호도, 잠금 화면에서도 이름과 한 줄 보기, [카드 위치 처음으로]) → 정리(정리 동의, 알림 시각 "저녁 통화 정리"(15~23시, 기본 19시), 통화마다 알림, 새 버전은 자동으로 설치, 설치 허용, 내 정보 세 칸, 개인으로 둔 번호) → **아침 보고**(v3.5, 아래) → 상태와 도움(신호등, 앱 버전 줄·[지금 확인]·[지금 업데이트], 저장 공간 %, 음성 인식 모델, 현장 상황 메모, 처리한 통화 수, [기다리는 통화 다시 정리하기], [합친 사람 되돌리기], [상대 카드 다시 만들기], [문제 알리기], [골든 측정]) |
+
+**설정 묶음 순서(v3.5):** (주황 불이면 지금 상태) → 지금 할 일과 진행 상황 → 연결 → 통화 카드 → 정리 → 아침 보고 → 상태와 도움.
+
+**"아침 보고" 묶음(`SettingsScreen.morningGroup`, 정리 묶음의 "아침 체크할 일" 시각을 옮겨 승격):**
+| 부분 | 보이는 것 |
+| --- | --- |
+| 카카오톡(키 있는 빌드만) | 스위치 [카카오톡으로 받기](`MORNING_KAKAO`, 기본 켬). 끄면 "꺼 두면 아침 보고는 이음 알림으로만 와요." 켜고 **연결됨**: 초록 "연결됨, 매일 5:30에 보내요", 마지막 전송 "오늘 5:30에 보냈어요"(어제, "11월 4일 …", 없으면 "아직 보낸 적이 없어요"), [지금 보내 보기](결과 한 줄과 토스트, "시험으로 하루에 한 번 보내요. 매일 5:30 보고는 그대로 가요."), 글자 링크 [연결 끊기]. **연결이 풀림**(토큰 오류): 앰버 "카카오톡 연결이 풀렸어요" + [다시 연결]. **연결 안 됨**: "카카오톡을 연결하면 매일 아침 5:30에 나와의 채팅으로 어제 통화 정리와 오늘 챙길 일을 보내요." + [카카오톡 연결하기] |
+| 이음 알림 | 안내 한 줄(연결·켬이면 "카카오톡으로 보낸 날에는 이음 알림이 조용히 와요. 보내지 못한 날에는 평소처럼 와요.", 아니면 "매일 이 시각에 이음 알림으로 체크할 일을 알려 드려요.") + 시각 "아침 체크할 일"(4~11시, 기본 6시). 키 없는 빌드는 이 시각 줄만 |
 
 ### 5.3 처음 설정(`SettingsScreen.steps`)
 | 구분 | 단계(순서대로) |
@@ -238,13 +264,13 @@
 ### 5.4 신호등(`StatusLights.lights`, 설정 "지금 상태")
 | 줄 | 주황 조건(위에서부터 처음 맞는 것) |
 | --- | --- |
-| 녹음 가져오기 | 폴더 미연결 / 권한 풀림 / 발견 성공이 24시간 넘음 / 녹음 공백 판정 문구(확정된 `noRecording`·`partial`·`folder`, `tooMany`). `pendingText`는 초록 글 |
-| 글자로 바꾸기 | 모델 지원 안 됨·실패·없음 / 대기열이 있고 가장 오래된 진입이 6시간 넘고 마지막 자막도 6시간 넘음 |
+| 녹음 가져오기 | 폴더 미연결 / 권한 풀림 / 발견 성공이 24시간 넘음 / 녹음 공백 판정 문구(확정된 `noRecording`·`partial`·`folder`, `tooMany`) / (v3.5) `noMatch`가 48시간 넘게 이어짐 "녹음이 2일 넘게 통화와 이어지지 않아요. 관리하는 분께 알려 주세요." `pendingText`는 초록 글 |
+| 글자로 바꾸기 | 모델 지원 안 됨·실패·없음 / 대기열이 있고 가장 오래된 진입이 6시간 넘고 마지막 자막도 6시간 넘음 / (v3.5) 지금 FAILED인 자막이 있음 "글자로 바꾸지 못한 녹음이 n건 있어요. 새 버전이 오면 한 번 더 바꿔 봐요."(수는 `StatusLights.read`가 IO 스레드의 같은 저장소 읽기에서 셈) |
 | 통화 정리 | 정리 동의 꺼짐 / 분석 루틴 예정 실행을 2회 놓침("분석이 n시간 안 돌았어요", 슬롯 뒤 40분이 지나도 자가 보고가 없으면 놓친 것, 받은편지함 오류가 더 늦으면 세지 않음) / 저장 공간 80% 이상 / 정리 못 한 통화(빈 자막 제외) / 기다리는 통화 |
-| 알림 | 알림 꺼짐 |
+| 알림 | 알림 꺼짐 / (v3.5, 스위치 켬일 때) 카카오톡 연결이 풀림 "카카오톡 연결이 풀렸어요. 위 아침 보고 묶음에서 다시 연결해 주세요." / 연결·켬인데 실패가 있고 마지막 성공이 3일 넘음(성공한 적이 없으면 실패 3회 이상) "아침 보고가 3일 넘게 카카오톡으로 가지 않았어요. …지금 보내 보기를 눌러 주세요." 누르면 아침 보고 묶음 |
 | 업데이트 | 설치 오류 문구 / 준비된 지 24시간 넘음 / 준비됨 |
 | 통화 카드 | 끄면 초록 / 오버레이 권한 없음 / 전화 상태 없음 / 통화기록 없음 / 대기 버킷이 EXEMPTED·NONE·UNKNOWN 밖 / 누적 통화 5건 이상에서 번호 없음 20% 이상 / 카드 없음 60% 이상. 역할이 없으면 초록 안내 |
-- 빨강은 쓰지 않는다. 4회 놓침은 저녁 자가 진단 `routine_late`로 알린다. 줄을 누르면 고칠 묶음으로 스크롤.
+- 빨강은 쓰지 않는다. 4회 놓침은 저녁 자가 진단 `routine_late`로 알린다. 줄을 누르면 고칠 묶음으로 스크롤. 주황 불이 하나라도 있으면 신호등이 페이지 맨 위로 가므로 문구의 "위 ○○ 묶음"을 "아래 ○○ 묶음"으로 바꿔 보인다(v3.5, `StatusLights.below`).
 
 ### 5.5 디자인 토큰(`CallUi`)
 | 항목 | 값 |
@@ -264,7 +290,7 @@
 | --- | --- | --- |
 | 통화 DB `callbrief-local-v2.db` | `ProtectedDatabase`: 파일 하나를 통째로 암호화(Keystore), 열면 메모리 SQLite로 복원, 트랜잭션마다 직렬화·암호화·fsync. 한도 16MB·10만 행, 80%면 경고. `.new`/`.bak` 복구 결과는 `dbRecovery` | 아래 표들 |
 | 상대 카드 `contact-cards-v1.sealed` | 같은 방식 | 4절 |
-| 설정 | `SecureSettings`(암호화 JSON) | 설정 키 약 75개(`PipelineSettingsKeys`, `CallPorts.kt`) |
+| 설정 | `SecureSettings`(암호화 JSON) | 설정 키(`PipelineSettingsKeys` 상수 83개, 값 코드 일부 포함, `CallPorts.kt`). v3.5: `MORNING_KAKAO`, `KAKAO_LINKED`, `KAKAO_LAST_SENT_MS`, `KAKAO_LAST_ERROR`, `KAKAO_SENT_COUNT`, `KAKAO_FAILED_COUNT`, `REPORT_DAY`, `REPORT_SOURCE`, 그리고 `reportBody`·`reportETag`(받은 보고서와 ETag), `kakaoTestSentDay`. 카카오 토큰은 SDK가 따로 보관 |
 | 녹음 금고 | `EncryptedAudioVault`(암호화 사본) | 자막 DONE 14일 뒤 원본 사본 삭제(`PRUNE_AFTER_MS`, 하루 1회 `ieum.calls.vault-prune`), `vault_pruned` |
 
 **통화 DB 표**(`CallRecordStore.SCHEMA`, `STORE_V4_SCHEMA`, `CallTranscriptionStore`, 발견 원장 SQL)
@@ -283,7 +309,7 @@
 | personal_numbers, personal_streaks | 개인 번호(2회 연속 판정 뒤 기억, `PERSONAL_STREAK`), 연속 횟수 |
 | person_merge_candidates | 자동으로 합치지 않은 쌍 |
 | app_migration | `MIGRATION_VERSION`=4 |
-| call_transcription_jobs(state QUEUED/RUNNING/DONE/FAILED/SKIPPED, reason, attempts, queued_ms, audio_ms), _parts, _stalls, _splits, vault_pruned | 자막 대기열과 조각 |
+| call_transcription_jobs(state QUEUED/RUNNING/DONE/FAILED/SKIPPED, reason, attempts, queued_ms, audio_ms, v3.5 failed_build·retried_build·requeue_count), _parts, _stalls, _splits, vault_pruned | 자막 대기열과 조각(v3.5 열은 실패 재큐용, 3.2) |
 | recordings, source_versions, local_files, local_visibility, folder_grants 등 | 발견 원장(`vault2_ledger.sql`, `call_core_schema.sql`) |
 - 보관: 자막·segments_json은 결과 받은 뒤 14일에 비움(`TRANSCRIPT_KEEP_DAYS`), 요약은 유지. 분석 전체는 90일 뒤 요약과 이름으로 줄임(`ANALYSIS_KEEP_DAYS`).
 
@@ -296,8 +322,9 @@
 | `ledger/ledger.json`, `ledger/edits/*.json` | 루틴 / 폰 | 장부 원본, 사용자 수정 |
 | `tidy/state.json`, `tidy/proposal.json`, `tidy/project.md`, `tidy/history/`, `tidy/briefing.md` | 폰 / 새벽 정리 | 새벽 정리 입력·제안·기억 |
 | `story/today.json` | 매시간 분석 | 오늘 통화 이야기 |
+| `report/YYYY-MM-DD.json` | 새벽 정리(v3.5) | 아침 보고서(3.12). 폰이 05:30부터 ETag로 읽음, 30일 뒤 루틴이 지움 |
 | `status/phone.json`, `status/calllog.txt`, `status/last-run-hourly.json`, `status/last-run-tidy.json`, `status/last-run.json`(v3.3까지, 새 파일이 없을 때만 읽음), `status/verify-log.md` | 폰 / 루틴 | 상태 |
-| `routines/hourly.md`·`tidy.md`, `tools/watchdog.py` | release-apk | 지시문·워치독 사본 |
+| `routines/hourly.md`·`tidy.md`, `tools/watchdog.py`, `tools/report_check.py` | release-apk | 지시문·워치독·보고서 검사기 사본 |
 | `app/version.json`, 릴리스 | release-apk | 업데이트 |
 
 ### 6.3 장부 `ledger/ledger.json`
@@ -316,12 +343,14 @@
 | 개인 통화 | 결과 business=false 2회 연속이면 번호를 기억해 다음부터 안 올림, 설정에서 되돌림. 개인·제외 번호 통화는 카드·알림·기록 없음(통화 목록에는 "개인 내용" 한 줄) |
 | 골든 측정 | 음성·정답 안 나감, 점수 숫자만 |
 | 하트비트 | 숫자·코드만 |
+| 아침 보고서 `report/*.json`(v3.5) | 우편함(비공개)에 이름·업체·요약·체크할 일, 30일 뒤 루틴이 지움 | 전화번호·자막·문자 원문 없음(`report_check.py`가 전화번호 검사) |
+| 카카오톡 아침 보고(v3.5) | **카카오 서버로 나감**: 이름·업체·요약·체크할 일·금액·날짜 | 받는 사람은 **아내 본인 계정 "나와의 채팅"뿐**(친구 보내기·`friends` 동의 안 씀, 사용자 결정 11/6 08:40). 보고 이미지는 `uploadImage`로 카카오 CDN에 올라가 **URL만 알면 열리는 형태로 100일** 보관된다(URL은 길고 무작위, 나와의 채팅에만 감; 사용자에게 11/6 14시 알림, 원하면 글만 보내는 방식으로 바꿀 수 있음). 전화번호·자막·문자 원문은 넣지 않는다. 카카오 토큰은 아내 폰의 SDK에만 있고 루틴·저장소에는 없다 |
 
 **알려진 약점(사실대로)**
 - 우편함 토큰(`IEUM_INBOX_TOKEN`, 우편함만 다루는 fine-grained 토큰)이 빌드 때 `BuildConfig.IEUM_INBOX_TOKEN`에 그대로 들어간다. APK를 가진 사람은 우편함을 읽고 쓸 수 있다(`build.gradle.kts`).
 - `IEUM_SIGNING_SEED` 비밀이 비어 있어 서명 키가 우편함 토큰에서 파생된다(`tools/derive_signing_key.py`, keystore 비밀번호 고정 "ieum-signing"). 토큰을 바꾸면 서명이 바뀌어 업데이트가 막힌다. 먼저 현재 토큰 값을 시드로 복사해야 한다(사용자 할 일).
 - 배포 APK는 `assembleDebug` 산출물이다(디버그 빌드 유형, `SYNTHETIC_TOOLS_ENABLED=true`)(release-apk.yml). 비디버그 릴리스는 보류.
-- 앱 저장소가 공개다(저장소 안에 비밀은 없음, `tools/scan_export.py`가 ci에서 검사). 비공개 복귀는 사용자 할 일.
+- 앱 저장소가 공개다(저장소 안에 비밀은 없음, `tools/scan_export.py`가 ci에서 검사). 비공개 복귀는 사용자 할 일. 카카오 네이티브 앱 키는 빌드 비밀로 주입하고 패키지 `kr.callbrief`·키 해시(서명 인증서와 같은 것)로 묶여 다른 앱이 쓰지 못한다.
 - 캡처 차단 `FLAG_SECURE`는 통화 카드 창에만 있다. 앱 본 화면은 캡처를 허용한다(사용자 결정 10/30).
 - 루틴 실행 로그에 통화 내용이 남지 않게 지시문에 명시돼 있지만 강제 장치는 없다(달에 한 번 실행 기록 1건 확인, OPERATIONS.md 6절).
 
@@ -351,10 +380,13 @@
 | 매시간 분석이 예정 시각에 돌지 않았어요 | hourly 자가 보고 status 커밋이 cron상 2슬롯 연속 없음(슬롯 뒤 40분, 앞 5분 허용, 30시간 되돌아봄) |
 | 루틴이 결과를 저장소에 올리지 못했어요 | 어느 루틴이든 pushed=false |
 | 우편함 토큰이 곧 만료돼요 | tokenExpiresMs가 14일 안 |
+| (v3.5) 아침 보고서가 안 만들어졌어요 | 한국 시각 05:30이 지났는데 `report/<오늘>.json`이 없음(있는지만 보고 내용은 안 읽음). 새벽 정리 자가 보고 promptVersion ≥ 7일 때만(배포 당일 오경보 방지). 04:46 워치독은 05:30 전이라 실제 판정은 그날 07:34부터의 매시간 워치독. 본문에 `reportWritten`으로 원인 |
+| (v3.5) 카카오톡 보고가 안 갔어요 | 하트비트 `kakao.on`이 참(키 없는 옛 하트비트는 참으로 봄)이고 `kakao.linked=true`인데 09:00이 지나도 `lastSentMs`가 어제 00:00 전(어제·오늘 두 아침 연속), 어제 09:00 전부터 연결돼 있었을 때만 |
+| (v3.5) 카카오톡 연결이 풀렸어요 | `kakao.on`이 거짓이 아니고 `kakao.linked=false`이며 `kakao.error`가 `TOKEN_`으로 시작 |
 
 ### 8.2 자가 보고와 루틴 실패 길
-- `status/last-run-hourly.json`·`last-run-tidy.json` 한 줄 JSON: routine, startedMs, endedMs, processed, skipped, failed, batches, model, limitHit, ledgerRev, promptVersion, promptMismatch, loggedTranscript(항상 false), repoOk, pushed, (hourly만) kinds, firstPassItems, formats, requestVersions, leftover, cron/crons. 처리할 것이 없어도 항상 쓴다(`docs/routines/self-report.md`).
-- 루틴이 저장소에 못 닿으면 자가 보고도 못 쓰고 "확인 필요: 저장소 접근"으로 답한다 → 예약 작업 알림. 루틴이 죽으면 워치독도 멈추므로 폰 신호등 "통화 정리" 줄(2회 놓침 주황)과 저녁 자가 진단(4회)이 둘째 눈이다. 폰은 결과 받기 때 `endedMs`·`cron`을 `routineEndedMs`·`routineCrons`에 둔다.
+- `status/last-run-hourly.json`·`last-run-tidy.json` 한 줄 JSON: routine, startedMs, endedMs, processed, skipped, failed, batches, model, limitHit, ledgerRev, promptVersion, promptMismatch, loggedTranscript(항상 false), repoOk, pushed, (hourly만) kinds, firstPassItems, formats, requestVersions, leftover, cron/crons, (tidy만, v3.5) reportWritten(오늘 보고서를 push했으면 참). 처리할 것이 없어도 항상 쓴다(`docs/routines/self-report.md`).
+- 루틴이 저장소에 못 닿으면 자가 보고도 못 쓰고 "확인 필요: 저장소 접근"으로 답한다 → 예약 작업 알림. 루틴이 죽으면 워치독도 멈추므로 폰 신호등 "통화 정리" 줄(2회 놓침 주황)과 저녁 자가 진단(4회)이 둘째 눈이다. 새벽 정리가 죽어도 폰이 06:00에 자기 자료로 짧은 카톡 보고를 보낸다(3.12). 폰은 결과 받기 때 `endedMs`·`cron`을 `routineEndedMs`·`routineCrons`에 둔다.
 - 통화 목록 검증(09:00): `status/calllog.txt`와 저장·분석 결과를 대조해 검증 파일과 다섯 줄 알림, `status/verify-log.md`에 숫자만.
 - 문제 찾기 순서와 증상별 볼 곳은 OPERATIONS.md 4~6절.
 
@@ -362,19 +394,21 @@
 
 | 게이트 | 내용 | 근거 |
 | --- | --- | --- |
-| 단위 시험 | `:core:test :app:testDebugUnitTest`(Robolectric) + lint. 소스의 @Test 742개(실행 건수는 마지막 기록이 v3.1 통합 582건, v3.4는 ci 통과만 확인(추정)) | `android-ci.yml` |
-| 화면 규칙 | `tools/check_ui_rules.py` 위반 0, 도구 시험(`test_check_ui_rules.py`, `test_watchdog.py`, `test_version_fields.py`, `test_golden_score.py`, `test_call_card_script.py`) | ci "UI rules and tool tests" |
+| 단위 시험 | `:core:test :app:testDebugUnitTest`(Robolectric) + lint. 소스의 @Test 816개(v3.5, `R15ZeroTest`·`R15ThreeTest`·`R15FourTest`·`KakaoReportTest` 추가; 실행 건수는 마지막 기록이 v3.1 통합 582건, 그 뒤는 ci 통과만 확인(추정)) | `android-ci.yml` |
+| 화면 규칙 | `tools/check_ui_rules.py` 위반 0, 도구 시험(`tools/`·`tools/inbox/`의 `test_*.py` 전부: `test_check_ui_rules.py`, `test_watchdog.py`, `test_version_fields.py`, `test_golden_score.py`, `test_call_card_script.py`, v3.5 `test_report_check.py`) | ci "UI rules and tool tests" |
 | 비밀 스캔 | `tools/scan_export.py`(비밀 값은 실패, 개인 경로는 경고) | ci "Export scan" |
 | 업데이트 문구 | 앱 코드가 바뀌었는데 UPDATE_NOTE가 그대로면 경고 | ci |
-| `RoutineDocTest` | hourly.md의 [분석 규칙]·[결과 형식]이 `SYSTEM`·`SCHEMA`와 같고 버전이 맞는지 | 단위 시험 |
+| `RoutineDocTest` | hourly.md의 [분석 규칙]·[결과 형식]이 `SYSTEM`·`SCHEMA`와 같고 버전이 맞는지, tidy.md 버전 7·9-1절이 있는지 | 단위 시험 |
+| 카톡 보고(v3.5) | 가짜 전송기(`KakaoReport.Sender`)로 compose 고정 사례, 각 글 ≤ 200자, 렌더 높이 ≤ 2400px·전화번호 없음, 업로드 실패 → 폴백 글, 같은 날 재전송 금지, 404 → 재시도 → 폰 폴백, 토큰 오류 → linked=false, 카톡 성공 날 조용한 아침 알림, 실행 파라미터 → 화면. 실제 카카오 전송은 아내 폰 실전송으로만 확인 | `KakaoReportTest`, `R15ThreeTest`, `R15FourTest` |
 | ci → release-apk | lean-calls·main push. 같은 커밋 ci 성공 필수(40분 안). `tools/needs_update_smoke.sh`가 매니페스트·IeumApplication·StartupReceiver·CallSinkImpl·빌드 설정 변경을 보면 update-smoke "Install, update, start" 통과도 필수(70분). 에뮬레이터 부팅 실패(인프라)만 경고 | `release-apk.yml` |
 | update-smoke | 직전 릴리스 위에 덮어 설치, 시작, 충돌 없음, 예약 작업 다섯 개, 앱 자신 설치 단계(`appops REQUEST_INSTALL_PACKAGES allow` 뒤 사용자 확인 없이 versionCode 상승) | `update-smoke.yml`, `tools/update_smoke.sh` |
-| device-test | feature/** push(안드로이드·도구 경로) 또는 수동. 에뮬레이터 API 34: 모델 SHA-256, 한국어 Whisper(평소 base-q5_1, 음성 인식 파일이 바뀌면 전체), 화면 9장(1_home, 2_today, 3_tasks, 4_settings, 5_companies, 6_company_detail, 7_call_detail, 8_person, 9_home_large 1.3배), 골든(push는 base), 통화 카드 11항목(ringingWindow, stripAfter3s, goneAfterIdle, serviceGone, outgoing, unknownOff, personalNothing, outgoingNoRole, callWaiting, coldWindow, lockedNotice; 기준 벨→창 3,000ms, 콜드는 `am kill`, 통화 대기는 에뮬레이터가 재현 못 해 null, 잠금 위 창은 기록만). 카드 샷 4종은 ci `IEUM_SHOTS_DIR` 산출물 | `device-test.yml`, `tools/device/call_card_test.sh` |
+| device-test | feature/** push(안드로이드·도구 경로) 또는 수동. 에뮬레이터 API 34: 모델 SHA-256, 한국어 Whisper(평소 base-q5_1, 음성 인식 파일이 바뀌면 전체), 화면 9장(1_home, 2_today, 3_tasks, 4_settings, 5_companies, 6_company_detail, 7_call_detail, 8_person, 9_home_large 1.3배), 골든(push는 base), 통화 카드 11항목(ringingWindow, stripAfter3s, goneAfterIdle, serviceGone, outgoing, unknownOff, personalNothing, outgoingNoRole, callWaiting, coldWindow, lockedNotice; 기준 벨→창 3,000ms, 콜드는 `am kill`, 통화 대기는 에뮬레이터가 재현 못 해 null, 잠금 위 창은 기록만). `lockedNotice`는 에뮬레이터가 잠기지 않으면(lock screen on=false) 실패로 나온다(v3.5 배포·키 커밋 때 같음, 판정 보류로 바꿀 것). 카드 샷 4종은 ci `IEUM_SHOTS_DIR` 산출물 | `device-test.yml`, `tools/device/call_card_test.sh` |
 | real-device-test | Firebase Test Lab 최신 Galaxy S(S26), 공개 음성만, 수동, 하루 5번 | `real-device-test.yml` |
 | inbox-e2e | feature/** push(그 파일) 또는 수동으로 `inbox/selftest-<번호>.json` 투입, 07:40~23:40 KST 매시 40분에 결과를 폰 파서·필터로 검증 후 삭제 | `inbox-e2e.yml` |
 | cleanup-branches | lean-calls에 다 들어간 feature/* 삭제(수동, dry_run) | `cleanup-branches.yml` |
 | S26 체크리스트 | 사용자 10분: 잠긴 채 받기, 측면 버튼 잠금 뒤 벨, 다른 앱 중 벨(통화 팝업), 밀어 닫은 뒤 받기·걸기, 받기·거절 터치, 스피커·키패드·스크린샷, 이어폰·블루투스, 1.3배 글자, 긴 문자·사진 문자·채팅+(RCS). 통과 기준 1~8 O(2번 창은 관찰), 9·10 O, 11은 O 또는 "채팅+ 끄기" 안내 | `docs/REAL_DEVICE_CHECKLIST.md` |
-| 배포 뒤 확인 기준(1045 설치 뒤 48시간) | matched/withFile ≥ 0.8, long48h.ratePct ≥ 80, callCard null 아님·shown > 0·shownOutgoing/eligibleOutgoing ≥ 90%·발신 noNumber 0·fgsRefused 0·ringToCardMs p50 < 1,000·cold 3건 이상에서 ringToCardMsCold p50 < 1,500, last-run-hourly 슬롯마다 갱신·pushed=true, 무인 설치 2시간 안 versionCode 상승, 요청 본문에 '@' 없음 | DESIGN_V4 2-2, 2-3, 4.5 |
+| 배포 뒤 확인 기준(1045 이상 설치 뒤 48시간, 아내 폰은 11/7부터 1046) | matched/withFile ≥ 0.8, long48h.ratePct ≥ 80, callCard null 아님·shown > 0·shownOutgoing/eligibleOutgoing ≥ 90%·발신 noNumber 0·fgsRefused 0·ringToCardMs p50 < 1,000·cold 3건 이상에서 ringToCardMsCold p50 < 1,500, last-run-hourly 슬롯마다 갱신·pushed=true, 무인 설치 2시간 안 versionCode 상승, 요청 본문에 '@' 없음 | DESIGN_V4 2-2, 2-3, 4.5 |
+| 배포 뒤 확인 기준(v3.5, 카톡 연결 뒤 3일) | 매일 04:46 `report/<날짜>.json` 생성(워치독 조용), 05:30~05:45 카톡 도착(아내 확인 1회), 하트비트 `kakao.sent` 3 증가·`failed` 0, `report.source="routine"` 3/3, 아침 앱 알림은 조용한 것만 | DESIGN_V5 3절 |
 
 ## 10. 사용자 결정 모음
 
@@ -404,17 +438,22 @@
 | 11/6 03시 | v3.4까지 한 번에 배포(48시간 실측을 기다리지 않음) |
 | 11/6 06시 | 필요 없는 파일·코드 정리 |
 | 11/6 08:28 | v3.5 큰 변화: 매일 아침 5:30 카카오톡으로 어제 일 정리·요약을 보고 형식으로 받는다(설계 DESIGN_V5.md) |
-| 11/6 08:26 | 카드·체크할 일에는 "언제까지"·"지났어요"가 아니라 문자·메일 등 맥락을 종합한 상태("메일 발송 확인 완료", "문자로 답 받음")를 보여 준다. 약속 날짜는 판단 입력일 뿐 화면에 남기지 않는다. 완료 처리는 그대로 사람이 한다(v3.4.x에서 적용, 지금 카드의 "n일 지났어요"는 뺄 것) |
+| 11/6 08:26 | 카드·체크할 일에는 "언제까지"·"지났어요"가 아니라 문자·메일 등 맥락을 종합한 상태("메일 발송 확인 완료", "문자로 답 받음")를 보여 준다. 약속 날짜는 판단 입력일 뿐 화면에 남기지 않는다. 완료 처리는 그대로 사람이 한다(v3.5 r15-0에서 카드 상태 글로 적용, 4절) |
+| 11/6 08:40 | 카톡 아침 보고를 받는 사람은 아내 본인 계정 "나와의 채팅"뿐(관리자에게는 보내지 않음, 친구 보내기 안 씀) |
+| 11/6 09시(Claude, "편리함 중점") | 카톡 보고는 피드 이미지 1통 + 오늘 챙길 일 글 1통, 이미지 실패 시 글 최대 4통(DESIGN_V5 0-1절) |
+| 11/6 14시 | 보고 이미지가 카카오 CDN에 URL로 100일 남는 점을 사용자에게 알림(원하면 글 방식으로 전환) |
+| 11/6 17시 | **v3.5 배포, 빌드 1046**: 카톡 아침 보고(나에게 보내기, 피드 이미지 + 글), 새벽 정리 04:46·tidy.md v7·보고서 JSON, v3.4.x 묶음(실패 자막 재큐, 녹음 기준 숫자, 약속 문구, 신호등, 알림 묶음, 카드 상태 글, 업데이트 재알림), 독립 검토 반영. 구현에서 다르게 정한 것은 DESIGN_V5 6절 19줄(이 문서에 흡수) |
 | (Claude 결정, 설계 표) | 지키지 못할 약속 문구 금지, 마이그레이션 자동 합치기는 같은 번호+같은 이름만, 합치기 되돌리기와 keepApart, 숫자 확실성은 화면에 앰버 배지, 숫자만 다른 일은 합치지 않음, 자막 오인 교정은 이름·호칭·업체명만, 잠금 화면 카드 공개 범위는 설정(기본 켬), 발신 역할은 선택 항목, 처음 설정은 필수/선택, 포그라운드 서비스는 통화 중에만, CallScreeningService 안 씀, 분석은 구독 한도 방식(API 키 경로 삭제) |
 
 ## 11. 알려진 한계, 미구현, 보류
-- **실측 전:** 아내 폰은 08:01 하트비트 기준 v3.1(1040)이고 1045를 받아 둔 채 설치 대기(사이드로드 뒤 첫 자가 설치는 한 번 눌러야 하는 것으로 보임). 1042~1045의 짝짓기·긴 통화 완주·카드·결과 시각은 폰에서 아직 증명되지 않았다(9절 확인 기준). `latency` p50이 수천 분인 것은 `started_ms` 오염으로 보이며 판단 근거로 쓰지 않는다(`recordTime`으로 진단 중).
+- **실측 중(11/7):** 아내 폰은 v3.5(1046). 통화기록 저장은 빠짐 없음, 녹음-통화 연결은 나아지는 중이나 절반 수준, 자막 실패 누적이 있다(숫자는 HANDOFF.md 4절). 카카오톡은 아직 연결 전이라 카톡 보고 실전송은 증명되지 않았다(9절 v3.5 확인 기준). `latency` p50이 수천 분인 것은 `started_ms` 오염으로 보이며 판단 근거로 쓰지 않는다(`recordTime`으로 진단 중).
+- **카톡 보고의 한계:** 텍스트 템플릿 200자, 피드 제목·본문 각 2줄(그래서 전체는 이미지). "나와의 채팅"은 카톡 푸시가 안 울릴 수 있어 06시 앱 알림을 조용히 남긴다. 09:00이 지나면 그날 카톡은 보내지 않는다. 아내 카카오 계정을 developers 앱 팀원으로 등록해야 하는지는 첫 연결 때 확인.
 - **자막 정확도:** 실녹음 골든(사용자 받아쓰기 3~5건) 전이라 B1(폴백 제한), B2(조각 간 문맥), B3(문장체 초기 프롬프트 ≤ 120토큰, `PROMPT_ENABLED`), B4~B7(beam, suppress_nst, 양자화·i8mm, VAD 하한)은 스위치만 있고 기본값 그대로. 합성 골든(base) CER 18%는 대표성이 없다.
 - **다음 후보(3-3):** 충전 중 야간 포그라운드 장기 실행(안드로이드 15+ dataSync 한도), 게인 정규화, 한국어 파인튜닝 모델. 기각: 조각 5분, audio_ctx 축소, max_len.
 - **하지 않은 것:** 예약 작업 30분 간격(예약 작업이 허용하지 않음), Actions 분량 조정(device-test push 축소, inbox-e2e 하루 2회 — 비공개 복귀 전에), `corrected`의 화면 표시, 불확실 숫자의 조각 저장 형식 칸, 비디버그 릴리스 빌드, 서명 시드 분리, 우편함 이력 압축, "AI 메모" → "이음 메모" 표기, 아침 알림 [다 됐어요] 2개.
 - **S26에서만 알 수 있는 것:** 잠금 화면 위 오버레이가 보이는지, 삼성 "통화 팝업"과의 겹침, 삼성 "절전 앱"과 FGS 거부, phoneCall 타입의 MANAGE_OWN_CALLS 전제, 역할 없이 발신 번호가 늘 오는지, RCS(채팅+)가 `content://mms`에 오는지, 첫 벨 창 1회 실패 원인.
 - **카드 다듬기(v3.4.x 후보):** 위치 상수 실측 조정, 1.0배에서 배지 카드의 "외 1개" 줄 넘김.
-- 사용자 할 일: S26 체크리스트, 실녹음 골든, cleanup-branches 실행, `IEUM_SIGNING_SEED` 복사, 저장소 비공개 복귀, 예약 작업 알림 조정, Claude Docs 설계도를 이 문서로 갱신.
+- 사용자 할 일: 아내 폰에서 카카오톡 연결(설정 › 아침 보고), S26 체크리스트, 실녹음 골든, cleanup-branches 실행(r15-* 5개), `IEUM_SIGNING_SEED` 복사, 저장소 비공개 복귀, 예약 작업 알림 조정, Claude Docs 설계도를 이 문서로 갱신.
 
 ## 12. 용어
 
@@ -427,13 +466,16 @@
 | 진행 중인 일 | 장부 issues. 새벽 정리가 여러 기록을 한 일로 묶고 현황 한 줄 |
 | 처음 정리 | 10/1부터의 지난 통화·문자·메일을 묶음(b-)으로 시간순 정리. 끝나면 `FIRST_PASS_DONE` |
 | live / old | 처음 정리 중 기록 시각이 7일 안이면 live(단건), 그 전이면 old(묶음) |
-| 새벽 정리 | 05:16 Opus 루틴. 진행 중인 일, 합치기, 체크할 일 다시 쓰기·팔로업 제안 |
+| 새벽 정리 | 04:46 Opus 루틴. 진행 중인 일, 합치기, 체크할 일 다시 쓰기·팔로업 제안, 아침 보고서 |
+| 아침 보고 | 05:30 카카오톡 "나와의 채팅"으로 오는 보고(피드 이미지 + 글)와 06시 앱 알림. 보고서는 `report/YYYY-MM-DD.json` |
+| 나에게 보내기 | 카카오 메시지 API로 로그인한 본인의 "나와의 채팅"에 보내는 것(`talk_message` 동의, 건수 제한 없음) |
+| 폰 폴백 | 06:00까지 새벽 정리 보고서가 없을 때 폰이 열린 체크할 일로 만들어 보내는 짧은 카톡 1통 |
 | 매시간 분석 | 매시 34분 07~22시 Sonnet 루틴. 요청을 분석해 결과와 장부를 쓴다 |
 | 결과 받기 | 폰이 예정 실행 +3·+8·+15분에 결과를 가져와 적용하는 것(`ResultChain`) |
 | 하트비트 | 폰이 매시간 올리는 `status/phone.json`(숫자와 코드만) |
 | 자가 보고 | 루틴이 실행마다 쓰는 `status/last-run-hourly.json`·`last-run-tidy.json` |
 | 워치독 | 루틴 끝에서 도는 `watchdog.py`. 이상이면 GitHub 이슈 |
-| 신호등 | 설정 "지금 상태"의 여섯 줄(녹음 가져오기, 글자로 바꾸기, 통화 정리, 알림, 업데이트, 통화 카드). 초록 또는 주황 |
+| 신호등 | 설정 "지금 상태"의 여섯 줄(녹음 가져오기, 글자로 바꾸기, 통화 정리, 알림(v3.5 카톡 상태 포함), 업데이트, 통화 카드). 초록 또는 주황 |
 | 녹음 공백 | 통화는 있는데 녹음 파일이 창 안에 없는 상태(`RecordingGap`) |
 | 상대 카드 | 번호별로 미리 계산해 작은 봉인 파일에 둔 "이 사람과의 지금 상황"(통화 카드와 사람 화면이 읽음) |
 | thin 카드 | 정리된 통화는 없고 통화기록만 있는 번호의 작은 카드("3일 전 통화, 30일간 5번") |
@@ -444,18 +486,13 @@
 | 골든 | 정답이 있는 녹음으로 자막 정확도를 재는 것(합성 골든, 실녹음 골든) |
 | 지시문 | `docs/routines/*.md`의 "---" 아래. 예약 작업이 우편함 사본을 읽어 따름 |
 
-## 13. 문서와 코드가 달랐던 곳(코드를 따름; 11/6 정리에서 PRODUCT.md·OPERATIONS.md·HANDOFF.md·self-report.md·watchdog.py 주석은 고쳤고, 아래는 기록으로 남김)
-- `docs/routines/self-report.md`: 신호등 분석 줄이 "4회면 빨강" → 코드는 빨강 없음, 4회는 저녁 자가 진단 `routine_late`(`StatusLights.ROUTINE_NOTICE`, DESIGN_V4 4.6).
-- `docs/PRODUCT.md` 2절: 예약 작업 "매시 정각, 07~23시" → 코드·지시문은 매시 34분 07~22시(`ResultChain.DEFAULT_CRON`).
-- `docs/PRODUCT.md` 3.6절: 아침 보고 "오늘 할 일 n개, • [업체] 할 일 — 기한" → 코드는 "체크할 일 n개", "지금 할 일:" 말머리, 기한 없음(`CallDigestText.morning`).
-- `docs/PRODUCT.md` 3.3·4.3절: 할 일 카드 "기한 배지, 공정표 막대 기한 지남 빨강", 색 `#1F5C99`·`#B23A2B` → 코드는 요청 날짜 묶음, 빨강 없음, 강조 `#3268F0`(`CallUi` LIGHT 팔레트).
-- `docs/PRODUCT.md` 5절: DB 표 7개 → 코드 표는 6.1절처럼 훨씬 많다(`CallRecordStore.SCHEMA`, `STORE_V4_SCHEMA`).
-- 옛 HANDOFF(3절 "배포본은 화면 캡처 차단(FLAG_SECURE)") → 코드의 FLAG_SECURE는 통화 카드 창에만 있다(`CallCardOverlay`).
-- DESIGN_V3 7.1: 카드 높이 화면의 40% 이하, 세로 38% → 코드는 벨 중 높이 34%, 아래 끝 72%, 기본 위쪽 끝 38%(`CallCardOverlay.MAX_HEIGHT`·`BOTTOM_LIMIT`·`DEFAULT_POS_Y`).
-- DESIGN_V4 4.2-3: 첫 줄 "줄당 18자 안팎, 2줄" → 코드는 36자 한도(`FIRST_CHARS`), 셋째·넷째 줄 14자(`ROW_CHARS`)(4.6과 같음).
-- DESIGN_V3 6.2: 통화별 알림 잠금 화면 "통화 정리 중"만 → 코드는 상태별 "통화 정리됨 / 확인할 통화 / 통화 정리 중"(`CallFollowupNotice.publicTitle`).
-- OPERATIONS.md 4절 `standbyBucket` 값 목록에 EXEMPTED·NEVER가 없음 → 코드는 5→EXEMPTED, 50→NEVER(`PhoneStatus`).
-- HANDOFF·OPERATIONS의 새벽 자료 "밤 21~05시" → 코드는 21:00~04:59(`takeTidy`의 `hour in 5..20`이면 안 보냄).
+## 13. 문서와 코드가 다른 곳(코드를 따름; 11/7 v3.5 정리에서 PRODUCT.md·OPERATIONS.md·HANDOFF.md·self-report.md·watchdog.py 주석이 코드와 맞는 것을 확인해 해소된 항목은 지웠다)
 - `android/core` `RecordingPolicy.MAX_BYTES`=25,000,000 → 실제 한도는 금고 `AudioBinding.MAX_BYTES`=60,000,000이고 `RecordingPolicy.safeSize`는 앱에서 부르는 곳이 없다(남은 상수).
-- `watchdog.py` 주석·`ROUTINE_END_HOUR`=23("마지막 실행 22:30, 30분 간격") → 실제 cron은 `34 7-22`(규칙 판정은 cron 파싱을 쓰므로 영향은 "분석이 멈췄어요"의 루틴 시간 계산뿐(추정)).
-- 문서 여러 곳의 "단위 시험 n건" → 최근 기록된 실행 건수는 v3.1의 582건이고, 지금 소스의 @Test는 742개(9절).
+- 문서 여러 곳의 "단위 시험 n건" → 최근 기록된 실행 건수는 v3.1의 582건이고, 지금 소스의 @Test는 816개(9절).
+- 자가 진단 "음성 인식 모델을 다시 받아야 해요"의 본문 "와이파이에 연결한 뒤"(`SelfCheckNotices`) → 결정은 "어떤 연결에서든 받음"(11/5). 코드 문구가 결정과 어긋남(PRODUCT.md 6절 5번).
+
+옛 설계 기록(`history/`, DESIGN_V5.md)은 고치지 않으므로 그 문서와 다른 점은 아래처럼 코드가 기준이다.
+- DESIGN_V3 7.1: 카드 높이 화면의 40% 이하, 세로 38% → 코드는 벨 중 높이 34%, 아래 끝 72%, 기본 위쪽 끝 38%(`CallCardOverlay.MAX_HEIGHT`·`BOTTOM_LIMIT`·`DEFAULT_POS_Y`).
+- DESIGN_V4 4.2-3: 첫 줄 "줄당 18자 안팎, 2줄" → 코드는 36자 한도(`FIRST_CHARS`), 셋째·넷째 줄 14자(`ROW_CHARS`).
+- DESIGN_V3 6.2: 통화별 알림 잠금 화면 "통화 정리 중"만 → 코드는 상태별 "통화 정리됨 / 확인할 통화 / 통화 정리 중"(`CallFollowupNotice.publicTitle`).
+- DESIGN_V5 0~2절(SDK 2.26.0, "카톡 성공이면 앱 알림 없음", 폴백 "[진행 중·확인]", FAILED 재큐 빌드마다 1회 등) → 구현은 6절 "다르게 정한 것" 19줄대로이고 이 문서 3.2·3.9·3.12·8.1에 반영했다.
