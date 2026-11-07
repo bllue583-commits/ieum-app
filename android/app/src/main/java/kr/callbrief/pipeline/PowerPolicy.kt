@@ -245,7 +245,7 @@ internal object PowerStats {
         inc(m,"audioMs",audioMs.coerceAtLeast(0));m.put("audioMin",m.optLong("audioMs")/60_000)
         if(mode==PowerPolicy.Mode.BATTERY) {
             if(uahScreenOff!=null && uahScreenOff>0) { inc(m,"uahScreenOff",uahScreenOff);m.put("mAhScreenOff",m.optLong("uahScreenOff")/1000) }
-            o.put("lastBatteryRunEndMs",now)
+            o.put("lastBatteryRunEndMs",now);o.remove("batteryRunStartMs")
         }
         o.put("lastRunEndMs",now)
         return o
@@ -259,15 +259,15 @@ internal object PowerStats {
     fun noteStop(old:JSONObject?,now:Long,reason:String):JSONObject { val o=copy(old);inc(sub(today(o,PowerPolicy.day(now)),"stopReasons"),reason);return o }
 
     /** A finished piece: [ms] of work for [audioMs] of audio on [threads] threads; [cold]: the first piece of a run after a rest. */
-    fun notePiece(old:JSONObject?,ms:Long,audioMs:Long,threads:Int,cold:Boolean):JSONObject {
+    fun notePiece(old:JSONObject?,ms:Long,audioMs:Long,threads:Int,cold:Boolean,now:Long=System.currentTimeMillis()):JSONObject {
         val o=copy(old);val c=sub(o,"chunk")
         if(audioMs<=0 || ms<=0) return o
         val rate=Math.round(ms.toDouble()/audioMs*1000)/1000.0
         fun push(k:String) { val a=c.optJSONArray(k) ?: JSONArray();a.put(rate);while(a.length()>KEEP) a.remove(0);c.put(k,a) }
-        // A piece on other thread counts is not compared with the others: the list starts again.
-        if(c.optInt("threads",threads)!=threads) { c.remove("rates") }
+        // A piece on other thread counts is not compared with the others: both lists start again (review r16-1 #1).
+        if(c.optInt("threads",threads)!=threads) { c.remove("rates");c.remove("coldRates");c.remove("coldMedianMs") }
         push("rates");if(cold) push("coldRates")
-        c.put("lastMs",ms).put("lastAudioMs",audioMs).put("threads",threads).put("lastRate",rate)
+        c.put("lastMs",ms).put("lastAudioMs",audioMs).put("threads",threads).put("lastRate",rate).put("lastEndMs",now)
         median(c.optJSONArray("coldRates"))?.let { c.put("coldMedianMs",(it*PipelineAudioMath.MAX_CHUNK_MS).toLong()) }
         median(c.optJSONArray("rates"))?.let { c.put("p50Ms",(it*PipelineAudioMath.MAX_CHUNK_MS).toLong()) }
         return o
@@ -280,9 +280,12 @@ internal object PowerStats {
     }
     /** Work ms per audio ms for W1: the median of the recent pieces (same threads), null without any. */
     fun rate(o:JSONObject?):Double? = median(o?.optJSONObject("chunk")?.optJSONArray("rates"))
-    /** The last piece ran at least [TranscriptionPower.HOT_RATIO] times the cold median (needs both). */
-    fun slow(o:JSONObject?):Boolean {
+    /** The last piece ran at least [TranscriptionPower.HOT_RATIO] times the cold median (needs both), and it ended less than
+     * [TranscriptionPower.COLD_AFTER_MS] ago: after a rest the phone is taken as cool again, else one slow piece would stop
+     * every later run for good (review r16-1 #1). */
+    fun slow(o:JSONObject?,now:Long=System.currentTimeMillis()):Boolean {
         val c=o?.optJSONObject("chunk") ?: return false
+        val end=c.optLong("lastEndMs",0);if(end<=0 || now-end>=TranscriptionPower.COLD_AFTER_MS) return false
         val cold=median(c.optJSONArray("coldRates")) ?: return false
         val last=c.optDouble("lastRate",Double.NaN);if(!last.isFinite()) return false
         return last>=cold*TranscriptionPower.HOT_RATIO
@@ -307,19 +310,28 @@ internal object PowerStats {
         }
         return o
     }
-    /** Plugged in for at least [TranscriptionPower.LEVEL_WINDOW_MS] and the charge is lower than when the plug was sampled. */
+    /** Plugged in for at least [TranscriptionPower.LEVEL_WINDOW_MS] and the charge is [LEVEL_DROP_PCT] lower than when the plug
+     * was sampled. Never while the battery is full or Samsung's protection holds it (it sways a percent there; review r16-1 #2). */
     fun levelFalling(o:JSONObject?,s:BatterySnapshot,now:Long):Boolean {
-        if(o==null || !s.isPlugged) return false
+        if(o==null || !s.isPlugged || s.status=="full" || s.status=="notCharging") return false
         val ms=o.optLong("plugSampleMs",0);if(ms<=0 || now-ms<TranscriptionPower.LEVEL_WINDOW_MS) return false
-        return s.pct<o.optInt("plugSamplePct",0)
+        return s.pct<=o.optInt("plugSamplePct",0)-LEVEL_DROP_PCT
     }
+    const val LEVEL_DROP_PCT=2
+    /** A battery run began a piece (written before it, cleared by [noteRun]): a run the process died in still counts. */
+    fun noteBatteryStart(old:JSONObject?,now:Long):JSONObject { val o=copy(old);o.put("batteryRunStartMs",now);return o }
     /** The policy's memory for [PowerPolicy.decide]. */
     fun budget(o:JSONObject?,s:BatterySnapshot,now:Long,chargingOnly:Boolean):PowerBudget {
         val t=o?.optJSONObject("today")?.takeIf { it.optInt("day")==PowerPolicy.day(now) }
         val b=t?.optJSONObject("battery")
         val capacity=s.chargeUah?.let { c -> if(s.pct in 5..100) c*100/s.pct else null }
-        return PowerBudget(chargingOnly,b?.optLong("ms",0) ?: 0,b?.optLong("uahScreenOff",0) ?: 0,capacity,
-            o?.optLong("lastBatteryRunEndMs",0) ?: 0,o?.optLong("lastPluggedMs",0) ?: 0,levelFalling(o,s,now),slow(o))
+        var used=b?.optLong("ms",0) ?: 0;var last=o?.optLong("lastBatteryRunEndMs",0) ?: 0
+        // A battery run that never wrote its end (the process died, review r16-1 #4): it counts as a full run that ended then,
+        // once it is older than a run can be.
+        val open=o?.optLong("batteryRunStartMs",0) ?: 0
+        if(open>last && now-open>=TranscriptionPower.SELF_END_MS+2*60_000L) { last=open+TranscriptionPower.SELF_END_MS;if(PowerPolicy.day(open)==PowerPolicy.day(now)) used+=TranscriptionPower.SELF_END_MS }
+        else if(open>last) last=now // one is running now: the gap holds
+        return PowerBudget(chargingOnly,used,b?.optLong("uahScreenOff",0) ?: 0,capacity,last,o?.optLong("lastPluggedMs",0) ?: 0,levelFalling(o,s,now),slow(o,now))
     }
     /** The battery as last seen (heartbeat `power` head). */
     fun noteSnapshot(old:JSONObject?,s:BatterySnapshot,cpusAllowed:Int?,cpuset:String?):JSONObject {

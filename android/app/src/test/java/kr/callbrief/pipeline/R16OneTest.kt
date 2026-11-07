@@ -130,9 +130,10 @@ class R16OneTest:ProtectedTextHostTestBase() {
         // The sample: plugged at 70% at 14:00, 69% at 14:11 -> falling; 70% -> not.
         var o=PowerStats.notePlug(null,snap(pct=70,plugged="usb"),base)
         assertFalse(PowerStats.levelFalling(o,snap(pct=69,plugged="usb"),base+5*minute))
-        o=PowerStats.notePlug(o,snap(pct=69,plugged="usb"),base+11*minute)
-        assertTrue(PowerStats.levelFalling(o,snap(pct=69,plugged="usb"),base+11*minute))
-        assertFalse(PowerStats.levelFalling(o,snap(pct=70,plugged="usb"),base+11*minute))
+        o=PowerStats.notePlug(o,snap(pct=68,plugged="usb"),base+11*minute)
+        assertTrue(PowerStats.levelFalling(o,snap(pct=68,plugged="usb"),base+11*minute))
+        assertFalse("one percent sways",PowerStats.levelFalling(o,snap(pct=69,plugged="usb"),base+11*minute))
+        for(st in listOf("full","notCharging")) assertFalse("battery protection",PowerStats.levelFalling(o,snap(pct=60,plugged="ac",status=st),base+11*minute))
     }
     @Test fun hotInThreeWaysWaitsTenMinutesWhilePluggedIn() {
         for(s in listOf(snap(plugged="ac",headroom=0.85f),snap(plugged="ac",temp=400))) {
@@ -146,6 +147,11 @@ class R16OneTest:ProtectedTextHostTestBase() {
         o=PowerStats.notePiece(o,300_000,120_000,6,cold=false);assertFalse(PowerStats.slow(o))
         o=PowerStats.notePiece(o,360_000,120_000,6,cold=false);assertTrue(PowerStats.slow(o))
         assertEquals(240_000L,o.getJSONObject("chunk").getLong("coldMedianMs"))
+        // After a 20-minute rest the phone counts as cool again (else one slow piece would hold every run back).
+        val end=o.getJSONObject("chunk").getLong("lastEndMs")
+        assertTrue(PowerStats.slow(o,end+19*minute));assertFalse(PowerStats.slow(o,end+20*minute))
+        // Another thread count starts the cold reference again too.
+        assertFalse(PowerStats.notePiece(o,500_000,120_000,4,cold=false).getJSONObject("chunk").has("coldRates"))
     }
     @Test fun theMorningIsForChargingUnderNinetyPercent() {
         val six=LocalDate.of(2026,11,8).atTime(6,0).atZone(CallRecordStore.KST).toInstant().toEpochMilli()
@@ -173,6 +179,12 @@ class R16OneTest:ProtectedTextHostTestBase() {
         assertEquals(9,t.getJSONObject("plugged").getInt("min"));assertEquals(2,t.getInt("gapSkips"));assertEquals("min",t.getString("budgetHit"))
         val b=PowerStats.budget(o,snap(),base+hour,false)
         assertEquals(6*minute,b.batteryRunMs);assertEquals(base,b.lastBatteryRunEndMs)
+        // A battery run the process died in: the gap holds while it may still run, then it counts as a whole run.
+        val started=PowerStats.noteBatteryStart(o,base+2*hour)
+        assertEquals(base+2*hour+minute,PowerStats.budget(started,snap(),base+2*hour+minute,false).lastBatteryRunEndMs)
+        val dead=PowerStats.budget(started,snap(),base+3*hour,false)
+        assertEquals(base+2*hour+TranscriptionPower.SELF_END_MS,dead.lastBatteryRunEndMs);assertEquals(6*minute+TranscriptionPower.SELF_END_MS,dead.batteryRunMs)
+        assertEquals("a run that wrote its end clears the mark",6*minute+minute,PowerStats.budget(PowerStats.noteRun(started,base+2*hour+minute,PowerPolicy.Mode.BATTERY,minute,0,null),snap(),base+3*hour,false).batteryRunMs)
         // The next KST day starts again; yesterday is prev.
         val next=base+24*hour
         assertEquals(0L,PowerStats.budget(o,snap(),next,false).batteryRunMs)
@@ -298,7 +310,7 @@ class R16OneTest:ProtectedTextHostTestBase() {
         }
         CallTranscriptionStore.buildCode={ 5001 }
         CallTranscriptionStore(context,{ clock },{}).use { s -> assertEquals(0,s.requeueFailed());assertEquals("FAILED",state(s,"bad").first) }
-        assertTrue(CallTranscriptionStore.permanent("CodecException"));assertTrue(CallTranscriptionStore.permanent("EMPTY_TRANSCRIPT"));assertFalse(CallTranscriptionStore.permanent("STALLED"))
+        assertTrue(CallTranscriptionStore.permanent("CodecException"));assertFalse(CallTranscriptionStore.permanent("STALLED"))
     }
     @Test fun theDeadlineTwiceSendsTheRecordingToTheCharger() {
         rec("slow",base-hour,30.0)

@@ -73,8 +73,10 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         val n=db.query("SELECT count(*) AS n FROM call_transcription_jobs WHERE $where",build,build).single()["n"].let { (it as Number).toInt() }
         if(n>0) db.transaction {
             // v3.6 W5: the stop counts and halving marks of a revived row start again too (its finished pieces stay).
+            // A halving mark whose halves are saved stays, else the next run would take the piece whole and drop them (review r16-1 #6).
             for(t in listOf("call_transcription_stalls","call_transcription_splits"))
-                db.execute("DELETE FROM $t WHERE EXISTS(SELECT 1 FROM call_transcription_jobs WHERE call_transcription_jobs.recording_id=$t.recording_id AND call_transcription_jobs.source_version=$t.source_version AND call_transcription_jobs.audio_sha=$t.audio_sha AND $where)",build,build)
+                db.execute("DELETE FROM $t WHERE EXISTS(SELECT 1 FROM call_transcription_jobs WHERE call_transcription_jobs.recording_id=$t.recording_id AND call_transcription_jobs.source_version=$t.source_version AND call_transcription_jobs.audio_sha=$t.audio_sha AND $where)"+
+                    (if(t=="call_transcription_splits") " AND NOT EXISTS(SELECT 1 FROM call_transcription_parts p WHERE p.recording_id=$t.recording_id AND p.source_version=$t.source_version AND p.audio_sha=$t.audio_sha AND p.chunk IN(-(2*$t.chunk+1),-(2*$t.chunk+2)))" else ""),build,build)
             db.execute("UPDATE call_transcription_jobs SET state='QUEUED',reason='$REQUEUED',attempts=0,deadline_count=0,updated_ms=?,queued_ms=?,retried_build=CAST(? AS INTEGER),requeue_count=coalesce(requeue_count,0)+1 WHERE $where",
                 now(),now(),build,build,build);null
         }
@@ -328,7 +330,7 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         /** v3.6 W4: this many native deadlines on one recording send it to the charger. */
         const val DEADLINES_TO_CHARGER=2
         /** v3.6 W4: failures that come back the same however often they are tried (the m4a cannot be read, too short, nothing in it). */
-        fun permanent(code:String)=code=="CodecException" || code=="ANDROID_STT_PCM_SIZE" || code=="EMPTY_TRANSCRIPT"
+        fun permanent(code:String)=code=="CodecException" || code=="ANDROID_STT_PCM_SIZE"
         /** Queued recordings whose time (start or filename time, else the file's modified time) is before 10/1 become
          * SKIPPED with BEFORE_START, the reason the offer pass gives them. Arguments: updated_ms, [FirstPass.FROM_MS]. */
         const val SKIP_BEFORE_START_SQL="""UPDATE call_transcription_jobs SET state='SKIPPED',reason='BEFORE_START',updated_ms=? WHERE state='QUEUED' AND recording_id IN(

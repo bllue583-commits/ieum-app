@@ -168,6 +168,8 @@ internal class CallTranscriptionRunner(
         fun deadline(ms:Long) {}
         fun yielded() {}
         fun modelLoad(ms:Long) {}
+        /** A piece is about to begin (the first of the run: the battery run's start is written before it). */
+        fun started() {}
         companion object { val NONE=object:Events {} }
     }
     data class Pass(val state:String,val done:Int,val failed:Int,val pieces:Int=0)
@@ -225,6 +227,7 @@ internal class CallTranscriptionRunner(
             val audioMs=pcm.size*1000L/PipelineAudioMath.TARGET_RATE
             val first=startedPieces==0
             if(!first && !keepGoing() || !PowerPolicy.startPiece(first,now()-runStartedMs,PowerPolicy.expectedPieceMs(audioMs,rate()),runLimitMs)) throw Yield()
+            if(startedPieces==0) events.started()
             startedPieces++
             val began=now()
             val raw=try {
@@ -313,7 +316,8 @@ internal class CallTranscriptionRunner(
                 if(stopped()){endStopped(c.key);return Pass("STOPPED",done,failed,pieces)}
                 val code=e.message?.takeIf{it.matches(Regex("[A-Z0-9_]{1,80}"))} ?: e.javaClass.simpleName
                 // v3.6 W4: a failure in the recording itself comes back the same: failed for good at once, never revived.
-                if(CallTranscriptionStore.permanent(code)){store.failPermanently(c.key,code);failed++}
+                // A codec error the codec calls transient (busy) is not one of them (review r16-1 #5).
+                if(CallTranscriptionStore.permanent(code) && !transientCodec(e)){store.failPermanently(c.key,code);failed++}
                 else if(store.attempts(c.key)>=MAX_ATTEMPTS){store.finish(c.key,"FAILED",code);failed++} else store.finish(c.key,"QUEUED",code)
             }
         }
@@ -334,6 +338,8 @@ internal class CallTranscriptionRunner(
         /** r12-8 A4: the native run ended by its own [NATIVE_DEADLINE_SECONDS] (ieum_whisper.cpp ends it with
          * ANDROID_STT_NOT_COMPLETED); a stop signal is told apart by the caller before this is asked. */
         fun deadline(e:Exception)=e.message=="ANDROID_STT_NOT_COMPLETED"
+        /** A MediaCodec error, here or as a cause, that the codec says may go away on its own. */
+        fun transientCodec(e:Throwable):Boolean = generateSequence(e) { it.cause }.take(5).any { it is android.media.MediaCodec.CodecException && it.isTransient }
         /** Without a stop reason (before Android 12): a stop this long after the start is taken as the 10 minute limit. */
         const val TIME_LIMIT_NEAR_MS=9*60_000L
         /** Queue the next pass at once only when this one made progress; otherwise the hourly job takes over. */
@@ -425,6 +431,7 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
             lastOk }
         val events=object:CallTranscriptionRunner.Events {
             override fun piece(ms:Long,audioMs:Long,cold:Boolean) { savePower(settings) { PowerStats.notePiece(it,ms,audioMs,threads,cold) } }
+            override fun started() { if(run.mode==PowerPolicy.Mode.BATTERY) savePower(settings) { PowerStats.noteBatteryStart(it,System.currentTimeMillis()) } }
             override fun killed(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"killedChunkMs",ms) } }
             override fun deadline(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"deadlineMs",ms) } }
             override fun yielded() { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"yieldCount") } }
@@ -463,6 +470,12 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                     // Charge used: battery runs with the screen off at both ends only (the phone's whole use, an upper bound).
                     val uah=if(run.mode==PowerPolicy.Mode.BATTERY && !start.screenOn && !endSnap.screenOn) start.chargeUah?.let { a -> endSnap.chargeUah?.let { b -> (a-b).takeIf { it>0 } } } else null
                     savePower(settings) { o -> var x=PowerStats.noteRun(o,end,run.mode,end-now,runner.doneAudioMs,uah)
+                        // Begun as plugged in (or within the plug debounce) but ended on battery: the time since the plug was
+                        // last seen goes to the battery budget, with the gap after it (review r16-1 #3).
+                        if(run.mode==PowerPolicy.Mode.PLUGGED && !endSnap.isPlugged) {
+                            val since=o.optLong("lastPluggedMs",now).coerceIn(now,end)
+                            x=PowerStats.noteRun(x,end,PowerPolicy.Mode.BATTERY,end-since,0,null)
+                        }
                         if(pass.state=="STOPPED") x=PowerStats.noteStop(x,end,if(timeLimitStop(began)) "timeout" else "other");x }
                 }
                 runCatching { val (n,oldest)=store.powerWaiting(CallTranscriptionStore.BatteryWindow(PowerPolicy.dayStartMs(end),store.bytesPerMs()),chargingOnly(settings))
@@ -471,7 +484,8 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                 // at once while plugged in, after the gap on battery (the next wake decides again either way).
                 if(CallTranscriptionRunner.requeueNow(pass.state,pass.pieces) || severe()) {
                     if(severe()) later(applicationContext,TranscriptionPower.HOT_DELAY_MS*2)
-                    else if(run.mode==PowerPolicy.Mode.PLUGGED) enqueue(applicationContext) else later(applicationContext,TranscriptionPower.BATTERY_RUN_GAP_MS)
+                    // A battery run that ended because the plug went in goes on at once (review r16-1 #7).
+                    else if(run.mode==PowerPolicy.Mode.PLUGGED || BatterySnapshot.read(storage).isPlugged) enqueue(applicationContext) else later(applicationContext,TranscriptionPower.BATTERY_RUN_GAP_MS)
                 }
                 Result.success()
             } }
@@ -544,7 +558,8 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(PERIODIC,ExistingPeriodicWorkPolicy.UPDATE,
                 PeriodicWorkRequestBuilder<CallTranscriptionTick>(1,TimeUnit.HOURS).build())
             enqueue(context,ExistingWorkPolicy.KEEP)
-            armPlug(context,true)
+            // Armed only on battery: while plugged in it would fire at once and add one more run (review r16-1 #8).
+            armPlug(context,!BatterySnapshot.read(context).isPlugged)
         }
     }
 }
