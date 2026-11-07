@@ -65,7 +65,8 @@ internal object PowerText {
     /** One day of the ledger ([d] null: a day with nothing, [day] its KST day). */
     fun dayBlock(d:JSONObject?,day:Int):JSONObject {
         val b=d?.optJSONObject("battery");val p=d?.optJSONObject("plugged")
-        val o=JSONObject().put("day",if(d!=null && d.optInt("day")>0) d.optInt("day") else day)
+        // The day as "yyyy-MM-dd": a yyyymmdd number can look like a phone number to the heartbeat's leak check ("010").
+        val o=JSONObject().put("day",(if(d!=null && d.optInt("day")>0) d.optInt("day") else day).let { if(it>0) "%04d-%02d-%02d".format(it/10000,it/100%100,it%100) else JSONObject.NULL })
         o.put("battery",JSONObject().put("runs",n(b,"runs")).put("ms",n(b,"ms")).put("min",n(b,"min")).put("audioMin",n(b,"audioMin"))
             .put("mAhScreenOff",(b?.opt("mAhScreenOff") as? Number)?.toLong()?.takeIf { it>0 } ?: JSONObject.NULL))
         o.put("plugged",JSONObject().put("runs",n(p,"runs")).put("ms",n(p,"ms")).put("min",n(p,"min")).put("audioMin",n(p,"audioMin")))

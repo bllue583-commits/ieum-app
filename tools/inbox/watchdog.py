@@ -345,12 +345,12 @@ def power_rules(now_ms, phone, history, add):
 
     if heavy(today):
         # The other day: prev of this heartbeat, or an earlier heartbeat whose today was another day.
-        day0 = num(today.get("day"))
+        day0 = str(today.get("day"))
         other = sub(p, "prev") if heavy(sub(p, "prev")) else None
         if other is None:
             for h in history or []:
                 t = sub(power(h), "today")
-                if t and num(t.get("day")) != day0 and heavy(t):
+                if t and str(t.get("day")) != day0 and heavy(t):
                     other = t
                     break
         if other is not None:

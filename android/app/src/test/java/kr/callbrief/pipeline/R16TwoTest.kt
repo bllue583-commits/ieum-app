@@ -16,6 +16,7 @@ import java.time.ZonedDateTime
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[35])
 class R16TwoTest {
+    private fun iso(d:Int)="%04d-%02d-%02d".format(d/10000,d/100%100,d%100)
     private val h=3_600_000L;private val min=60_000L
     /** 2027-01-15 14:00 KST. */
     private val now=ZonedDateTime.of(2027,1,15,14,0,0,0,TranscriptionPower.KST).toInstant().toEpochMilli()
@@ -38,7 +39,7 @@ class R16TwoTest {
     @Test fun powerBlockIsNumbersAndCodesOnlyAndAlwaysThere() {
         val input=PhoneStatus.Input(now,"3.6",1047,2,null,0,0,"READY","","",12)
         val empty=PhoneStatus.build(input).getJSONObject("power")
-        assertEquals(today,empty.getJSONObject("today").getInt("day"))
+        assertEquals(iso(today),empty.getJSONObject("today").getString("day"))
         assertEquals(0,empty.getJSONObject("today").getJSONObject("battery").getInt("min"))
         assertEquals("none",empty.getJSONObject("today").getString("budgetHit"))
         assertEquals(0,empty.getJSONObject("waiting").getInt("n"));assertTrue(empty.getJSONObject("waiting").isNull("oldestMin"))
@@ -68,8 +69,8 @@ class R16TwoTest {
     }
     @Test fun aLedgerFromYesterdayGivesEmptyTodayAndItAsPrev() {
         val o=PowerText.heartbeat(ledger(day=today-1),false,now)
-        assertEquals(today,o.getJSONObject("today").getInt("day"));assertEquals(0,o.getJSONObject("today").getJSONObject("battery").getInt("min"))
-        assertEquals(today-1,o.getJSONObject("prev").getInt("day"));assertEquals(5,o.getJSONObject("prev").getJSONObject("battery").getInt("min"))
+        assertEquals(iso(today),o.getJSONObject("today").getString("day"));assertEquals(0,o.getJSONObject("today").getJSONObject("battery").getInt("min"))
+        assertEquals(iso(today-1),o.getJSONObject("prev").getString("day"));assertEquals(5,o.getJSONObject("prev").getJSONObject("battery").getInt("min"))
         // A broken ledger still gives the block.
         assertEquals(0,PowerText.heartbeat(JSONObject().put("today","x").put("waiting",5),false,now).getJSONObject("waiting").getInt("n"))
         assertEquals(0L,PowerText.batteryMinToday(ledger(day=today-1),now));assertEquals(5L,PowerText.batteryMinToday(ledger(),now))
