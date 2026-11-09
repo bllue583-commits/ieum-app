@@ -23,3 +23,7 @@ Robolectric JAR는 준비 후 `python3 tools/prepare_host_tests.py <local-jar>`�
 Android T81~T84는 `IEUM_HISTORICAL_SYNTHETIC_AUDIO`로 원래 승인된 합성 WAV를 지정합니다. 2050244 bytes/SHA256 `3ee1442ed8ac61b95ac1ff2985d2857126042b99141c05f7947c25ae4f7c56b5`를 코드가 검사합니다. 원본 Mac의 기존 code8 `drive-integration-ro1/core-handoff/code8-dot-work/source/dot-core/handoff/connector-pilot-v0/audio.wav`를 소유자가 승인된 저장 위치에서 확보할 수 있습니다. 이 Git에는 재배포하지 않았으며 출처 불명 음성을 대신하지 않습니다. 미준비 시 네 시험은 명시 SKIP입니다. 이는 실제 신규 STT 시험이 아닙니다.
 
 P3302/P3303는 `IEUM_LOCAL_STT_PIN_FILE`로 코드33의 기존 준비된 whisper-cli와 모델 해시를 지정할 때만 실행됩니다. native Android 모델 핀과 다릅니다. 미준비 시 두 시험은 SKIP입니다.
+
+## 실사용 모델
+
+이 표의 `ggml-tiny-q5_1.bin`은 공개 시험용이다. 아내 폰이 쓰는 모델은 large-v3-turbo q5_0(약 574MB)이고 앱이 처음 실행 때 받아 SHA-256을 확인한다(자세한 것은 [DESIGN.md](DESIGN.md) 3.2절). 엔진·양자화 후보의 측정 계획은 [DESIGN_V7.md](DESIGN_V7.md) 4절.

@@ -33,14 +33,14 @@ APK에는 네이티브 빌드(NDK 28.2.13676358, CMake 3.22 이상)가 필요하
 ## 문서
 
 - [docs/DESIGN.md](docs/DESIGN.md): 현재 설계도(기술). 구현된 그대로의 구조, 흐름, 저장, 시험. 설계를 바꿀 때 먼저 고칩니다.
-- [docs/DESIGN_V5.md](docs/DESIGN_V5.md): 다음 버전(v3.5 카톡 아침 보고) 설계. 배포 뒤 `docs/history/`로.
+- [docs/DESIGN_V7.md](docs/DESIGN_V7.md): 다음 네 버전(v3.7~v4.0) 설계. 버전이 배포될 때마다 DESIGN.md에 흡수하고, 끝나면 `docs/history/`로.
 - [docs/HANDOFF.md](docs/HANDOFF.md): 인수인계. 현재 상태, 다음 할 일, 워크플로, 함정. 새 세션은 이 파일부터 읽습니다. 지난 세션 이력은 `docs/history/HANDOFF_HISTORY.md`.
 - [docs/PRODUCT.md](docs/PRODUCT.md): 앱 목적, 기능, 화면과 UX 설계(무엇을, 누구를 위해, 어떻게 보여 줄지).
 - [docs/OPERATIONS.md](docs/OPERATIONS.md): 예약 작업, 우편함, 상태 파일, 워치독, 배포 흐름. 지시문 원본은 `docs/routines/`.
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md): 작업 방식, 지켜야 할 것, 로컬 빌드 환경.
 - [docs/REAL_DEVICE_CHECKLIST.md](docs/REAL_DEVICE_CHECKLIST.md): 아내 폰(S26) 10분 확인표.
-- `docs/history/`: 버전별 설계·구현 대조 이력(`DESIGN_V3.md` v2.6~v3.0, `DESIGN_V4.md` v3.1~v3.4)과 HANDOFF 이력.
-- `docs/reviews/`: 검토 원문(11/4 종합 검토, 11/5 화면·파이프라인·데이터, v3.3 자막 협의안, v3.4 설계 검토). 작업자 지시문과 보고서는 `docs/orchestration/`.
+- `docs/history/`: 버전별 설계·구현 대조 이력(`DESIGN_V3.md` v2.6~v3.0, `DESIGN_V4.md` v3.1~v3.4, `DESIGN_V5.md` v3.5, `DESIGN_V6.md` v3.6)과 HANDOFF 이력.
+- `docs/reviews/`: 검토 원문(11/4 종합 검토, 11/5 화면·파이프라인·데이터, v3.3 자막 협의안, v3.4 설계 검토·객관 평가, v3.6 배터리 감사·토론·구현 대조, 11/10 프로젝트·결과 평가). 작업자 지시문과 보고서는 `docs/orchestration/`.
 - [docs/MIGRATION.md](docs/MIGRATION.md), [docs/ASSETS.md](docs/ASSETS.md), [docs/FIXTURES.md](docs/FIXTURES.md), [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md): 저장소 이전 기록, 모델·시험 자료 출처와 라이선스.
 
 개발용 저장소이며(11/5부터 Actions 때문에 공개, 비밀은 들어 있지 않음) 공개 라이선스는 부여하지 않았습니다.

@@ -1,6 +1,6 @@
 # 이음 배터리 소모 원인 감사 (Opus 중간 작업자, 읽기 전용, 2026-11-07 16시)
 
-> 기준 `feature/lean-calls` 3b4ebcd(v3.5 빌드 1046). 우편함에서는 `status/phone.json`(11/7 14:57 KST)만 읽음. 경로 약어: `K/` = `android/app/src/main/java/kr/callbrief/`, `P/` = `K/pipeline/`. 이 보고를 바탕으로 쓴 설계는 [DESIGN_V6.md](../DESIGN_V6.md).
+> 기준 `feature/lean-calls` 3b4ebcd(v3.5 빌드 1046). 우편함에서는 `status/phone.json`(11/7 14:57 KST)만 읽음. 경로 약어: `K/` = `android/app/src/main/java/kr/callbrief/`, `P/` = `K/pipeline/`. 이 보고를 바탕으로 쓴 설계는 [DESIGN_V6.md](../history/DESIGN_V6.md).
 
 ## 1. 자막 작업 스케줄
 - **제약은 배터리 부족 아님 하나뿐** (`P/CallTranscriptionRunner.kt:378`). 충전 중, 기기 유휴, expedited, backoff 설정은 없음. 매시간 틱은 KEEP으로 한 번 거는 일만 함(`:303-304`, `:385-390`).

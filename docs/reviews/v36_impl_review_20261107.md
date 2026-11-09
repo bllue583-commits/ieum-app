@@ -1,6 +1,6 @@
 # v3.6 구현 대조 검토 (Opus 중간 작업자, 읽기 전용, 2026-11-07 19시, feature/lean-calls 5fa39cf)
 
-> 설계 [DESIGN_V6.md](../DESIGN_V6.md)와 구현(f4d61d2·a99a7b3·b1f9f45·6d0edad)을 대조. 약어 P=`pipeline/PowerPolicy.kt`, R=`pipeline/CallTranscriptionRunner.kt`, S=`pipeline/CallTranscriptionStore.kt`, T=`pipeline/PowerText.kt`, D=DESIGN_V6. 우편함 개인정보 파일은 읽지 않음.
+> 설계 [DESIGN_V6.md](../history/DESIGN_V6.md)와 구현(f4d61d2·a99a7b3·b1f9f45·6d0edad)을 대조. 약어 P=`pipeline/PowerPolicy.kt`, R=`pipeline/CallTranscriptionRunner.kt`, S=`pipeline/CallTranscriptionStore.kt`, T=`pipeline/PowerText.kt`, D=DESIGN_V6. 우편함 개인정보 파일은 읽지 않음.
 
 ## 종합 판정
 구조는 설계대로다. 실행 작업 하나 + 전원 트리거, `PowerPolicy` 순수 함수, W1~W5, P7, 화면·워치독이 모두 들어갔고 차이는 대부분 8절에 근거와 함께 적혀 있다. 다만 6d0edad의 검토 반영 수정이 배터리 실행 안의 재판정과 부딪혀 **배터리 모드가 한 실행에 조각 하나만 하도록 퇴행**했다. 통화기록 길이 추정과 일부 계측(decode today/prev, yieldMs·decodeAudioMs)은 8절 없이 빠졌다. → "설계대로이되 고쳐야 할 회귀 하나"(v3.6.1).

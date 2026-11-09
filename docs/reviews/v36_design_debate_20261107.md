@@ -1,6 +1,6 @@
 # v3.6 배터리 설계 토론 (2026-11-07 16~17시, Fable 초안 ↔ Opus 중간 검토자, 읽기 전용)
 
-> 대상 문서 [../DESIGN_V6.md](../DESIGN_V6.md) 초안(0582abc). 검토자는 코드(`CallTranscriptionRunner.kt`=R, `CallTranscriptionStore.kt`=S, `AndroidWhisperEngine.kt`=E, `cpp/ieum_whisper.cpp`=N)와 안드로이드 공식 문서·AOSP 커밋을 직접 확인했다. 결정은 DESIGN_V6 2~7절에 반영했고, 9절이 요지다.
+> 대상 문서 [../DESIGN_V6.md](../history/DESIGN_V6.md) 초안(0582abc). 검토자는 코드(`CallTranscriptionRunner.kt`=R, `CallTranscriptionStore.kt`=S, `AndroidWhisperEngine.kt`=E, `cpp/ieum_whisper.cpp`=N)와 안드로이드 공식 문서·AOSP 커밋을 직접 확인했다. 결정은 DESIGN_V6 2~7절에 반영했고, 9절이 요지다.
 
 ## 1차: Opus 반박
 

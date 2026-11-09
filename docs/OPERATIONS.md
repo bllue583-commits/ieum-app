@@ -16,7 +16,7 @@
 
 우편함은 비공개 저장소 `bllue583-commits/ieum-inbox`이다. 앱 저장소는 `bllue583-commits/ieum-app`이다.
 
-## 2. 예약 작업 세 개 (11/6 기준, 알림 켬(push), 승인 방식 자동. 매시간·새벽 작업은 11/6 새벽 Opus 세션이 ieum-app·ieum-inbox 둘 다 붙여 다시 만들었고, 07:36 실행이 `repoOk=true`로 우편함에 push한 것으로 연결이 확인됨)
+## 2. 예약 작업 세 개 (11/10 확인 — 세 작업 모두 정상 실행 중; 구성은 11/6 기준, 알림 켬(push), 승인 방식 자동. 매시간·새벽 작업은 11/6 새벽 Opus 세션이 ieum-app·ieum-inbox 둘 다 붙여 다시 만들었고, 07:36 실행이 `repoOk=true`로 우편함에 push한 것으로 연결이 확인됨)
 
 | 이름 | 시각(한국) | 모델 | 지시문 원본 | 기억 파일 | 하는 일 |
 |---|---|---|---|---|---|
@@ -24,6 +24,7 @@
 | 이음 새벽 정리 (매일) | 04:46(v3.5, 전에는 05:16) | Opus 5.5 | `docs/routines/tidy.md`(v7)의 "---" 아래 | `tidy/project.md`, `tidy/history/YYYY-MM.md`, `tidy/briefing.md`, 자가 보고 `status/last-run-tidy.json`(`reportWritten`) | 진행 중인 일 묶기, 팔로업 제안, 중복 합치기, 아침 보고서 `report/YYYY-MM-DD.json`(9-1번, `tools/report_check.py` 통과 뒤 커밋, 30일 지난 것은 지움), 현황 파일과 다섯 줄 알림, 워치독. 폰이 밤에 올린 `tidy/state.json`(24시간 안)이 있어야 일을 한다. v3.1부터 폰이 처음 정리 중이어도 최근 14일 기록을 올리므로 처음 정리를 기다리지 않는다(state가 없거나 오래됐으면 "정리할 것 없음: 이유"가 정상, 같은 날 이미 "tidy" 커밋이 있으면 "이미 정리됨") |
 | 이음 통화 목록 검증 (매일) | 09:00 | Opus 5.5 | 예약 작업 프롬프트가 원본 | `status/verify-log.md`(숫자만) | 폰 통화기록(`status/calllog.txt`)과 저장·분석 결과 대조, 검증 파일과 다섯 줄 알림. 프롬프트는 아직 옛 `status/last-run.json`을 읽는다(새 루틴별 파일로 바꾸지 않았음) |
 
+- **v3.7에서 바뀔 시각표(DESIGN_V7 2.2, 배포와 같은 시각에 적용):** 매시간 분석 cron `34 7-22` → `34 3-4,7-22`(밤에 만든 자막을 아침 보고 전에 분석), 새벽 정리 04:46 → 05:05, 카톡 05:30은 그대로. 지시문 안 cron 문자열과 자가 보고 `cron`도 같이 바꾼다(폰이 그 값으로 결과 받는 시각을 정함).
 - 매시간·새벽 예약 작업 프롬프트(11/6부터)는 짧은 안내다: ieum-inbox를 pull(실패하면 "[이음 분석 HH:MM] 확인 필요: 저장소 접근", 새벽은 "[이음 새벽 정리 MM/DD HH:MM] 확인 필요: 저장소 접근"만 답함) → 우편함의 `routines/hourly.md`(또는 `routines/tidy.md`)를 Read로 끝까지 읽고 첫 "---" 아래를 지시문으로 따른다. cron은 매시간 `CRON_TZ=Asia/Seoul 34 7-22 * * *`, 새벽 `CRON_TZ=Asia/Seoul 46 4 * * *`, 검증 `CRON_TZ=Asia/Seoul 0 9 * * *`. ID는 매시간 `trig_016vQxos9z6p1pdPJ28MjrsV`, 새벽 `trig_01Sp6piuvasw52ZR1KPupumB`, 검증 `trig_01KyuDNZWkmrQpJj8e8cr661`.
 - 지시문을 바꿀 때: 이 저장소의 원본 파일(`docs/routines/*.md`)을 고치고 배포한다. release-apk가 version.json보다 먼저 우편함 `routines/`와 `tools/watchdog.py`에 바뀐 것만 올린다. 배포 없이 급히 바꿀 때만 우편함 `routines/`에 직접 커밋한다. 매시간 지시문의 [분석 규칙]과 [결과 형식]은 앱 코드(`ClaudeCallAnalyzer.SYSTEM`, `SCHEMA`)와 같아야 하며 `RoutineDocTest`가 검사한다. 규칙을 바꾸면 `ClaudeCallAnalyzer.PROMPT_VERSION`과 지시문 버전을 함께 올린다.
 - 실행 확인: claude.ai의 예약 작업 화면에서 실행 기록을 본다. 실행 로그에는 통화 내용이 남지 않게 지시돼 있다. 빈 실행은 "새 기록 없음" 한 줄로 끝나는 것이 정상이다.
@@ -53,7 +54,7 @@
 | `status/verify-log.md` | 통화 목록 검증 | 검증 작업의 기억(숫자만) |
 | `routines/hourly.md`, `routines/tidy.md` | release-apk | 예약 작업이 읽는 지시문 사본(원본 `docs/routines/`, 바뀐 것만 올림) |
 | `tools/watchdog.py`, `tools/report_check.py` | release-apk | 루틴 안 워치독과 아침 보고서 검사기 사본(원본 `tools/inbox/watchdog.py`, `tools/report_check.py`) |
-| `app/version.json`, 릴리스 | release-apk | 최신 APK 정보와 파일(최근 3개만 남김). 11/6 17시부터 versionCode 1046, versionName 3.5, promptVersion "8", tidyVersion "7", certSha256 |
+| `app/version.json`, 릴리스 | release-apk | 최신 APK 정보와 파일(최근 3개만 남김). 11/7 21:44부터 versionCode 1049, versionName v3.6, promptVersion "8", tidyVersion "7", certSha256 |
 | `README.md` | release-apk | 빈 저장소에 처음 한 번 만드는 안내 한 줄 |
 
 `.github/` 폴더는 없다(Actions 워치독을 지웠음). `bad/`는 11/6 아침 체크아웃에는 없고 필요할 때 생긴다.
