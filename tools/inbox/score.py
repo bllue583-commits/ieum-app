@@ -201,7 +201,7 @@ def item_call_card(cfg, window, asof, daily):
         got = today["drawn"] if "drawn" in today else today.get("shown", 0) + today.get("locked", 0)
         # calls가 덜 세진 날(프로세스가 먼저 죽음)도 실패가 있으면 분모에 넣는다
         # v3.6.1부터는 한 통화가 noPermission과 fallback에 함께 세질 수 있어 drawn+fallback만 더한다
-        missed = today.get("fallback", 0) if "drawn" in today else today.get("noPermission", 0)
+        missed = (today.get("fallback", 0) + today.get("unconfirmed", 0)) if "drawn" in today else today.get("noPermission", 0)
         base = max(today.get("calls", 0) - today.get("ignored", 0) - today.get("off", 0), got + missed)
         if base <= 0:
             continue
