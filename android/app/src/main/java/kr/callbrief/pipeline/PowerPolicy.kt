@@ -30,7 +30,9 @@ internal object TranscriptionPower {
     const val HOT_HEADROOM=0.85f
     const val HOT_RATIO=1.5
     const val HOT_TEMP_DECI_C=400
-    /** While plugged in and hot: try again this much later (an explicit delay, not WorkManager's backoff). */
+    /** While plugged in and hot: try again this much later (an explicit delay, not WorkManager's backoff). v3.6.1 (T1): one
+     * such rest clears a "slow" verdict, and the first piece after it is a cold one ([PowerStats.slow], [PowerStats.coldStart]),
+     * so one slow piece costs one rest, not two ([COLD_AFTER_MS] is longer than this delay). */
     const val HOT_DELAY_MS=10*60_000L
     /** 05:00 to 07:00 KST while plugged in: charging first unless the battery is at least this full. */
     const val MORNING_REST_FROM_HOUR=5
@@ -51,8 +53,12 @@ internal object TranscriptionPower {
     const val THREADS_OTHER=4
     /** A piece that starts a run at least this long after the previous run is a "cold" piece (its speed is the reference). */
     const val COLD_AFTER_MS=20*60_000L
-    /** Without a measurement: ms of work per ms of audio (2-minute piece in 300 s, DESIGN_V6 1.1). */
+    /** Without a measurement: ms of work per ms of audio (2-minute piece in 300 s, DESIGN_V6 1.1). v3.6.1 (T1): per ms of
+     * encoder windows ([WINDOW_MS]), the same for a whole 2-minute piece. */
     const val DEFAULT_RATE=2.5
+    /** v3.6.1 (T1, DESIGN_V7 2): Whisper encodes a whole 30-second window however little audio is in it, so a piece costs by
+     * its windows: speed = work ms per (windows x 30 s), and the expected time of a piece = speed x windows x 30 s. */
+    const val WINDOW_MS=30_000L
     val KST:ZoneId=ZoneId.of("Asia/Seoul")
 }
 
@@ -138,7 +144,14 @@ internal object PowerPolicy {
 
     /** Plugged in for the policy: a plug now, or one seen within the debounce; not when the charge goes down while plugged. */
     fun plugged(s:BatterySnapshot,b:PowerBudget,now:Long)=(s.isPlugged || b.lastPluggedMs>0 && now-b.lastPluggedMs in 0 until TranscriptionPower.PLUG_DEBOUNCE_MS) && !b.levelFalling
-    fun hot(s:BatterySnapshot,b:PowerBudget)=(s.headroom ?: 0f)>=TranscriptionPower.HOT_HEADROOM || (s.tempDeciC ?: 0)>=TranscriptionPower.HOT_TEMP_DECI_C || b.slow
+    fun hot(s:BatterySnapshot,b:PowerBudget)=hotWhy(s,b)!=null
+    /** v3.6.1 (T1): which of the three makes it hot, the first that holds: headroom, temp, slow (null: not hot). Counted under
+     * today's `hot` in the ledger, so the heartbeat tells a real heat from a slow-piece verdict. */
+    fun hotWhy(s:BatterySnapshot,b:PowerBudget):String? = when {
+        (s.headroom ?: 0f)>=TranscriptionPower.HOT_HEADROOM -> "headroom"
+        (s.tempDeciC ?: 0)>=TranscriptionPower.HOT_TEMP_DECI_C -> "temp"
+        b.slow -> "slow"
+        else -> null }
     fun morning(now:Long)=Instant.ofEpochMilli(now).atZone(TranscriptionPower.KST).hour.let { it>=TranscriptionPower.MORNING_REST_FROM_HOUR && it<TranscriptionPower.MORNING_REST_TO_HOUR }
     private fun untilSeven(now:Long):Long {
         val z=Instant.ofEpochMilli(now).atZone(TranscriptionPower.KST)
@@ -180,8 +193,14 @@ internal object PowerPolicy {
     /** P7: threads never above the cores the process may run on ([coresAllowed], null: unknown). */
     fun threads(cap:Int,coresAllowed:Int?)=if(coresAllowed==null || coresAllowed<=0) cap else minOf(cap,coresAllowed).coerceAtLeast(1)
 
-    /** W1: how long a piece of [audioMs] audio is expected to take at [rate] (work ms per audio ms), with the margin. */
-    fun expectedPieceMs(audioMs:Long,rate:Double?)=(audioMs*(rate ?: TranscriptionPower.DEFAULT_RATE)*TranscriptionPower.PIECE_MARGIN).toLong()
+    /** v3.6.1 (T1): the encoder windows a piece of [audioMs] takes (a 7-second tail is one window, a 2-minute piece four). */
+    fun windows(audioMs:Long)=if(audioMs<=0) 0L else (audioMs+TranscriptionPower.WINDOW_MS-1)/TranscriptionPower.WINDOW_MS
+    /** v3.6.1 (T1): the audio a piece is charged for: its windows x 30 s. */
+    fun windowMs(audioMs:Long)=windows(audioMs)*TranscriptionPower.WINDOW_MS
+    /** v3.6.1 (T1): the speed of a finished piece, work ms per window ms (null for nothing done). */
+    fun rate(workMs:Long,audioMs:Long):Double? = if(workMs<=0 || audioMs<=0) null else workMs.toDouble()/windowMs(audioMs)
+    /** W1: how long a piece of [audioMs] audio is expected to take at [rate] (work ms per window ms, [rate]), with the margin. */
+    fun expectedPieceMs(audioMs:Long,rate:Double?)=(windowMs(audioMs)*(rate ?: TranscriptionPower.DEFAULT_RATE)*TranscriptionPower.PIECE_MARGIN).toLong()
     /** W1: start this piece? The first piece of a run always starts (else a hot phone would only wake and end, DESIGN_V6 W1). */
     fun startPiece(firstOfRun:Boolean,elapsedMs:Long,expectedMs:Long,limitMs:Long)=firstOfRun || elapsedMs+expectedMs<=limitMs
     /** W2: split a whole piece in two before it is begun when it is expected to run into the native deadline. */
@@ -217,7 +236,9 @@ internal object CpuSet {
  * Layout: {"today":{day, battery{runs,ms,min,audioMs,audioMin,mAhScreenOff}, plugged{runs,ms,min,audioMs,audioMin}, budgetHit,
  * gapSkips,hotSkips,inCallSkips,morningSkips,lowSkips,powerSaveSkips,chargingOnlySkips,budgetSkips,levelFallingRuns,plugDropped,
  * killedChunkMs,deadlineMs,yieldCount,yieldMs,modelLoads,modelLoadMs,stopReasons{timeout,constraint,other}}, "prev":{same},
- * "chunk":{rates[], coldRates[], lastMs, lastAudioMs, threads, coldMedianMs, p50Ms}, "battery":{the last snapshot},
+ * hot{headroom,temp,slow,severe} (v3.6.1), "chunk":{rates[], coldRates[] (work ms per encoder-window ms, v3.6.1), lastMs,
+ * lastAudioMs, lastRate, lastEndMs, threads, coldMedianMs, p50Ms (a 2-minute piece at that speed)}, "battery":{the last snapshot},
+ * "hotRestMs" (v3.6.1: the last wake that found it hot),
  * "lastBatteryRunEndMs","lastRunEndMs","lastPluggedMs","plugSampleMs","plugSamplePct","waiting":{n,oldestMs}}. */
 internal object PowerStats {
     private const val KEEP=12
@@ -262,7 +283,8 @@ internal object PowerStats {
     fun notePiece(old:JSONObject?,ms:Long,audioMs:Long,threads:Int,cold:Boolean,now:Long=System.currentTimeMillis()):JSONObject {
         val o=copy(old);val c=sub(o,"chunk")
         if(audioMs<=0 || ms<=0) return o
-        val rate=Math.round(ms.toDouble()/audioMs*1000)/1000.0
+        // v3.6.1 (T1): per encoder window, so a short tail piece is no "slow" piece.
+        val rate=Math.round(PowerPolicy.rate(ms,audioMs)!!*1000)/1000.0
         fun push(k:String) { val a=c.optJSONArray(k) ?: JSONArray();a.put(rate);while(a.length()>KEEP) a.remove(0);c.put(k,a) }
         // A piece on other thread counts is not compared with the others: both lists start again (review r16-1 #1).
         if(c.optInt("threads",threads)!=threads) { c.remove("rates");c.remove("coldRates");c.remove("coldMedianMs") }
@@ -278,7 +300,7 @@ internal object PowerStats {
         if(v.isEmpty()) return null
         return if(v.size%2==1) v[v.size/2] else (v[v.size/2-1]+v[v.size/2])/2
     }
-    /** Work ms per audio ms for W1: the median of the recent pieces (same threads), null without any. */
+    /** Work ms per window ms for W1/W2 ([PowerPolicy.rate]): the median of the recent pieces (same threads), null without any. */
     fun rate(o:JSONObject?):Double? = median(o?.optJSONObject("chunk")?.optJSONArray("rates"))
     /** The last piece ran at least [TranscriptionPower.HOT_RATIO] times the cold median (needs both), and it ended less than
      * [TranscriptionPower.COLD_AFTER_MS] ago: after a rest the phone is taken as cool again, else one slow piece would stop
@@ -286,9 +308,27 @@ internal object PowerStats {
     fun slow(o:JSONObject?,now:Long=System.currentTimeMillis()):Boolean {
         val c=o?.optJSONObject("chunk") ?: return false
         val end=c.optLong("lastEndMs",0);if(end<=0 || now-end>=TranscriptionPower.COLD_AFTER_MS) return false
+        // v3.6.1 (T1): a hot rest taken since that piece, and over: the verdict is spent (one slow piece, one rest).
+        val rest=o.optLong("hotRestMs",0);if(rest>=end && now-rest>=TranscriptionPower.HOT_DELAY_MS) return false
         val cold=median(c.optJSONArray("coldRates")) ?: return false
         val last=c.optDouble("lastRate",Double.NaN);if(!last.isFinite()) return false
         return last>=cold*TranscriptionPower.HOT_RATIO
+    }
+    /** v3.6.1 (T1): a wake found it hot ([why] from [PowerPolicy.hotWhy], or "severe" for the thermal status): counted under
+     * today's hot{headroom,temp,slow,severe}, and the time of the rest kept ("hotRestMs") for [slow] and [coldStart]. */
+    fun noteHot(old:JSONObject?,now:Long,why:String?):JSONObject {
+        val o=copy(old)
+        // The rest starts at the first hot wake after the last piece: a tick during the rest does not make it longer.
+        val rest=o.optLong("hotRestMs",0);val piece=o.optJSONObject("chunk")?.optLong("lastEndMs",0) ?: 0
+        if(rest<=0 || rest<piece || now<rest || now-rest>=TranscriptionPower.HOT_DELAY_MS) o.put("hotRestMs",now)
+        why?.let { inc(sub(today(o,PowerPolicy.day(now)),"hot"),it) }
+        return o
+    }
+    /** v3.6.1 (T1): the first piece of a run starting [now] counts as cold: the last run ended at least
+     * [TranscriptionPower.COLD_AFTER_MS] ago, or a hot rest was taken since it ended. */
+    fun coldStart(o:JSONObject?,now:Long):Boolean {
+        val last=o?.optLong("lastRunEndMs",0) ?: 0
+        return now-last>=TranscriptionPower.COLD_AFTER_MS || (o?.optLong("hotRestMs",0) ?: 0).let { it>0 && it>=last }
     }
     /** Remembers the plug: when it was last seen, and a sample of the charge to tell a plug that falls short. Counts a
      * plug that stayed away past the debounce once (plugDropped). */
@@ -320,19 +360,25 @@ internal object PowerStats {
     const val LEVEL_DROP_PCT=2
     /** A battery run began a piece (written before it, cleared by [noteRun]): a run the process died in still counts. */
     fun noteBatteryStart(old:JSONObject?,now:Long):JSONObject { val o=copy(old);o.put("batteryRunStartMs",now);return o }
-    /** The policy's memory for [PowerPolicy.decide]. */
-    fun budget(o:JSONObject?,s:BatterySnapshot,now:Long,chargingOnly:Boolean):PowerBudget {
+    /** The policy's memory for [PowerPolicy.decide]. [ownStartMs]: asked from inside the battery run that wrote this start
+     * ([noteBatteryStart]); that mark is the run itself, not another one, so it holds no gap (v3.6.1 T3a: before, the run's
+     * own mark made every check between pieces a "gap" and a battery run did one piece). */
+    fun budget(o:JSONObject?,s:BatterySnapshot,now:Long,chargingOnly:Boolean,ownStartMs:Long?=null):PowerBudget {
         val t=o?.optJSONObject("today")?.takeIf { it.optInt("day")==PowerPolicy.day(now) }
         val b=t?.optJSONObject("battery")
         val capacity=s.chargeUah?.let { c -> if(s.pct in 5..100) c*100/s.pct else null }
         var used=b?.optLong("ms",0) ?: 0;var last=o?.optLong("lastBatteryRunEndMs",0) ?: 0
         // A battery run that never wrote its end (the process died, review r16-1 #4): it counts as a full run that ended then,
         // once it is older than a run can be.
-        val open=o?.optLong("batteryRunStartMs",0) ?: 0
+        val open=(o?.optLong("batteryRunStartMs",0) ?: 0).takeUnless { ownStartMs!=null && it==ownStartMs } ?: 0
         if(open>last && now-open>=TranscriptionPower.SELF_END_MS+2*60_000L) { last=open+TranscriptionPower.SELF_END_MS;if(PowerPolicy.day(open)==PowerPolicy.day(now)) used+=TranscriptionPower.SELF_END_MS }
         else if(open>last) last=now // one is running now: the gap holds
         return PowerBudget(chargingOnly,used,b?.optLong("uahScreenOff",0) ?: 0,capacity,last,o?.optLong("lastPluggedMs",0) ?: 0,levelFalling(o,s,now),slow(o,now))
     }
+    /** v3.6.1 (T3a): between pieces, the run in [mode] may go on (the same mode still applies). [ownStartMs]: this battery
+     * run's own start mark, null for a plugged-in run or before its first piece. */
+    fun stillRuns(o:JSONObject?,s:BatterySnapshot,now:Long,chargingOnly:Boolean,mode:PowerPolicy.Mode,ownStartMs:Long?):Boolean =
+        PowerPolicy.decide(s,budget(o,s,now,chargingOnly,ownStartMs),now).let { it is PowerPolicy.Decision.Run && it.mode==mode }
     /** The battery as last seen (heartbeat `power` head). */
     fun noteSnapshot(old:JSONObject?,s:BatterySnapshot,cpusAllowed:Int?,cpuset:String?):JSONObject {
         val o=copy(old)

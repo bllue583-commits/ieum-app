@@ -81,8 +81,13 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         val KST:ZoneId=ZoneId.of("Asia/Seoul")
         const val TRANSCRIBED="TRANSCRIBED";const val ANALYZED="ANALYZED";const val FAILED="FAILED"
         const val WAITING_CONSENT="WAITING_CONSENT"
-        /** Transcripts of records that got their result are trimmed after this many days: the whole sealed DB must stay under 16 MB. Summaries stay. */
-        const val TRANSCRIPT_KEEP_DAYS=14L
+        /** Transcripts of records that got their result are trimmed after this many days: the whole sealed DB must stay under 16 MB. Summaries stay.
+         * v3.6.1 (D1, DESIGN_V7 2): 14 -> 7 days, and [TRANSCRIPT_KEEP_DAYS_FULL] once the store is [TRANSCRIPT_FULL_PERCENT]% full. */
+        const val TRANSCRIPT_KEEP_DAYS=7L
+        const val TRANSCRIPT_KEEP_DAYS_FULL=3L
+        const val TRANSCRIPT_FULL_PERCENT=60
+        /** v3.6.1 (D1): the days a transcript stays at a store share of [dbPercent] (null: unknown, the usual days). */
+        fun transcriptKeepDays(dbPercent:Int?)=if(dbPercent!=null && dbPercent>=TRANSCRIPT_FULL_PERCENT) TRANSCRIPT_KEEP_DAYS_FULL else TRANSCRIPT_KEEP_DAYS
         /** The full analysis of a record is reduced to its summary and names after this many days (review B20). */
         const val ANALYSIS_KEEP_DAYS=90L
         /** Sealed database limit and the share of it that is worth a log line. */
@@ -406,14 +411,24 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         val times=NumberGuard.Times.of(t.segments,t.text)?.toJson() ?: "[]"
         port.execute("INSERT INTO call_records(record_id,recording_id,started_ms,duration_ms,counterpart,counterpart_key,transcript,segments_json,state,created_ms) VALUES(?,?,?,?,?,?,?,?,?,?)",
             id,t.recordingId,t.originalStartedAtMs,t.durationMs,t.counterpart,counterpartKey(t.counterpart),t.text,times,TRANSCRIBED,now)
-        trim(now)
+        trimRows(now,null) // inside the insert's transaction; the daily [VaultPruneWork] trims on its own too (D1)
         true
     }
-    /** Keeps the sealed store small (B20). A transcript goes 14 days after the record got its result, whatever state it
-     * is in now (one that never got a result keeps its words so it can still be analysed); the full analysis of a call
-     * older than 90 days shrinks to its summary and names. */
-    fun trim(now:Long) {
-        port.execute("UPDATE call_records SET transcript='',segments_json='[]' WHERE analyzed_ms IS NOT NULL AND analyzed_ms<CAST(? AS INTEGER) AND (transcript!='' OR segments_json!='[]')",now-TRANSCRIPT_KEEP_DAYS*86_400_000L)
+    /** Keeps the sealed store small (B20). A transcript goes [TRANSCRIPT_KEEP_DAYS] days after the record got its result
+     * ([transcriptKeepDays]: fewer when the store is filling up, [dbPercent]), whatever state it is in now (one that never got
+     * a result keeps its words so it can still be analysed); the full analysis of a call older than 90 days shrinks to its
+     * summary and names. The check items' quotes (in analysis_json) stay. v3.6.1 (D1): its own transaction, also run daily by
+     * [VaultPruneWork] without an insert, so a full store that refuses inserts still gets trimmed. */
+    fun trim(now:Long,dbPercent:Int?=null) { port.transaction { trimRows(now,dbPercent);null } }
+    /** v3.6.1 (D1): the store's share of its limit, as the lights count it ([StatusLights.dbPercent]: bytes or rows). */
+    fun dbPercent():Int? = runCatching {
+        val bytes=(rows("PRAGMA page_count").single().long("page_count") ?: 0)*(rows("PRAGMA page_size").single().long("page_size") ?: 0)
+        val tables=rows("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").mapNotNull { it.str("name") }
+        val total=tables.sumOf { t -> rows("SELECT count(*) AS n FROM \"${t.replace("\"","\"\"")}\"").single().long("n") ?: 0L }
+        StatusLights.dbPercent(bytes,total)
+    }.getOrNull()
+    private fun trimRows(now:Long,dbPercent:Int?) {
+        port.execute("UPDATE call_records SET transcript='',segments_json='[]' WHERE analyzed_ms IS NOT NULL AND analyzed_ms<CAST(? AS INTEGER) AND (transcript!='' OR segments_json!='[]')",now-transcriptKeepDays(dbPercent)*86_400_000L)
         rows("""SELECT record_id,analysis_json FROM call_records WHERE analysis_json LIKE '%"keyPoints"%' AND COALESCE(started_ms,created_ms)<CAST(? AS INTEGER) LIMIT 200""",now-ANALYSIS_KEEP_DAYS*86_400_000L).forEach { r ->
             val root=runCatching { JSONObject(r.str("analysis_json")!!) }.getOrNull() ?: return@forEach
             val a=root.optJSONObject("analysis") ?: return@forEach

@@ -152,7 +152,7 @@ internal class CallTranscriptionRunner(
     private val battery:CallTranscriptionStore.BatteryWindow?=null,
     /** v3.6 W1: how long this run may go (9 minutes, or what is left of the day's battery budget). */
     private val runLimitMs:Long=TranscriptionPower.SELF_END_MS,
-    /** v3.6 W1/W2: work ms per audio ms of recent pieces (null: none measured yet). */
+    /** v3.6 W1/W2: work ms per encoder-window ms of recent pieces (v3.6.1 T1, [PowerPolicy.rate]; null: none measured yet). */
     private val rate:()->Double?={null},
     /** v3.6: the power still allows another piece (checked between pieces; the plug pulled on a plugged-in run ends it). */
     private val keepGoing:()->Boolean={true},
@@ -393,7 +393,6 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
         settings.update { s -> s.put(PipelineSettingsKeys.TRANSCRIPTION_POWER,change(PowerStats.parse(s.optString(PipelineSettingsKeys.TRANSCRIPTION_POWER))).toString()) }
     }
     private fun chargingOnly(settings:SecureSettings)=settings.snapshot().optBoolean(PipelineSettingsKeys.TRANSCRIBE_CHARGING_ONLY,false)
-    private fun decide(settings:SecureSettings,s:BatterySnapshot,now:Long)=PowerPolicy.decide(s,PowerStats.budget(power(settings),s,now,chargingOnly(settings)),now)
 
     override fun doWork():Result {
         val storage=applicationContext
@@ -411,7 +410,9 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
         if(decision is PowerPolicy.Decision.Wait) {
             // Only decided: no run counted, no budget used (DESIGN_V6 함정 ⑥). An explicit delay, not WorkManager's backoff.
             savePower(settings) { o -> var x=PowerStats.noteSkip(o,now,decision.reason)
-                if(decision.reason=="budget") PowerPolicy.budgetHit(budget)?.let { x=PowerStats.noteBudgetHit(x,now,it) };x }
+                if(decision.reason=="budget") PowerPolicy.budgetHit(budget)?.let { x=PowerStats.noteBudgetHit(x,now,it) }
+                // v3.6.1 (T1): why it is hot, counted; the rest clears a slow verdict once it is over.
+                if(decision.reason=="hot") x=PowerStats.noteHot(x,now,if(start.thermal>=PowerPolicy.SEVERE) "severe" else PowerPolicy.hotWhy(start,budget));x }
             decision.retryInMs?.let { later(storage,it) }
             // The waiting count opens the store: at most every half hour from a wake that only decided.
             if(decision.reason!="gap" && decision.reason!="inCall" && now-(power(settings).optJSONObject("waiting")?.optLong("atMs",0) ?: 0)>=TranscriptionPower.BATTERY_RUN_GAP_MS) noteWaiting(settings,now)
@@ -421,17 +422,21 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
         val threads=PowerPolicy.threads(run.threads,cores)
         val severe={ BatterySnapshot.read(storage).thermal>=PowerManager.THERMAL_STATUS_SEVERE }
         val began=android.os.SystemClock.elapsedRealtime()
-        val coldStart=now-power(settings).optLong("lastRunEndMs",0)>=TranscriptionPower.COLD_AFTER_MS
+        // v3.6.1 (T1): also the first piece after a hot rest is a cold one (one slow piece, one rest).
+        val coldStart=PowerStats.coldStart(power(settings),now)
         var lastCheck=0L;var lastOk=true
+        // v3.6.1 (T3a): this battery run's own start mark ([PowerStats.noteBatteryStart]); the checks between pieces do not
+        // take it for another run that holds the gap.
+        var ownStart:Long?=null
         // Between pieces: the same mode still applies (a plug pulled mid-run hands the rest to the battery rules, and a plug
         // put in on battery hands it to the plugged rules); read at most every 20 seconds.
         val keepGoing={ val t=System.currentTimeMillis()
-            if(t-lastCheck>=20_000L) { lastCheck=t;val d=decide(settings,BatterySnapshot.read(storage).also { s -> savePower(settings) { PowerStats.notePlug(it,s,t) } },t)
-                lastOk=d is PowerPolicy.Decision.Run && d.mode==run.mode }
+            if(t-lastCheck>=20_000L) { lastCheck=t;val s=BatterySnapshot.read(storage).also { s -> savePower(settings) { PowerStats.notePlug(it,s,t) } }
+                lastOk=PowerStats.stillRuns(power(settings),s,t,chargingOnly(settings),run.mode,ownStart) }
             lastOk }
         val events=object:CallTranscriptionRunner.Events {
             override fun piece(ms:Long,audioMs:Long,cold:Boolean) { savePower(settings) { PowerStats.notePiece(it,ms,audioMs,threads,cold) } }
-            override fun started() { if(run.mode==PowerPolicy.Mode.BATTERY) savePower(settings) { PowerStats.noteBatteryStart(it,System.currentTimeMillis()) } }
+            override fun started() { if(run.mode==PowerPolicy.Mode.BATTERY) { val t=System.currentTimeMillis();ownStart=t;savePower(settings) { PowerStats.noteBatteryStart(it,t) } } }
             override fun killed(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"killedChunkMs",ms) } }
             override fun deadline(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"deadlineMs",ms) } }
             override fun yielded() { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"yieldCount") } }
