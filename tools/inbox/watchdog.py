@@ -99,13 +99,14 @@ SLOT_EARLY_MS = 5 * MINUTE
 SLOT_WINDOW_MS = 60 * MINUTE
 SLOTS_MISSED = 2
 SLOT_LOOKBACK_MS = 30 * HOUR
-DEFAULT_CRON = "CRON_TZ=Asia/Seoul 34 7-22 * * *"
+# v3.7 (DESIGN_V7 3.2 M1): 03:34 and 04:34 too, so night transcripts are analysed before the 05:05 tidy.
+DEFAULT_CRON = "CRON_TZ=Asia/Seoul 34 3-4,7-22 * * *"
 # Fixed offsets only: the routines run in Korea (no daylight saving) or in UTC.
 ZONES_MS = {"Asia/Seoul": 9 * HOUR, "UTC": 0, "Etc/UTC": 0}
 STATUS_FILES = {"hourly": "status/last-run-hourly.json", "tidy": "status/last-run-tidy.json"}
 OLD_STATUS = "status/last-run.json"
 
-# v3.5 (DESIGN_V5 2.2-4): the morning report. The tidy (04:46) writes report/<today>.json; the phone sends it at 05:30 and
+# v3.5 (DESIGN_V5 2.2-4): the morning report. The tidy (05:05 from v3.7, 04:46 before) writes report/<today>.json; the phone sends it at 05:30 and
 # tries until 09:00.
 T_REPORT_MISSING = "아침 보고서가 안 만들어졌어요"
 T_KAKAO_NOT_SENT = "카카오톡 보고가 안 갔어요"
@@ -263,7 +264,7 @@ def report_rules(now_ms, phone, history, tidy, report_exists, add):
         else:
             why = "오늘 새벽 정리의 자가 보고가 없어요" + (f"(마지막 실행 {hours(now_ms - ended)} 전).\n" if ended else ".\n")
         add(T_REPORT_MISSING, f"한국 시각 05:30이 지났는데 report/{kst_date(now_ms)}.json이 없어요.\n" + why
-            + "\n추정 원인: 새벽 정리(04:46)가 돌지 않았거나 늦게 끝났어요, 폰 자료가 오지 않아 \"정리할 것 없음\"이었어요, "
+            + "\n추정 원인: 새벽 정리(05:05)가 돌지 않았거나 늦게 끝났어요, 폰 자료가 오지 않아 \"정리할 것 없음\"이었어요, "
               "보고서가 검사(report_check.py)를 통과하지 못했어요. 폰은 06:00에 자기 자료로 짧은 보고를 보내요.")
     if not isinstance(phone, dict):
         return
@@ -507,11 +508,13 @@ def hours(ms):
 # A request that went up at night waits for 07:00 by design, so its age counts only the time the routine runs.
 KST_OFFSET_MS = 9 * HOUR
 ROUTINE_FIRST_HOUR = 7
-ROUTINE_END_HOUR = 23  # hourly cron is 34 7-22 KST: the last run is 22:34, the next one is 07:34
+ROUTINE_END_HOUR = 23  # the day runs, 34 7-22 KST: the last run is 22:34
+# v3.7 (DESIGN_V7 3.2 M1): the cron is 34 3-4,7-22 KST, so 03:00 to 05:00 counts as routine time too.
+ROUTINE_WINDOWS = ((3, 5), (ROUTINE_FIRST_HOUR, ROUTINE_END_HOUR))
 
 
 def routine_ms(from_ms, to_ms):
-    """Milliseconds between from_ms and to_ms that fall in the routine's hours (07:00 to 23:00 KST)."""
+    """Milliseconds between from_ms and to_ms that fall in the routine's hours (03:00 to 05:00 and 07:00 to 23:00 KST)."""
     if to_ms <= from_ms:
         return 0
     day = 24 * HOUR
@@ -519,9 +522,10 @@ def routine_ms(from_ms, to_ms):
     start_day = (from_ms + KST_OFFSET_MS) // day
     end_day = (to_ms + KST_OFFSET_MS) // day
     for d in range(start_day, end_day + 1):
-        lo = d * day - KST_OFFSET_MS + ROUTINE_FIRST_HOUR * HOUR
-        hi = d * day - KST_OFFSET_MS + ROUTINE_END_HOUR * HOUR
-        total += max(0, min(hi, to_ms) - max(lo, from_ms))
+        for first, end in ROUTINE_WINDOWS:
+            lo = d * day - KST_OFFSET_MS + first * HOUR
+            hi = d * day - KST_OFFSET_MS + end * HOUR
+            total += max(0, min(hi, to_ms) - max(lo, from_ms))
     return total
 
 

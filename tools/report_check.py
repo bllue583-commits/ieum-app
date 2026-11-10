@@ -12,17 +12,22 @@ Usage: python3 tools/report_check.py report/2026-11-07.json [more files]
 import json, os, re, sys
 
 LINE_MAX = 60
-LIMITS = {"yesterday": 8, "today": 8, "inProgress": 3, "check": 3}
+LIMITS = {"yesterday": 8, "today": 8, "inProgress": 3, "check": 3, "late": 5}
 HEAD_KEYS = ("calls", "newChecks", "todayChecks", "issues")
 TOP_KEYS = ("day", "generatedMs", "tidyRev", "head", "yesterday", "today", "inProgress", "check")
+# v3.7 (DESIGN_V7 3.2 M3, M4; tidy.md v8): head.pendingCalls and late[]. Optional, so a v7 report (before the routine moves to
+# v8 on the release day) still passes; when present they are checked like the rest.
+HEAD_OPTIONAL = ("pendingCalls",)
+TOP_OPTIONAL = ("late",)
 ITEM_KEYS = {
     "yesterday": {"who": str, "what": str},
     "today": {"id": str, "what": str, "who": str, "since": str, "status": str, "check": bool},
     "inProgress": {"what": str},
     "check": {"what": str, "who": str},
+    "late": {"who": str, "what": str},
 }
 # Fields that must not be empty (the rest may be "").
-REQUIRED_TEXT = {"yesterday": ("who", "what"), "today": ("id", "what", "since"), "inProgress": ("what",), "check": ("what",)}
+REQUIRED_TEXT = {"yesterday": ("who", "what"), "today": ("id", "what", "since"), "inProgress": ("what",), "check": ("what",), "late": ("who", "what")}
 
 DAY_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
 SINCE_RE = re.compile(r"^(오늘|어제|그제|\d{1,3}일 전|\d{1,2}주 전|\d{1,2}/\d{1,2}) 요청$")
@@ -86,7 +91,7 @@ def text_problems(path, value, style=True):
 
 def line_of(section, item):
     """The one line the phone shows for an item (tidy.md 9-1: the 60-character rule)."""
-    if section == "yesterday":
+    if section in ("yesterday", "late"):
         return f"{item.get('who', '')}: {item.get('what', '')}"
     if section == "today":
         extra = [x for x in (item.get("who"), item.get("since"), item.get("status")) if isinstance(x, str) and x]
@@ -110,7 +115,7 @@ def check(report, file_day=None):
         if k not in report:
             out.append(f"{k}: 빠짐")
     for k in report:
-        if k not in TOP_KEYS:
+        if k not in TOP_KEYS and k not in TOP_OPTIONAL:
             out.append(f"{k}: 모르는 키")
     day = report.get("day")
     if "day" in report:
@@ -129,8 +134,11 @@ def check(report, file_day=None):
             for k in HEAD_KEYS:
                 if not is_int(head.get(k)) or head[k] < 0:
                     out.append(f"head.{k}: 0 이상의 정수가 아님")
+            for k in HEAD_OPTIONAL:
+                if k in head and (not is_int(head[k]) or head[k] < 0):
+                    out.append(f"head.{k}: 0 이상의 정수가 아님")
             for k in head:
-                if k not in HEAD_KEYS:
+                if k not in HEAD_KEYS and k not in HEAD_OPTIONAL:
                     out.append(f"head.{k}: 모르는 키")
     for section, limit in LIMITS.items():
         items = report.get(section)

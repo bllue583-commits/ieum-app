@@ -83,6 +83,9 @@ object KakaoReport {
     @Volatile internal var clock:()->Long={ System.currentTimeMillis() }
     /** The Kakao login (the SDK in the app); tests replace it. Returns null on success, else a code. */
     @Volatile internal var linker:(suspend (Context)->String?)?=null
+    /** v3.7 r17-2: counts [day]'s calls for the report (by the report's generatedMs when given); tests replace it. */
+    @Volatile internal var coverageOf:((Context,LocalDate,Long?)->CallRecordStore.DayCoverage?)?=null
+    private fun storeCoverage(app:Context,day:LocalDate,by:Long?)=kr.callbrief.IeumApplication.store(app).dayCoverage(day,by)
     /** The application context, kept by [init], so [compose] draws with the app's own typeface. */
     @Volatile private var appContext:Context?=null
     private val sending=Mutex()
@@ -131,7 +134,11 @@ object KakaoReport {
     // ---- compose (DESIGN_V5 1절 and 0-1절) ----------------------------------------------------------------------------
     /** One report read with every word masked once more; lists already cut to the routine's own maxima. */
     internal data class Report(val day:LocalDate,val calls:Int,val newChecks:Int,val todayChecks:Int,
-                               val yesterday:List<String>,val today:List<String>,val inProgress:List<String>,val check:List<String>,val phone:Boolean)
+                               val yesterday:List<String>,val today:List<String>,val inProgress:List<String>,val check:List<String>,val phone:Boolean,
+                               /** v3.7 r17-2 (M3): yesterday's calls still waiting for their text or analysis (head.pendingCalls, recounted by the phone right before the send). */
+                               val pending:Int=0,
+                               /** v3.7 r17-2 (M4): calls from before yesterday summed up after the last report ("late", 5 at most), "who: what". */
+                               val late:List<String> =emptyList())
     private val WEEK=arrayOf("월","화","수","목","금","토","일")
     /** "11/7(금)". */
     internal fun dayLabel(d:LocalDate)="${d.monthValue}/${d.dayOfMonth}(${WEEK[d.dayOfWeek.value-1]})"
@@ -159,10 +166,21 @@ object KakaoReport {
         val check=objects(o.optJSONArray("check")).take(3).mapNotNull { c ->
             val what=clean(c.optString("what")).ifEmpty { return@mapNotNull null };val who=clean(c.optString("who"))
             if(who.isEmpty()) what else clean("$what ($who)") }
+        val late=objects(o.optJSONArray("late")).take(LATE_ITEMS).mapNotNull { y ->
+            val who=clean(y.optString("who"));val what=clean(y.optString("what"))
+            when { what.isEmpty() -> who.ifEmpty { null };who.isEmpty() -> what;else -> clean("$who: $what") } }
         fun n(key:String,fallback:Int)=head.optInt(key,-1).takeIf { it>=0 } ?: fallback
-        return Report(day,n("calls",yesterday.size),n("newChecks",0),n("todayChecks",today.size),yesterday,today,inProgress,check,phoneFallback)
+        return Report(day,n("calls",yesterday.size),n("newChecks",0),n("todayChecks",today.size),yesterday,today,inProgress,check,phoneFallback,
+            n("pendingCalls",0),late)
     }
-    internal fun headLine(r:Report)="어제 통화 ${r.calls}건, 새 체크 ${r.newChecks}개, 오늘 챙길 일 ${r.todayChecks}개"
+    /** v3.7 r17-2 (M3): "어제 통화 14건을 정리했어요. 9건은 아직 글자로 바꾸는 중이에요" (no second sentence when nothing waits). */
+    internal fun headLine(r:Report)=(if(r.calls>0) "어제 통화 ${r.calls}건을 정리했어요" else "어제 정리한 통화가 없어요")+pendingSentence(r.pending)
+    internal fun pendingSentence(n:Int)=if(n>0) ". ${n}건은 아직 글자로 바꾸는 중이에요" else ""
+    /** The counts under [headLine] (v3.6 and before they were on the same line). */
+    internal fun countsLine(r:Report)="새 체크 ${r.newChecks}개, 오늘 챙길 일 ${r.todayChecks}개"
+    /** v3.7 r17-2 (M4): the last block of the text and of the picture. */
+    const val LATE_TITLE="뒤늦게 정리된 통화"
+    const val LATE_ITEMS=5
     private fun numbered(items:List<String>)=items.mapIndexed { i,s -> "${i+1}. $s" }
     /** Execution parameters of the [이음에서 보기] button (r15-3 reads them in MainActivity). */
     internal fun callsLink(day:LocalDate)="screen=calls&dayMs="+day.minusDays(1).atStartOfDay(CallRecordStore.KST).toInstant().toEpochMilli()
@@ -189,24 +207,35 @@ object KakaoReport {
         val label=dayLabel(r.day)
         if(phoneFallback) {
             // 1절: no report from the night's tidy: one text only, from what the phone has.
-            val head=listOf("[이음 아침 보고] $label (새벽 정리 없이 폰에서 만든 보고)","오늘 챙길 일 ${r.todayChecks}개")
+            val head=listOfNotNull("[이음 아침 보고] $label (새벽 정리 없이 폰에서 만든 보고)",
+                r.pending.takeIf { it>0 }?.let { "어제 통화 ${it}건은 아직 글자로 바꾸는 중이에요" },"오늘 챙길 일 ${r.todayChecks}개")
             val items=numbered(r.today.take(TODAY_TEXT_ITEMS)).ifEmpty { listOf("새로 챙길 일 없음") }
             val more=(r.today.size-TODAY_TEXT_ITEMS).coerceAtLeast(0)
             return Composed(null,Message.Text(fit(head,items,more=more).first,TASKS_LINK),emptyList())
         }
         val feed=runCatching { render(report,appContext) }.onFailure { Log.w(TAG,"report not drawn: ${it.javaClass.simpleName}") }.getOrNull()
             ?.takeIf { it.size<=MAX_PNG }
-            ?.let { Message.Feed(it,"[이음 아침 보고] $label",headLine(r),callsLink(r.day)) }
-        val todayText=if(r.today.isEmpty()) null else Message.Text(fit(listOf("[오늘 챙길 일] $label"),numbered(r.today.take(TODAY_TEXT_ITEMS)),
-            more=(r.today.size-TODAY_TEXT_ITEMS).coerceAtLeast(0)).first,TASKS_LINK)
-        return Composed(feed,todayText,fallback(r,label))
+            ?.let { Message.Feed(it,"[이음 아침 보고] $label",headLine(r)+"\n"+countsLine(r),callsLink(r.day)) }
+        return Composed(feed,todayText(r,label),fallback(r,label))
+    }
+    /** The text after the picture: "오늘 챙길 일" (top [TODAY_TEXT_ITEMS], the rest told), then as its last block
+     * [LATE_TITLE] (r17-2 M4) when it still fits in [LIMIT]; null when there is neither. */
+    private fun todayText(r:Report,label:String):Message.Text? {
+        val late=numbered(r.late)
+        val first=if(r.today.isEmpty()) null else fit(listOf("[오늘 챙길 일] $label"),numbered(r.today.take(TODAY_TEXT_ITEMS)),
+            more=(r.today.size-TODAY_TEXT_ITEMS).coerceAtLeast(0)).first
+        if(late.isEmpty()) return first?.let { Message.Text(it,TASKS_LINK) }
+        if(first==null) return Message.Text(fit(listOf("[$LATE_TITLE] $label"),late).first,callsLink(r.day))
+        // The late block only when its title and a short first line still fit after the to-dos.
+        if(length(first)+length(LATE_TITLE)+2+12>LIMIT) return Message.Text(first,TASKS_LINK)
+        return Message.Text(fit(listOf(first,LATE_TITLE),late).first,TASKS_LINK)
     }
     /** The text-only fallback (1절 ① to ④): only the messages with something in them, in order, each [LIMIT] at most. */
     private fun fallback(r:Report,label:String):List<Message.Text> {
         val out=mutableListOf<Message.Text>()
         val calls=callsLink(r.day)
         val ys=numbered(r.yesterday)
-        val head=listOf("[이음 아침 보고] $label",headLine(r),"어제 정리")
+        val head=listOf("[이음 아침 보고] $label",headLine(r),countsLine(r),"어제 정리")
         if(ys.isEmpty()) out+=Message.Text(fit(head,listOf("어제 업무 통화 없음")).first,calls)
         else {
             // ① takes what it can without "외 n건": the rest goes to ②, which then tells what is still left.
@@ -222,6 +251,7 @@ object KakaoReport {
         if(r.today.isNotEmpty()) out+=Message.Text(fit(listOf("[오늘 챙길 일]"),numbered(r.today)).first,TASKS_LINK)
         val rest=r.inProgress.map { "진행 중: $it" }+r.check.map { "확인 필요: $it" }
         if(rest.isNotEmpty()) out+=Message.Text(fit(listOf("[진행 중과 확인 필요]"),rest).first,TASKS_LINK)
+        if(r.late.isNotEmpty()) out+=Message.Text(fit(listOf("[$LATE_TITLE]"),numbered(r.late)).first,calls)
         return out
     }
 
@@ -242,8 +272,8 @@ object KakaoReport {
 
     /** The report's lines with at most [caps] items per section (yesterday, today, in progress, check); a cut section ends
      * with "외 n건". */
-    internal fun lines(r:Report,caps:IntArray=intArrayOf(8,8,3,3)):List<Line> {
-        val out=mutableListOf(Line("${dayLabel(r.day)} 아침 보고",Kind.TITLE),Line(headLine(r),Kind.HEAD))
+    internal fun lines(r:Report,caps:IntArray=intArrayOf(8,8,3,3,LATE_ITEMS)):List<Line> {
+        val out=mutableListOf(Line("${dayLabel(r.day)} 아침 보고",Kind.TITLE),Line(headLine(r),Kind.HEAD),Line(countsLine(r),Kind.HEAD))
         if(r.phone) out+=Line("새벽 정리 없이 폰에서 만든 보고",Kind.NOTE)
         fun section(title:String,items:List<String>,cap:Int,empty:String?) {
             if(items.isEmpty() && empty==null) return
@@ -256,6 +286,7 @@ object KakaoReport {
         section("오늘 챙길 일",numbered(r.today),caps[1],"새로 챙길 일 없음")
         section("진행 중",r.inProgress,caps[2],null)
         section("확인 필요",r.check,caps[3],null)
+        section(LATE_TITLE,numbered(r.late),caps.getOrElse(4) { LATE_ITEMS },null)
         return out
     }
     private fun px(sp:Float)=sp*DENSITY
@@ -296,10 +327,11 @@ object KakaoReport {
     internal fun renderFull(report:JSONObject,context:Context?=appContext,phoneFallback:Boolean=false):Rendered {
         val r=read(report,phoneFallback);val f=faces(context)
         val width=WIDTH-SIDE*2
-        val caps=intArrayOf(8,8,3,3)
+        val caps=intArrayOf(8,8,3,3,LATE_ITEMS)
         var ls=lines(r,caps)
         while(measure(ls,f,width)>MAX_HEIGHT) {
-            val counts=intArrayOf(minOf(caps[0],r.yesterday.size),minOf(caps[1],r.today.size),minOf(caps[2],r.inProgress.size),minOf(caps[3],r.check.size))
+            val counts=intArrayOf(minOf(caps[0],r.yesterday.size),minOf(caps[1],r.today.size),minOf(caps[2],r.inProgress.size),minOf(caps[3],r.check.size),
+                minOf(caps[4],r.late.size))
             val i=counts.indices.maxByOrNull { counts[it] }!!
             if(counts[i]<=1) break
             caps[i]=counts[i]-1;ls=lines(r,caps)
@@ -336,7 +368,14 @@ object KakaoReport {
         if(test) { if(s.optString(TEST_SENT_DAY)==today) return@withLock ALREADY_SENT }
         else if(s.optString(PipelineSettingsKeys.REPORT_DAY)==day) return@withLock ALREADY_SENT
         if(!s.optBoolean(PipelineSettingsKeys.KAKAO_LINKED,false)) return@withLock NOT_LINKED
-        val composed=compose(report,source==SOURCE_PHONE)
+        // v3.7 r17-2 (M3): right before the send the phone counts again what of yesterday still waits (the tidy counted at
+        // night), so the first line says it as it is at 05:30. The report's own count stays when the store cannot be read.
+        val reportDay=runCatching { LocalDate.parse(day) }.getOrElse { CallRecordStore.kstDay(clock()) }
+        val gen=report.optLong("generatedMs",0).takeIf { it>0 && source==SOURCE_ROUTINE }
+        val cov=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { (coverageOf ?: ::storeCoverage)(app,reportDay.minusDays(1),gen) }.getOrNull() }
+        val sent=if(cov==null) report else JSONObject(report.toString()).apply {
+            put("head",(optJSONObject("head")?.let { JSONObject(it.toString()) } ?: JSONObject()).put("pendingCalls",cov.pending)) }
+        val composed=compose(sent,source==SOURCE_PHONE)
         val sender=senderFactory?.invoke(app) ?: KakaoSdkSender(app.applicationContext)
         val out=deliver(sender,composed)
         val now=clock()
@@ -349,6 +388,8 @@ object KakaoReport {
         }
         save(app) { o ->
             if(out.sent>0) o.put(PipelineSettingsKeys.REPORT_DAY,day).put(PipelineSettingsKeys.REPORT_SOURCE,source)
+            // The heartbeat's report.coverage (DESIGN_V7 3.3): the phone's own count; the phone's 06:00 report lists no call of yesterday.
+            if(out.sent>0 && cov!=null) ReportCoverage.note(o,reportDay,cov,if(source==SOURCE_PHONE) 0 else cov.analyzed,source,now)
             if(out.error==null) {
                 o.put(PipelineSettingsKeys.KAKAO_LAST_SENT_MS,now).put(PipelineSettingsKeys.KAKAO_SENT_COUNT,o.optLong(PipelineSettingsKeys.KAKAO_SENT_COUNT,0)+1)
                     .put(PipelineSettingsKeys.KAKAO_LAST_ERROR,"")

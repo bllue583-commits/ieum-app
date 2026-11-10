@@ -58,8 +58,12 @@ class RoutineDocTest {
         assertTrue(text.contains(REPO))
         // v2.9 (r10-3): the routine runs every 30 minutes; the line sits above "---", so it is not part of the prompt.
         val head=text.substringBefore("\n---\n")
-        // 11/5: the task was made again at minute 34, 07:34 to 22:34 (a schedule cannot run more often than hourly).
-        assertTrue("routine time",head.contains("루틴 시간: 매시간 34분") && head.contains("`CRON_TZ=Asia/Seoul 34 7-22 * * *`"))
+        // 11/5: the task was made again at minute 34, 07:34 to 22:34 (a schedule cannot run more often than hourly); v3.7 r17-2
+        // (DESIGN_V7 3.2 M1): 03:34 and 04:34 too, 40 items a run at night.
+        assertTrue("routine time",head.contains("루틴 시간: 매시간 34분") && head.contains("`CRON_TZ=Asia/Seoul ${ResultChain.DEFAULT_CRON.removePrefix("CRON_TZ=Asia/Seoul ")}`"))
+        assertEquals("CRON_TZ=Asia/Seoul 34 3-4,7-22 * * *",ResultChain.DEFAULT_CRON)
+        assertFalse("the old cron string is gone from the prompt",text.substringAfter("\n---\n").contains("34 7-22 *"))
+        listOf("한 실행 처리 상한이 40건이다","03시와 04시에 시작한 실행(03:34, 04:34)은 40건까지다","20건, 03:34와 04:34 실행은 40건","+25분").forEach { assertTrue(it,text.contains(it)) }
         // Same v5 round: the open items' request fields (design C5) are named next to rule 12, the rules unchanged.
         listOf("askedOn(요청한 날)","owner(그때 정한 맡는 쪽)","person(요청한 통화 상대 이름)","quote(그때 근거 원문의 앞 40자)").forEach { assertTrue(it,block(text,"SYSTEM","text").contains(it)) }
         // v6: the ledger gets a people entry for every counterpartId (the repository ledger had rev 3 with no people and no companies).
@@ -123,20 +127,23 @@ class RoutineDocTest {
     }
 
     /** v3.5 (DESIGN_V5 1절, 2.2절, r15-2): prompt 7 writes the morning report after step 9 (section 9-1), checks it with
-     * tools/report_check.py, keeps 30 days, reports reportWritten, and starts at 04:46 so the phone can send it at 05:30. */
-    @Test fun tidyV7WritesTheMorningReport() {
+     * tools/report_check.py, keeps 30 days, reports reportWritten. v3.7 r17-2 (DESIGN_V7 3.2, prompt 8): it starts at 05:05,
+     * after the 03:34 and 04:34 analysis runs, and the report says what it leaves out (head.pendingCalls) and the calls summed
+     * up late (late[]). */
+    @Test fun tidyV8WritesTheMorningReport() {
         val text=File(doc().parentFile,"tidy.md").readText()
         val head=text.substringBefore("\n---\n");val prompt=text.substringAfter("\n---\n")
-        assertTrue(head.contains("지시문 버전 7\n"))
-        assertTrue("04:46",head.contains("`CRON_TZ=Asia/Seoul 46 4 * * *`") && prompt.contains("04:46"))
-        assertFalse("the old time is gone from the prompt",prompt.contains("05:16"))
+        assertTrue(head.contains("지시문 버전 8\n"))
+        assertTrue("05:05",head.contains("`CRON_TZ=Asia/Seoul 5 5 * * *`") && prompt.contains("05:05"))
+        assertFalse("the old times are gone from the prompt",prompt.contains("05:16") || prompt.contains("04:46"))
         val nine=prompt.indexOf("\n9. 기억 파일을 쓴다.");val nineOne=prompt.indexOf("\n9-1. 아침 보고서.");val ten=prompt.indexOf("\n10. 장부의 rev를 1 올리고")
         assertTrue("9-1 sits between 9 and 10",nine in 0 until nineOne && nineOne<ten)
         val section=prompt.substring(nineOne,ten)
         // The format of DESIGN_V5 1절: every key the phone reads (r15-1 KakaoReport.compose).
         val format=JSONObject(section.substringAfter("```json\n").substringBefore("\n```"))
-        assertEquals(listOf("day","generatedMs","tidyRev","head","yesterday","today","inProgress","check"),format.keys().asSequence().toList())
-        assertEquals(listOf("calls","newChecks","todayChecks","issues"),format.getJSONObject("head").keys().asSequence().toList())
+        assertEquals(listOf("day","generatedMs","tidyRev","head","yesterday","today","inProgress","check","late"),format.keys().asSequence().toList())
+        assertEquals(listOf("calls","newChecks","todayChecks","issues","pendingCalls"),format.getJSONObject("head").keys().asSequence().toList())
+        assertEquals(listOf("who","what"),format.getJSONArray("late").getJSONObject(0).keys().asSequence().toList())
         assertEquals(listOf("who","what"),format.getJSONArray("yesterday").getJSONObject(0).keys().asSequence().toList())
         assertEquals(listOf("id","what","who","since","status","check"),format.getJSONArray("today").getJSONObject(0).keys().asSequence().toList())
         assertEquals(listOf("what","who"),format.getJSONArray("check").getJSONObject(0).keys().asSequence().toList())
@@ -150,7 +157,11 @@ class RoutineDocTest {
         assertTrue(prompt.contains("아침 보고서(9-1번), 지운 파일을 한 커밋 \"tidy\"로 push한다"))
         assertTrue(prompt.contains("\" | 확인 필요: 아침 보고서\""))
         // The self-report: reportWritten, and prompt 7 in the line the watchdog compares with version.json's tidyVersion.
-        assertTrue(prompt.contains("\"promptVersion\":\"7\""));assertTrue(prompt.contains("\"reportWritten\":true}"))
+        assertTrue(prompt.contains("\"promptVersion\":\"8\""));assertTrue(prompt.contains("\"reportWritten\":true}"))
+        // v8: what the phone puts in the state for it (CallRecordStore.tidyState) and what the report takes from it.
+        listOf("pending{yesterdayCalls, yesterdayMin}","keyPoints, doneMs}","`pendingCalls`는 state의 `pending.yesterdayCalls`",
+            "`late`: 뒤늦게 정리된 통화","그제 00:00(한국 시각) 전","doneMs가 지난 보고","최대 5줄","\"뒤늦게 정리된 통화\"",
+            "`yesterday`와 `late`는 \"who: what\"").forEach { assertTrue(it,prompt.contains(it)) }
         assertTrue(prompt.contains("- `reportWritten`:"))
         assertTrue(File(doc().parentFile,"self-report.md").readText().contains("reportWritten"))
     }
@@ -179,14 +190,14 @@ class RoutineDocTest {
         listOf("firstPassDone이 false여도 멈추지 않는다","state의 records(최근 14일)를 날짜순으로 전부 읽고","이때는 7번의 tidiedOnce를 쓰지 않는다",
             "firstPassDone이 true이고 장부의 tidiedOnce가 true가 아니면 10월 1일부터","firstPassDone이 false인 날(3번)에는 tidiedOnce를 쓰지 않고").forEach { assertTrue(it,text.contains(it)) }
         // 2.3-3: the hourly self-report carries the cron and the real start and end.
-        assertTrue(doc().readText().contains("\"cron\":\"CRON_TZ=Asia/Seoul 34 7-22 * * *\""))
+        assertTrue(doc().readText().contains("\"cron\":\"${ResultChain.DEFAULT_CRON}\""))
     }
 
     private companion object {
         /** The version docs/routines/hourly.md is at (v7: DESIGN_V4 3.2-3, r13-2; v8: DESIGN_V4 4.3, r14-3, same rules and format). */
         const val DOC_VERSION=8
-        /** The version docs/routines/tidy.md is at (v7: DESIGN_V5 2.2, r15-2, the morning report). */
-        const val TIDY_VERSION=7
+        /** The version docs/routines/tidy.md is at (v7: DESIGN_V5 2.2, r15-2, the morning report; v8: DESIGN_V7 3.2, r17-2). */
+        const val TIDY_VERSION=8
         /** True once ClaudeCallAnalyzer (r13-1's file) carries the doc's version (the orchestrator's integration step). */
         val codeAtDocVersion get()=ClaudeCallAnalyzer.PROMPT_VERSION>=DOC_VERSION
         /** Both routines find the inbox repository the same way. */

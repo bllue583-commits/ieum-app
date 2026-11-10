@@ -178,9 +178,13 @@ class R14TwoTest:ProtectedTextHostTestBase() {
         assertEquals(2,StatusLights.routineMissed(ended,crons,kst(5,13,20)))
         assertEquals(4,StatusLights.routineMissed(ended,crons,kst(5,15,20)))
         assertEquals("never reported",0,StatusLights.routineMissed(0,crons,kst(5,15,20)))
-        // Before the first morning run the evening's was the last: nothing missed.
-        assertEquals(0,StatusLights.routineMissed(kst(4,22,37),crons,kst(5,7,50)))
-        assertEquals(0,StatusLights.routineMissed(kst(4,22,37),crons,kst(5,8,10)))
+        // Before the first morning run the evening's was the last: nothing missed (the cron before v3.7).
+        val old=listOf(ResultChain.parseCron("CRON_TZ=Asia/Seoul 34 7-22 * * *")!!)
+        assertEquals(0,StatusLights.routineMissed(kst(4,22,37),old,kst(5,7,50)))
+        assertEquals(0,StatusLights.routineMissed(kst(4,22,37),old,kst(5,8,10)))
+        // v3.7 r17-2 (DESIGN_V7 3.2 M1): 03:34 and 04:34 are runs too; after 04:34 reported, 07:50 misses nothing.
+        assertEquals(2,StatusLights.routineMissed(kst(4,22,37),crons,kst(5,7,50)))
+        assertEquals(0,StatusLights.routineMissed(kst(5,4,37),crons,kst(5,7,50)))
         fun analyze(missed:Int)=StatusLights.lights(okLights(kst(5,15,20)).copy(routineMissed=missed,routineEndedMs=ended)).single { it.tag=="status_analyze" }
         assertTrue(analyze(1).ok)
         assertFalse(analyze(2).ok);assertEquals("분석이 4시간 안 돌았어요. 관리하는 분께 알려 주세요.",analyze(2).words)

@@ -202,6 +202,12 @@ object PipelineSettingsKeys {
      * (today/prev runs and minutes on battery and plugged in, the battery budget, skips, killed/yield ms, model loads, piece
      * speed, the last battery snapshot, plug debounce and level samples, and the power-waiting queue). Numbers and codes only. */
     const val TRANSCRIPTION_POWER="transcriptionPower"
+
+    // ---- v3.7 r17-2 (DESIGN_V7 3.2 M3): the morning report's coverage. ----
+    /** r17-2: what the last morning report covered, a JSON object {"day": the report's KST day, "yesterdayCalls", "inReport",
+     * "pending", "atMs", "source"} (numbers and a code only), written right before the 05:30 send and by the 06:00 notice when
+     * no send counted it. Read through [kr.callbrief.pipeline.report.ReportCoverage.snapshot] (the heartbeat's report.coverage). */
+    const val REPORT_COVERAGE="reportCoverage"
 }
 
 /** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets
