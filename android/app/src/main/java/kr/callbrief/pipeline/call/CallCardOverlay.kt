@@ -84,10 +84,14 @@ internal object CallCardOverlay {
     /** Why a card did or did not show, for r11-3's `CARD_STATS` (callCard:{shown,noPermission,noNumber,noCard}). */
     const val SHOWN="shown";const val NO_PERMISSION="noPermission";const val NO_NUMBER="noNumber";const val NO_CARD="noCard"
     const val LOCKED="locked"
-    /** v3.6.1: the window not seen this long after it was added is taken for hidden. */
-    const val HIDDEN_AFTER_MS=1_500L
+    /** v3.6.1: the window not seen this long after it was added is taken for hidden. v3.6.1 fix (review, medium): 1.5 s -> 3 s
+     * (a cold start or the ring's CPU rush can hold the first frame past 1.5 s), and a hidden window is tried once more when the
+     * call's state changes ([retryLeft]). */
+    const val HIDDEN_AFTER_MS=3_000L
     /** v3.6.1 cause codes ([CardStats.Attempt.cause]); an exception of `addView` is `addView:<its class>`. */
     const val CAUSE_OK="ok";const val CAUSE_DRAWN_DESPITE_FALSE="drawnDespiteFalse";const val CAUSE_SHORT="short"
+    /** v3.6.1 fix: seen on the one second try after the first window was taken for hidden. */
+    const val CAUSE_OK_RETRY="okRetry"
     /** Added while the screen was locked and never seen until the call ended (the notice was beside it). */
     const val CAUSE_HIDDEN_LOCKED="hiddenLocked"
     /** Told once per call when the window was put up: [SHOWN] (added, unlocked), [LOCKED] (added while locked, the notice beside
@@ -157,8 +161,15 @@ internal object CallCardOverlay {
     private var coldAtAdd=false
     private var outAtAdd=false
     private var addError:String?=null
-    /** No window again in this call (it could not be added, or it was hidden). */
+    /** No window again in this call (it could not be added, or it was hidden; a hidden one may still get [retryLeft]). */
     private var windowGone=false
+    /** v3.6.1 fix (review, medium): the window was taken for hidden; its verdict waits for the one more try (or the call's end),
+     * so a call is still told once. */
+    private var hiddenPending=false
+    /** The one more try of a hidden window at the next change of the call's state is not spent yet. */
+    private var retryLeft=true
+    /** This call's window is the second try. */
+    private var retrying=false
     /** [onVerdict] was told; the window was seen. */
     private var judged=false
     private var seenOnce=false
@@ -192,7 +203,8 @@ internal object CallCardOverlay {
     /** Takes the card (and the notice instead of it) away; the next call starts afresh. */
     fun hide():Unit = onMain { removeAll();forgetCall();state=CallSession.State.IDLE }
     private fun forgetCall() { closed=false;openedByHand=false;told=false;toldNoNumber=false;loading=false;key=null;content=null;stripY=null;shownAt=0L;generation++
-        main.removeCallbacks(judgeLater);addedAt=0L;canDrawAtAdd=true;lockedAtAdd=false;addError=null;windowGone=false;judged=false;seenOnce=false;probed=null;coldAtAdd=false;outAtAdd=false }
+        main.removeCallbacks(judgeLater);addedAt=0L;canDrawAtAdd=true;lockedAtAdd=false;addError=null;windowGone=false;judged=false;seenOnce=false;probed=null;coldAtAdd=false;outAtAdd=false
+        hiddenPending=false;retryLeft=true;retrying=false }
 
     private fun showNow(c:Context,phoneKey:String?,to:CallSession.State) {
         app=c
@@ -203,8 +215,11 @@ internal object CallCardOverlay {
         val newCall=phoneKey!=null && phoneKey!=key
         if(newCall) { removeAll();forgetCall() }
         if(phoneKey!=null) key=phoneKey
+        val changed=to!=state
         state=to
         if(closed) return
+        // v3.6.1 fix: a window taken for hidden is tried once more when the call's state changes (ringing to off hook).
+        if(changed && hiddenPending && retryLeft && view==null && content!=null) { retryLeft=false;retrying=true;windowGone=false;judged=false }
         if(content!=null) { place(c);relayout();afterState();return }
         val k=key
         if(k==null) { tell(c,NO_NUMBER,last=false);return }
@@ -268,7 +283,11 @@ internal object CallCardOverlay {
         when {
             view==null -> notice(c,data)
             isLocked -> { notice(c,data);waitForUnlock(c) }
-            !draw && !seenOnce -> notice(c,data)
+            // v3.6.1 fix (review, critical): added while the check said no, the window may be hidden by the system without the
+            // view hearing of it: the notice stays until the call ends, seen or not.
+            !canDrawAtAdd || !draw && !seenOnce -> notice(c,data)
+            // The second try after a hidden window: the notice stays until that window is seen.
+            retrying && !seenOnce -> notice(c,data)
             noticeUp -> cancelNotice(c)
         }
     }
@@ -284,21 +303,26 @@ internal object CallCardOverlay {
         if(!seen && !ending && v!=null) {
             // Locked: the lock screen covers the window and the notice is up; it is judged again once unlocked (4.2-1).
             if(runCatching { locked(c) }.getOrDefault(false)) return
-            judged=true;windowGone=true
+            windowGone=true
             runCatching { c.getSystemService(WindowManager::class.java)?.removeViewImmediate(v) }
             view=null;params=null
             Log.i(LOG,"card hidden")
             content?.let { notice(c,it) }
-            verdict(c,CardStats.FALLBACK,CardStats.HIDDEN,null)
+            // v3.6.1 fix: the second try is hidden too, or there is none left: told now. Else told after the try (or at the end).
+            if(retrying || !retryLeft) { judged=true;hiddenPending=false;verdict(c,CardStats.FALLBACK,CardStats.HIDDEN,null) } else hiddenPending=true
             return
         }
         judged=true
         if(seen) {
-            seenOnce=true
+            seenOnce=true;hiddenPending=false
             Log.i(LOG,"card drawn")
-            verdict(c,CardStats.DRAWN,if(canDrawAtAdd) CAUSE_OK else CAUSE_DRAWN_DESPITE_FALSE,(clock()-addedAt).coerceAtLeast(0))
-            if(!ending && noticeUp && !runCatching { locked(c) }.getOrDefault(false)) cancelNotice(c)
-        } else verdict(c,if(noticeUp) CardStats.FALLBACK else CardStats.GONE,if(lockedAtAdd) CAUSE_HIDDEN_LOCKED else CAUSE_SHORT,null)
+            // v3.6.1 fix (review, critical): seen although the check said no is not trusted as drawn (the system may hide the
+            // window on its side only): unconfirmed, and the notice stays until the call ends.
+            if(canDrawAtAdd) verdict(c,CardStats.DRAWN,if(retrying) CAUSE_OK_RETRY else CAUSE_OK,(clock()-addedAt).coerceAtLeast(0))
+            else verdict(c,CardStats.UNCONFIRMED,CAUSE_DRAWN_DESPITE_FALSE,(clock()-addedAt).coerceAtLeast(0))
+            if(canDrawAtAdd && !ending && noticeUp && !runCatching { locked(c) }.getOrDefault(false)) cancelNotice(c)
+        } else if(hiddenPending) { hiddenPending=false;verdict(c,CardStats.FALLBACK,CardStats.HIDDEN,null) }
+        else verdict(c,if(noticeUp) CardStats.FALLBACK else CardStats.GONE,if(lockedAtAdd) CAUSE_HIDDEN_LOCKED else CAUSE_SHORT,null)
     }
     private fun verdict(c:Context,result:String,cause:String,drawMs:Long?) {
         val after=runCatching { canDraw(c) }.getOrNull()
@@ -414,7 +438,7 @@ internal object CallCardOverlay {
     /** Unlocked during the call: the notice goes, the card stays (or comes, when the window could not be added before). */
     private fun onUnlocked(c:Context) {
         stopWaiting(c)
-        if(noticeUp && view!=null && (seenOnce || runCatching { canDraw(c) }.getOrDefault(false))) cancelNotice(c)
+        if(noticeUp && view!=null && canDrawAtAdd && (seenOnce || runCatching { canDraw(c) }.getOrDefault(false))) cancelNotice(c)
         // v3.6.1: a window not judged yet (the lock covered it) is judged a while after the unlock.
         if(!judged && view!=null) { main.removeCallbacks(judgeLater);main.postDelayed(judgeLater,HIDDEN_AFTER_MS) }
         if(state==CallSession.State.IDLE || closed || content==null) return

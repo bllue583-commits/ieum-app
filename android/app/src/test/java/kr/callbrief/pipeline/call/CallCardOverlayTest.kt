@@ -483,16 +483,40 @@ class R17CardWindowTest:ProtectedTextHostTestBase() {
         assertEquals(listOf(CallCardOverlay.SHOWN),outcomes)
         idle();assertEquals("told once per call",1,verdicts.size)
     }
-    @Test fun aWindowAddedAlthoughTheCheckSaidNoAndSeenIsDrawnDespiteFalse() {
+    @Test fun aWindowAddedAlthoughTheCheckSaidNoAndSeenIsUnconfirmedAndTheNoticeStays() {
+        // v3.6.1 fix (review, critical): Android may hide such a window on its side only (MODE_IGNORED) while the view draws.
         CallCardOverlay.canDraw={ false }
         ring();settle(50)
         assertEquals("the window is tried anyway",1,windows.size)
-        assertEquals("the notice too, until the window is seen",1,notices.size)
+        assertEquals("the notice too",1,notices.size)
         assertEquals(listOf(CallCardOverlay.NO_PERMISSION),outcomes)
         settle(CallCardOverlay.HIDDEN_AFTER_MS)
-        assertEquals(CardStats.DRAWN,verdict().result);assertEquals(CallCardOverlay.CAUSE_DRAWN_DESPITE_FALSE,verdict().cause)
+        assertEquals(CardStats.UNCONFIRMED,verdict().result);assertEquals(CallCardOverlay.CAUSE_DRAWN_DESPITE_FALSE,verdict().cause)
         assertFalse(verdict().canDraw)
-        assertTrue("seen: the notice goes",notices.isEmpty());assertEquals(1,windows.size)
+        assertEquals("seen, yet the notice stays",1,notices.size);assertEquals(1,windows.size)
+        // Later states of the call (the check says yes now, the unlock) do not take it away either; the call's end does.
+        CallCardOverlay.canDraw={ true }
+        CallCardOverlay.show(app,null,CallSession.State.OFFHOOK);settle(50)
+        assertEquals(1,notices.size)
+        app.sendBroadcast(Intent(Intent.ACTION_USER_PRESENT));settle(50)
+        assertEquals(1,notices.size)
+        idle();assertTrue(notices.isEmpty());assertEquals("told once",1,verdicts.size)
+    }
+    @Test fun aWindowAddedWhileTheCheckSaidYesAndSeenIsDrawnWithoutANotice() {
+        ring();settle(50)
+        assertTrue(notices.isEmpty())
+        settle(CallCardOverlay.HIDDEN_AFTER_MS)
+        assertEquals(CardStats.DRAWN,verdict().result);assertEquals(CallCardOverlay.CAUSE_OK,verdict().cause)
+        assertTrue(notices.isEmpty());assertEquals(1,windows.size)
+    }
+    @Test fun theFirstFrameMayTakeLongerThanOneAndAHalfSeconds() {
+        // v3.6.1 fix (review, medium): a cold start can hold the first frame; the window is judged at 3 seconds.
+        assertEquals(3_000L,CallCardOverlay.HIDDEN_AFTER_MS)
+        seen=false
+        ring();settle(2_000)
+        assertEquals("not judged at 2 s",1,windows.size);assertTrue(verdicts.isEmpty())
+        seen=true;settle(CallCardOverlay.HIDDEN_AFTER_MS)
+        assertEquals(CardStats.DRAWN,verdict().result);assertEquals(1,windows.size)
     }
     @Test fun anExceptionOfAddViewIsAFallbackWithItsName() {
         CallCardOverlay.addWindow={ _,_,_ -> throw WindowManager.BadTokenException("synthetic") }
@@ -509,11 +533,37 @@ class R17CardWindowTest:ProtectedTextHostTestBase() {
         assertEquals(1,windows.size);assertTrue(notices.isEmpty())
         settle(CallCardOverlay.HIDDEN_AFTER_MS)
         assertTrue("the hidden window goes",windows.isEmpty());assertEquals(1,notices.size)
-        assertEquals(CardStats.FALLBACK,verdict().result);assertEquals(CardStats.HIDDEN,verdict().cause)
-        // A later state of the same call does not add it again.
+        // v3.6.1 fix (review, medium): the verdict waits for the one more try at the next state (or the call's end).
+        assertTrue(verdicts.isEmpty())
+        // The call's state changes (ringing to off hook): tried once more, hidden again: a fallback, told once.
         CallCardOverlay.show(app,null,CallSession.State.OFFHOOK);settle(50)
+        assertEquals("tried once more",1,windows.size);assertEquals(1,notices.size)
+        settle(CallCardOverlay.HIDDEN_AFTER_MS)
+        assertTrue(windows.isEmpty());assertEquals(1,notices.size)
+        assertEquals(CardStats.FALLBACK,verdict().result);assertEquals(CardStats.HIDDEN,verdict().cause)
+        // Only once: a later state does not add it again.
+        CallCardOverlay.show(app,null,CallSession.State.RINGING);settle(50)
         assertTrue(windows.isEmpty());assertEquals(1,verdicts.size)
-        idle();assertTrue(notices.isEmpty())
+        idle();assertTrue(notices.isEmpty());assertEquals(1,verdicts.size)
+    }
+    @Test fun aHiddenWindowSeenOnTheSecondTryIsDrawn() {
+        seen=false
+        ring();settle(50);settle(CallCardOverlay.HIDDEN_AFTER_MS)
+        assertTrue(windows.isEmpty());assertEquals(1,notices.size);assertTrue(verdicts.isEmpty())
+        seen=true
+        CallCardOverlay.show(app,null,CallSession.State.OFFHOOK);settle(50)
+        assertEquals(1,windows.size)
+        settle(CallCardOverlay.HIDDEN_AFTER_MS)
+        assertEquals(CardStats.DRAWN,verdict().result);assertEquals(CallCardOverlay.CAUSE_OK_RETRY,verdict().cause)
+        assertTrue("seen with the check saying yes: the notice goes",notices.isEmpty())
+        idle();assertEquals(1,verdicts.size)
+    }
+    @Test fun aHiddenWindowWithoutASecondTryIsToldAtTheCallsEnd() {
+        seen=false
+        ring();settle(50);settle(CallCardOverlay.HIDDEN_AFTER_MS)
+        assertTrue(verdicts.isEmpty())
+        idle()
+        assertEquals(CardStats.FALLBACK,verdict().result);assertEquals(CardStats.HIDDEN,verdict().cause)
     }
     @Test fun aWindowGoneBeforeItWasJudgedIsToldOnce() {
         seen=false

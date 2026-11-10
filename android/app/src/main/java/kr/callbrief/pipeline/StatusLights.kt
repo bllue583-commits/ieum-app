@@ -62,7 +62,7 @@ internal object StatusLights {
          * waits ([PowerText.waiting], from the power ledger r16-1 writes; null: not known). */
         val chargeWaiting:Int=0,val chargeWaitOldestMs:Long?=null,
         /** v3.6.1 (DESIGN_V7 K4), filled by [withPhone]: today's (KST) calls whose card window was tried ([CardStats] drawn plus
-         * fallback) and of them the ones whose window was really drawn. */
+         * fallback plus unconfirmed) and of them the ones whose window was really drawn. */
         val cardTodayTried:Int=0,val cardTodayDrawn:Int=0)
 
     const val TRANSCRIBE_LATE_MS=6*3_600_000L
@@ -203,7 +203,8 @@ internal object StatusLights {
         if(st.optInt("day",0)!=kr.callbrief.pipeline.call.CardStats.day(now)) return 0 to 0
         val t=st.optJSONObject("today") ?: return 0 to 0
         val drawn=t.optInt(kr.callbrief.pipeline.call.CardStats.DRAWN,0)
-        return drawn+t.optInt(kr.callbrief.pipeline.call.CardStats.FALLBACK,0) to drawn
+        // v3.6.1 fix (review, critical): a window seen although the check said no is unconfirmed: tried, not drawn.
+        return drawn+t.optInt(kr.callbrief.pipeline.call.CardStats.FALLBACK,0)+t.optInt(kr.callbrief.pipeline.call.CardStats.UNCONFIRMED,0) to drawn
     }
 
     // ---- v3.4 (DESIGN_V4 4.2-5, r14-2) ------------------------------------------------------------------------------

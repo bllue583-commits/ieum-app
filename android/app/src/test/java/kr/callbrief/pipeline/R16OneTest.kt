@@ -193,7 +193,8 @@ class R16OneTest:ProtectedTextHostTestBase() {
         // A piece on another thread count starts the speed list again.
         var c=PowerStats.notePiece(null,300_000,120_000,6,false);c=PowerStats.notePiece(c,200_000,120_000,4,false)
         assertEquals(1,c.getJSONObject("chunk").getJSONArray("rates").length())
-        assertEquals(200_000.0/120_000,PowerStats.rate(c)!!,0.01)
+        // v3.6.1 fix: W1/W2's speed is per expected window (5 for a 2-minute piece), from the long pieces.
+        assertEquals(200_000.0/150_000,PowerStats.rate(c)!!,0.01)
     }
 
     // ---- the battery queue: today's short calls only, newest first, in SQL ----
@@ -221,7 +222,8 @@ class R16OneTest:ProtectedTextHostTestBase() {
         val events=object:CallTranscriptionRunner.Events { override fun yielded() { yields++ } }
         val t=CallTranscriber { _,pcm,_ -> pieces++;clock+=pcm.size/16*5/2;listOf(CallTranscript.Segment(0,pcm.size*1000L/rate,"말")) } // 2.5 x real time
         CallTranscriptionStore(context,{ clock },{}).use { s ->
-            val pass=runner(s,t,rate=2.5,events=events).run()
+            // v3.6.1 fix: the speed per expected window (5 for a 2-minute piece): 2.0 is 300 s a piece, as 2.5 per audio ms was.
+            val pass=runner(s,t,rate=2.0,events=events).run()
             // 300 s for the first piece, then 300+375 > 540: the second is not begun.
             assertEquals("YIELD",pass.state);assertEquals(1,pieces);assertEquals(1,yields);assertEquals(1,pass.pieces)
             assertEquals("QUEUED" to ("STOPPED" to 0),state(s,"long"))
@@ -234,7 +236,8 @@ class R16OneTest:ProtectedTextHostTestBase() {
         var pieces=0
         val t=CallTranscriber { _,pcm,_ -> pieces++;clock+=5*minute;listOf(CallTranscript.Segment(0,pcm.size*1000L/rate,"말")) }
         CallTranscriptionStore(context,{ clock },{}).use { s ->
-            runner(s,t,rate=4.0,limit=minute).run() // expected 300 s, the run may go 60 s: begun anyway
+            // v3.6.1 fix: per expected window (3 for a minute): 3 x 30 s x 3.2 x 1.25 = 360 s, the run may go 60 s: begun anyway.
+            runner(s,t,rate=3.2,limit=minute).run()
             assertEquals(1,pieces);assertEquals("DONE",state(s,"a").first)
         }
         assertTrue(PowerPolicy.startPiece(true,0,10*hour,TranscriptionPower.SELF_END_MS))
@@ -256,8 +259,8 @@ class R16OneTest:ProtectedTextHostTestBase() {
         val sizes=mutableListOf<Int>()
         val t=CallTranscriber { _,pcm,_ -> sizes+=pcm.size;listOf(CallTranscript.Segment(0,pcm.size*1000L/rate,"말")) }
         CallTranscriptionStore(context,{ clock },{}).use { s ->
-            // 120 s x 3 x 1.25 = 450 s > 432 s: two halves from the start.
-            runner(s,t,rate=3.0,limit=hour).run()
+            // 5 windows x 30 s x 2.4 x 1.25 = 450 s > 432 s: two halves from the start (v3.6.1 fix: per expected window).
+            runner(s,t,rate=2.4,limit=hour).run()
             assertEquals(2,sizes.size);assertTrue("$sizes",sizes.all { it<=96*rate })
             assertEquals("DONE",state(s,"hot").first)
         }

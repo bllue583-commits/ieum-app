@@ -235,6 +235,22 @@ class WatchdogTest(unittest.TestCase):
         self.assertNotIn("김", body)
         self.assertNotIn("3333", body)
 
+    def test_call_card_unconfirmed_is_not_drawn_v361_fix(self):
+        # v3.6.1 fix (review, critical): a window seen although the check said no (unconfirmed) is on the not-drawn side.
+        recent = [{"day": 20261110, "at": "09:0%d" % i, "result": "unconfirmed", "cause": "drawnDespiteFalse", "mode": 1}
+                  for i in range(3)]
+        card = {"day": 20261110, "recent": recent,
+                "today": {"shown": 0, "noPermission": 3, "fallback": 0, "drawn": 0, "unconfirmed": 3}}
+        self.assertEqual([w.T_CARD_PERMISSION], titles(phone=phone(callCard=card)))
+        body = problems(phone=phone(callCard=card))[0]["body"]
+        self.assertIn("하루에 3번", body)
+        self.assertIn("카드가 뜬 횟수: 0번", body)
+        self.assertIn("drawnDespiteFalse 3번", body)
+        # Two fallbacks and one unconfirmed reach the rule's 3; drawn alone does not.
+        self.assertEqual([w.T_CARD_PERMISSION], titles(phone=phone(callCard={"today": {"fallback": 2, "unconfirmed": 1, "drawn": 5}})))
+        self.assertEqual([], titles(phone=phone(callCard={"today": {"fallback": 1, "unconfirmed": 1, "drawn": 5}})))
+        self.assertEqual([], titles(phone=phone(callCard={"today": {"fallback": 0, "drawn": 9}})))
+
     def test_exempted_bucket_is_no_cause(self):
         body = problems(phone=phone(atMs=NOW - 20 * H, standbyBucket="EXEMPTED"))[0]["body"]
         self.assertNotIn("EXEMPTED", body)

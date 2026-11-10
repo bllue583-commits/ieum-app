@@ -62,7 +62,7 @@ def card_causes(card):
     recent = card.get("recent") if isinstance(card.get("recent"), list) else []
     seen = {}
     for e in recent:
-        if not isinstance(e, dict) or e.get("result") != "fallback" or e.get("day") != card.get("day"):
+        if not isinstance(e, dict) or e.get("result") not in ("fallback", "unconfirmed") or e.get("day") != card.get("day"):
             continue
         c = w_code(e.get("cause"))
         if c and sum(ch.isdigit() for ch in c) < 6:
@@ -660,6 +660,10 @@ def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count, version=None
             v = today.get(key)
             return v if isinstance(v, int) and not isinstance(v, bool) else None
         np = count("fallback") if count("fallback") is not None else count("noPermission")
+        # v3.6.1 fix (review, critical): `unconfirmed` (seen although the check said no; the system may hide such a window on
+        # its side only) is on the not-drawn side too.
+        if np is not None and count("unconfirmed"):
+            np += count("unconfirmed")
         if np is not None and np >= CARD_NO_PERMISSION_PER_DAY:
             drawn = count("drawn")
             got = drawn if drawn is not None else ms(today, "shown")

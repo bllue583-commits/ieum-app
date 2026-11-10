@@ -45,9 +45,14 @@ internal object CardStats {
     const val DRAWN="drawn";const val FALLBACK="fallback";const val HIDDEN="hidden"
     /** v3.6.1: a window that went (the call ended, the card was closed) before it was seen, without the notice: neither. */
     const val GONE="gone"
+    /** v3.6.1 fix (review, critical): the window was seen although the overlay check said no when it was put up
+     * (`drawnDespiteFalse`). Android may hide such a window on the server side only (AppOps MODE_IGNORED) while the view still
+     * draws as VISIBLE, so it is not counted as [DRAWN]: the notice stays until the call ends, and the watchdog and the light
+     * count it on the not-drawn side. */
+    const val UNCONFIRMED="unconfirmed"
     /** Every count the heartbeat carries (zeros when missing). */
     val KINDS=listOf(CALLS,SHOWN,SHOWN_OUTGOING,ELIGIBLE_OUTGOING,NO_CARD,THIN,NO_NUMBER,NO_NUMBER_IN,NO_NUMBER_OUT,NO_ROLE,
-        IGNORED,OFF,LOCKED,COLD,FGS_REFUSED,NO_PERMISSION,NO_NOTIFY,EXPANDED,CLOSED_UNDER_2S,DRAWN,FALLBACK,HIDDEN)
+        IGNORED,OFF,LOCKED,COLD,FGS_REFUSED,NO_PERMISSION,NO_NOTIFY,EXPANDED,CLOSED_UNDER_2S,DRAWN,FALLBACK,HIDDEN,UNCONFIRMED)
     /** v3.6.1 (K3): the newest calls kept in `recent` (the heartbeat's `callCard.recent[]`), and the only keys an entry has. */
     const val RECENT=20
     val RECENT_KEYS=setOf("day","at","result","cause","canDraw","canDrawAfter","mode","pid","ageS","cold","locked","car","btAudio",
@@ -150,7 +155,8 @@ internal object CardStats {
     }
 
     /** v3.6.1 (K1 to K3): what became of the card's window in one call, told once by [CallCardOverlay] when it knows. [result]
-     * [DRAWN], [FALLBACK] or [GONE]; [cause] `ok`, `drawnDespiteFalse` (seen although the overlay check said no), [HIDDEN],
+     * [DRAWN], [UNCONFIRMED] (seen although the overlay check said no: cause `drawnDespiteFalse`), [FALLBACK] or [GONE]; [cause]
+     * `ok`, `okRetry` (seen on the one second try after a hidden window), `drawnDespiteFalse`, [HIDDEN],
      * `addView:<exception class>` or `short` (the window went before it was seen); [canDraw] when the window was put up,
      * [canDrawAfter] when this was told; [probe] the phone then; [drawMs] from adding the window to its first drawing. */
     data class Attempt(val result:String,val cause:String,val canDraw:Boolean,val canDrawAfter:Boolean?=null,val probe:Probe?=null,
@@ -160,12 +166,13 @@ internal object CardStats {
      * a Bluetooth audio device connected, and the call audio's device type ([android.media.AudioDeviceInfo] TYPE_*; null: none). */
     data class Probe(val mode:Int,val pid:Int,val ageS:Long,val car:Boolean,val btAudio:Boolean,val commDevice:Int?)
 
-    /** v3.6.1: counts [DRAWN] or [FALLBACK] (and [HIDDEN]) for [a] and keeps it in `recent`. Not tied to the call's state: the
+    /** v3.6.1: counts [DRAWN], [UNCONFIRMED] or [FALLBACK] (and [HIDDEN]) for [a] and keeps it in `recent`. Not tied to the call's state: the
      * card tells it once per call, also when the window is judged after the call ended. */
     fun verdict(context:Context,a:Attempt) {
         val inc=LinkedHashMap<String,Int>()
         when(a.result) {
             DRAWN -> inc[DRAWN]=1
+            UNCONFIRMED -> inc[UNCONFIRMED]=1
             FALLBACK -> { inc[FALLBACK]=1;if(a.cause==HIDDEN) inc[HIDDEN]=1 }
         }
         write(context,inc,null,entry(a,clock()))
