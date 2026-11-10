@@ -198,6 +198,11 @@ object PipelineSettingsKeys {
     /** The plugged-in transcription run in the foreground (a measurement): "auto" (default: KST even dates only, so nights
      * on and off can be compared), "on", "off" ([ForegroundPolicy]). No switch on screen; set from the settings JSON. */
     const val TRANSCRIBE_FOREGROUND="transcribeForeground"
+    // ---- v3.7 r17-2 (DESIGN_V7 3.2 M3): the morning report's coverage. ----
+    /** r17-2: what the last morning report covered, a JSON object {"day": the report's KST day, "yesterdayCalls", "inReport",
+     * "pending", "atMs", "source"} (numbers and a code only), written right before the 05:30 send and by the 06:00 notice when
+     * no send counted it. Read through [kr.callbrief.pipeline.report.ReportCoverage.snapshot] (the heartbeat's report.coverage). */
+    const val REPORT_COVERAGE="reportCoverage"
 }
 
 /** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets

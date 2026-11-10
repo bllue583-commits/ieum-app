@@ -16,6 +16,7 @@ import kotlinx.coroutines.withContext
 import kr.callbrief.R
 import kr.callbrief.SecureSettings
 import kr.callbrief.pipeline.report.KakaoReport
+import kr.callbrief.pipeline.report.ReportCoverage
 import kr.callbrief.pipeline.report.ReportFetch
 import java.time.Duration
 import java.time.Instant
@@ -113,20 +114,30 @@ internal object CallDigestText {
     const val EVENING_WAITING_KEY="digestEveningWaiting"
     /** "늦게 정리된 통화 2건": the morning report's last line when calls were summed up after the evening report. */
     fun lateLine(n:Int):String?=if(n>0) "늦게 정리된 통화 ${n}건" else null
-    /** What the evening report of [calls] (its [day], sent [at]) leaves waiting, for [EVENING_WAITING_KEY]. */
+    /** What the evening report of [calls] (its [day], sent [at]) leaves waiting, for [EVENING_WAITING_KEY]. v3.7 r17-2 (M4):
+     * "known" lists every record of the day the evening saw, so a recording that had no record yet then (its text still being
+     * made) counts the next morning too. */
     fun eveningWaiting(calls:List<CallRecord>,day:LocalDate,at:Long):String =org.json.JSONObject().put("at",at).put("day",day.toString())
-        .put("ids",org.json.JSONArray().apply { calls.filter { it.summary==null && it.state!=CallRecordStore.FAILED }.forEach { put(it.recordId) } }).toString()
-    /** Calls summed up after the evening report: the ones it left waiting that have their result now, and the calls of its day
-     * that began after it went out and have one. 0 without a stored evening. */
+        .put("ids",org.json.JSONArray().apply { calls.filter { it.summary==null && it.state!=CallRecordStore.FAILED }.forEach { put(it.recordId) } })
+        .put("known",org.json.JSONArray().apply { calls.forEach { put(it.recordId) } }).toString()
+    /** Calls of the evening's day summed up after the evening report: the ones it left waiting that have their result now, and
+     * (r17-2 M4) every call of that day it did not know (begun after it went out, or whose recording had no record yet: before,
+     * a daytime call still being turned into text at 19:00 was never counted). An evening saved before "known" counts as v3.4
+     * did (by start time). 0 without a stored evening. */
     fun lateDone(store:CallRecordStore,saved:String?):Int {
         val o=saved?.takeIf { it.isNotBlank() }?.let { runCatching { org.json.JSONObject(it) }.getOrNull() } ?: return 0
         val at=o.optLong("at",0);val ids=o.optJSONArray("ids")?.let { a -> (0 until a.length()).map { a.optString(it) } }.orEmpty().toSet()
+        val known=o.optJSONArray("known")?.let { a -> (0 until a.length()).map { a.optString(it) }.toSet() }
         fun done(r:CallRecord?)=r!=null && r.state==CallRecordStore.ANALYZED && !r.summary.isNullOrBlank()
         val waited=ids.count { id -> done(runCatching { store.record(id) }.getOrNull()) }
         val after=runCatching { LocalDate.parse(o.optString("day")) }.getOrNull()?.let { d ->
-            runCatching { store.day(d) }.getOrDefault(emptyList()).count { r -> r.recordId !in ids && (r.startedMs ?: r.createdMs)>=at && r.kind=="통화" && done(r) } } ?: 0
+            runCatching { store.day(d) }.getOrDefault(emptyList()).count { r -> r.recordId !in ids && r.kind=="통화" && done(r) &&
+                (if(known!=null) r.recordId !in known else (r.startedMs ?: r.createdMs)>=at) } } ?: 0
         return waited+after
     }
+    /** v3.7 r17-2 (M4): the evening's "충전하면 n개" counts today's calls only: the recordings waiting for the charger ([charger],
+     * the power ledger's count, which holds every day) but no more than today's recordings still without their text. */
+    fun chargerToday(charger:Int,todayUntranscribed:Int?)=if(todayUntranscribed==null) charger else minOf(charger,todayUntranscribed).coerceAtLeast(0)
     /** v3.6 (DESIGN_V6 3.2, r16-2): [m] with "충전하면 n개를 이어서 정리해요" at its end while [n] recordings wait for the charger
      * (the title and the short text stay; the lines stay within [MAX_LINES]). */
     fun withCharger(m:Message,n:Int):Message {
@@ -233,7 +244,8 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
             // v3.5 r15-0: the morning report also says when a new version waits for its install (the home banner stays as it is).
             val update=kind==CallDigestSchedule.MORNING && runCatching { CallUpdate.installWaiting(applicationContext) }.getOrDefault(false)
             val message=if(kind==CallDigestSchedule.MORNING) CallDigestText.withUpdate(CallDigestText.withLate(CallDigestText.morning(store,plan.day),late),update)
-                else CallDigestText.withCharger(CallDigestText.evening(store,plan.day),runCatching { PowerText.waiting(PowerText.ledger(settings.snapshot())).n }.getOrDefault(0))
+                else CallDigestText.withCharger(CallDigestText.evening(store,plan.day),CallDigestText.chargerToday(
+                    runCatching { PowerText.waiting(PowerText.ledger(settings.snapshot())).n }.getOrDefault(0),runCatching { store.dayCoverage(plan.day).untranscribed }.getOrNull()))
             // The evening report carries its day, so a tap the next morning still opens that day's calls.
             // v3.5 r15-3: the morning notice stays away when today's report went out in full over KakaoTalk.
             val posted=if(kind==CallDigestSchedule.MORNING) CallDigestKakao.postMorning(applicationContext,message,waitForSend=true)
@@ -242,7 +254,14 @@ internal class CallDigestWork(context:Context,params:WorkerParameters):Coroutine
                 if(posted) runCatching { val waiting=CallDigestText.eveningWaiting(store.day(plan.day),plan.day,System.currentTimeMillis())
                     settings.update { it.put(CallDigestText.EVENING_WAITING_KEY,waiting) } }
                 CallFollowupNotice.afterEvening(applicationContext) // r10-2: the day's call notices are in the report now
-            } else if(posted) runCatching { settings.update { it.remove(CallDigestText.EVENING_WAITING_KEY) } }
+            } else {
+                if(posted) runCatching { settings.update { it.remove(CallDigestText.EVENING_WAITING_KEY) } }
+                // v3.7 r17-2 (M3): a morning with no KakaoTalk report still leaves its coverage for the heartbeat (what a report
+                // made at 05:30 would have held), so report.coverage is there every day.
+                runCatching { if(!ReportCoverage.hasDay(settings.snapshot(),plan.day)) {
+                    val c=store.dayCoverage(plan.day.minusDays(1),ReportFetch.target(plan.day).toEpochMilli())
+                    settings.update { ReportCoverage.note(it,plan.day,c,c.analyzed,ReportCoverage.SOURCE_NONE,System.currentTimeMillis()) } } }
+            }
         } catch(e:Exception) { Log.w(TAG,"$kind report not posted: ${e.javaClass.simpleName}") } // class only, never a message with names
         CallDigestSchedule.next(applicationContext,kind)
         if(kind==CallDigestSchedule.EVENING) {

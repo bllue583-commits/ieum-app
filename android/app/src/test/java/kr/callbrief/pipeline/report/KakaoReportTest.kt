@@ -54,13 +54,14 @@ class KakaoReportTest:ProtectedTextHostTestBase() {
     @Before fun setup() {
         KakaoReport.appKey={ "abc123" };KakaoReport.pause={};KakaoReport.clock={ at530 };ReportFetch.clock={ at530 }
         KakaoReport.senderFactory={ fake }
+        KakaoReport.coverageOf={ _,_,_ -> null } // the report's own count unless a test sets one
         ReportFetch.scheduler={ _,p -> plans+=p }
         link(true)
     }
     @After fun reset() {
         KakaoReport.appKey={ kr.callbrief.BuildConfig.KAKAO_APP_KEY };KakaoReport.pause={ kotlinx.coroutines.delay(it) }
         KakaoReport.clock={ System.currentTimeMillis() };ReportFetch.clock={ System.currentTimeMillis() }
-        KakaoReport.senderFactory=null;ReportFetch.sourceFactory=null;ReportFetch.scheduler=null;KakaoReport.linker=null
+        KakaoReport.senderFactory=null;ReportFetch.sourceFactory=null;ReportFetch.scheduler=null;KakaoReport.linker=null;KakaoReport.coverageOf=null
     }
     private val plans=mutableListOf<ReportFetch.Plan>()
     private fun link(on:Boolean)=SecureSettings(app).update { it.put(PipelineSettingsKeys.KAKAO_LINKED,on) }
@@ -98,8 +99,8 @@ class KakaoReportTest:ProtectedTextHostTestBase() {
         assertNotNull(c.feed);assertNull("nothing to check: no second text",c.todayText)
         assertEquals("one fallback text only",1,c.fallback.size)
         assertTrue(c.fallback[0].text.startsWith("[이음 아침 보고] 11/7(토)"))
-        assertTrue(c.fallback[0].text.contains("어제 통화 0건"));assertTrue(c.fallback[0].text.contains("어제 업무 통화 없음"))
-        assertEquals("[이음 아침 보고] 11/7(토)",c.feed!!.title);assertEquals("어제 통화 0건, 새 체크 3개, 오늘 챙길 일 0개",c.feed!!.body)
+        assertTrue(c.fallback[0].text.contains("어제 정리한 통화가 없어요"));assertTrue(c.fallback[0].text.contains("어제 업무 통화 없음"))
+        assertEquals("[이음 아침 보고] 11/7(토)",c.feed!!.title);assertEquals("어제 정리한 통화가 없어요\n새 체크 3개, 오늘 챙길 일 0개",c.feed!!.body)
     }
     @Test fun composeOneCall() {
         val c=KakaoReport.compose(one)
@@ -107,7 +108,7 @@ class KakaoReportTest:ProtectedTextHostTestBase() {
         assertEquals("[오늘 챙길 일] 11/7(토)\n1. 견적서 보내기 (△△철강, 어제 요청)",c.todayText!!.text)
         assertEquals(KakaoReport.TASKS_LINK,c.todayText!!.link)
         assertEquals(2,c.fallback.size)
-        assertEquals("[이음 아침 보고] 11/7(토)\n어제 통화 1건, 새 체크 3개, 오늘 챙길 일 1개\n어제 정리\n1. △△철강 김민수 대표: 철근 단가 재협의, 견적서 금요일까지 보내기로",c.fallback[0].text)
+        assertEquals("[이음 아침 보고] 11/7(토)\n어제 통화 1건을 정리했어요\n새 체크 3개, 오늘 챙길 일 1개\n어제 정리\n1. △△철강 김민수 대표: 철근 단가 재협의, 견적서 금요일까지 보내기로",c.fallback[0].text)
         // The calls button opens yesterday's calls.
         val dayMs=LocalDate.of(2026,11,6).atStartOfDay(CallRecordStore.KST).toInstant().toEpochMilli()
         assertEquals("screen=calls&dayMs=$dayMs",c.fallback[0].link);assertEquals(c.fallback[0].link,c.feed!!.link)
@@ -376,6 +377,64 @@ class KakaoReportTest:ProtectedTextHostTestBase() {
         assertEquals(at530,k.getLong("lastSentMs"));assertTrue(k.isNull("error"));assertTrue(k.getBoolean("on"))
         assertEquals("2026-11-07",r.getString("day"));assertEquals("routine",r.getString("source"))
         assertFalse(Regex("[가-힣]").containsMatchIn(o.getJSONObject("kakao").toString()+r.toString()))
+    }
+    // ---- v3.7 r17-2 (DESIGN_V7 3.2 M3, M4): what the report leaves out, and the calls summed up late ----
+    private fun withV8(r:JSONObject,pending:Int,late:List<JSONObject> =emptyList())=r.apply { getJSONObject("head").put("pendingCalls",pending);put("late",JSONArray(late)) }
+    @Test fun theFirstLineSaysHowManyStillWait() {
+        val c=KakaoReport.compose(withV8(report((1..3).map { y("업체$it","자재 입고") },calls=14),9))
+        assertFits(c)
+        assertEquals("어제 통화 14건을 정리했어요. 9건은 아직 글자로 바꾸는 중이에요\n새 체크 3개, 오늘 챙길 일 0개",c.feed!!.body)
+        assertEquals("어제 통화 14건을 정리했어요. 9건은 아직 글자로 바꾸는 중이에요",c.fallback[0].text.lines()[1])
+        assertEquals("nothing waiting: no second sentence","어제 통화 14건을 정리했어요",KakaoReport.headLine(KakaoReport.read(withV8(report(calls=14),0),false)))
+        val drawn=KakaoReport.renderFull(withV8(report(calls=14),9),app).lines
+        assertEquals(KakaoReport.Kind.HEAD,drawn[1].kind);assertEquals("어제 통화 14건을 정리했어요. 9건은 아직 글자로 바꾸는 중이에요",drawn[1].text)
+        // A v7 report (no pendingCalls, no late) reads as nothing waiting.
+        assertEquals(0,KakaoReport.read(one,false).pending);assertTrue(KakaoReport.read(one,false).late.isEmpty())
+        // The phone's own 06:00 report says it too.
+        val phone=ReportFetch.phoneReport(day,emptyList()).apply { getJSONObject("head").put("pendingCalls",2) }
+        assertTrue(KakaoReport.compose(phone,phoneFallback=true).todayText!!.text.contains("어제 통화 2건은 아직 글자로 바꾸는 중이에요"))
+    }
+    @Test fun lateCallsAreTheLastBlock() {
+        val late=(1..7).map { y("업체$it 담당자","도면 회신 받음, 다음 주 시공") }
+        val r=KakaoReport.read(withV8(eight(),0,late),false)
+        assertEquals("five at most",KakaoReport.LATE_ITEMS,r.late.size);assertEquals("업체1 담당자: 도면 회신 받음, 다음 주 시공",r.late[0])
+        val c=KakaoReport.compose(withV8(eight(),0,late))
+        assertFits(c)
+        val last=c.fallback.last()
+        assertTrue(last.text,last.text.startsWith("[뒤늦게 정리된 통화]"));assertTrue(last.text.contains("1. 업체1 담당자: 도면 회신 받음"))
+        val words=KakaoReport.renderFull(withV8(eight(),0,late),app).lines
+        val at=words.indexOfFirst { it.text==KakaoReport.LATE_TITLE && it.kind==KakaoReport.Kind.SECTION }
+        assertTrue("the picture's last section",at>words.indexOfFirst { it.text=="확인 필요" })
+        // A day with a short to-do list: the daily text ends with the late block.
+        val small=KakaoReport.compose(withV8(one,0,late.take(2)))
+        assertFits(small)
+        assertTrue(small.todayText!!.text,small.todayText!!.text.contains("\n뒤늦게 정리된 통화\n1. 업체1 담당자"))
+        // No to-do at all: the late block is the text, and it opens the calls.
+        val only=KakaoReport.compose(withV8(report(calls=0),0,late.take(1)))
+        assertTrue(only.todayText!!.text.startsWith("[뒤늦게 정리된 통화] 11/7(토)"));assertEquals(KakaoReport.callsLink(day),only.todayText!!.link)
+    }
+    @Test fun theSendCountsAgainAndKeepsTheCoverage() = runBlocking {
+        var asked:Pair<LocalDate,Long?>?=null
+        KakaoReport.coverageOf={ _,d,by -> asked=d to by;CallRecordStore.DayCoverage(calls=20,analyzed=11,pending=6,pendingMin=40) }
+        assertNull(KakaoReport.send(app,withV8(report((1..3).map { y("업체$it","자재 입고") },calls=11),9),KakaoReport.SOURCE_ROUTINE))
+        assertEquals("yesterday, by the report's own time",LocalDate.of(2026,11,6) to (at530-40*minute),asked)
+        val feed=fake.sent.first() as KakaoReport.Message.Feed
+        assertTrue(feed.body,feed.body.startsWith("어제 통화 11건을 정리했어요. 6건은 아직 글자로 바꾸는 중이에요"))
+        val cov=ReportCoverage.snapshot(settings())!!
+        assertEquals("2026-11-07",cov.getString("day"));assertEquals(20,cov.getInt("yesterdayCalls"));assertEquals(11,cov.getInt("inReport"))
+        assertEquals(6,cov.getInt("pending"));assertEquals(at530,cov.getLong("atMs"));assertEquals("routine",cov.getString("source"))
+        assertTrue(ReportCoverage.hasDay(settings(),day))
+        assertFalse(Regex("[가-힣]").containsMatchIn(cov.toString()))
+    }
+    @Test fun theCoverageSnapshotIsPure() {
+        assertNull(ReportCoverage.snapshot(null));assertNull(ReportCoverage.snapshot(JSONObject()))
+        assertNull(ReportCoverage.snapshot(JSONObject().put(PipelineSettingsKeys.REPORT_COVERAGE,"{")))
+        assertNull("no day",ReportCoverage.snapshot(JSONObject().put(PipelineSettingsKeys.REPORT_COVERAGE,JSONObject().put("yesterdayCalls",3).toString())))
+        val o=JSONObject();ReportCoverage.note(o,day,CallRecordStore.DayCoverage(5,7,9,1),7,"phone",42)
+        val c=ReportCoverage.snapshot(o)!!
+        assertEquals("never more than the base",5,c.getInt("inReport"));assertEquals(5,c.getInt("pending"));assertEquals("phone",c.getString("source"))
+        assertEquals(listOf("day","yesterdayCalls","inReport","pending","atMs","source"),c.keys().asSequence().toList())
+        c.put("day","x");assertEquals("a new object each call","2026-11-07",ReportCoverage.snapshot(o)!!.getString("day"))
     }
     @Test fun sdkCodesAndLinks() {
         assertEquals(mapOf("screen" to "calls","dayMs" to "12"),KakaoSdkSender.params("screen=calls&dayMs=12"))

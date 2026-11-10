@@ -103,7 +103,7 @@ internal class CallRecordAnalysisRunner(
                 .filter { it.second!=null && it.second!!.state!=CallRecordStore.ANALYZED }
                 .filter { it.second!!.kind!="메일" } // v3.7: an answer for a mail record from before is ignored (the record is dropped below)
                 .sortedBy { it.second!!.dayMs }
-            var duplicates=0
+            var duplicates=0;var appliedNow=0
             for((name,record,analysis) in items) runCatching {
                 val isOld=FirstPass.stale(record!!.dayMs,clock())
                 // Checked against what is there now, more widely than when it was sent: what changed since must not drop good items.
@@ -113,7 +113,7 @@ internal class CallRecordAnalysisRunner(
                 val dropped=analysis.tasks.size+analysis.promises.size-a.tasks.size-a.promises.size
                 val applied=apply(db,record.recordId,if(FirstPass.stale(record.dayMs,clock())) FirstPass.restrict(a,record.dayMs,clock()) else a)
                 CallFollowupNotice.onResult(context,record.recordId,db) // r10-2: the call's notice says "정리됐어요"
-                duplicates+=applied.count { it.duplicate }
+                duplicates+=applied.count { it.duplicate };appliedNow++
                 save { it.put(PipelineSettingsKeys.LAST_ANALYZED_MS,clock()).put(PipelineSettingsKeys.DROPPED_ITEMS,it.optLong(PipelineSettingsKeys.DROPPED_ITEMS,0)+dropped) }
             }.onFailure { failedFiles+=name }
             if(duplicates>0) save { it.put(PipelineSettingsKeys.DUPLICATE_SKIPPED,it.optLong(PipelineSettingsKeys.DUPLICATE_SKIPPED,0)+duplicates) }
@@ -132,7 +132,7 @@ internal class CallRecordAnalysisRunner(
             }
             runCatching { releaseStuck(db) }
             runCatching { noteLatency(db) }
-            runCatching { takeTidy(store,db,consent) }
+            runCatching { takeTidy(store,db,consent,appliedNow) }
 
             fun due(r:CallRecord):Boolean {
                 // v3.7: mail is gone; a mail record left from before is dropped, not sent.
@@ -302,16 +302,17 @@ internal class CallRecordAnalysisRunner(
         db.applyLedger(o)
         save { it.put(PipelineSettingsKeys.LEDGER_REV,rev).put(PipelineSettingsKeys.TIDIED_ONCE,o.optBoolean("tidiedOnce",false)) }
     }
-    /** The morning tidy's side: its proposal is applied once (by rev), and once a night (21:00 to 05:00) the open check
-     * items and record summaries go up for it, from the end of the first pass on. */
-    private fun takeTidy(store:CallInboxStore,db:CallRecordStore,consent:Boolean) {
+    /** The morning tidy's side: its proposal is applied once (by rev), and at night ([tidyWindow], 21:00 to 04:58 KST) the open
+     * check items and record summaries go up for it. v3.7 r17-2 (DESIGN_V7 3.2 M2): a pass that applied [applied] results (one
+     * or more) sends at once, whatever the gap; otherwise when the content changed, at most every [TIDY_GAP_MS] (30 minutes).
+     * Before, once in 12 hours: the 05:05 tidy read a 21:00 snapshot. */
+    private fun takeTidy(store:CallInboxStore,db:CallRecordStore,consent:Boolean,applied:Int=0) {
         runCatching { JSONObject(store.get(CallInbox.TIDY_PROPOSAL)) }.getOrNull()?.let { o ->
             val rev=o.optLong("rev",0)
             if(rev>settings().optLong(PipelineSettingsKeys.TIDY_REV,0)) { db.applyTidy(o);save { it.put(PipelineSettingsKeys.TIDY_REV,rev) } }
         }
         val s=settings();val now=clock()
-        val hour=java.time.Instant.ofEpochMilli(now).atZone(CallRecordStore.KST).hour
-        if(!consent || hour in 5..20 || now-s.optLong(PipelineSettingsKeys.TIDY_SENT_MS,0)<12*3_600_000L) return
+        if(!consent || !tidyWindow(now) || (applied<=0 && now-s.optLong(PipelineSettingsKeys.TIDY_SENT_MS,0)<TIDY_GAP_MS)) return
         // r12-3 (DESIGN_V4 2.3-1): the nightly state goes up whether or not the first pass is over, so "진행 중인 일" is
         // there from the first nights. Until it is over only the last 14 days go up; the one full read follows it.
         val done=FirstPass.done(s)
@@ -450,6 +451,13 @@ internal fun mergeCandidates(s:JSONObject):JSONArray?=when(val v=s.opt(MERGE_CAN
 }?.takeIf { it.length()>0 }
 /** Settings key: SHA-256 of the last tidy state that went up, without its time stamp (round 6). */
 internal const val TIDY_STATE_HASH="tidyStateHash"
+/** v3.7 r17-2 (M2): the least time between two tidy states that went up with no result applied in between. */
+internal const val TIDY_GAP_MS=30*60_000L
+/** v3.7 r17-2 (M2): the night the tidy state may go up, 21:00 to 04:58 KST (the 05:05 tidy reads it); by minutes, not hours. */
+internal fun tidyWindow(now:Long):Boolean {
+    val t=java.time.Instant.ofEpochMilli(now).atZone(CallRecordStore.KST).toLocalTime()
+    return !t.isBefore(java.time.LocalTime.of(21,0)) || !t.isAfter(java.time.LocalTime.of(4,58))
+}
 /** The tidy state's content hash: generatedMs is left out, everything else counts. */
 internal fun tidyHash(state:JSONObject):String {
     val body=JSONObject(state.toString()).apply { remove("generatedMs") }.toString()
@@ -478,9 +486,16 @@ internal object ResultChain {
     const val NAME="ieum.calls.results"
     /** After a scheduled run: when the result is most likely there, then two later looks for a slow run. */
     val OFFSETS_MS=listOf(3*60_000L,8*60_000L,15*60_000L)
+    /** v3.7 r17-2 (DESIGN_V7 3.2 M2): the night runs (03:34, 04:34 KST, up to 40 items) may run long: one more look, +25
+     * minutes, still before the 05:05 tidy. */
+    val NIGHT_EXTRA_MS=25*60_000L
+    val NIGHT_HOURS=setOf(3,4)
+    /** The looks after a run at [runMs]: [OFFSETS_MS], and [NIGHT_EXTRA_MS] too after a run in [NIGHT_HOURS] (KST). */
+    fun offsets(runMs:Long):List<Long> =
+        if(java.time.Instant.ofEpochMilli(runMs).atZone(CallRecordStore.KST).hour in NIGHT_HOURS) OFFSETS_MS+NIGHT_EXTRA_MS else OFFSETS_MS
     const val HORIZON_MS=24*3_600_000L
-    /** The hourly routine's schedule since 11/5 (hourly.md): used when the self-report's cron cannot be read. */
-    const val DEFAULT_CRON="CRON_TZ=Asia/Seoul 34 7-22 * * *"
+    /** The hourly routine's schedule (hourly.md; v3.7 r17-2 adds 03:34 and 04:34): used when the self-report's cron cannot be read. */
+    const val DEFAULT_CRON="CRON_TZ=Asia/Seoul 34 3-4,7-22 * * *"
     /** Settings keys: the round now set (0 = no chain) and when it runs (0 = none); since when the chain counts (the upload). */
     const val ROUND_KEY="resultChainRound"
     const val NEXT_MS_KEY="resultChainNextMs"
@@ -547,7 +562,7 @@ internal object ResultChain {
      * [nowMs], then the same after the next runs; null once that is more than [HORIZON_MS] after [sinceMs]. */
     fun nextFetch(sinceMs:Long,nowMs:Long,crons:List<Cron>):Long? {
         val end=sinceMs+HORIZON_MS
-        return runs(crons,sinceMs,end).asSequence().flatMap { r -> OFFSETS_MS.asSequence().map { r+it } }
+        return runs(crons,sinceMs,end).asSequence().flatMap { r -> offsets(r).asSequence().map { r+it } }
             .firstOrNull { it>nowMs && it<=end }
     }
 

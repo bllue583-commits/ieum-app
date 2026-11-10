@@ -1144,6 +1144,44 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
      * issue, so it does not grow with every record (round 2). Each item carries its [rev] (workflow_items.revision): the
      * proposal hands it back and [applyTidy] skips an item changed since (v2.6, a call late at night wins over the morning).
      * [mergeCandidates]: id pairs the phone saw as near duplicates (settings [MERGE_CANDIDATES]), sent only when there are some. */
+    /** v3.7 r17-2 (DESIGN_V7 3.2 M3): the calls of [day] (KST) the morning report should cover, numbers only. The base is
+     * "녹음이 있고 개인 번호가 아닌 통화": call records of the day (not texts or mail) whose number is not a personal one and
+     * whose analysis did not find them personal, plus the day's recordings still without a record (queued, running or
+     * failed; their number is not known yet, so they count). [analyzed]: analysed as work, by [analyzedBy] when it is given
+     * (the report's generatedMs: what the morning tidy could see). [pending]: still waiting for their text or their analysis
+     * now, and [pendingMin] their minutes (a recording without its length yet: its size over the store's bytes per minute). */
+    data class DayCoverage(val calls:Int,val analyzed:Int,val pending:Int,val pendingMin:Int,
+                           /** Of [pending]: recordings with no text yet (queued or running, no call record): the evening's "충전하면 n개". */ val untranscribed:Int=0)
+    fun dayCoverage(day:LocalDate,analyzedBy:Long?=null):DayCoverage {
+        val from=startOf(day);val to=startOf(day.plusDays(1))
+        val recs=rows("""SELECT c.*,NULL AS linked_person,(SELECT 1 FROM personal_numbers n WHERE n.phone_key=c.counterpart_key) AS personal_number FROM call_records c
+            WHERE COALESCE(c.started_ms,c.created_ms)>=CAST(? AS INTEGER) AND COALESCE(c.started_ms,c.created_ms)<CAST(? AS INTEGER)
+            AND c.recording_id NOT LIKE 'sms:%' AND c.recording_id NOT LIKE 'mail:%'""",from,to)
+            .filter { it["personal_number"]==null }.map(::map).filter { it.analysis?.business!=false }
+        var calls=recs.size
+        val analyzed=recs.count { it.state==ANALYZED && (analyzedBy==null || (it.analyzedMs ?: Long.MAX_VALUE)<=analyzedBy) }
+        val waiting=recs.filter { it.state==TRANSCRIBED || it.state==WAITING_CONSENT }
+        var pending=waiting.size;var pendingMs=waiting.sumOf { it.durationMs.coerceAtLeast(0) };var untranscribed=0
+        if(rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name='call_transcription_jobs'").isNotEmpty()) runCatching {
+            val perMin=rows("""SELECT SUM(r.byte_count) AS b,SUM(c.duration_ms) AS d FROM call_records c JOIN recordings r ON r.recording_id=c.recording_id
+                WHERE c.duration_ms>0 AND r.byte_count>0""").single().let { val b=it.long("b") ?: 0;val d=it.long("d") ?: 0;if(b>0 && d>=60_000) b*60_000/d else null }
+            val at="COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)"
+            rows("""SELECT j.recording_id,MAX(CASE WHEN j.state IN ('QUEUED','RUNNING') THEN 1 ELSE 0 END) AS waiting,MAX(j.audio_ms) AS audio_ms,MAX(r.byte_count) AS bytes
+                FROM call_transcription_jobs j JOIN recordings r ON r.recording_id=j.recording_id AND r.source_version=j.source_version
+                LEFT JOIN local_files l ON l.recording_id=j.recording_id WHERE j.state IN ('QUEUED','RUNNING','FAILED')
+                AND $at>=CAST(? AS INTEGER) AND $at<CAST(? AS INTEGER) AND NOT EXISTS(SELECT 1 FROM call_records c WHERE c.recording_id=j.recording_id)
+                GROUP BY j.recording_id""",from,to).forEach { r ->
+                calls++
+                if((r.long("waiting") ?: 0)==1L) { pending++;untranscribed++
+                    pendingMs+=r.long("audio_ms")?.takeIf { it>0 } ?: perMin?.let { p -> (r.long("bytes") ?: 0)*60_000/p } ?: 0 }
+            }
+        }
+        return DayCoverage(calls,analyzed,pending,((pendingMs+30_000)/60_000).toInt(),untranscribed)
+    }
+    /** v3.7 r17-2: the "어제" of a night's tidy state: before 21:00 KST the report that follows is tomorrow's, so its "어제" is
+     * the day before today; from 21:00 on, today (the state goes up from 21:00 to 04:58). */
+    fun tidyPendingDay(now:Long):LocalDate { val at=Instant.ofEpochMilli(now).atZone(KST);return if(at.hour>=21) at.toLocalDate() else at.toLocalDate().minusDays(1) }
+
     fun tidyState(firstPassDone:Boolean,now:Long,all:Boolean=true,mergeCandidates:JSONArray?=null):JSONObject {
         val linked=rows("SELECT record_keys FROM issues").flatMap { r -> JSONArray(r.str("record_keys") ?: "[]").let { a -> (0 until a.length()).map { a.optString(it) } } }.toSet()
         val tasks=JSONArray()
@@ -1162,8 +1200,13 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
             val lid=rows("SELECT p.ledger_id FROM call_links l JOIN people p ON p.id=l.person_id WHERE l.record_id=?",c.recordId).firstOrNull()?.str("ledger_id")
             records.put(JSONObject().put("key",CallInbox.recordKey(c.recordId)).put("atMs",c.dayMs).put("kind",c.kind)
                 .put("counterpartId",lid ?: JSONObject.NULL).put("company",c.analysis?.counterpartCompany ?: JSONObject.NULL).put("summary",c.summary)
-                .put("keyPoints",JSONArray(c.analysis?.keyPoints.orEmpty()))) }
+                .put("keyPoints",JSONArray(c.analysis?.keyPoints.orEmpty()))
+                // v3.7 r17-2 (M4): when the phone applied its result, so the tidy finds the calls summed up after the last report.
+                .put("doneMs",c.analyzedMs ?: JSONObject.NULL)) }
+        // v3.7 r17-2 (M3): "어제" calls still waiting for their text or analysis, so the report says what it leaves out.
+        val waiting=dayCoverage(tidyPendingDay(now))
         return JSONObject().put("generatedMs",now).put("firstPassDone",firstPassDone).put("tasks",tasks).put("records",records)
+            .put("pending",JSONObject().put("yesterdayCalls",waiting.pending).put("yesterdayMin",waiting.pendingMin))
             .put("recentlyDone",JSONArray(recentlyDone(null))).apply { mergeCandidates?.takeIf { it.length()>0 }?.let { put("mergeCandidates",it) }
                 // r12-4: people on one number the migration did not merge by itself, [id, id] pairs (ledger ids where known).
                 personCandidates().takeIf { it.length()>0 }?.let { put("personCandidates",it) } }

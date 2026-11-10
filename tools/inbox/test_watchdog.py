@@ -82,14 +82,18 @@ class WatchdogTest(unittest.TestCase):
         self.assertEqual([], titles(last_run={"processed": 0}))
 
     def test_inbox_age_counts_only_routine_hours(self):
-        # v2.9: the routine runs 07:00 to 22:30 KST. NOW is 17:00 KST; 07:00 KST that day is NOW - 10 h.
+        # v2.9: the routine runs 07:00 to 22:30 KST; v3.7 adds 03:00 to 05:00. NOW is 17:00 KST; 07:00 KST that day is NOW - 10 h.
         seven = NOW - 10 * H
         self.assertEqual(2 * H, w.routine_ms(seven + H, seven + 3 * H))
-        # Sent at 22:00, read at 08:30 the next day: 1 h before 23:00 and 1.5 h after 07:00.
-        self.assertEqual(int(2.5 * H), w.routine_ms(seven + 15 * H - DAY, seven + int(1.5 * H)))
-        self.assertEqual(0, w.routine_ms(seven - 5 * H, seven))
-        # A request from 23:30 the night before is not stuck at 08:30; at 10:30 it is.
-        self.assertEqual([], [p["title"] for p in w.evaluate(seven + int(1.5 * H), {"atMs": seven + H}, {"processed": 3}, seven - int(7.5 * H), 1)])
+        # Sent at 22:00, read at 08:30 the next day: 1 h before 23:00, 2 h of 03:00 to 05:00 and 1.5 h after 07:00.
+        self.assertEqual(int(4.5 * H), w.routine_ms(seven + 15 * H - DAY, seven + int(1.5 * H)))
+        self.assertEqual(0, w.routine_ms(seven - 2 * H, seven))
+        self.assertEqual(2 * H, w.routine_ms(seven - 5 * H, seven))
+        # A request from 05:30 (after the night runs) is not stuck at 08:30; at 10:30 it is.
+        self.assertEqual([], [p["title"] for p in w.evaluate(seven + int(1.5 * H), {"atMs": seven + H}, {"processed": 3}, seven - int(1.5 * H), 1)])
+        self.assertEqual([w.T_INBOX], [p["title"] for p in w.evaluate(seven + int(3.5 * H), {"atMs": seven + 3 * H}, {"processed": 3}, seven - int(1.5 * H), 1)])
+        # v3.7: one from 23:30 the night before has had 03:34 and 04:34 (2 h): stuck by 08:30 already.
+        self.assertEqual(int(3.5 * H), w.routine_ms(seven - int(7.5 * H), seven + int(1.5 * H)))
         self.assertEqual([w.T_INBOX], [p["title"] for p in w.evaluate(seven + int(3.5 * H), {"atMs": seven + 3 * H}, {"processed": 3}, seven - int(7.5 * H), 1)])
 
     def test_limit_replaces_idle_routine(self):
@@ -382,8 +386,11 @@ class V34RoutineTest(unittest.TestCase):
     def test_slots_follow_the_cron_in_kst(self):
         crons = [w.parse_cron(w.DEFAULT_CRON)]
         self.assertEqual([at(14, 34), at(15, 34), at(16, 34)], w.slots(crons, at(14, 0), NOW))
-        # Night: nothing between 22:34 and the next 07:34.
-        self.assertEqual([at(22, 34), at(7, 34, 1)], w.slots(crons, at(22, 0), at(7, 40, 1)))
+        # Night (v3.7): 22:34, then 03:34 and 04:34, then 07:34.
+        self.assertEqual([at(22, 34), at(3, 34, 1), at(4, 34, 1), at(7, 34, 1)], w.slots(crons, at(22, 0), at(7, 40, 1)))
+        old = [w.parse_cron("CRON_TZ=Asia/Seoul 34 7-22 * * *")]
+        self.assertEqual([at(22, 34), at(7, 34, 1)], w.slots(old, at(22, 0), at(7, 40, 1)))
+        self.assertEqual({"offset": 9 * H, "minutes": [34], "hours": [3, 4] + list(range(7, 23))}, w.parse_cron(w.DEFAULT_CRON))
         two = [w.parse_cron("CRON_TZ=Asia/Seoul 34 7-22 * * *"), w.parse_cron("CRON_TZ=Asia/Seoul 4 8-22 * * *")]
         self.assertEqual([at(15, 4), at(15, 34), at(16, 4), at(16, 34)], w.slots(two, at(15, 0), NOW))
 
@@ -406,13 +413,20 @@ class V34RoutineTest(unittest.TestCase):
         self.assertEqual([], self.run_rules([at(15, 31)]))
 
     def test_the_night_is_no_miss(self):
-        # 07:10 next morning: the last two slots are 21:34 and 22:34 of the evening before.
+        # 07:10 next morning, the old cron (34 7-22): the last two slots are 21:34 and 22:34 of the evening before.
         morning = at(7, 10, 1)
-        self.assertEqual([], self.run_rules([at(22, 36)], now=morning))
-        self.assertEqual([w.T_ROUTINE_MISSED], self.run_rules([at(20, 36)], now=morning))
-        body = w.evaluate(morning, phone(atMs=morning - H, lastDiscoveryMs=morning - H),{"routine": "hourly", "cron": w.DEFAULT_CRON}, None, 0,
+        old = {"routine": "hourly", "processed": 1, "cron": "CRON_TZ=Asia/Seoul 34 7-22 * * *", "pushed": True}
+        self.assertEqual([], self.run_rules([at(22, 36)], now=morning, hourly=old))
+        self.assertEqual([w.T_ROUTINE_MISSED], self.run_rules([at(20, 36)], now=morning, hourly=old))
+        body = w.evaluate(morning, phone(atMs=morning - H, lastDiscoveryMs=morning - H), old, None, 0,
                           status_commits=[at(20, 36)])[0]["body"]
         self.assertIn("21:34, 22:34", body)
+        # v3.7 (34 3-4,7-22): the last two are 03:34 and 04:34; their status commits keep it quiet, the evening's alone does not.
+        self.assertEqual([], self.run_rules([at(22, 36), at(4, 36, 1)], now=morning))
+        self.assertEqual([w.T_ROUTINE_MISSED], self.run_rules([at(22, 36)], now=morning))
+        body = w.evaluate(morning, phone(atMs=morning - H, lastDiscoveryMs=morning - H), {"routine": "hourly", "cron": w.DEFAULT_CRON}, None, 0,
+                          status_commits=[at(22, 36)])[0]["body"]
+        self.assertIn("03:34, 04:34", body)
 
     def test_the_report_cron_and_a_second_cron(self):
         # Every 30 minutes (4.3-6): at 17:00 the due slots are 15:34 and 16:04.

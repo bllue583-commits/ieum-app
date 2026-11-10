@@ -151,6 +151,33 @@ class ReportCheckTest(unittest.TestCase):
             self.assertEqual(1, rc.main([ok, broken]))
             self.assertEqual(2, rc.main([]))
 
+    def test_v8_pending_and_late(self):
+        """tidy.md v8 (DESIGN_V7 3.2 M3, M4): head.pendingCalls and late[] pass, are optional and are checked like the rest."""
+        r = good()
+        r["head"]["pendingCalls"] = 9
+        r["late"] = [{"who": "○○전기 이과장", "what": "분전반 교체 일정 확정, 다음 주 화요일 시공"}]
+        self.assertEqual([], rc.check(r))
+        r["late"] = []
+        self.assertEqual([], rc.check(r))
+        self.assertEqual([], rc.check(good()), "a v7 report without them still passes")
+        bad = good()
+        bad["head"]["pendingCalls"] = -1
+        self.assertBreaks(bad, "head.pendingCalls: 0 이상의 정수가 아님")
+        bad["head"]["pendingCalls"] = "9"
+        self.assertBreaks(bad, "head.pendingCalls: 0 이상의 정수가 아님")
+        r["late"] = [{"who": f"업체{i}", "what": "도면 회신"} for i in range(6)]
+        self.assertBreaks(r, "late: 6줄 (최대 5줄)")
+        r["late"] = [{"who": "○○전기", "what": "회신 받아요"}]
+        self.assertBreaks(r, "late[0].what: 해요체")
+        r["late"] = [{"who": "○○전기", "what": "가" * 60}]
+        self.assertBreaks(r, "late[0]: 한 줄")
+        r["late"] = [{"who": "○○전기", "what": "010-1234-5678로 회신"}]
+        self.assertBreaks(r, "late[0].what: 전화번호")
+        r["late"] = [{"who": "", "what": "회신"}]
+        self.assertBreaks(r, "late[0].who: 비어 있음")
+        r["late"] = [{"who": "○○전기", "what": "회신", "atMs": 1}]
+        self.assertBreaks(r, "late[0].atMs: 모르는 키")
+
 
 if __name__ == "__main__":
     unittest.main()

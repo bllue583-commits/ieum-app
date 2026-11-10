@@ -62,18 +62,32 @@ class CallRecordWorkChainTest {
         assertEquals(listOf(kst(17,37),kst(17,42),kst(17,49),kst(18,37),kst(18,42),kst(18,49)),times.take(6))
         assertEquals((1..times.size).toList(),plans.map { it.round })
         assertTrue(plans.drop(1).all { it.policy==ExistingWorkPolicy.APPEND_OR_REPLACE })
-        // At most 24 hours after the upload, then only the hourly tick; the night (22:49 to 07:37) has no look.
+        // At most 24 hours after the upload, then only the hourly tick. v3.7 r17-2 (DESIGN_V7 3.2 M1, M2): the night has the
+        // 03:34 and 04:34 runs, each with a fourth look at +25 minutes; nothing else between 22:49 and 07:37.
         assertTrue(times.last()<=now+ResultChain.HORIZON_MS)
         assertEquals(kst(16,49,1),times.last())
-        assertFalse(times.any { it>kst(22,49) && it<kst(7,37,1) })
+        assertEquals(listOf(kst(3,37,1),kst(3,42,1),kst(3,49,1),kst(3,59,1),kst(4,37,1),kst(4,42,1),kst(4,49,1),kst(4,59,1)),
+            times.filter { it>kst(22,49) && it<kst(7,37,1) })
+        assertTrue("the last night look is before the 05:05 tidy",times.filter { it<kst(7,0,1) }.last()<kst(5,5,1))
+        assertFalse("no +25 by day",times.any { it==kst(17,59) || it==kst(7,59,1) })
         assertEquals("chain over in settings",0,s.getInt(ResultChain.ROUND_KEY));assertEquals(0L,s.getLong(ResultChain.NEXT_MS_KEY))
         // Half the GitHub calls of v3.3 in the first two hours (12 looks then, 6 now).
         assertEquals(6,times.count { it<now+2*3_600_000L })
     }
 
     @Test fun anUploadAfterTheLastRunWaitsForTheFirstOneNextDay() {
+        // v3.7: the first run of the next day is 03:34.
+        start(kst(22,50))
+        assertEquals(kst(3,37,1),s.getLong(ResultChain.NEXT_MS_KEY))
+        // With the cron before v3.7, 07:34.
+        s.put(PipelineSettingsKeys.ROUTINE_CRONS,org.json.JSONArray(listOf("CRON_TZ=Asia/Seoul 34 7-22 * * *")).toString())
         start(kst(22,50))
         assertEquals(kst(7,37,1),s.getLong(ResultChain.NEXT_MS_KEY))
+        s.remove(PipelineSettingsKeys.ROUTINE_CRONS)
+        // A request that went up before 04:34 and is still waiting at 04:50: the night's fourth look, 04:59.
+        s.put(ResultChain.SINCE_KEY,kst(4,20,1))
+        after(3,0,true,kst(4,50,1))
+        assertEquals(kst(4,59,1),s.getLong(ResultChain.NEXT_MS_KEY))
         // Just before a run: that run.
         plans.clear();start(kst(10,30))
         assertEquals(kst(10,37),s.getLong(ResultChain.NEXT_MS_KEY))
@@ -85,7 +99,7 @@ class CallRecordWorkChainTest {
         assertEquals(kst(17,7),s.getLong(ResultChain.NEXT_MS_KEY))
         s.put(PipelineSettingsKeys.ROUTINE_CRONS,"[\"매시간\"]")
         start(now)
-        assertEquals("unreadable: minute 34, 07 to 22",kst(17,37),s.getLong(ResultChain.NEXT_MS_KEY))
+        assertEquals("unreadable: minute 34, 03 to 04 and 07 to 22",kst(17,37),s.getLong(ResultChain.NEXT_MS_KEY))
         s.remove(PipelineSettingsKeys.ROUTINE_CRONS)
         start(now)
         assertEquals(kst(17,37),s.getLong(ResultChain.NEXT_MS_KEY))
@@ -94,6 +108,7 @@ class CallRecordWorkChainTest {
     @Test fun cronsAreReadLikeTheScheduler() {
         val c=ResultChain.parseCron("CRON_TZ=Asia/Seoul 34 7-22 * * *")!!
         assertEquals(listOf(34),c.minutes);assertEquals((7..22).toList(),c.hours);assertEquals(java.time.ZoneId.of("Asia/Seoul"),c.zone)
+        assertEquals(listOf(3,4)+(7..22).toList(),ResultChain.parseCron(ResultChain.DEFAULT_CRON)!!.hours)
         assertEquals(listOf(4,34),ResultChain.parseCron("4,34 8-22 * * *")!!.minutes)
         assertEquals(listOf(0,30),ResultChain.parseCron("*/30 7 * * *")!!.minutes)
         assertEquals(java.time.ZoneOffset.UTC,ResultChain.parseCron("34 7 * * *")!!.zone)
