@@ -181,25 +181,22 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
      * log's, else the file size over [bytesPerMs] (null: unknown, not taken). Never charging_only rows. */
     data class BatteryWindow(val fromMs:Long,val bytesPerMs:Double?)
     /** SQL for a job's length (j = the job row, [at] the recording's time); takes two arguments, bytes per ms twice (bound as
-     * text, hence the casts). v3.7 (T3, review r16-1 #2): after the decoded length comes the call log's: the answered entry
-     * closest to the recording's time in the usual pairing window ([FirstPass.inWindow]: 2 minutes before to 1 minute after),
+     * text, hence the casts). v3.7 (T3, review r16-1 #2): after the decoded length comes the call log's: the longest answered
+     * entry in the usual pairing window ([FirstPass.inWindow]: 2 minutes before to 1 minute after; the longest, so a doubtful
+     * pair errs toward the charger; no correlated ORDER BY, which the test runner's SQLite does not resolve),
      * since a waiting recording has no call record yet; then the call record's; then the size. */
     private fun lengthSql(byteCount:String,at:String):String {
         val tables=db.query("SELECT name FROM sqlite_master WHERE type='table' AND name IN('call_records','call_log')").map { it["name"].toString() }.toSet()
         val record=if("call_records" in tables) "(SELECT MAX(c.duration_ms) FROM call_records c WHERE c.recording_id=j.recording_id AND c.duration_ms>0)" else "NULL"
-        val logged=if("call_log" in tables) "(SELECT cl.duration_ms FROM call_log cl WHERE cl.duration_ms>0 AND cl.type IN(1,2) AND $at>0 AND cl.start_ms>=$at-$LOG_BEFORE_MS AND cl.start_ms<=$at+$LOG_AFTER_MS ORDER BY abs(cl.start_ms-$at) LIMIT 1)" else "NULL"
+        val logged=if("call_log" in tables) "(SELECT MAX(cl.duration_ms) FROM call_log cl WHERE cl.duration_ms>0 AND cl.type IN(1,2) AND $at>0 AND cl.start_ms>=$at-$LOG_BEFORE_MS AND cl.start_ms<=$at+$LOG_AFTER_MS)" else "NULL"
         return "coalesce(j.audio_ms,$logged,$record,CASE WHEN CAST(? AS REAL)>0 AND $byteCount>0 THEN CAST($byteCount/CAST(? AS REAL) AS INTEGER) END)"
     }
     /** Short calls of today, newest first: the filter is in SQL, so a long call at the top never ends a battery run (DESIGN_V6 함정 ③). */
     private fun nextShort(w:BatteryWindow):Job? {
         val at="coalesce(x.original_started_at_ms,x.modified_at_ms,0)"
         val bpm=w.bytesPerMs ?: 0.0
-        // The call-log lookup is correlated on base tables (r0, l0): SQLite cannot reach a column of the derived table x there.
-        val at0="coalesce(r0.original_started_at_ms,l0.filename_time_candidate_ms,r0.modified_at_ms,0)"
-        return db.query("""SELECT * FROM (SELECT j.state,j.reason,j.attempts,j.updated_ms AS job_updated_ms,x.*,$at AS q_at,${lengthSql("r0.byte_count",at0)} AS q_len
-            FROM call_transcription_jobs j JOIN recordings r0 ON r0.recording_id=j.recording_id AND r0.source_version=j.source_version
-            LEFT JOIN local_files l0 ON l0.recording_id=j.recording_id
-            JOIN ($select WHERE r.owner_key=? AND gone.ciphertext_sha256 IS NULL) x
+        return db.query("""SELECT * FROM (SELECT j.state,j.reason,j.attempts,j.updated_ms AS job_updated_ms,x.*,$at AS q_at,${lengthSql("x.byte_count",at)} AS q_len
+            FROM call_transcription_jobs j JOIN ($select WHERE r.owner_key=? AND gone.ciphertext_sha256 IS NULL) x
             ON x.recording_id=j.recording_id AND x.source_version=j.source_version AND x.audio_sha256=j.audio_sha
             WHERE j.state='QUEUED' AND j.charging_only=0) WHERE q_at>=CAST(? AS INTEGER) AND q_len>=CAST(? AS INTEGER) AND q_len<=CAST(? AS INTEGER)
             ORDER BY q_at DESC,job_updated_ms LIMIT 1""".trimIndent(),bpm,bpm,GeneralLocalStore.OWNER,w.fromMs,TranscriptionPower.SHORT_MIN_MS,TranscriptionPower.SHORT_MAX_MS)
