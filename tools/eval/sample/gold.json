@@ -1,0 +1,2 @@
+[{"call_id":"c1","promises":[{"who":"me","what":"계약금 송금","evidence":"계약금 30만원은 금요일까지 보내드릴게요","numbers":["30만원"]}]},
+ {"call_id":"c4","promises":[{"who":"them","what":"샘플 발송","evidence":"샘플 5개","numbers":["5개"]},{"who":"them","what":"카탈로그 보내기","evidence":"카탈로그 보내드릴게요","numbers":[]}]}]

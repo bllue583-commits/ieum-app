@@ -1,0 +1,2 @@
+[{"call_id":"c1","promises":[{"who":"me","what":"계약금 송금하기","evidence":"","numbers":["삼십만 원"]}]},
+ {"call_id":"c4","promises":[{"who":"them","what":"샘플 발송","evidence":"","numbers":["50개"]},{"who":"me","what":"견적 다시 요청","evidence":"","numbers":[]}]}]
