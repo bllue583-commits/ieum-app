@@ -197,6 +197,10 @@ internal class CallCardView(context:Context):LinearLayout(context) {
     /** Everything is drawn, not just the first two lines (the second step of drawing). */
     var complete=false;private set
     var content:Content?=null;private set
+    /** v3.6.1 (DESIGN_V7 K1): the window this card is in is visible ([onWindowVisibilityChanged]) and the card was drawn while it
+     * was ([dispatchDraw]): only then is it really on the screen (a window Android adds hidden is neither). */
+    @Volatile var seen=false;private set
+    private var windowVisible=false
 
     /** Rows that may be left out when the card is too tall, the first one first. */
     private val optional=mutableListOf<View>()
@@ -300,6 +304,10 @@ internal class CallCardView(context:Context):LinearLayout(context) {
             setOnTouchListener(Drag(this,tapOpens=true))
         })
     }
+
+    override fun onAttachedToWindow() { super.onAttachedToWindow();windowVisible=windowVisibility==VISIBLE }
+    override fun onWindowVisibilityChanged(visibility:Int) { super.onWindowVisibilityChanged(visibility);windowVisible=visibility==VISIBLE }
+    override fun dispatchDraw(canvas:android.graphics.Canvas) { super.dispatchDraw(canvas);if(windowVisible && isAttachedToWindow) seen=true }
 
     override fun onMeasure(widthSpec:Int,heightSpec:Int) {
         val free=MeasureSpec.makeMeasureSpec(0,MeasureSpec.UNSPECIFIED)

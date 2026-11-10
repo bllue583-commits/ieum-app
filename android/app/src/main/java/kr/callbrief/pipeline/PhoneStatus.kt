@@ -71,7 +71,10 @@ internal object PhoneStatus {
      * [PipelineSettingsKeys.GUARD_STATS] (r13-1). Both go through [counts]: no text, no names, only numbers and yes/no. */
     data class V33(val golden:JSONObject?=null,val guard:JSONObject?=null)
     /** Granted permissions and roles (r12-2); null: not read. */
-    data class Permissions(val phoneState:Boolean,val overlay:Boolean,val redirectRole:Boolean,val installAllowed:Boolean)
+    data class Permissions(val phoneState:Boolean,val overlay:Boolean,val redirectRole:Boolean,val installAllowed:Boolean,
+        /** v3.6.1 (DESIGN_V7 K3): this process (pid, seconds since it started) and the raw app-op mode of drawing over apps
+         * ([kr.callbrief.pipeline.call.CardProbe.overlayMode]: 0 allowed, 1 ignored, 2 errored, 3 default, 4 foreground; -1 not read). */
+        val pid:Int?=null,val processAgeS:Long?=null,val overlayMode:Int?=null)
     /** The v3.1 keys (DESIGN_V4 2절 머리). Values come from settings keys the bundles write; null/absent where nothing is known yet.
      * [recordingGap] goes through [counts]; its verdict goes up as the top-level code [recordingGapVerdict]. */
     data class V31(val permissions:Permissions?=null,val recordingGap:JSONObject?=null,val recordingGapVerdict:String?=null,
@@ -134,7 +137,7 @@ internal object PhoneStatus {
         val match=w.callLogMatch?.let(::counts)
         o.put("callLogMatch",match ?: JSONObject.NULL)
         // Counts only (the same filter as the match statistics), whatever is stored under the key.
-        o.put("callCard",w.callCard?.let(::counts) ?: JSONObject.NULL)
+        o.put("callCard",w.callCard?.let(::callCardJson) ?: JSONObject.NULL)
         w.dbRecovery?.let(::code)?.takeIf { it.isNotEmpty() }?.let { o.put("dbRecovery",it) }
         i.callLog?.let { c -> o.put("callLog",callLogJson(c).also { j -> match?.let { j.put("match",JSONObject(it.toString())) } }) }
         i.firstPass?.let { f -> o.put("firstPass",JSONObject().put("done",f.done).put("toTranscribe",f.toTranscribe)
@@ -170,7 +173,8 @@ internal object PhoneStatus {
     }
     private fun putV31(o:JSONObject,v:V31) {
         o.put("permissions",v.permissions?.let { p -> JSONObject().put("phoneState",p.phoneState).put("overlay",p.overlay)
-            .put("redirectRole",p.redirectRole).put("installAllowed",p.installAllowed) } ?: JSONObject.NULL)
+            .put("redirectRole",p.redirectRole).put("installAllowed",p.installAllowed)
+            .put("pid",p.pid ?: JSONObject.NULL).put("processAgeS",p.processAgeS ?: JSONObject.NULL).put("overlayMode",p.overlayMode ?: JSONObject.NULL) } ?: JSONObject.NULL)
         o.put("recordingGap",v.recordingGap?.let(::counts) ?: JSONObject.NULL)
         // String values as top-level codes so the counts() filter does not drop them (DESIGN_V4 2절 머리).
         o.put("recordingGapVerdict",v.recordingGapVerdict?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
@@ -210,6 +214,15 @@ internal object PhoneStatus {
 
     /** Error values are codes (INBOX_HTTP_401, STATUS_FAILURE_...). Anything longer or odder is cut so free text cannot leak. */
     internal fun code(raw:String):String = raw.trim().take(60).filter { it.code<128 && it.isLetterOrDigit() || it=='_' || it=='-' || it==':' }
+    /** The heartbeat's `callCard`: counts only ([counts]); v3.6.1 (K3) its `recent[]` keeps short codes too, each entry with
+     * [kr.callbrief.pipeline.call.CardStats.RECENT_KEYS] only ([kr.callbrief.pipeline.call.CardStats.safe]), the newest 20. */
+    internal fun callCardJson(card:JSONObject):JSONObject {
+        val out=counts(card)
+        val r=card.optJSONArray("recent") ?: return out
+        val kept=(0 until r.length()).mapNotNull { r.optJSONObject(it)?.let(kr.callbrief.pipeline.call.CardStats::safe) }
+            .takeLast(kr.callbrief.pipeline.call.CardStats.RECENT)
+        return out.put("recent",org.json.JSONArray(kept))
+    }
     /** Only numbers and yes/no (also in nested objects and arrays) under code-like keys: whatever another part of the app
      * keeps under the match statistics, no name, number text or content can go up with it. */
     internal fun counts(o:JSONObject):JSONObject {
@@ -327,7 +340,8 @@ internal object PhoneStatus {
         val role=if(android.os.Build.VERSION.SDK_INT>=29) runCatching { app.getSystemService(android.app.role.RoleManager::class.java)
             ?.isRoleHeld(android.app.role.RoleManager.ROLE_CALL_REDIRECTION)==true }.getOrDefault(false) else false
         val install=runCatching { app.packageManager.canRequestPackageInstalls() }.getOrDefault(false)
-        Permissions(phone,overlay,role,install)
+        Permissions(phone,overlay,role,install,runCatching { kr.callbrief.pipeline.call.CardProbe.pid() }.getOrNull(),
+            runCatching { kr.callbrief.pipeline.call.CardProbe.ageS() }.getOrNull(),kr.callbrief.pipeline.call.CardProbe.overlayMode(app))
     }.onFailure { Log.w(TAG,"permissions not read: ${it.javaClass.simpleName}") }.getOrNull()
     private fun inboxErrorSince(app:Context,s:JSONObject,now:Long):Long? {
         val c=code(s.optString(PipelineSettingsKeys.LAST_INBOX_ERROR,""))
