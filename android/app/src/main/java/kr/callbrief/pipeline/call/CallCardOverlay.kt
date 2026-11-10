@@ -42,6 +42,12 @@ import java.util.concurrent.TimeUnit
  *   in view during the call (no summary, no work: [CallCardView.Content.hasBody]) goes instead of folding.
  * - Drawn in two steps: the first two lines at once, everything else within [REST_DELAY_MS] (well under 50 ms).
  * - Without the "draw over other apps" permission a silent heads-up notice in channel [CHANNEL] says the same in lines.
+ *   v3.6.1 (DESIGN_V7 K1, K2): the window is added whatever the check says (the check was seen to say no at the very moment of
+ *   calls while it said yes before and after). Android then shows it, refuses it (an exception: the notice) or adds it hidden
+ *   (no exception). So the window counts as drawn only when it was drawn while visible ([drawnNow]), judged [HIDDEN_AFTER_MS]
+ *   after it was added (or when it goes sooner); a window not seen by then is taken away and the notice shows instead. While the
+ *   check says no, the notice goes up at once beside the window and goes once the window is seen. What became of it goes to
+ *   [CardStats.verdict] with a cause code and the phone's state ([CardProbe]).
  *   While the screen is locked (4.2-1) the window is added anyway and the notice goes up beside it (a policy may hide the window
  *   without the view hearing of it); `ACTION_USER_PRESENT` takes the notice away. While [CallCardService] runs, the notice takes
  *   the service's own slot ([CallCardService.NOTIFICATION_ID]): one notice, not two.
@@ -77,8 +83,16 @@ internal object CallCardOverlay {
 
     /** Why a card did or did not show, for r11-3's `CARD_STATS` (callCard:{shown,noPermission,noNumber,noCard}). */
     const val SHOWN="shown";const val NO_PERMISSION="noPermission";const val NO_NUMBER="noNumber";const val NO_CARD="noCard"
-    /** Told once per call: [SHOWN] (the window is up; locked too, [CardStats] tells that apart), [NO_PERMISSION] (shown as a
-     * notice instead), [NO_NUMBER] or [NO_CARD]. Counted in [CardStats] (settings CARD_STATS, the heartbeat's callCard). */
+    const val LOCKED="locked"
+    /** v3.6.1: the window not seen this long after it was added is taken for hidden. */
+    const val HIDDEN_AFTER_MS=1_500L
+    /** v3.6.1 cause codes ([CardStats.Attempt.cause]); an exception of `addView` is `addView:<its class>`. */
+    const val CAUSE_OK="ok";const val CAUSE_DRAWN_DESPITE_FALSE="drawnDespiteFalse";const val CAUSE_SHORT="short"
+    /** Added while the screen was locked and never seen until the call ended (the notice was beside it). */
+    const val CAUSE_HIDDEN_LOCKED="hiddenLocked"
+    /** Told once per call when the window was put up: [SHOWN] (added, unlocked), [LOCKED] (added while locked, the notice beside
+     * it), [NO_PERMISSION] (the overlay check said no then, or the window could not be added: the notice), [NO_NUMBER] or
+     * [NO_CARD]. Counted in [CardStats] (settings CARD_STATS, the heartbeat's callCard); v3.6.1: as told, nothing read again. */
     @Volatile var outcome:(Context,String)->Unit={ c,w -> CardStats.record(c,w) }
     /** v3.4: the person opened the strip again / closed the card this long after it showed. Replaceable in host tests. */
     @Volatile internal var onExpanded:(Context)->Unit={ CardStats.expanded(it) }
@@ -92,6 +106,14 @@ internal object CallCardOverlay {
     /** The card's service is up in this process (its notice slot is then the card's). */
     @Volatile internal var serviceUp:()->Boolean={ CallCardService.running!=null }
     @Volatile internal var clock:()->Long={ SystemClock.elapsedRealtime() }
+    /** v3.6.1 (K1): the window was drawn while visible ([CallCardView.seen]). Replaceable in host tests. */
+    @Volatile internal var drawnNow:(CallCardView)->Boolean={ it.seen }
+    /** v3.6.1: adds the window (an exception is the system's refusal). Replaceable in host tests. */
+    @Volatile internal var addWindow:(WindowManager,View,WindowManager.LayoutParams)->Unit={ wm,v,p -> wm.addView(v,p) }
+    /** v3.6.1 (K3): the phone's state when the window is added, read on the card's thread. Replaceable in host tests. */
+    @Volatile internal var probe:(Context)->CardStats.Probe?={ c -> runCatching { CardProbe.read(c) }.getOrNull() }
+    /** v3.6.1 (K2): what became of the window, once per call. Replaceable in host tests. */
+    @Volatile internal var onVerdict:(Context,CardStats.Attempt)->Unit={ c,a -> CardStats.verdict(c,a) }
 
     private val main=Handler(Looper.getMainLooper())
     private val worker=Executors.newSingleThreadExecutor { r -> Thread(r,"ieum-call-card").apply { isDaemon=true } }
@@ -119,13 +141,30 @@ internal object CallCardOverlay {
     /** The data of this call is being read. */
     private var loading=false
     /** Bumped by [hide]: data read for an earlier call is dropped. */
-    private var generation=0
+    @Volatile private var generation=0
     private var collapseQueued=false
     /** When the card (or its notice) first showed in this call ([clock]), for [onClosed]. */
     private var shownAt=0L
     /** Where the strip was left in this call (px), so it folds back there. */
     private var stripY:Int?=null
     private val autoCollapse=Runnable { collapseQueued=false;collapse() }
+    // v3.6.1: this call's window attempt.
+    /** When the window was added ([clock]; 0: not yet), what the overlay check and the lock said then, and its exception. */
+    private var addedAt=0L
+    private var canDrawAtAdd=true
+    private var lockedAtAdd=false
+    /** This call's broadcast started the process; the call goes out (both read when the window is put up). */
+    private var coldAtAdd=false
+    private var outAtAdd=false
+    private var addError:String?=null
+    /** No window again in this call (it could not be added, or it was hidden). */
+    private var windowGone=false
+    /** [onVerdict] was told; the window was seen. */
+    private var judged=false
+    private var seenOnce=false
+    /** The phone's state read after the window was added (the card's thread). */
+    @Volatile private var probed:CardStats.Probe?=null
+    private val judgeLater=Runnable { app?.let { runCatching { judge(it,ending=false) }.onFailure(::warn) } }
 
     private fun onMain(block:()->Unit) { if(Looper.myLooper()==Looper.getMainLooper()) runCatching(block).onFailure(::warn) else main.post { runCatching(block).onFailure(::warn) } }
     private fun warn(t:Throwable) { Log.w(LOG,"card: ${t.javaClass.simpleName}") }
@@ -152,7 +191,8 @@ internal object CallCardOverlay {
     }
     /** Takes the card (and the notice instead of it) away; the next call starts afresh. */
     fun hide():Unit = onMain { removeAll();forgetCall();state=CallSession.State.IDLE }
-    private fun forgetCall() { closed=false;openedByHand=false;told=false;toldNoNumber=false;loading=false;key=null;content=null;stripY=null;shownAt=0L;generation++ }
+    private fun forgetCall() { closed=false;openedByHand=false;told=false;toldNoNumber=false;loading=false;key=null;content=null;stripY=null;shownAt=0L;generation++
+        main.removeCallbacks(judgeLater);addedAt=0L;canDrawAtAdd=true;lockedAtAdd=false;addError=null;windowGone=false;judged=false;seenOnce=false;probed=null;coldAtAdd=false;outAtAdd=false }
 
     private fun showNow(c:Context,phoneKey:String?,to:CallSession.State) {
         app=c
@@ -193,7 +233,7 @@ internal object CallCardOverlay {
             if(gen!=generation || closed || state==CallSession.State.IDLE) return@post
             val first=content==null
             content=data;loading=false
-            if(first) { place(c,nameOnly=true);shownAt=clock();tell(c,if(view==null && noticeUp) NO_PERMISSION else SHOWN) }
+            if(first) { place(c,nameOnly=true);shownAt=clock();tell(c,firstOutcome()) }
             else view?.let { if(it.complete) it.showAll(data) }
             if(rest) main.postDelayed({ runCatching { if(gen==generation && content===data) { view?.showAll(data);relayout();if(noticeUp) notice(c,data) } }.onFailure(::warn) },
                 if(first) REST_DELAY_MS else 0L)
@@ -209,13 +249,62 @@ internal object CallCardOverlay {
         told=true;runCatching { outcome(c,what) }
     }
 
-    /** The card in its window; with the screen locked the notice beside it too (4.2-1); without the permission the notice only. */
+    /** What the card tells [outcome] when it first shows (v3.6.1: what it found then; [CardStats] reads nothing again). */
+    private fun firstOutcome():String = when {
+        view==null && noticeUp -> NO_PERMISSION
+        view==null -> NO_PERMISSION // no notice either: CardStats counts noNotify
+        !canDrawAtAdd -> NO_PERMISSION
+        lockedAtAdd -> LOCKED
+        else -> SHOWN
+    }
+    /** The card in its window; with the screen locked the notice beside it too (4.2-1). v3.6.1 (K1): the window is tried whatever
+     * the overlay check says; while the check says no and the window was not seen yet, or the window could not be added or was
+     * hidden, the notice shows. */
     private fun place(c:Context,nameOnly:Boolean=false) {
         val data=content ?: return
-        if(!runCatching { canDraw(c) }.getOrDefault(false)) { notice(c,data);return }
-        if(view==null) addCard(c,data,nameOnly)
-        if(runCatching { locked(c) }.getOrDefault(false)) { notice(c,data);waitForUnlock(c) }
-        else if(noticeUp) cancelNotice(c)
+        val draw=runCatching { canDraw(c) }.getOrDefault(false)
+        val isLocked=runCatching { locked(c) }.getOrDefault(false)
+        if(view==null && !windowGone) addCard(c,data,nameOnly,draw,isLocked)
+        when {
+            view==null -> notice(c,data)
+            isLocked -> { notice(c,data);waitForUnlock(c) }
+            !draw && !seenOnce -> notice(c,data)
+            noticeUp -> cancelNotice(c)
+        }
+    }
+    /** v3.6.1 (K1, K2): what became of the window, once per call: at [HIDDEN_AFTER_MS] after it was added, or sooner when it goes
+     * ([ending]). Seen: drawn (the notice put up for a check that said no goes). Not seen in time: hidden, the window goes and the
+     * notice shows. Gone before it was judged: a fallback when the notice was up, else nothing to count. */
+    private fun judge(c:Context,ending:Boolean) {
+        if(judged) return
+        main.removeCallbacks(judgeLater)
+        val v=view
+        if(addedAt==0L && addError==null) return
+        val seen=v!=null && runCatching { drawnNow(v) }.getOrDefault(false)
+        if(!seen && !ending && v!=null) {
+            // Locked: the lock screen covers the window and the notice is up; it is judged again once unlocked (4.2-1).
+            if(runCatching { locked(c) }.getOrDefault(false)) return
+            judged=true;windowGone=true
+            runCatching { c.getSystemService(WindowManager::class.java)?.removeViewImmediate(v) }
+            view=null;params=null
+            Log.i(LOG,"card hidden")
+            content?.let { notice(c,it) }
+            verdict(c,CardStats.FALLBACK,CardStats.HIDDEN,null)
+            return
+        }
+        judged=true
+        if(seen) {
+            seenOnce=true
+            Log.i(LOG,"card drawn")
+            verdict(c,CardStats.DRAWN,if(canDrawAtAdd) CAUSE_OK else CAUSE_DRAWN_DESPITE_FALSE,(clock()-addedAt).coerceAtLeast(0))
+            if(!ending && noticeUp && !runCatching { locked(c) }.getOrDefault(false)) cancelNotice(c)
+        } else verdict(c,if(noticeUp) CardStats.FALLBACK else CardStats.GONE,if(lockedAtAdd) CAUSE_HIDDEN_LOCKED else CAUSE_SHORT,null)
+    }
+    private fun verdict(c:Context,result:String,cause:String,drawMs:Long?) {
+        val after=runCatching { canDraw(c) }.getOrNull()
+        val base=CardStats.Attempt(result,cause,canDrawAtAdd,after,null,lockedAtAdd,coldAtAdd,drawMs,addError,outAtAdd)
+        // On the card's thread, after the probe read when the window was added.
+        worker.execute { runCatching { onVerdict(c,base.copy(probe=probed ?: runCatching { probe(c) }.getOrNull())) }.onFailure(::warn) }
     }
     private fun afterState() {
         val v=view ?: return
@@ -226,9 +315,11 @@ internal object CallCardOverlay {
     }
     private fun outgoing()=runCatching { CallSession.current().direction==CallSession.Direction.OUT }.getOrDefault(false)
 
-    private fun addCard(c:Context,data:CallCardView.Content,nameOnly:Boolean) {
+    private fun addCard(c:Context,data:CallCardView.Content,nameOnly:Boolean,draw:Boolean,isLocked:Boolean) {
         CallUi.applyTheme(c)
         val wm=c.getSystemService(WindowManager::class.java) ?: return
+        canDrawAtAdd=draw;lockedAtAdd=isLocked
+        coldAtAdd=runCatching { CardStats.callCold() }.getOrDefault(false);outAtAdd=outgoing()
         val dm=c.resources.displayMetrics
         val v=CallCardView(c).apply {
             maxHeightPx=maxHeight(c,this)
@@ -247,10 +338,19 @@ internal object CallCardOverlay {
         }
         // A new height (the second drawing step, folding, larger letters) is checked against the limits again.
         v.addOnLayoutChangeListener { _,_,top,_,bottom,_,oldTop,_,oldBottom -> if(bottom-top!=oldBottom-oldTop) main.post { if(view===v) relayout() } }
-        wm.addView(v,p)
-        view=v;params=p
+        val gen=generation
+        worker.execute { runCatching { val pr=probe(c);if(gen==generation) probed=pr }.onFailure(::warn) }
+        // v3.6.1 (K2): the system's refusal is kept as a cause code, not swallowed (the notice shows instead).
+        try { addWindow(wm,v,p) } catch(e:Exception) {
+            addError="addView:${e.javaClass.simpleName}";windowGone=true
+            Log.w(LOG,"card refused: ${e.javaClass.simpleName} canDraw=$draw")
+            verdict(c,CardStats.FALLBACK,addError!!,null);judged=true
+            return
+        }
+        view=v;params=p;addedAt=clock()
+        main.postDelayed(judgeLater,HIDDEN_AFTER_MS)
         // r11-3: the emulator check reads these lines (tools/device/call_card_test.sh); no number, no name.
-        Log.i(LOG,"card shown unknown=${data.unknown}")
+        Log.i(LOG,"card shown unknown=${data.unknown} canDraw=$draw")
     }
     private fun height(c:Context)=c.resources.displayMetrics.heightPixels
     /** The open card of a call going out, not opened again by hand: at the top (4.2-2). */
@@ -294,6 +394,7 @@ internal object CallCardOverlay {
     private fun removeAll() {
         main.removeCallbacks(autoCollapse);collapseQueued=false
         val c=app
+        if(c!=null) runCatching { judge(c,ending=true) }.onFailure(::warn)
         view?.let { v -> runCatching { c?.getSystemService(WindowManager::class.java)?.removeViewImmediate(v) } }
         view=null;params=null
         if(c!=null) { if(noticeUp) cancelNotice(c);stopWaiting(c) }
@@ -313,7 +414,9 @@ internal object CallCardOverlay {
     /** Unlocked during the call: the notice goes, the card stays (or comes, when the window could not be added before). */
     private fun onUnlocked(c:Context) {
         stopWaiting(c)
-        if(noticeUp && runCatching { canDraw(c) }.getOrDefault(false)) cancelNotice(c)
+        if(noticeUp && view!=null && (seenOnce || runCatching { canDraw(c) }.getOrDefault(false))) cancelNotice(c)
+        // v3.6.1: a window not judged yet (the lock covered it) is judged a while after the unlock.
+        if(!judged && view!=null) { main.removeCallbacks(judgeLater);main.postDelayed(judgeLater,HIDDEN_AFTER_MS) }
         if(state==CallSession.State.IDLE || closed || content==null) return
         place(c);view?.let { v -> content?.let { if(!v.complete) v.showAll(it) } };relayout();afterState()
     }
@@ -380,12 +483,14 @@ internal object CallCardOverlay {
 
     /** Host tests: back to the start. */
     internal fun resetForHost() {
-        main.removeCallbacks(autoCollapse);collapseQueued=false
+        main.removeCallbacks(autoCollapse);collapseQueued=false;main.removeCallbacks(judgeLater);judged=true
         app?.let { c -> view?.let { runCatching { c.getSystemService(WindowManager::class.java)?.removeViewImmediate(it) } };stopWaiting(c) }
         view=null;params=null;noticeUp=false;noticeMerged=false;forgetCall()
         state=CallSession.State.IDLE;app=null
         canDraw={ Settings.canDrawOverlays(it) };locked={ c -> c.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked==true }
         logLine=::callLogLine;outcome={ c,w -> CardStats.record(c,w) };serviceUp={ CallCardService.running!=null }
         onExpanded={ CardStats.expanded(it) };onClosed={ c,ms -> CardStats.closed(c,ms) };clock={ SystemClock.elapsedRealtime() }
+        drawnNow={ it.seen };addWindow={ wm,v,p -> wm.addView(v,p) };probe={ c -> runCatching { CardProbe.read(c) }.getOrNull() }
+        onVerdict={ c,a -> CardStats.verdict(c,a) }
     }
 }

@@ -52,8 +52,22 @@ T_CALL_LOG = "통화 목록을 빠뜨리고 있어요"
 T_NOT_INSTALLED = "새 버전이 설치되지 않아요"
 T_INBOX_ERROR = "우편함 오류가 계속돼요"
 T_DB_FULL = "폰 저장 공간이 거의 찼어요"
-T_CARD_PERMISSION = "통화 카드 권한이 꺼져 있어요"
+# v3.6.1 (K4): not "권한이 꺼져 있어요" any more: the permission read before and after the calls said yes.
+T_CARD_PERMISSION = "통화 카드가 통화 순간에 뜨지 않아요"
 CARD_NO_PERMISSION_PER_DAY = 3
+
+
+def card_causes(card):
+    """v3.6.1: the cause codes of today's calls whose card window was not drawn (callCard.recent, codes only), counted."""
+    recent = card.get("recent") if isinstance(card.get("recent"), list) else []
+    seen = {}
+    for e in recent:
+        if not isinstance(e, dict) or e.get("result") != "fallback" or e.get("day") != card.get("day"):
+            continue
+        c = w_code(e.get("cause"))
+        if c:
+            seen[c] = seen.get(c, 0) + 1
+    return ", ".join(f"{c} {n}번" for c, n in sorted(seen.items(), key=lambda x: (-x[1], x[0])))
 
 # v3.1 (DESIGN_V4 2.2-3): four rules. Titles stay fixed (plan() matches open issues by title); numbers go in the body.
 T_OLD_VERSION = "폰이 옛 버전에 머물러 있어요"
@@ -636,15 +650,24 @@ def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count, version=None
         if ie and ie_since and now_ms - ie_since > INBOX_ERROR_STUCK_MS:
             add(T_INBOX_ERROR, f"폰이 {hours(now_ms - ie_since)} 동안 같은 우편함 오류를 보내요 (기준 2시간). 코드: {ie}\n\n"
                 "추정 원인: 우편함 토큰 만료나 권한 문제, 요청 형식 오류예요.")
-        # v3.0 (r11-3): the call card fell back to a notice for lack of the overlay permission 3 times or more on one day
-        # (callCard.today: the phone's counts of its current KST day, zeros on a day without such calls, so the issue closes).
+        # v3.0 (r11-3): the call card fell back to a notice 3 times or more on one day (callCard.today: the phone's counts of
+        # its current KST day, zeros on a day without such calls, so the issue closes). v3.6.1 (DESIGN_V7 K4): the phone counts
+        # `fallback` (the window could not be added, was hidden, or the check said no) and `drawn` (the window really drawn);
+        # an older phone without `fallback` still says `noPermission`. The cause codes are in callCard.recent.
         card = phone.get("callCard") if isinstance(phone.get("callCard"), dict) else {}
         today = card.get("today") if isinstance(card.get("today"), dict) else {}
-        np = today.get("noPermission")
-        if isinstance(np, int) and not isinstance(np, bool) and np >= CARD_NO_PERMISSION_PER_DAY:
+        def count(key):
+            v = today.get(key)
+            return v if isinstance(v, int) and not isinstance(v, bool) else None
+        np = count("fallback") if count("fallback") is not None else count("noPermission")
+        if np is not None and np >= CARD_NO_PERMISSION_PER_DAY:
+            drawn = count("drawn")
+            got = drawn if drawn is not None else ms(today, "shown")
+            causes = card_causes(card)
             add(T_CARD_PERMISSION, f"하루에 {np}번 통화 카드 대신 알림으로 보여 드렸어요 (기준 3번). "
-                f"카드가 뜬 횟수: {ms(today, 'shown')}번.\n\n"
-                "추정 원인: 휴대폰 설정에서 이음의 다른 앱 위에 표시 권한이 꺼졌어요. 앱 설정의 통화 카드 묶음에서 다시 허용해 주세요.")
+                f"카드가 뜬 횟수: {got}번.\n\n"
+                "추정 원인: 통화 순간에 카드 창을 띄우지 못했어요(원인 코드는 하트비트 callCard.recent)."
+                + (f" 최근 원인 코드: {causes}." if causes else ""))
         err = phone.get("lastUpdateError")
         # v3.1 codes that are no install failure of their own: the old-version rule says them when they last.
         if err and w_code(err) not in ("USER_ACTION_REQUIRED", "INSTALL_SOURCE_NOT_ALLOWED"):

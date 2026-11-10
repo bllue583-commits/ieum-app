@@ -207,6 +207,30 @@ class WatchdogTest(unittest.TestCase):
         self.assertEqual([], titles(phone=phone()))
         self.assertEqual([], titles(phone=phone(callCard={"today": {"noPermission": True}})))
         self.assertEqual([], titles(phone=phone(callCard={"today": {"noPermission": "5"}})))
+        self.assertIn("통화 순간에 카드 창을 띄우지 못했어요", body)
+        self.assertNotIn("권한이 꺼졌어요", body)
+
+    def test_call_card_fallback_and_drawn_v361(self):
+        # v3.6.1: fallback (window refused, hidden or the check said no) is what counts; drawn is what showed.
+        recent = [{"day": 20261110, "at": "09:01", "result": "fallback", "cause": "hidden", "mode": 1},
+                  {"day": 20261110, "at": "09:30", "result": "fallback", "cause": "addView:BadTokenException", "mode": 2},
+                  {"day": 20261110, "at": "10:02", "result": "fallback", "cause": "hidden"},
+                  {"day": 20261109, "at": "18:00", "result": "fallback", "cause": "short"},
+                  {"day": 20261110, "at": "11:00", "result": "drawn", "cause": "drawnDespiteFalse"}]
+        card = {"day": 20261110, "recent": recent,
+                "today": {"shown": 0, "noPermission": 0, "fallback": 3, "drawn": 1, "hidden": 2}}
+        self.assertEqual([w.T_CARD_PERMISSION], titles(phone=phone(callCard=card)))
+        body = problems(phone=phone(callCard=card))[0]["body"]
+        self.assertIn("3번", body)
+        self.assertIn("카드가 뜬 횟수: 1번", body)
+        self.assertIn("callCard.recent", body)
+        self.assertIn("hidden 2번, addView:BadTokenException 1번", body)
+        self.assertNotIn("short", body)
+        # fallback is there: noPermission alone (it may count the same calls) is not used.
+        self.assertEqual([], titles(phone=phone(callCard={"today": {"noPermission": 5, "fallback": 2, "drawn": 9}})))
+        # Bad recent entries are skipped.
+        bad = dict(card, recent=[None, "x", {"result": "fallback", "day": 20261110, "cause": "김 010"}])
+        self.assertNotIn("김", problems(phone=phone(callCard=bad))[0]["body"])
 
     def test_exempted_bucket_is_no_cause(self):
         body = problems(phone=phone(atMs=NOW - 20 * H, standbyBucket="EXEMPTED"))[0]["body"]

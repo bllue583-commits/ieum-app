@@ -1,6 +1,5 @@
 package kr.callbrief.pipeline.call
 
-import android.app.KeyguardManager
 import android.app.NotificationManager
 import android.content.Context
 import android.os.SystemClock
@@ -40,9 +39,19 @@ internal object CardStats {
     const val NO_ROLE="noRole";const val IGNORED="ignored";const val OFF="off";const val LOCKED="locked";const val COLD="cold"
     const val FGS_REFUSED="fgsRefused";const val NO_PERMISSION=CallCardOverlay.NO_PERMISSION;const val NO_NOTIFY="noNotify"
     const val EXPANDED="expanded";const val CLOSED_UNDER_2S="closedUnder2s"
+    /** v3.6.1 (DESIGN_V7 K1, K2): the card's window was seen on the screen ([DRAWN], locked too), the call got the notice instead
+     * ([FALLBACK]: the window could not be added, was hidden, or the call ended before it was seen while the notice was up), and
+     * of those the window added without an error but never seen within [CallCardOverlay.HIDDEN_AFTER_MS] ([HIDDEN]). */
+    const val DRAWN="drawn";const val FALLBACK="fallback";const val HIDDEN="hidden"
+    /** v3.6.1: a window that went (the call ended, the card was closed) before it was seen, without the notice: neither. */
+    const val GONE="gone"
     /** Every count the heartbeat carries (zeros when missing). */
     val KINDS=listOf(CALLS,SHOWN,SHOWN_OUTGOING,ELIGIBLE_OUTGOING,NO_CARD,THIN,NO_NUMBER,NO_NUMBER_IN,NO_NUMBER_OUT,NO_ROLE,
-        IGNORED,OFF,LOCKED,COLD,FGS_REFUSED,NO_PERMISSION,NO_NOTIFY,EXPANDED,CLOSED_UNDER_2S)
+        IGNORED,OFF,LOCKED,COLD,FGS_REFUSED,NO_PERMISSION,NO_NOTIFY,EXPANDED,CLOSED_UNDER_2S,DRAWN,FALLBACK,HIDDEN)
+    /** v3.6.1 (K3): the newest calls kept in `recent` (the heartbeat's `callCard.recent[]`), and the only keys an entry has. */
+    const val RECENT=20
+    val RECENT_KEYS=setOf("day","at","result","cause","canDraw","canDrawAfter","mode","pid","ageS","cold","locked","car","btAudio",
+        "commDevice","drawMs","error","out")
     /** What the card may tell [record]. */
     private val OUTCOMES=setOf(SHOWN,LOCKED,NO_PERMISSION,NO_NOTIFY,NO_CARD,NO_NUMBER)
     /** Outcomes where something reached the person (a window or a notice): they carry a ring-to-card time. */
@@ -60,14 +69,15 @@ internal object CardStats {
     @Volatile internal var elapsed:()->Long={ SystemClock.elapsedRealtime() }
     /** When this process started ([android.os.Process.getStartElapsedRealtime]); replaceable in host tests. */
     @Volatile internal var processStart:()->Long={ android.os.Process.getStartElapsedRealtime() }
-    /** The probes [record] uses to tell a locked screen and a missing permission apart. Replaceable in host tests. */
-    @Volatile internal var canDraw:(Context)->Boolean={ android.provider.Settings.canDrawOverlays(it) }
-    @Volatile internal var locked:(Context)->Boolean={ c -> c.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked==true }
+    /** Whether a notice may be posted ([NO_NOTIFY]). v3.6.1 (K2): the overlay permission and the lock are no longer read again
+     * here: the card tells what it found when it put the window up. Replaceable in host tests. */
     @Volatile internal var notifyAllowed:(Context)->Boolean={ c -> c.getSystemService(NotificationManager::class.java)?.areNotificationsEnabled()!=false }
     /** The number's card is a thin one (call log only). Memory first ([ContactCards.get]). Replaceable in host tests. */
     @Volatile internal var isThin:(Context,String)->Boolean={ c,k -> ContactCards.get(c,k)?.thin!=null }
     /** The optional outgoing-call role is held ([CallCardService.roleHeld]). */
     @Volatile internal var roleHeld:(Context)->Boolean={ c -> CallCardService.roleHeld(c) }
+    /** v3.6.1 (K3): the phone's state for a `recent` entry of a call the card never reached. Replaceable in host tests. */
+    @Volatile internal var probe:(Context)->Probe?={ c -> runCatching { CardProbe.read(c) }.getOrNull() }
 
     private val lock=Any()
     /** A state other than IDLE was seen since the last IDLE. */
@@ -103,17 +113,20 @@ internal object CardStats {
     /** [CallStateReceiver], before the state is handled: the broadcast's time and whether it was cold. */
     fun signal(at:Long,coldStart:Boolean) = synchronized(lock) { signalAt=at;signalCold=coldStart }
 
-    /** The card's own outcome for this call (once per call; a second one for the same call is dropped). [what]: [SHOWN],
-     * [NO_PERMISSION] (shown as a notice instead), [LOCKED], [NO_NOTIFY], [NO_CARD] or [NO_NUMBER]. v3.4: a notice put up because
-     * the screen was locked is [LOCKED], not [NO_PERMISSION] (that is only a missing overlay permission); a notice that could not
-     * be posted also counts [NO_NOTIFY]. */
+    /** This call's broadcast started the process (the card puts it in its `recent` entry). */
+    fun callCold():Boolean = synchronized(lock) { cold }
+
+    /** The card's own outcome for this call when it put the window up (once per call; a second one for the same call is dropped).
+     * [what]: [SHOWN] (the window was added, the screen unlocked), [LOCKED] (added while locked, the notice beside it),
+     * [NO_PERMISSION] (the overlay check said no when the window was put up, or the window could not be added: the notice),
+     * [NO_NOTIFY], [NO_CARD] or [NO_NUMBER]. v3.6.1 (K2): taken as the card tells it, nothing is read again (before, a permission
+     * read here a moment later turned a refused window into [LOCKED]); a notice that cannot be posted also counts [NO_NOTIFY].
+     * Whether the window was then seen is told later, by [verdict]. */
     fun record(context:Context,what:String) {
         if(what !in OUTCOMES) return
         val app=context.applicationContext ?: context
-        val draw=runCatching { canDraw(app) }.getOrDefault(false)
-        val isLocked=runCatching { locked(app) }.getOrDefault(false)
         val notify=runCatching { notifyAllowed(app) }.getOrDefault(true)
-        val (kind,noNotify)=classify(what,draw,isLocked,notify)
+        val (kind,noNotify)=classify(what,notify)
         val inc=LinkedHashMap<String,Int>();var sample:Pair<Long,Boolean>?=null
         val at=elapsed()
         val k:String?
@@ -130,17 +143,44 @@ internal object CardStats {
         if(kind in REACHED && k!=null && runCatching { isThin(app,k) }.getOrDefault(false)) inc[THIN]=1
         write(app,inc,sample)
     }
-    /** [what] the card told, read against the phone now: (the outcome, whether no notice could be posted as well). */
-    internal fun classify(what:String,canDraw:Boolean,locked:Boolean,notify:Boolean):Pair<String,Boolean> = when(what) {
-        // The card fell back to the notice: for a locked screen when the overlay itself is allowed.
-        NO_PERMISSION -> (if(canDraw) LOCKED else NO_PERMISSION) to !notify
-        // "Shown", but the window could not be drawn and no notice could be posted either.
-        SHOWN -> when {
-            (!canDraw || locked) && !notify -> (if(!canDraw) NO_PERMISSION else LOCKED) to true
-            canDraw && locked -> LOCKED to false
-            else -> SHOWN to false
-        }
+    /** [what] the card told: (the outcome, whether its notice could not be posted as well). Only a notice can fail to post. */
+    internal fun classify(what:String,notify:Boolean):Pair<String,Boolean> = when(what) {
+        NO_PERMISSION,LOCKED -> what to !notify
         else -> what to false
+    }
+
+    /** v3.6.1 (K1 to K3): what became of the card's window in one call, told once by [CallCardOverlay] when it knows. [result]
+     * [DRAWN], [FALLBACK] or [GONE]; [cause] `ok`, `drawnDespiteFalse` (seen although the overlay check said no), [HIDDEN],
+     * `addView:<exception class>` or `short` (the window went before it was seen); [canDraw] when the window was put up,
+     * [canDrawAfter] when this was told; [probe] the phone then; [drawMs] from adding the window to its first drawing. */
+    data class Attempt(val result:String,val cause:String,val canDraw:Boolean,val canDrawAfter:Boolean?=null,val probe:Probe?=null,
+        val locked:Boolean=false,val cold:Boolean=false,val drawMs:Long?=null,val error:String?=null,val out:Boolean=false)
+    /** The phone around the window ([CardProbe.read]): the raw app-op mode of drawing over apps ([android.app.AppOpsManager]
+     * MODE_*: 0 allowed, 1 ignored, 2 errored, 3 default, 4 foreground; -1 not read), this process (pid, age in seconds), car mode,
+     * a Bluetooth audio device connected, and the call audio's device type ([android.media.AudioDeviceInfo] TYPE_*; null: none). */
+    data class Probe(val mode:Int,val pid:Int,val ageS:Long,val car:Boolean,val btAudio:Boolean,val commDevice:Int?)
+
+    /** v3.6.1: counts [DRAWN] or [FALLBACK] (and [HIDDEN]) for [a] and keeps it in `recent`. Not tied to the call's state: the
+     * card tells it once per call, also when the window is judged after the call ended. */
+    fun verdict(context:Context,a:Attempt) {
+        val inc=LinkedHashMap<String,Int>()
+        when(a.result) {
+            DRAWN -> inc[DRAWN]=1
+            FALLBACK -> { inc[FALLBACK]=1;if(a.cause==HIDDEN) inc[HIDDEN]=1 }
+        }
+        write(context,inc,null,entry(a,clock()))
+    }
+    /** One `recent` entry: numbers, yes/no and short codes, never a number or a name. */
+    internal fun entry(a:Attempt,now:Long):JSONObject {
+        val t=Instant.ofEpochMilli(now).atZone(KST)
+        val o=JSONObject().put("day",day(now)).put("at","%02d:%02d".format(t.hour,t.minute)).put("result",a.result).put("cause",a.cause)
+            .put("canDraw",a.canDraw).put("locked",a.locked).put("cold",a.cold).put("out",a.out)
+        a.canDrawAfter?.let { o.put("canDrawAfter",it) }
+        a.drawMs?.let { o.put("drawMs",it) }
+        a.error?.let { o.put("error",it) }
+        a.probe?.let { p -> o.put("mode",p.mode).put("pid",p.pid).put("ageS",p.ageS).put("car",p.car).put("btAudio",p.btAudio)
+            p.commDevice?.let { o.put("commDevice",it) } }
+        return o
     }
 
     /** Every call state the service sees ([CallCardService.follow]), with its verdict [reason]: [CallCardService.SHOW],
@@ -149,6 +189,7 @@ internal object CardStats {
     fun follow(context:Context,snap:CallSession.Snapshot,reason:String?) {
         val inc=LinkedHashMap<String,Int>()
         var askRole=false
+        var unreached:Attempt?=null
         synchronized(lock) {
             val at=signalAt;val c=signalCold;signalAt=null;signalCold=false
             if(snap.state==CallSession.State.IDLE) {
@@ -165,6 +206,11 @@ internal object CardStats {
                                 inc[if(direction==CallSession.Direction.OUT) NO_NUMBER_OUT else NO_NUMBER_IN]=1
                             }
                         }
+                    }
+                    // v3.6.1 (K3): a call the card never put a window up for is kept in `recent` too (the card tells its own).
+                    if(told==null || told==NO_CARD) {
+                        val r=when { ignoredSeen -> IGNORED;offSeen -> OFF;told==NO_CARD -> NO_CARD;noNumberSeen -> NO_NUMBER;else -> "none" }
+                        unreached=Attempt(r,r,canDraw=false,cold=cold,out=direction==CallSession.Direction.OUT)
                     }
                 }
                 resetCall()
@@ -183,7 +229,8 @@ internal object CardStats {
             }
         }
         if(askRole && !runCatching { roleHeld(context) }.getOrDefault(false)) inc[NO_ROLE]=1
-        if(inc.isNotEmpty()) write(context,inc,null)
+        val e=unreached?.let { u -> entry(u.copy(probe=runCatching { probe(context) }.getOrNull()),clock()).apply { remove("canDraw") } }
+        if(inc.isNotEmpty() || e!=null) write(context,inc,null,e)
     }
 
     /** The service could not be started from the background ([CallCardService.follow]) or could not go foreground. Once per call. */
@@ -201,11 +248,11 @@ internal object CardStats {
         fgsTold=false;expandTold=false;closeTold=false
     }
 
-    private fun write(context:Context,inc:Map<String,Int>,sample:Pair<Long,Boolean>?) {
+    private fun write(context:Context,inc:Map<String,Int>,sample:Pair<Long,Boolean>?,entry:JSONObject?=null) {
         val app=context.applicationContext ?: context
         val now=clock()
         val open=ContactCards.lastOpenMs.takeIf { it>=0 }
-        writer.execute { runCatching { SecureSettings(app).update { s -> s.put(PipelineSettingsKeys.CARD_STATS,add(read(s),inc,now,sample,open)) } }
+        writer.execute { runCatching { SecureSettings(app).update { s -> s.put(PipelineSettingsKeys.CARD_STATS,add(read(s),inc,now,sample,open,entry)) } }
             .onFailure { Log.w(TAG,"not counted: ${it.javaClass.simpleName}") } }
     }
 
@@ -221,8 +268,9 @@ internal object CardStats {
     /** [stats] with one more [what] at [now]. */
     fun add(stats:JSONObject,what:String,now:Long):JSONObject=add(stats,mapOf(what to 1),now)
     /** [stats] with [inc] added at [now]: the totals and today's (a new KST day starts today's from zero); [sample] a ring-to-card
-     * time (ms, cold) kept among the newest [SAMPLES]; [cardOpenMs] the last card file open. */
-    fun add(stats:JSONObject,inc:Map<String,Int>,now:Long,sample:Pair<Long,Boolean>?=null,cardOpenMs:Long?=null):JSONObject {
+     * time (ms, cold) kept among the newest [SAMPLES]; [cardOpenMs] the last card file open; [entry] one more `recent` call (the
+     * newest [RECENT] kept). */
+    fun add(stats:JSONObject,inc:Map<String,Int>,now:Long,sample:Pair<Long,Boolean>?=null,cardOpenMs:Long?=null,entry:JSONObject?=null):JSONObject {
         val out=clean(stats)
         val today=day(now)
         val t=if(stats.optInt("day",0)==today) clean(stats.optJSONObject("today") ?: JSONObject()) else clean(JSONObject())
@@ -234,7 +282,20 @@ internal object CardStats {
             if(kept.isNotEmpty()) out.put(name,JSONArray(kept.takeLast(SAMPLES)))
         }
         (cardOpenMs ?: (stats.opt("cardOpenMs") as? Number)?.toLong())?.let { out.put("cardOpenMs",it) }
+        val recent=recent(stats.optJSONArray("recent")).toMutableList()
+        entry?.let { recent+=safe(it) }
+        if(recent.isNotEmpty()) out.put("recent",JSONArray(recent.takeLast(RECENT)))
         return out
+    }
+    /** The stored `recent` entries, each with [RECENT_KEYS] only. */
+    private fun recent(a:JSONArray?):List<JSONObject> = a?.let { (0 until it.length()).mapNotNull { i -> it.optJSONObject(i)?.let(::safe) } }.orEmpty()
+    /** [o] with [RECENT_KEYS] only: numbers, yes/no and short codes (ASCII letters, digits, `_`, `-`, `:`). */
+    internal fun safe(o:JSONObject):JSONObject = JSONObject().apply {
+        for(k in RECENT_KEYS) when(val v=o.opt(k)) {
+            is Boolean -> put(k,v)
+            is Number -> if(v !is Double || v.isFinite()) put(k,v)
+            is String -> v.take(60).filter { c -> c.code<128 && c.isLetterOrDigit() || c=='_' || c=='-' || c==':' }.takeIf { it.isNotEmpty() }?.let { put(k,it) }
+        }
     }
     private fun numbers(a:JSONArray?):List<Long> = a?.let { (0 until it.length()).mapNotNull { i -> (it.opt(i) as? Number)?.toLong()?.takeIf { v -> v>=0 } } }.orEmpty()
 
@@ -250,7 +311,8 @@ internal object CardStats {
     }
 
     /** The heartbeat's `callCard`: every count (zeros when not counted), today's KST day and today's counts (zeros on a new day,
-     * so a quiet day closes the watchdog's issue), `ringToCardMs`, `ringToCardMsCold` and `cardOpenMs`. Null before this
+     * so a quiet day closes the watchdog's issue), `ringToCardMs`, `ringToCardMsCold`, `cardOpenMs` and (v3.6.1) `recent`, the
+     * newest [RECENT] calls ([entry], oldest first). Null before this
      * version saw any call. [now] null: the day as stored. */
     fun heartbeat(s:JSONObject,now:Long?=null):JSONObject? {
         val st=read(s)
@@ -259,6 +321,7 @@ internal object CardStats {
         val out=clean(st).put("day",day).put("today",clean(if(day==stored) st.optJSONObject("today") ?: JSONObject() else JSONObject()))
         out.put("ringToCardMs",summary(numbers(st.optJSONArray("ring")))).put("ringToCardMsCold",summary(numbers(st.optJSONArray("ringCold"))))
         (st.opt("cardOpenMs") as? Number)?.toLong()?.let { out.put("cardOpenMs",it) }
+        out.put("recent",JSONArray(recent(st.optJSONArray("recent")).takeLast(RECENT)))
         return out
     }
 
@@ -266,9 +329,32 @@ internal object CardStats {
     internal fun resetForHost() {
         synchronized(lock) { resetCall();signalAt=null;signalCold=false;firstSignal=true }
         clock={ System.currentTimeMillis() };elapsed={ SystemClock.elapsedRealtime() };processStart={ android.os.Process.getStartElapsedRealtime() }
-        canDraw={ android.provider.Settings.canDrawOverlays(it) }
-        locked={ c -> c.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked==true }
+        probe={ c -> runCatching { CardProbe.read(c) }.getOrNull() }
         notifyAllowed={ c -> c.getSystemService(NotificationManager::class.java)?.areNotificationsEnabled()!=false }
         isThin={ c,k -> ContactCards.get(c,k)?.thin!=null };roleHeld={ c -> CallCardService.roleHeld(c) }
     }
+}
+
+/** v3.6.1 (DESIGN_V7 K3): what the phone says around the card's window, read without any permission. Every read is cheap (a
+ * binder call or two) and runs off the ringing path ([CallCardOverlay] reads it on its own thread after the window is added). */
+internal object CardProbe {
+    /** The raw mode of the app op "draw over other apps" for this app ([android.app.AppOpsManager] MODE_*), -1 when not read. */
+    fun overlayMode(c:Context):Int = runCatching {
+        val ops=c.getSystemService(android.app.AppOpsManager::class.java) ?: return@runCatching -1
+        val uid=android.os.Process.myUid()
+        if(android.os.Build.VERSION.SDK_INT>=29) ops.unsafeCheckOpNoThrow(android.app.AppOpsManager.OPSTR_SYSTEM_ALERT_WINDOW,uid,c.packageName)
+        else @Suppress("DEPRECATION") ops.checkOpNoThrow(android.app.AppOpsManager.OPSTR_SYSTEM_ALERT_WINDOW,uid,c.packageName)
+    }.getOrDefault(-1)
+    fun pid():Int = android.os.Process.myPid()
+    /** Seconds since this process started ([android.os.Process.getStartElapsedRealtime]). */
+    fun ageS():Long = ((SystemClock.elapsedRealtime()-android.os.Process.getStartElapsedRealtime())/1_000).coerceAtLeast(0)
+    fun car(c:Context):Boolean = runCatching { c.getSystemService(android.app.UiModeManager::class.java)?.currentModeType==android.content.res.Configuration.UI_MODE_TYPE_CAR }.getOrDefault(false)
+    private val BT=setOf(android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO,26 /* TYPE_BLE_HEADSET */,27 /* TYPE_BLE_SPEAKER */)
+    /** A Bluetooth audio output is connected (the device list needs no permission). */
+    fun btAudio(c:Context):Boolean = runCatching { c.getSystemService(android.media.AudioManager::class.java)
+        ?.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS)?.any { it.type in BT }==true }.getOrDefault(false)
+    /** The call audio's device type (API 31+), null when none or not known. */
+    fun commDevice(c:Context):Int? = if(android.os.Build.VERSION.SDK_INT<31) null else runCatching {
+        c.getSystemService(android.media.AudioManager::class.java)?.communicationDevice?.type }.getOrNull()
+    fun read(c:Context):CardStats.Probe = CardStats.Probe(overlayMode(c),pid(),ageS(),car(c),btAudio(c),commDevice(c))
 }
