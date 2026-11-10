@@ -87,7 +87,8 @@ class R12EightTest:ProtectedTextHostTestBase() {
         CallTranscriptionStore(context,{ clock },{}).use { s ->
             // v3.6 W1: a run ends itself at 9 minutes before a piece that would not fit (the measured speed, 1.4 here), so a
             // run holds two such pieces instead of three and a cut-off fourth: four runs, none of them throwing a piece away.
-            val r=runner(s,transcriber,stopped={ clock-runStart>=10*minute },timeLimited={ true },rate=1.4)
+            // v3.6.1 fix: the speed per expected window (5 for a 2-minute piece): 1.12 is 1.4 per audio ms.
+            val r=runner(s,transcriber,stopped={ clock-runStart>=10*minute },timeLimited={ true },rate=1.12)
             for(i in 0 until 4) {
                 if(i>0) repeat(3) { recording("new$i$it",clock+it*minute,30.0) } // calls that came in meanwhile
                 clock+=hour;runStart=clock;r.run();runs++

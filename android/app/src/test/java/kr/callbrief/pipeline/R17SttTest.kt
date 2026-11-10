@@ -102,12 +102,60 @@ class R17SttTest:ProtectedTextHostTestBase() {
         // next 2-minute piece ahead. Per window it is 1.67: 120 s x 1.67 x 1.25 = 250 s.
         val o=PowerStats.notePiece(null,50_000,7_000,6,cold=true,now=base)
         val r=PowerStats.rate(o)!!
-        assertEquals(50_000.0/30_000,r,0.001)
+        // v3.6.1 fix: no long piece measured yet: the largest sample, never under the default.
+        assertEquals(TranscriptionPower.DEFAULT_RATE,r,0.001)
         assertFalse(PowerPolicy.splitAhead(PowerPolicy.expectedPieceMs(120_000,r),CallTranscriptionRunner.NATIVE_DEADLINE_SECONDS))
         assertTrue("the old rate would have split it",PowerPolicy.splitAhead((120_000*(50_000.0/7_000)*TranscriptionPower.PIECE_MARGIN).toLong(),CallTranscriptionRunner.NATIVE_DEADLINE_SECONDS))
-        // A tail piece is expected by its one window, not by its seconds.
-        assertEquals((30_000*2.0*TranscriptionPower.PIECE_MARGIN).toLong(),PowerPolicy.expectedPieceMs(7_000,2.0))
-        assertEquals((120_000*TranscriptionPower.DEFAULT_RATE*TranscriptionPower.PIECE_MARGIN).toLong(),PowerPolicy.expectedPieceMs(120_000,null))
+        // A tail piece is expected by its windows plus one (v3.6.1 fix), not by its seconds.
+        assertEquals((60_000*2.0*TranscriptionPower.PIECE_MARGIN).toLong(),PowerPolicy.expectedPieceMs(7_000,2.0))
+        assertEquals("a 2-minute piece: 5 windows, 300 s without a measurement",(150_000*TranscriptionPower.DEFAULT_RATE*TranscriptionPower.PIECE_MARGIN).toLong(),PowerPolicy.expectedPieceMs(120_000,null))
+        // Measured 2-minute pieces at 240 s (the S26's usual): not split ahead after the tail either.
+        var o2=PowerStats.notePiece(null,240_000,120_000,6,cold=true,now=base)
+        o2=PowerStats.notePiece(o2,50_000,7_000,6,cold=false,now=base+5*minute)
+        assertFalse(PowerPolicy.splitAhead(PowerPolicy.expectedPieceMs(120_000,PowerStats.rate(o2)),CallTranscriptionRunner.NATIVE_DEADLINE_SECONDS))
+    }
+
+    // ---- v3.6.1 fix (review, high): W1/W2 never expect a whole piece smaller than it really takes ----
+    @Test fun shortPiecesDoNotShrinkTheExpectedTimeOfATwoMinutePiece() {
+        // Two whole 2-minute pieces at 300 s, then ten short calls (12 s in 15 s: cheap per window) fill the recent samples.
+        var o=PowerStats.notePiece(null,300_000,120_000,6,cold=true,now=base)
+        o=PowerStats.notePiece(o,300_000,120_000,6,cold=false,now=base+6*minute)
+        repeat(10) { i -> o=PowerStats.notePiece(o,15_000,12_000,6,cold=false,now=base+20*minute+i*minute) }
+        val perWindow=PowerStats.median(o.getJSONObject("chunk").getJSONArray("rates"))!!
+        assertTrue("the slow verdict's median is the short calls' now",perWindow<1.0)
+        assertTrue("the old way: far under the 300 s it takes",(4*30_000*perWindow*TranscriptionPower.PIECE_MARGIN).toLong()<=150_000)
+        val expected=PowerPolicy.expectedPieceMs(120_000,PowerStats.rate(o))
+        assertEquals("the long pieces' speed, 5 windows: 300 s x 1.25",375_000L,expected)
+        assertTrue(expected>=300_000)
+        // Seven minutes into a run, a 2-minute piece is not begun (it would be cut at 10 minutes).
+        assertFalse(PowerPolicy.startPiece(false,7*minute,expected,TranscriptionPower.SELF_END_MS))
+        // Without any long piece measured, the largest sample (never under the default) stands in.
+        var s=JSONObject()
+        repeat(10) { i -> s=PowerStats.notePiece(s,15_000,12_000,6,cold=false,now=base+i*minute) }
+        assertEquals(TranscriptionPower.DEFAULT_RATE,PowerStats.rate(s)!!,0.001)
+        assertEquals(375_000L,PowerPolicy.expectedPieceMs(120_000,PowerStats.rate(s)))
+        // A ledger of v3.6.1 before this fix (rates only): their largest.
+        val old=JSONObject().put("chunk",JSONObject().put("rates",org.json.JSONArray().put(0.5).put(2.4).put(0.6)))
+        assertEquals(2.4,PowerStats.rate(old)!!,0.001)
+        assertNull(PowerStats.rate(JSONObject()))
+        // Another thread count starts the long samples again too.
+        assertFalse(PowerStats.notePiece(o,300_000,120_000,4,cold=false).getJSONObject("chunk").getJSONArray("expectLong").length()>1)
+    }
+    @Test fun aSevenMinuteRunDoesNotBeginATwoMinutePieceAfterShortCalls() {
+        rec("long",base-hour,240.0) // two 2-minute pieces
+        var ledger=JSONObject()
+        ledger=PowerStats.notePiece(ledger,300_000,120_000,6,cold=true,now=base-30*minute)
+        repeat(10) { i -> ledger=PowerStats.notePiece(ledger,15_000,12_000,6,cold=false,now=base-20*minute+i*minute) }
+        val runStart=clock
+        var pieces=0
+        // The first piece takes 7 minutes; the second would not fit in the 9 minutes.
+        val t=CallTranscriber { _,pcm,_ -> pieces++;clock+=7*minute;listOf(CallTranscript.Segment(0,pcm.size*1000L/rate,"말")) }
+        val pass=CallTranscriptionStore(context,{ clock },{}).use { s ->
+            CallTranscriptionRunner(s,model,PipelineAudioDecoder(),t,read={ c -> PipelineBytesInput(wavs.getValue(c.key.recordingId).copyOf()) },
+                skipReason={null},sink={ object:CallTranscriptSink { override fun onTranscript(transcript:CallTranscript){} } },now={clock},
+                runLimitMs=TranscriptionPower.SELF_END_MS,rate={ PowerStats.rate(ledger) }).run()
+        }
+        assertEquals("YIELD",pass.state);assertEquals(1,pieces);assertEquals(7*minute,clock-runStart)
     }
 
     // ---- T3a: a battery run goes on past its own start mark ----
@@ -182,6 +230,23 @@ class R17SttTest:ProtectedTextHostTestBase() {
         assertFalse(PowerStats.stillRuns(PowerStats.noteBatteryStart(spent,base),s,base+minute,false,PowerPolicy.Mode.BATTERY,base))
     }
 
+    // ---- v3.6.1 fix (review, medium): only a rest for a slow piece makes the next piece cold ----
+    @Test fun aRestForTheHeadroomOrTheHeatIsNoColdStart() {
+        val end=base
+        val done=JSONObject().put("lastRunEndMs",end)
+        val t=end+minute
+        val headroom=PowerStats.noteHot(done,t,"headroom")
+        assertEquals("headroom",headroom.getString("hotRestWhy"))
+        assertFalse("warm after a headroom rest: not a cold sample",PowerStats.coldStart(headroom,t+TranscriptionPower.HOT_DELAY_MS))
+        assertFalse(PowerStats.coldStart(PowerStats.noteHot(done,t,"temp"),t+TranscriptionPower.HOT_DELAY_MS))
+        assertFalse(PowerStats.coldStart(PowerStats.noteHot(done,t,"severe"),t+TranscriptionPower.HOT_DELAY_MS))
+        assertTrue(PowerStats.coldStart(PowerStats.noteHot(done,t,"slow"),t+TranscriptionPower.HOT_DELAY_MS))
+        // 20 minutes after the last run it is cold whatever the rest was for.
+        assertTrue(PowerStats.coldStart(headroom,end+TranscriptionPower.COLD_AFTER_MS))
+        // A tick during the headroom rest keeps the rest and its cause.
+        assertEquals("headroom",PowerStats.noteHot(headroom,t+4*minute,"slow").getString("hotRestWhy"))
+    }
+
     // ---- D1: the trim on its own transaction, 7 days, 3 from 60% ----
     private fun recordings(vararg ids:String) = port().use { p -> p.transaction {
         ids.forEach { id -> p.execute("INSERT OR IGNORE INTO recordings(recording_id,owner_key,grant_id,document_id,display_name,mime_type,byte_count,first_seen_ms,last_seen_ms,source_seq,source_version,head_revision) VALUES(?,?,'g1',?,?,'audio/wav',10,0,0,1,1,1)",
@@ -213,6 +278,16 @@ class R17SttTest:ProtectedTextHostTestBase() {
             assertEquals(3L,CallRecordStore.transcriptKeepDays(60))
             s.trim(base,dbPercent=60)
             assertEquals("",words(mid));assertTrue(words(fresh).isNotEmpty())
+            // v3.6.1 fix (review, medium): a text keeps its words 7 days even from 60% (the analysis reads 7 days of them).
+            clock=base-5*day
+            assertTrue(s.insertMessage("sms:01000004444:1",base-5*day,"01000004444","[오전 10:00 받은 문자] 견적서 금요일까지 부탁드려요"))
+            val sms=s.day(java.time.Instant.ofEpochMilli(base-5*day).atZone(CallRecordStore.KST).toLocalDate()).single { it.kind=="문자" }.recordId
+            s.applyAnalysis(sms,ClaudeCallAnalysis("견적서 요청",emptyList(),null,null,emptyList(),emptyList()))
+            clock=base
+            s.trim(base,dbPercent=80)
+            assertTrue("a 5-day-old text stays at 80%",words(sms).isNotEmpty())
+            s.trim(base+3*day,dbPercent=80)
+            assertEquals("8 days: gone","",words(sms))
             assertNotNull(s.dbPercent())
         }
         // The daily work's own call: the process store, at its share (small here: 7 days).

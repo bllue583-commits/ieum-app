@@ -90,6 +90,29 @@ class R17CardStatsTest:ProtectedTextHostTestBase() {
         assertTrue(last.getString("at"),Regex("""\d{2}:\d{2}""").matches(last.getString("at")))
         assertEquals(CardStats.day(now),last.getInt("day"))
     }
+    @Test fun anUnconfirmedWindowIsNotDrawnAndTurnsTheLightAmber() {
+        // v3.6.1 fix (review, critical): seen although the check said no (drawnDespiteFalse) is unconfirmed, not drawn.
+        repeat(3) {
+            phone(TelephonyManager.EXTRA_STATE_RINGING,number);CardStats.record(app,CardStats.NO_PERMISSION)
+            CardStats.verdict(app,attempt(CardStats.UNCONFIRMED,CallCardOverlay.CAUSE_DRAWN_DESPITE_FALSE,canDraw=false));phone(TelephonyManager.EXTRA_STATE_IDLE)
+        }
+        phone(TelephonyManager.EXTRA_STATE_RINGING,number);CardStats.record(app,CardStats.SHOWN)
+        CardStats.verdict(app,attempt(CardStats.DRAWN,CallCardOverlay.CAUSE_OK));phone(TelephonyManager.EXTRA_STATE_IDLE)
+        val hb=heartbeat()
+        for(o in listOf(hb,hb.getJSONObject("today"))) {
+            assertEquals(3,o.getInt(CardStats.UNCONFIRMED));assertEquals("drawn stays as it was",1,o.getInt(CardStats.DRAWN))
+            assertEquals(0,o.getInt(CardStats.FALLBACK))
+        }
+        assertEquals("unconfirmed",hb.getJSONArray("recent").getJSONObject(0).getString("result"))
+        // The heartbeat's number filter carries it.
+        assertEquals(3,PhoneStatus.callCardJson(hb).getJSONObject("today").getInt(CardStats.UNCONFIRMED))
+        // The light: 4 tried today, 1 drawn: amber.
+        val st=CardStats.read(SecureSettings(app).snapshot())
+        assertEquals(4 to 1,StatusLights.cardToday(st,now))
+        val ok=StatusLights.Input(now=now,folderConnected=true,modelState="READY",consent=true)
+        val (tried,drawn)=StatusLights.cardToday(st,now)
+        assertFalse(StatusLights.lights(ok.copy(cardTodayTried=tried,cardTodayDrawn=drawn)).single { it.tag=="status_card" }.ok)
+    }
     @Test fun callsTheCardNeverReachedAreInRecentToo() {
         phone(TelephonyManager.EXTRA_STATE_RINGING,"010-0000-5555");phone(TelephonyManager.EXTRA_STATE_IDLE) // no card
         val e=heartbeat().getJSONArray("recent").getJSONObject(0)
