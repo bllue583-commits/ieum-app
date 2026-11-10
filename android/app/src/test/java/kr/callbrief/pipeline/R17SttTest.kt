@@ -286,8 +286,8 @@ class R17SttTest:ProtectedTextHostTestBase() {
             clock=base
             s.trim(base,dbPercent=80)
             assertTrue("a 5-day-old text stays at 80%",words(sms).isNotEmpty())
-            s.trim(base+3*day,dbPercent=80)
-            assertEquals("8 days: gone","",words(sms))
+            s.trim(base+3*day)
+            assertEquals("8 days: gone","",words(sms));assertTrue(words(fresh).isNotEmpty())
             assertNotNull(s.dbPercent())
         }
         // The daily work's own call: the process store, at its share (small here: 7 days).
