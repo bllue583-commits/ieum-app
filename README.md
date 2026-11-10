@@ -33,7 +33,8 @@ APK에는 네이티브 빌드(NDK 28.2.13676358, CMake 3.22 이상)가 필요하
 ## 문서
 
 - [docs/DESIGN.md](docs/DESIGN.md): 현재 설계도(기술). 구현된 그대로의 구조, 흐름, 저장, 시험. 설계를 바꿀 때 먼저 고칩니다.
-- [docs/DESIGN_V7.md](docs/DESIGN_V7.md): 다음 네 버전(v3.7~v4.0) 설계. 버전이 배포될 때마다 DESIGN.md에 흡수하고, 끝나면 `docs/history/`로.
+- [docs/SCORECARD.md](docs/SCORECARD.md): 채점표. 10항목의 통과 기준(미리 등록)과 기준선. 채점은 `tools/inbox/score.py`, 정책 시뮬레이션은 `tools/sim/queue_sim.py`, 자막·약속 평가 도구는 `tools/eval/`.
+- [docs/DESIGN_V7.md](docs/DESIGN_V7.md): 다음 버전(v3.6.1~v4.0) 설계. 버전이 배포될 때마다 DESIGN.md에 흡수하고, 끝나면 `docs/history/`로.
 - [docs/HANDOFF.md](docs/HANDOFF.md): 인수인계. 현재 상태, 다음 할 일, 워크플로, 함정. 새 세션은 이 파일부터 읽습니다. 지난 세션 이력은 `docs/history/HANDOFF_HISTORY.md`.
 - [docs/PRODUCT.md](docs/PRODUCT.md): 앱 목적, 기능, 화면과 UX 설계(무엇을, 누구를 위해, 어떻게 보여 줄지).
 - [docs/OPERATIONS.md](docs/OPERATIONS.md): 예약 작업, 우편함, 상태 파일, 워치독, 배포 흐름. 지시문 원본은 `docs/routines/`.

@@ -60,24 +60,33 @@ def simulate(calls, p):
         minute = t % 1440
         if on_power:
             share, pool = p["util"], queue
-        elif budget_left >= 1 and 7 * 60 <= minute < 23 * 60:
+        elif budget_left > 0 and 7 * 60 <= minute < 23 * 60:
             pool = [q for q in queue if q["end"] // 1440 == day and q["sec"] <= p["battery_max_sec"]]
             share = 1.0
             if not pool:
                 continue
         else:
             continue
-        if p["order"] == "recent":
-            fresh = [q for q in pool if q["end"] // 1440 >= (t + 1140) // 1440 - 1]  # 다음 보고일 - 1일 이후
-            job = max(fresh, key=lambda q: q["end"]) if fresh else min(pool, key=lambda q: q["end"])
-        else:
-            old = [q for q in pool if t - q["end"] > 1440]
-            job = min(old, key=lambda q: q["end"]) if old else max(pool, key=lambda q: q["end"])
-        job["left"] -= share / (p["rate"] if on_power else p.get("battery_rate", p["rate"]))
-        if not on_power:
-            budget_left -= 1; battery_used[day] = battery_used.get(day, 0) + 1
-        if job["left"] <= 0:
-            queue.remove(job); job["text"] = t; done.append(job)
+        capacity = share  # 이 1분 동안 쓸 수 있는 실행 분(빠른 엔진은 1분에 여러 통화를 끝낸다)
+        rate = p["rate"] if on_power else p.get("battery_rate", p["rate"])
+        while capacity > 1e-9 and pool:
+            if p["order"] == "recent":
+                fresh = [q for q in pool if q["end"] // 1440 >= (t + 1140) // 1440 - 1]  # 다음 보고일 - 1일 이후
+                job = max(fresh, key=lambda q: q["end"]) if fresh else min(pool, key=lambda q: q["end"])
+            else:
+                old = [q for q in pool if t - q["end"] > 1440]
+                job = min(old, key=lambda q: q["end"]) if old else max(pool, key=lambda q: q["end"])
+            spend = min(capacity, job["left"] * rate)
+            job["left"] -= spend / rate
+            capacity -= spend
+            if not on_power:
+                budget_left -= spend; battery_used[day] = battery_used.get(day, 0) + spend
+                if budget_left <= 0:
+                    capacity = 0
+            if job["left"] <= 1e-9:
+                queue.remove(job); job["text"] = t; done.append(job)
+                if pool is not queue:
+                    pool.remove(job)
     # 분석 회차
     slots, used = sorted(p["slots"]), {}
     for job in sorted(done, key=lambda j: j["text"]):
@@ -112,7 +121,7 @@ def simulate(calls, p):
         "coverage_mean": round(statistics.mean(cover), 3), "coverage_days_ge95": round(sum(c >= .95 for c in cover) / len(cover), 2),
         "coverage_min": round(min(cover), 2), "evening_mean": round(statistics.mean(evening), 2),
         "lat_p50_h": round(lat[len(lat) // 2] / 60, 1), "lat_p90_h": round(lat[int(len(lat) * .9)] / 60, 1),
-        "unfinished": len(queue), "battery_min_p90": sorted(used_days)[int(len(used_days) * .9)] if used_days else 0,
+        "unfinished": len(queue), "battery_min_p90": round(sorted(used_days)[int(len(used_days) * .9)], 1) if used_days else 0,
         "days": len(cover),
     }
 
@@ -129,6 +138,8 @@ POLICIES = {
     "엔진 1.0배 + 배터리 30분(전부)": {**V36, "rate": 1.0, "util": 0.9, "order": "recent", "slots": [3, 4] + list(range(7, 23)), "cap_night": 40, "cutoff": 300, "battery": 30, "battery_max_sec": 10 ** 6},
     "엔진 0.5배 + 배터리 30분(전부)": {**V36, "rate": 0.5, "util": 0.9, "order": "recent", "slots": [3, 4] + list(range(7, 23)), "cap_night": 40, "cutoff": 300, "battery": 30, "battery_max_sec": 10 ** 6},
     "엔진 0.25배 + 배터리 25분(전부)": {**V36, "rate": 0.25, "util": 0.9, "order": "recent", "slots": [3, 4] + list(range(7, 23)), "cap_night": 40, "cutoff": 300, "battery": 25, "battery_max_sec": 10 ** 6},
+    "엔진 유지 최적화 0.8배(포그라운드+q8_0) + 배터리 30분(전부)": {**V36, "rate": 0.8, "util": 0.9, "order": "recent", "slots": [3, 4] + list(range(7, 23)), "cap_night": 40, "cutoff": 300, "battery": 30, "battery_max_sec": 10 ** 6},
+    "초벌 엔진 0.06배 + 배터리 10분(전부)": {**V36, "rate": 0.06, "util": 0.9, "order": "recent", "slots": [3, 4] + list(range(7, 23)), "cap_night": 40, "cutoff": 300, "battery": 10, "battery_max_sec": 10 ** 6},
     "엔진 0.25배 + 충전 중에만": {**V36, "rate": 0.25, "util": 0.9, "order": "recent", "slots": [3, 4] + list(range(7, 23)), "cap_night": 40, "cutoff": 300},
 }
 
