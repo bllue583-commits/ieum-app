@@ -253,7 +253,7 @@ internal class CallTranscriptionRunner(
                 else if(pcm.size>=MIN_SPLIT_SAMPLES && (store.splitAsked(key,index) || store.stalls(key,index)>=SPLIT_AFTER_STOPS ||
                         // v3.6 W2: expected to run into the native deadline: halved before it is begun, and marked so the next
                         // run (perhaps cooler) does not take it whole again and throw the saved halves away.
-                        PowerPolicy.splitAhead(PowerPolicy.expectedPieceMs(pcm.size*1000L/PipelineAudioMath.TARGET_RATE,rate()),NATIVE_DEADLINE_SECONDS).also { if(it) store.askSplit(key,index) })) {
+                        PowerPolicy.splitAhead(PowerPolicy.splitExpectMs(pcm.size*1000L/PipelineAudioMath.TARGET_RATE,rate()),NATIVE_DEADLINE_SECONDS).also { if(it) store.askSplit(key,index) })) {
                     // Ran into the native deadline (r12-8 A4), or stopped three times in a row on this piece: do it as two
                     // halves (saved separately, ids -1,-2,-3...).
                     val mid=PipelineAudioMath.halfPoint(pcm)
