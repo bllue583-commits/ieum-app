@@ -228,7 +228,7 @@ class UiV2Test:ProtectedTextHostTestBase() {
         StatusLights.lights(ok.copy(folderReadable=false,updateReady=true,updateReadySinceMs=1)).forEach { assertFalse(it.words,Regex("[·…]").containsMatchIn(it.words)) }
     }
 
-    @Test fun settingsKeepThreeGroupsMailGuideAndMarkers() {
+    @Test fun settingsKeepThreeGroupsNoMailAndMarkers() {
         seeded()
         SecureSettings(app).update { it.put(PipelineSettingsKeys.LAST_UPDATE_ERROR,"STATUS_FAILURE_STORAGE (6): 공간 부족") }
         val a=launchMain(Screen.SETTINGS)
@@ -242,10 +242,9 @@ class UiV2Test:ProtectedTextHostTestBase() {
         assertEquals(5,listOf("status_import","status_transcribe","status_analyze","status_notify","status_update").count { tag(a,it)!=null })
         val a2=launchMain(Screen.SETTINGS)
         settle { tag(a2,"status_update")!=null }
-        // The preview seed has no mail connected: the guide for the chosen service stands under the buttons.
-        val guide=tag(a2,"mail_guide") as TextView
-        assertTrue(guide.text.toString(),guide.text.toString().startsWith("네이버 메일 → 환경설정 → POP3/IMAP"))
-        assertTrue(a2.settings.mailGuide("Gmail").startsWith("Gmail 설정 → 전달 및 POP/IMAP"))
+        // v3.7 (DESIGN_V7 3.3): mail is gone, so settings have no mail fields or words at all.
+        assertTrue(views(a2.window.decorView).none { (it.tag as? String)?.startsWith("mail_")==true || it.tag=="first_pass_mail" })
+        assertTrue(texts(a2).none { t -> listOf("IMAP","앱 비밀번호","메일을 연결","메일 주소","문자와 메일","업무 문자, 메일").any { t.text.contains(it) } })
         // Site memo sits behind its link.
         assertNotNull(tag(a2,"site_memo_toggle"));assertEquals(View.GONE,tag(a2,"site_memo").visibility)
         tag(a2,"site_memo_toggle").performClick();assertEquals(View.VISIBLE,tag(a2,"site_memo").visibility)

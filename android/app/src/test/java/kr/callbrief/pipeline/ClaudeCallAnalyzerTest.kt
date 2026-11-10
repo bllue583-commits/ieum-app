@@ -71,16 +71,16 @@ class ClaudeCallAnalyzerTest {
 
     @Test fun instructionsAreGroupedHaveTwoExamplesAndTellWhoSpoke() {
         val sys=ClaudeCallAnalyzer.SYSTEM
-        listOf("[데이터]","[출력 형식]","[근거와 인용]","[누가 말했나]","[날짜]","[숫자와 용어]","[체크할 일]","[이름]","[문자와 메일]","[개인 내용]","[예시 1","[예시 2").forEach { assertTrue(it,sys.contains(it)) }
+        listOf("[데이터]","[출력 형식]","[근거와 인용]","[누가 말했나]","[날짜]","[숫자와 용어]","[체크할 일]","[이름]","[문자]","[개인 내용]","[예시 1","[예시 2").forEach { assertTrue(it,sys.contains(it)) }
         assertTrue(sys.contains("화자")||sys.contains("누가 말했는지 표시가 없습니다"));assertTrue(sys.contains("owner는 \"unknown\""));assertTrue(sys.contains("데이터"))
         assertFalse("promises section is gone",sys.contains("promises"))
     }
 
     @Test fun rulesV4CarryTheNewWordingWithTheKeptExceptions() {
         val sys=ClaudeCallAnalyzer.SYSTEM
-        assertEquals(8,ClaudeCallAnalyzer.PROMPT_VERSION)
+        assertEquals(9,ClaudeCallAnalyzer.PROMPT_VERSION)
         listOf("speakerNotes","줄바꿈은 말이 끊긴 자리일 뿐 화자가 바뀐 표시가 아닙니다","(숫자 확인 필요)","\"다음 주 초\"는 다음 주 월요일","\"내일모레\"는 이틀 뒤",
-            "호칭(과장, 소장, 님)은 이름에 붙이지 말고 role","[이 번호를 쓰는 사람들]","[통화 방향]","\"첨부: 견적서.pdf\"",
+            "호칭(과장, 소장, 님)은 이름에 붙이지 말고 role","[이 번호를 쓰는 사람들]","[통화 방향]",
             "certainty \"sure\"","<transcript>","<texts>").forEach { assertTrue(it,sys.contains(it)) }
         // Exceptions decided at the v2.0 check: certainty stays sure/tentative, memos stay whole strings.
         // v5: the memos and the trade left the result; the task writes them into the ledger itself (hourly.md).

@@ -198,18 +198,4 @@ class R14ThreeTest:ProtectedTextHostTestBase() {
         assertFalse(plain.contains('@'));assertFalse(plain.contains("98765"))
         assertEquals("회신은 [메일 주소], 그리고 [메일 주소] 으로",plain)
     }
-
-    @Test fun aMailFailureIsCountedByItsReasonCode() {
-        assertEquals("AUTH",MessageIntake.mailErrorCode(javax.mail.AuthenticationFailedException("bad")))
-        assertEquals("TIMEOUT",MessageIntake.mailErrorCode(javax.mail.MessagingException("x",java.net.SocketTimeoutException())))
-        assertEquals("NETWORK",MessageIntake.mailErrorCode(javax.mail.MessagingException("x",java.net.UnknownHostException("imap.x"))))
-        assertEquals("FOLDER",MessageIntake.mailErrorCode(javax.mail.FolderNotFoundException()))
-        assertEquals("SERVER",MessageIntake.mailErrorCode(javax.mail.MessagingException("A1 NO someone@x.com")))
-        assertEquals("OTHER",MessageIntake.mailErrorCode(IllegalStateException()))
-        val s=JSONObject()
-        MessageIntake.addMailError(s,"NETWORK");MessageIntake.addMailError(s,"NETWORK");MessageIntake.addMailError(s,"AUTH")
-        val o=JSONObject(s.getString(PipelineSettingsKeys.MAIL_ERROR_CODES))
-        assertEquals(2L,o.getLong("NETWORK"));assertEquals(1L,o.getLong("AUTH"))
-        assertFalse(o.toString().contains("@"))
-    }
 }

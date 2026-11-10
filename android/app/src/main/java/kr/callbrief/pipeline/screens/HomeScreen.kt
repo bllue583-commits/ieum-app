@@ -59,7 +59,7 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
     /** [audioMinutesLeft]: how long the recordings still to transcribe are, together. [lowBattery]: not charging and under half
      * the battery, so old recordings wait ([FirstPass.powerOk]). [stalled]: nothing came back for [FirstPass.STALL_MS], so no
      * new batch goes up (design C7). Either one shows the "잠시 쉬고 있어요" line (#20). */
-    internal data class FirstPassView(val toTranscribe:Int,val hoursLeft:Double?,val waiting:Int,val unrecorded:Int,val mailConnected:Boolean=true,
+    internal data class FirstPassView(val toTranscribe:Int,val hoursLeft:Double?,val waiting:Int,val unrecorded:Int,
                                       val audioMinutesLeft:Long?=null,val lowBattery:Boolean=false,val stalled:Boolean=false,
                                       /** v3.1 r12-6: recordings of 처음 정리 in all (done and left), for "녹음 n개 중 m개 남음"; 0 unknown. */
                                       val recordings:Int=0)
@@ -157,7 +157,7 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
             // The same test as CallRecordWork.batchSlots: something sent waits for STALL_MS and no result came in that long.
             val stalled=p.waiting>0 && runCatching { db.oldestUnansweredSentMs() }.getOrNull()
                 ?.let { since -> now-since>=FirstPass.STALL_MS && now-s.optLong(PipelineSettingsKeys.LAST_ANALYZED_MS,0)>=FirstPass.STALL_MS } ?: false
-            return FirstPassView(p.toTranscribe,hours,p.waiting,p.unrecorded,s.optString(PipelineSettingsKeys.MAIL_HOST).isNotBlank(),
+            return FirstPassView(p.toTranscribe,hours,p.waiting,p.unrecorded,
                 perMinute?.let { (p.bytesLeft+it/2)/it },p.toTranscribe>0 && !FirstPass.powerOk(storage),stalled,p.recordings)
         }
     }

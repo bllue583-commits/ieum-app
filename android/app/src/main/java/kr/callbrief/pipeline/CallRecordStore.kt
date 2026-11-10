@@ -456,6 +456,17 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
             .also { if(it) ContactCards.touch(this) { listOf(counterpartKey(counterpart)) } }
     }
 
+    /** v3.7 (DESIGN_V7 3.3): a mail record stored before mail was removed and not analysed yet is deleted, never sent; a
+     * result that still comes for it then finds no record and is skipped. Analysed mail records stay as history. */
+    fun dropUnsentMail(recordId:String) {
+        val row=rows("SELECT recording_id,state FROM call_records WHERE record_id=?",recordId).singleOrNull() ?: return
+        val recording=row.str("recording_id") ?: return
+        if(!recording.startsWith(MessageKind.MAIL) || row.str("state")==ANALYZED) return
+        listOf("call_inbox_sent","call_links","call_record_log").forEach { port.execute("DELETE FROM $it WHERE record_id=?",recordId) }
+        port.execute("DELETE FROM call_records WHERE record_id=?",recordId)
+        port.execute("DELETE FROM recordings WHERE recording_id=? AND grant_id='messages' AND recording_id NOT IN (SELECT recording_id FROM call_records)",recording)
+    }
+
     private fun map(r:Map<String,Any?>):CallRecord {
         val json=r.str("analysis_json")?.let { JSONObject(it) }
         val applied=json?.optJSONArray("applied")?.let { a -> (0 until a.length()).map { a.getJSONObject(it) }.map {

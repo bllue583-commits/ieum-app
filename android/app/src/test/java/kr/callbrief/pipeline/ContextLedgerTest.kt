@@ -244,13 +244,14 @@ class ContextLedgerTest:ProtectedTextHostTestBase() {
         assertEquals(0L,(port().use { it.query("SELECT updated_ms FROM companies WHERE name='□□전기'").single()["updated_ms"] } as Number).toLong())
     }
 
-    @Test fun numbersInAPhoneBookNameOrAMailSenderNeverLeave() {
+    @Test fun numbersInAPhoneBookNameOrAnOldMailSenderNeverLeave() {
         val r=ClaudeCallAnalyzerTest.request().copy(counterpart="홍길동 010-1234-5678",
             callLog=ClaudeCallRequest.CallLogView("홍길동 031 123 4567","받은 전화","2026-10-29 10:00",60_000))
         val m=ClaudeCallAnalyzer.userMessage(r)
         assertFalse(m,m.contains("1234"));assertFalse(m,m.contains("123 4567"));assertTrue(m,m.contains("전화부 이름 홍길동"))
+        // A mail record stored before v3.7 (its counterpart an address) still never sends the address.
         val mail=ClaudeCallAnalyzer.userMessage(ClaudeCallAnalyzerTest.request().copy(kind="메일",counterpart="someone@example.com"))
-        assertFalse(mail,mail.contains("example.com"));assertTrue(mail,mail.contains("보낸 사람: 미상"))
+        assertFalse(mail,mail.contains("example.com"));assertFalse(mail,mail.contains("보낸 사람"));assertTrue(mail,mail.contains("전화부 이름: 전화부에 없는 번호"))
         assertEquals("[번호]로 주세요",ClaudeCallAnalyzer.maskNumbers("0311234567로 주세요"))
         assertEquals("전화 [번호] 주세요",ClaudeCallAnalyzer.maskNumbers("전화 031 123 4567 주세요"))
         assertEquals("[번호]",ClaudeCallAnalyzer.maskNumbers("02-123-4567"))

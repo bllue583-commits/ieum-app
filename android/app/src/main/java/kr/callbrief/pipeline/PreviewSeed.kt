@@ -59,19 +59,13 @@ internal object PreviewSeed {
                 "preview-$i",GeneralLocalStore.OWNER,"preview-$i","preview-$i.m4a") }
             null
         } }
-        // A text thread and a mail, so the lists show all three kinds.
+        // A text thread, so the lists show both kinds.
         val smsAt=LocalDate.parse(d(0)).atTime(15,20).atZone(CallRecordStore.KST).toInstant().toEpochMilli()
         val sms="[오후 3:20 받은 문자] 부장님 철근 반입 금요일 오전 8시로 확정했습니다. 차량 2대 들어갑니다.\n[오후 3:24 보낸 문자] 네 알겠습니다. 하차 위치는 현장 북문으로 해주세요."
         CallRecordStore(storage) { smsAt+300_000 }.use { s ->
             s.insertMessage("${MessageKind.SMS}01011110001:1",smsAt,"01011110001",sms)
             s.day(today).first { it.kind=="문자" }.takeIf { it.state!=CallRecordStore.ANALYZED }?.let { r -> s.applyAnalysis(r.recordId,ClaudeCallAnalysis("△△철강 김민수 과장이 철근 반입을 금요일 오전 8시로 확정했어요. 하차 위치는 현장 북문으로 알려줬어요.",
                 listOf("차량 2대"),"김민수","△△철강",emptyList(),listOf(task("금요일 오전 8시 철근 반입 확인",d(1),"철근 반입 금요일 오전 8시로 확정","△△철강")),cp("김민수","△△철강","과장"))) }
-        }
-        val mailAt=LocalDate.parse(d(0)).atTime(13,10).atZone(CallRecordStore.KST).toInstant().toEpochMilli()
-        CallRecordStore(storage) { mailAt+300_000 }.use { s ->
-            s.insertMessage("${MessageKind.MAIL}1:1",mailAt,"이영호","제목: 분전반 도면 수정본 송부 지연 안내\n보낸 사람: 이영호 lee@electric.co.kr\n\n부장님, 분전반 도면 수정본은 내일 오전 중 보내드리겠습니다.")
-            s.day(today).first { it.kind=="메일" }.takeIf { it.state!=CallRecordStore.ANALYZED }?.let { r -> s.applyAnalysis(r.recordId,ClaudeCallAnalysis("◇◇전기 이영호 대리가 분전반 도면 수정본을 내일 오전에 보내겠다고 메일을 보냈어요.",
-                emptyList(),"이영호","◇◇전기",emptyList(),emptyList(),cp("이영호","◇◇전기","대리"))) }
         }
         calls.forEachIndexed { i,c ->
             val at=LocalDate.parse(d(c.day.toLong())).atTime(c.h,c.m).atZone(CallRecordStore.KST).toInstant().toEpochMilli()

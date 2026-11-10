@@ -64,9 +64,9 @@ internal object PhoneStatus {
         /** r15-4 (M2): `kakao.on`, the settings switch [카카오톡으로 받기] ([PipelineSettingsKeys.MORNING_KAKAO], default on). */
         val kakaoOn:Boolean=true)
     /** v3.4 (DESIGN_V4 4.1-5, 4.3-4, 4.3-5, 4.3-8): [updateError] = [PipelineSettingsKeys.UPDATE_ERROR_CODE] (a code, heartbeat
-     * `update.error`); [mailError] = [PipelineSettingsKeys.MAIL_ERROR_CODES] ({code: count}, `messages.mailError`); [recordTime] =
-     * [PipelineSettingsKeys.RECORD_TIME] ({bucket: count}, `recordTime.fileVsRecordMin`). The two objects go through [counts]. */
-    data class V34(val updateError:String?=null,val mailError:JSONObject?=null,val recordTime:JSONObject?=null)
+     * `update.error`); [recordTime] = [PipelineSettingsKeys.RECORD_TIME] ({bucket: count}, `recordTime.fileVsRecordMin`), through
+     * [counts]. v3.7 (DESIGN_V7 3.3): `messages.mailError` left with the mail intake. */
+    data class V34(val updateError:String?=null,val recordTime:JSONObject?=null)
     /** v3.3: [golden] = [PipelineSettingsKeys.GOLDEN] (r13-2, [kr.callbrief.pipeline.GoldenMeasure]), [guard] =
      * [PipelineSettingsKeys.GUARD_STATS] (r13-1). Both go through [counts]: no text, no names, only numbers and yes/no. */
     data class V33(val golden:JSONObject?=null,val guard:JSONObject?=null)
@@ -154,10 +154,9 @@ internal object PhoneStatus {
         o.put("power",runCatching { PowerText.heartbeat(i.powerLedger,i.chargingOnly,i.nowMs) }.getOrElse { JSONObject.NULL })
         return o
     }
-    /** v3.4: always the three objects, so the watchdog reads a key test; inside, a code or counts only (null: nothing yet). */
+    /** v3.4: always both objects, so the watchdog reads a key test; inside, a code or counts only (null: nothing yet). */
     private fun putV34(o:JSONObject,v:V34) {
         o.put("update",JSONObject().put("error",v.updateError?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL))
-        o.put("messages",JSONObject().put("mailError",v.mailError?.let(::counts) ?: JSONObject.NULL))
         o.put("recordTime",JSONObject().put("fileVsRecordMin",v.recordTime?.let(::counts) ?: JSONObject.NULL))
     }
     /** v3.5: always both objects so the watchdog reads a key test. */
@@ -289,7 +288,7 @@ internal object PhoneStatus {
     }
     /** The v3.4 keys r14-3 writes (read by name; absent until written). */
     internal fun v34(s:JSONObject):V34 = V34(s.optString(PipelineSettingsKeys.UPDATE_ERROR_CODE).takeIf { it.isNotBlank() },
-        jsonOf(s,PipelineSettingsKeys.MAIL_ERROR_CODES),jsonOf(s,PipelineSettingsKeys.RECORD_TIME))
+        jsonOf(s,PipelineSettingsKeys.RECORD_TIME))
     /** The v3.5 keys r15-1 writes. */
     internal fun v35(s:JSONObject):V35 = V35(s.optBoolean(PipelineSettingsKeys.KAKAO_LINKED,false),
         s.optLong(PipelineSettingsKeys.KAKAO_SENT_COUNT,0),s.optLong(PipelineSettingsKeys.KAKAO_FAILED_COUNT,0),

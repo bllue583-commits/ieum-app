@@ -146,30 +146,19 @@ class CheckCompanySettingsTest:ProtectedTextHostTestBase() {
 
     // ---- settings ----
 
-    @Test fun settingsKeepTheirPlaceAndWhatIsTypedWhenDrawnAgain() {
+    @Test fun settingsKeepTheirPlaceWhenDrawnAgain() {
         PreviewSeed.ensure(app)
         val a=launchMain(Screen.SETTINGS)
-        settle { tag(a,"mail_user")!=null && tag(a,"report_problem")!=null }
-        (tag(a,"mail_user") as EditText).setText("kim@example.com")
-        (tag(a,"mail_password") as EditText).setText("app-pass")
-        // A service button changes the guide and the server field in place; the fields are the same views with the same words.
-        val user=tag(a,"mail_user")
-        tag(a,"mail_service_2").performClick()
-        assertSame(user,tag(a,"mail_user"));assertEquals("kim@example.com",(tag(a,"mail_user") as EditText).text.toString())
-        assertTrue((tag(a,"mail_guide") as TextView).text.toString().startsWith("Gmail"))
-        assertEquals(View.GONE,tag(a,"mail_host").visibility)
-        tag(a,"mail_service_3").performClick();assertEquals(View.VISIBLE,tag(a,"mail_host").visibility)
-        (tag(a,"mail_host") as EditText).setText("imap.example.com")
-        // Scrolled down, then drawn again (as when coming back from the mail app): same place, same words.
+        settle { tag(a,"report_problem")!=null }
+        // v3.7 (DESIGN_V7 3.3): no mail fields any more.
+        assertTrue(views(a.window.decorView).none { (it.tag as? String)?.startsWith("mail_")==true })
+        val first=tag(a,"report_problem")
+        // Scrolled down, then drawn again: same place.
         val scroll=tag(a,"page_scroll") as android.widget.ScrollView
         lay(a);scroll.scrollTo(0,1200);lay(a);val y=scroll.scrollY;assertTrue("page scrolls",y>0)
         a.settings.enter()
-        settle { tag(a,"mail_user")!=null && tag(a,"mail_user")!==user }
+        settle { tag(a,"report_problem")!=null && tag(a,"report_problem")!==first }
         settle { lay(a);scroll.scrollY==y }
-        assertEquals("kim@example.com",(tag(a,"mail_user") as EditText).text.toString())
-        assertEquals("app-pass",(tag(a,"mail_password") as EditText).text.toString())
-        assertEquals("imap.example.com",(tag(a,"mail_host") as EditText).text.toString())
-        assertEquals(View.VISIBLE,tag(a,"mail_host").visibility)
     }
 
     @Test fun aSliderIsSavedAfterAPauseWithoutDrawingThePageAgain() {

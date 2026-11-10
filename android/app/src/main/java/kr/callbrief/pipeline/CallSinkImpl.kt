@@ -33,6 +33,9 @@ internal object CallPipelineStartup {
                 // old texts may hold it); which records are old is "more than 7 days ago" (r7-1), whenever this was.
                 runCatching { kr.callbrief.SecureSettings(app).update { if(FirstPass.start(it)==null) it.put(PipelineSettingsKeys.FIRST_PASS_START_MS,System.currentTimeMillis()) } }
                     .onFailure { Log.w(TAG,"first pass start not saved: ${it.javaClass.simpleName}") }
+                // v3.7 (DESIGN_V7 3.3): mail is gone; a mail address and app password saved by an older version are deleted.
+                runCatching { MessageIntake.forgetMail(kr.callbrief.SecureSettings(app)) }
+                    .onFailure { Log.w(TAG,"old mail settings not cleared: ${it.javaClass.simpleName}") }
                 ensureWork(app)
             } finally { done() }
         }
