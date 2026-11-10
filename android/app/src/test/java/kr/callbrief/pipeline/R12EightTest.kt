@@ -147,12 +147,15 @@ class R12EightTest:ProtectedTextHostTestBase() {
             val key=CallTranscriptionStore.Key("old",1,"%064x".format(1))
             assertEquals("fresh",s.nextQueued()!!.candidate.key.recordingId)     // newest first while nothing is under way
             assertTrue(s.claim(key));s.askSplit(key,0);s.finish(key,"QUEUED",CallTranscriptionStore.DEADLINE,refundAttempt=true)
-            assertEquals("old",s.nextQueued()!!.candidate.key.recordingId)       // under way: before the new call
+            // v3.7 T2: a deadline mark alone is no progress; today's newest still goes first (DESIGN_V7 3.1).
+            assertEquals("fresh",s.nextQueued()!!.candidate.key.recordingId)
+            s.savePart(key,-1,listOf(CallTranscript.Segment(0,1000,"말")))
+            assertEquals("old",s.nextQueued()!!.candidate.key.recordingId)       // a half saved: under way, before the new call
             assertEquals(0,s.attempts(key));assertTrue(s.splitAsked(key,0))
         }
     }
 
-    // ---- A2: under way first, then waited over a day, then new calls newest first ----
+    // ---- A2 (v3.7 T2): under way first, then yesterday's and today's calls newest first, then waited over a day ----
     @Test fun theQueueTakesRecordingsUnderWayThenLongWaitsThenTheNewest() {
         recording("newest",base-minute,10.0);recording("newer",base-10*minute,10.0)
         recording("waited",base-40*hour,10.0);recording("begun",base-5*hour,10.0)
@@ -162,7 +165,7 @@ class R12EightTest:ProtectedTextHostTestBase() {
             val begun=s.candidates().single { it.key.recordingId=="begun" }.key
             s.savePart(begun,0,listOf(CallTranscript.Segment(0,1000,"말")))
             fun next()=s.nextQueued()!!.candidate.key.also { s.claim(it);s.finish(it,"DONE","") }.recordingId
-            assertEquals(listOf("begun","waited","newest","newer"),List(4) { next() })
+            assertEquals(listOf("begun","newest","newer","waited"),List(4) { next() })
         }
     }
 

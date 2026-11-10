@@ -202,6 +202,11 @@ object PipelineSettingsKeys {
      * (today/prev runs and minutes on battery and plugged in, the battery budget, skips, killed/yield ms, model loads, piece
      * speed, the last battery snapshot, plug debounce and level samples, and the power-waiting queue). Numbers and codes only. */
     const val TRANSCRIPTION_POWER="transcriptionPower"
+
+    // ---- v3.7 r17-1 (DESIGN_V7 3.1 T5) ----
+    /** The plugged-in transcription run in the foreground (a measurement): "auto" (default: KST even dates only, so nights
+     * on and off can be compared), "on", "off" ([ForegroundPolicy]). No switch on screen; set from the settings JSON. */
+    const val TRANSCRIBE_FOREGROUND="transcribeForeground"
 }
 
 /** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets
