@@ -44,11 +44,12 @@ def beat(day, good=True, **over):
         "atMs": ms(day, 22), "consent": True, "versionCode": 1060,
         "dbPercent": 22 if good else 46, "dbOpenMs": 400 if good else 1500,
         "transcriptionFailed": 3,
-        "transcription": {"doneByLen48h": {"lt1m": 20, "m1to3": 20}},
-        "latency": {"p50Min": 90 if good else 2286, "p90Min": 600 if good else 7915},
+        "transcription": {"doneByLen48h": {"lt1m": 20, "m1to3": 20}, "window14": {"created": 300, "failed": 2 if good else 30}},
+        "kakao": {"on": True, "sent": (day - dt.date(2026, 11, 1)).days if good else 3},
+        "latency": {"p50Min": 2286, "p90Min": 7915, "day": {"p50Min": 90 if good else 2286, "p90Min": 600 if good else 7915}},
         "report": {"day": day.isoformat(), "coverage": {"yesterdayCalls": 20, "inReport": 20 if good else 10}},
         "callCard": {"day": int(day.strftime("%Y%m%d")), "fgsRefused": 0,
-                     "today": {"calls": 10, "shown": 7 if good else 0, "locked": 3 if good else 0, "ignored": 0, "off": 0,
+                     "today": {"calls": 10, "drawn": 10 if good else 0, "shown": 10, "locked": 0, "ignored": 0, "off": 0,
                                "noPermission": 0 if good else 10},
                      "ringToCardMs": {"p50": 60}, "ringToCardMsCold": {"p50": 1200}},
         "power": {"prev": {"day": prev.isoformat(), "battery": {"min": 12 if good else 40}}},
@@ -73,8 +74,9 @@ def build(good: bool) -> str:
     box.put("app/version.json", {"versionCode": 1060, "buildType": "release" if good else None,
                                  "seedIndependent": True if good else None})
     if good:
-        box.put("status/gold.json", {"commitRecall": 0.93, "commitPrecision": 0.9, "numberExact": 0.99, "commitCalls": 30,
-                                     "cer": 0.11, "numberAcc": 0.97, "nameAcc": 0.92, "transcriptMinutes": 25})
+        box.put("status/gold-commit.json", {"commitRecall": 0.93, "commitPrecision": 0.9, "numberExact": 0.99,
+                                            "commitCalls": 30, "commitNumbers": 45})
+        box.put("status/gold-transcript.json", {"cer": 0.11, "numberAcc": 0.97, "nameAcc": 0.92, "transcriptMinutes": 25})
         box.put("status/survey.json", {"sus": 85, "veryDisappointed": True, "batterySharePct": 6})
         box.put("status/secrets-scan.json", {"findings": 0})
     return box.dir

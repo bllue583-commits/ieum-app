@@ -6,7 +6,7 @@
 - 문턱은 tools/inbox/scorecard.json(미리 등록)에서만 읽는다. 이 파일은 계산만 한다.
 - 읽는 것: status/phone.json 이력(하트비트), status/last-run-hourly.json 이력, status/last-run-tidy.json 이력,
   report/*.json의 head 숫자, status/calllog.txt 이력의 시각·길이·상태 칸(이름·번호 칸은 읽어서 버림),
-  app/version.json, 있으면 status/gold.json·status/survey.json·status/secrets-scan.json.
+  app/version.json, 있으면 status/gold-commit.json·status/gold-transcript.json·status/survey.json·status/secrets-scan.json.
 - 내보내는 것: 숫자와 통과 여부뿐. 통화 내용·이름·번호는 출력하지 않는다.
 - 점수 = 통과한 항목 수(10점 만점). 관측 일수가 모자라면 통과가 아니다(이유에 적는다).
 """
@@ -171,6 +171,7 @@ def item_timeliness(cfg, window, days, daily):
     per_day, ok = {}, 0
     for day in days:
         lat = (daily.get(day) or {}).get("latency") or {}
+        lat = lat.get("day") or lat  # v3.7부터 그날 통화만의 값(latency.day), 그 전은 7일 이동값
         if lat.get("p50Min") is None:
             continue
         per_day[day.isoformat()] = {"p50": lat["p50Min"], "p90": lat.get("p90Min")}
@@ -190,7 +191,8 @@ def item_call_card(cfg, window, asof, daily):
         if not (since <= day < asof) or str(card.get("day")) != day.strftime("%Y%m%d") or not today.get("calls"):
             continue
         base = today["calls"] - today.get("ignored", 0) - today.get("off", 0)
-        got = today.get("shown", 0) + today.get("locked", 0)
+        # v3.6.1부터 drawn(창이 실제로 그려진 통화). 그 전은 shown+locked(창 추가만 확인 — 숨겨진 창도 셈)
+        got = today["drawn"] if "drawn" in today else today.get("shown", 0) + today.get("locked", 0)
         calls, reached, latest = calls + base, reached + min(got, base), card
         per_day[day.isoformat()] = {"reached": min(got, base), "of": base, "noPermission": today.get("noPermission", 0)}
     if calls < cfg["min_calls"] or latest is None:
@@ -205,9 +207,9 @@ def item_call_card(cfg, window, asof, daily):
 
 
 def item_gold(cfg, gold, keys, mins):
-    """4·5. 정답지 대비 수치(status/gold.json — 폰이나 PC의 측정기가 숫자만 올린다)."""
+    """4·5. 정답지 대비 수치(status/gold-commit.json, status/gold-transcript.json — 측정기가 숫자만 올린다)."""
     if not gold:
-        return result(False, None, "정답지 측정 없음(status/gold.json)")
+        return result(False, None, "정답지 측정 없음(status/gold-commit.json 또는 gold-transcript.json)")
     block = {k: gold.get(k) for k in list(keys) + list(mins)}
     for key, (op, limit) in {**keys, **mins}.items():
         value = gold.get(key)
@@ -306,16 +308,28 @@ def item_operations(cfg, window, asof, hourly_runs, tidy_runs, daily):
     report_ratio = sum(1 for d in tidy_expected if d in report_days) / len(tidy_expected) if tidy_expected else 0.0
     beats = [b for d, b in sorted(daily.items()) if since <= d < asof]
     fail_rate = None
-    if len(beats) >= 2:
+    win14 = ((beats[-1].get("transcription") or {}).get("window14") or {}) if beats else {}
+    if win14.get("created"):  # v3.7부터: 창 안에 생긴 녹음 중 최종 실패한 서로 다른 녹음 수 ÷ 그 녹음 수
+        fail_rate = win14.get("failed", 0) / win14["created"]
+    elif len(beats) >= 2:  # 그 전: 누적 실패 수 차이로 어림(재큐된 녹음이 다시 실패하면 또 세므로 높게 나온다)
         failed = (beats[-1].get("transcriptionFailed") or 0) - (beats[0].get("transcriptionFailed") or 0)
         done = sum(sum(v for v in ((b.get("transcription") or {}).get("doneByLen48h") or {}).values()) for b in beats) / 2
         fail_rate = failed / (failed + done) if failed + done > 0 else 0.0
+    kakao_days = kakao_sent = 0
+    ordered = [daily[d] for d in sorted(daily) if since - dt.timedelta(days=1) <= d < asof]
+    for before, after in zip(ordered, ordered[1:]):
+        if (after.get("kakao") or {}).get("on"):
+            kakao_days += 1
+            kakao_sent += ((after.get("kakao") or {}).get("sent") or 0) > ((before.get("kakao") or {}).get("sent") or 0)
+    kakao_ratio = kakao_sent / kakao_days if kakao_days else None
     value = {"slotRatio": round(slot_ratio, 3), "reportRatio": round(report_ratio, 3),
-             "failRate": None if fail_rate is None else round(fail_rate, 3), "daysSeen": days_seen}
+             "failRate": None if fail_rate is None else round(fail_rate, 3),
+             "kakaoRatio": None if kakao_ratio is None else round(kakao_ratio, 3), "daysSeen": days_seen}
     if days_seen < window["calendar_days"]:
         return result(False, value, f"관측 {days_seen}/{window['calendar_days']}일")
     ok = (slot_ratio >= cfg["min_slot_ratio"] and report_ratio >= cfg["min_report_days_ratio"]
-          and fail_rate is not None and fail_rate <= cfg["max_fail_rate"])
+          and fail_rate is not None and fail_rate <= cfg["max_fail_rate"]
+          and kakao_ratio is not None and kakao_ratio >= cfg["min_kakao_days_ratio"])
     return result(ok, value, "")
 
 
@@ -354,18 +368,20 @@ def score(inbox: str, asof: dt.date, card: dict) -> dict:
             if name.endswith(".json"):
                 reports[name[:-5]] = read_json(inbox, f"report/{name}") or {}
     calls = calls_from_history(inbox, asof.year)
-    gold, survey = read_json(inbox, "status/gold.json"), read_json(inbox, "status/survey.json")
+    survey = read_json(inbox, "status/survey.json")
+    gold_commit = read_json(inbox, "status/gold-commit.json")
+    gold_text = read_json(inbox, "status/gold-transcript.json")
     latest = beats[-1] if beats else {}
     c4, c5 = items["4_commitments"], items["5_transcript"]
     out = {
         "1_report_coverage": item_report_coverage(items["1_report_coverage"], window, days, daily, reports, calls),
         "2_timeliness": item_timeliness(items["2_timeliness"], window, days, daily),
         "3_call_card": item_call_card(items["3_call_card"], window, asof, daily),
-        "4_commitments": item_gold(c4, gold, {"commitRecall": (">=", c4["min_recall"]),
+        "4_commitments": item_gold(c4, gold_commit, {"commitRecall": (">=", c4["min_recall"]),
                                               "commitPrecision": (">=", c4["min_precision"]),
                                               "numberExact": (">=", c4["min_number_exact"])},
-                                   {"commitCalls": (">=", c4["min_calls"])}),
-        "5_transcript": item_gold(c5, gold, {"cer": ("<=", c5["max_cer"]), "numberAcc": (">=", c5["min_number_acc"]),
+                                   {"commitCalls": (">=", c4["min_calls"]), "commitNumbers": (">=", c4["min_numbers"])}),
+        "5_transcript": item_gold(c5, gold_text, {"cer": ("<=", c5["max_cer"]), "numberAcc": (">=", c5["min_number_acc"]),
                                              "nameAcc": (">=", c5["min_name_acc"])},
                                   {"transcriptMinutes": (">=", c5["min_minutes"])}),
         "6_battery": item_battery(items["6_battery"], window, days, daily, survey),
