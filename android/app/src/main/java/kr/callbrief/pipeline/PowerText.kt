@@ -80,6 +80,13 @@ internal object PowerText {
         val hot=d?.optJSONObject("hot")
         o.put("hot",JSONObject().apply { HOT_WHY.forEach { put(it,n(hot,it)) } })
         o.put("stopReasons",d?.optJSONObject("stopReasons")?.let(PhoneStatus::counts) ?: JSONObject())
+        // v3.7 T5 (r17-1): the plugged-in run in the foreground, and the day's piece median per way (ms for a 2-minute piece).
+        val f=d?.optJSONObject("fg")
+        o.put("fg",JSONObject().put("runs",n(f,"runs")).put("min",n(f,"min")).put("refused",n(f,"refused")).put("timeout",n(f,"timeout")))
+        val pr=d?.optJSONObject("pieceRates")
+        fun med(k:String)=PowerStats.median(pr?.optJSONArray(k))?.let { Math.round(it*PipelineAudioMath.MAX_CHUNK_MS) } ?: JSONObject.NULL
+        o.put("pieceMedianMs",JSONObject().put("fg",med("fg")).put("bg",med("bg"))
+            .put("fgN",pr?.optJSONArray("fg")?.length() ?: 0).put("bgN",pr?.optJSONArray("bg")?.length() ?: 0))
         return o
     }
     fun heartbeat(ledger:JSONObject?,chargingOnly:Boolean,now:Long):JSONObject {
@@ -107,6 +114,9 @@ internal object PowerText {
         val w=waiting(l)
         o.put("waiting",JSONObject().put("n",w.n).put("oldestMin",w.oldestMs?.let { ((now-it)/60_000).coerceAtLeast(0) } ?: JSONObject.NULL))
         o.put("chargingOnly",chargingOnly)
+        // v3.7 T5: the [transcribeForeground] setting the last run saw, and whether that day was a foreground day.
+        o.put("fgSetting",l.optString("fgSetting").takeIf { it=="auto" || it=="on" || it=="off" } ?: JSONObject.NULL)
+        o.put("fgOn",(l.opt("fgOn") as? Boolean) ?: JSONObject.NULL)
         return o
     }
 }

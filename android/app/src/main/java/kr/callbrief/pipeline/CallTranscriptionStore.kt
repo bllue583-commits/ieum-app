@@ -154,46 +154,48 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         if(n>0) failed(n)
     }
 
-    /** r12-8 A2 (DESIGN_V4 2-3-1): which recording goes next.
-     * 1. a recording already under way (a finished piece saved, or its last run was stopped or ran into the native deadline),
-     *    longest in the queue first, so a long call is finished before new ones are begun;
-     * 2. a recording that has waited more than [WAITED_MS] (24 hours) in the queue, longest wait first;
-     * 3. new calls, newest first.
-     * With [oldBefore] (처음 정리) recordings before it come after all newer ones, in the same steps, except that old ones
-     * not under way go oldest call first, so they reach the analysis in time order. */
+    /** Which recording goes next (r12-8 A2, v3.7 T2 DESIGN_V7 3.1, order in [QueueOrder]). With [oldBefore] (처음 정리)
+     * recordings before it come after all newer ones. The rows are read with their order fields and sorted by the pure
+     * [QueueOrder.compare] (a few hundred rows at most). */
     fun nextQueued(oldBefore:Long?=null,battery:BatteryWindow?=null):Job? {
         if(battery!=null) return nextShort(battery)
         val at="coalesce(x.original_started_at_ms,x.modified_at_ms,0)"
         val queued="coalesce(j.queued_ms,j.updated_ms)"
-        val started="(EXISTS(SELECT 1 FROM call_transcription_parts p WHERE p.recording_id=j.recording_id AND p.source_version=j.source_version AND p.audio_sha=j.audio_sha) OR j.reason IN('STOPPED','$DEADLINE'))"
-        // step: 0 under way, 1 waited a day (new calls only), 2 the rest; key: queue entry for steps 0 and 1, else the call time.
-        return db.query("""SELECT * FROM (SELECT j.state,j.reason,j.attempts,j.updated_ms AS job_updated_ms,x.*,
-                CASE WHEN $at<CAST(? AS INTEGER) THEN 1 ELSE 0 END AS q_old,CASE WHEN $started THEN 1 ELSE 0 END AS q_started,
-                CASE WHEN $queued<CAST(? AS INTEGER) THEN 1 ELSE 0 END AS q_waited,$queued AS q_entered,$at AS q_at
+        val parts="EXISTS(SELECT 1 FROM call_transcription_parts p WHERE p.recording_id=j.recording_id AND p.source_version=j.source_version AND p.audio_sha=j.audio_sha)"
+        val rows=db.query("""SELECT j.state,j.reason,j.attempts,j.updated_ms AS job_updated_ms,x.*,
+                CASE WHEN $parts THEN 1 ELSE 0 END AS q_parts,$queued AS q_entered,$at AS q_at
             FROM call_transcription_jobs j JOIN ($select WHERE r.owner_key=? AND gone.ciphertext_sha256 IS NULL) x
             ON x.recording_id=j.recording_id AND x.source_version=j.source_version AND x.audio_sha256=j.audio_sha
-            WHERE j.state='QUEUED') ORDER BY q_old,
-            CASE WHEN q_started=1 THEN 0 WHEN q_old=0 AND q_waited=1 THEN 1 ELSE 2 END,
-            CASE WHEN q_started=1 OR q_old=0 AND q_waited=1 THEN q_entered WHEN q_old=1 THEN q_at ELSE -coalesce(original_started_at_ms,0) END,
-            job_updated_ms LIMIT 1""".trimIndent(),oldBefore ?: Long.MIN_VALUE,now()-WAITED_MS,GeneralLocalStore.OWNER)
-            .singleOrNull()?.let{Job(candidate(it),it["state"].toString(),it["reason"].toString(),(it["attempts"] as Number).toInt())}
+            WHERE j.state='QUEUED'""".trimIndent(),GeneralLocalStore.OWNER)
+        if(rows.isEmpty()) return null
+        val t=now()
+        fun n(v:Any?)=(v as? Number)?.toLong() ?: 0L
+        val best=rows.map { r -> r to QueueOrder.Row(n(r["q_at"]),n(r["q_entered"]),n(r["job_updated_ms"]),(r["q_parts"] as Number).toInt()==1,
+                r["reason"].toString().let { it=="STOPPED" || it==DEADLINE }) }
+            .minWithOrNull { a,b -> QueueOrder.compare(a.second,b.second,t,oldBefore) }!!.first
+        return Job(candidate(best),best["state"].toString(),best["reason"].toString(),(best["attempts"] as Number).toInt())
     }
 
     /** v3.6 (DESIGN_V6 2.1): what a battery run may take: calls from [fromMs] (KST midnight) whose length is between
      * [TranscriptionPower.SHORT_MIN_MS] and [TranscriptionPower.SHORT_MAX_MS]. The length is the decoded one, else the call
      * log's, else the file size over [bytesPerMs] (null: unknown, not taken). Never charging_only rows. */
     data class BatteryWindow(val fromMs:Long,val bytesPerMs:Double?)
-    /** SQL for a job's length (j = the job row); takes two arguments, bytes per ms twice (bound as text, hence the casts). */
-    private fun lengthSql(byteCount:String):String {
-        val records=db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='call_records'").isNotEmpty()
-        val record=if(records) "(SELECT MAX(c.duration_ms) FROM call_records c WHERE c.recording_id=j.recording_id AND c.duration_ms>0)" else "NULL"
-        return "coalesce(j.audio_ms,$record,CASE WHEN CAST(? AS REAL)>0 AND $byteCount>0 THEN CAST($byteCount/CAST(? AS REAL) AS INTEGER) END)"
+    /** SQL for a job's length (j = the job row, [at] the recording's time); takes two arguments, bytes per ms twice (bound as
+     * text, hence the casts). v3.7 (T3, review r16-1 #2): after the decoded length comes the call log's: the longest answered
+     * entry in the usual pairing window ([FirstPass.inWindow]: 2 minutes before to 1 minute after; the longest, so a doubtful
+     * pair errs toward the charger; no correlated ORDER BY, which the test runner's SQLite does not resolve),
+     * since a waiting recording has no call record yet; then the call record's; then the size. */
+    private fun lengthSql(byteCount:String,at:String):String {
+        val tables=db.query("SELECT name FROM sqlite_master WHERE type='table' AND name IN('call_records','call_log')").map { it["name"].toString() }.toSet()
+        val record=if("call_records" in tables) "(SELECT MAX(c.duration_ms) FROM call_records c WHERE c.recording_id=j.recording_id AND c.duration_ms>0)" else "NULL"
+        val logged=if("call_log" in tables) "(SELECT MAX(cl.duration_ms) FROM call_log cl WHERE cl.duration_ms>0 AND cl.type IN(1,2) AND $at>0 AND cl.start_ms>=$at-$LOG_BEFORE_MS AND cl.start_ms<=$at+$LOG_AFTER_MS)" else "NULL"
+        return "coalesce(j.audio_ms,$logged,$record,CASE WHEN CAST(? AS REAL)>0 AND $byteCount>0 THEN CAST($byteCount/CAST(? AS REAL) AS INTEGER) END)"
     }
     /** Short calls of today, newest first: the filter is in SQL, so a long call at the top never ends a battery run (DESIGN_V6 함정 ③). */
     private fun nextShort(w:BatteryWindow):Job? {
         val at="coalesce(x.original_started_at_ms,x.modified_at_ms,0)"
         val bpm=w.bytesPerMs ?: 0.0
-        return db.query("""SELECT * FROM (SELECT j.state,j.reason,j.attempts,j.updated_ms AS job_updated_ms,x.*,$at AS q_at,${lengthSql("x.byte_count")} AS q_len
+        return db.query("""SELECT * FROM (SELECT j.state,j.reason,j.attempts,j.updated_ms AS job_updated_ms,x.*,$at AS q_at,${lengthSql("x.byte_count",at)} AS q_len
             FROM call_transcription_jobs j JOIN ($select WHERE r.owner_key=? AND gone.ciphertext_sha256 IS NULL) x
             ON x.recording_id=j.recording_id AND x.source_version=j.source_version AND x.audio_sha256=j.audio_sha
             WHERE j.state='QUEUED' AND j.charging_only=0) WHERE q_at>=CAST(? AS INTEGER) AND q_len>=CAST(? AS INTEGER) AND q_len<=CAST(? AS INTEGER)
@@ -210,7 +212,7 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         val cond=if(chargingOnly) "1=1" else "(charging_only=1 OR q_at<CAST(? AS INTEGER) OR q_len IS NULL OR q_len<CAST(? AS INTEGER) OR q_len>CAST(? AS INTEGER))"
         val args=mutableListOf<Any?>(bpm,bpm);if(!chargingOnly) args.addAll(listOf(w.fromMs,TranscriptionPower.SHORT_MIN_MS,TranscriptionPower.SHORT_MAX_MS))
         val r=db.query("""SELECT count(*) AS n,min(q_entered) AS m FROM (SELECT j.charging_only AS charging_only,coalesce(j.queued_ms,j.updated_ms) AS q_entered,
-            coalesce(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0) AS q_at,${lengthSql("r.byte_count")} AS q_len
+            coalesce(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0) AS q_at,${lengthSql("r.byte_count","coalesce(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)")} AS q_len
             FROM call_transcription_jobs j LEFT JOIN recordings r ON r.recording_id=j.recording_id AND r.source_version=j.source_version LEFT JOIN local_files l ON l.recording_id=j.recording_id
             WHERE j.state='QUEUED') WHERE $cond""".trimIndent(),*args.toTypedArray()).single()
         return ((r["n"] as Number).toInt()) to (r["m"] as? Number)?.toLong()
@@ -324,6 +326,9 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         }.getOrDefault(0)
         /** r12-8 A2: a recording that has waited this long in the queue goes before new calls. */
         const val WAITED_MS=24*3_600_000L
+        /** v3.7 (T3): the call-log window for a waiting recording's length, the same as [FirstPass.inWindow]. */
+        const val LOG_BEFORE_MS=120_000L
+        const val LOG_AFTER_MS=60_000L
         /** r12-8 A4: the reason of a job whose piece ran into the native deadline (the piece is halved, the attempt given back). */
         const val DEADLINE="ANDROID_STT_DEADLINE"
         const val STALE_RUNNING_MS=11*60_000L
@@ -338,6 +343,44 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
             WHERE COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)>0
             AND COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)<CAST(? AS INTEGER))"""
     }
+}
+
+/** v3.7 T2 (DESIGN_V7 3.1): the order of the transcription queue, pure (JVM-tested). Yesterday's and today's calls first,
+ * so the 05:30 report holds yesterday:
+ * - first key `q_old` (처음 정리, the call before [oldBefore]) as before: the newer ones first;
+ * - then, for newer ones: (1) under way: a piece is really saved and the call is from [fromMs] on ("next report day" − 1 at
+ *   00:00 KST), longest in the queue first; (2) a call from [fromMs] on, newest first; (3) waited over
+ *   [CallTranscriptionStore.WAITED_MS], longest in the queue first; (4) the rest, newest first. A recording with only a
+ *   STOPPED or deadline mark and no saved piece, and an old one under way, go by their age like any other (review H2: one
+ *   long old recording pushed back once would otherwise take the whole night);
+ * - old ones (처음 정리) keep r12-8's order: under way (a piece, STOPPED or a deadline) first, then the oldest call. */
+internal object QueueOrder {
+    /** [atMs] the call time, [enteredMs] the queue entry, [updatedMs] the row's last change (last tie-break), [parts] a piece
+     * is saved, [marked] the reason is STOPPED or a native deadline. */
+    data class Row(val atMs:Long,val enteredMs:Long,val updatedMs:Long,val parts:Boolean,val marked:Boolean)
+    /** The morning report's day: today before 05:00 KST (the report goes out in the 05 o'clock hour), tomorrow from then on. */
+    const val REPORT_HOUR=5
+    fun reportDay(now:Long):java.time.LocalDate { val z=java.time.Instant.ofEpochMilli(now).atZone(TranscriptionPower.KST)
+        return if(z.hour<REPORT_HOUR) z.toLocalDate() else z.toLocalDate().plusDays(1) }
+    /** 00:00 KST of the day before [reportDay]: calls from then on are "yesterday and today" for the next report. */
+    fun fromMs(now:Long)=reportDay(now).minusDays(1).atStartOfDay(TranscriptionPower.KST).toInstant().toEpochMilli()
+    /** (group, key) of a row; smaller goes first. */
+    fun rank(r:Row,now:Long,oldBefore:Long?):Triple<Int,Int,Long> {
+        if(oldBefore!=null && r.atMs<oldBefore) return if(r.parts || r.marked) Triple(1,0,r.enteredMs) else Triple(1,1,r.atMs)
+        val from=fromMs(now)
+        return when {
+            r.parts && r.atMs>=from -> Triple(0,0,r.enteredMs)
+            r.atMs>=from -> Triple(0,1,-r.atMs)
+            now-r.enteredMs>=CallTranscriptionStore.WAITED_MS -> Triple(0,2,r.enteredMs)
+            else -> Triple(0,3,-r.atMs)
+        }
+    }
+    fun compare(a:Row,b:Row,now:Long,oldBefore:Long?):Int {
+        val x=rank(a,now,oldBefore);val y=rank(b,now,oldBefore)
+        return compareValuesBy(x,y,{ it.first },{ it.second },{ it.third }).takeIf { it!=0 } ?: a.updatedMs.compareTo(b.updatedMs)
+    }
+    /** [rows] in queue order (tests). */
+    fun sort(rows:List<Row>,now:Long,oldBefore:Long?=null)=rows.sortedWith { a,b -> compare(a,b,now,oldBefore) }
 }
 
 /** r12-8 A1 (DESIGN_V4 2-3-5): the day's transcription runs kept under [PipelineSettingsKeys.TRANSCRIPTION_RUNS]. */

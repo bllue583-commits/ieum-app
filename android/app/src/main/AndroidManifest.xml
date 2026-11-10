@@ -17,6 +17,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+    <!-- v3.7 (DESIGN_V7 3.1 T5): the plugged-in transcription run in the foreground, as a measurement (mediaProcessing on
+         Android 15 and later, dataSync below), only while the phone is on the charger. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- v3.1 (DESIGN_V4 2.2-4): with this, Android 12+ installs our own update without a tap (session with
@@ -84,6 +88,9 @@
                 <action android:name="android.telecom.CallRedirectionService" />
             </intent-filter>
         </service>
+        <!-- v3.7 (T5): WorkManager's own foreground service, with the types the transcription run asks for. -->
+        <service android:name="androidx.work.impl.foreground.SystemForegroundService" android:exported="false"
+            android:foregroundServiceType="dataSync|mediaProcessing" tools:node="merge" />
         <receiver android:name=".pipeline.StartupReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
