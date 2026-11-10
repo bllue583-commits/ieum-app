@@ -61,6 +61,8 @@ internal object PowerText {
     // ---- the heartbeat's `power` block (DESIGN_V6 3.1): numbers and short codes only ----
     private val DAY_COUNTS=listOf("gapSkips","hotSkips","inCallSkips","morningSkips","lowSkips","powerSaveSkips","chargingOnlySkips","budgetSkips",
         "plugDropped","killedChunkMs","deadlineMs","yieldCount","yieldMs","modelLoads","modelLoadMs","decodeAudioMs")
+    /** v3.6.1 (T1): the causes counted under today's `hot` ([PowerStats.noteHot]). */
+    val HOT_WHY=listOf("headroom","temp","slow","severe")
     private fun n(o:JSONObject?,k:String)=(o?.opt(k) as? Number)?.toLong()?.coerceAtLeast(0) ?: 0L
     /** One day of the ledger ([d] null: a day with nothing, [day] its KST day). */
     fun dayBlock(d:JSONObject?,day:Int):JSONObject {
@@ -74,6 +76,9 @@ internal object PowerText {
         o.put("budgetHit",d?.optString("budgetHit")?.takeIf { it=="min" || it=="pct" } ?: "none")
         DAY_COUNTS.forEach { o.put(it,n(d,it)) }
         o.put("levelFallingSkips",n(d,"levelFallingRuns"))
+        // v3.6.1 (T1): why the wakes found it hot (hotSkips split by cause; severe = the thermal status).
+        val hot=d?.optJSONObject("hot")
+        o.put("hot",JSONObject().apply { HOT_WHY.forEach { put(it,n(hot,it)) } })
         o.put("stopReasons",d?.optJSONObject("stopReasons")?.let(PhoneStatus::counts) ?: JSONObject())
         return o
     }
