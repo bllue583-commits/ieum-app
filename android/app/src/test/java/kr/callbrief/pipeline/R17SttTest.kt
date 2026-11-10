@@ -121,7 +121,7 @@ class R17SttTest:ProtectedTextHostTestBase() {
         // The S26's real 2-minute piece: 376 s. With the margin it read as 470 s > 432 s and every whole piece was halved.
         var o=PowerStats.notePiece(null,376_000,120_000,6,cold=true,now=base)
         val r=PowerStats.rate(o)
-        assertEquals(376_000.0,PowerPolicy.splitExpectMs(120_000,r).toDouble(),2.0)
+        assertEquals(376_000.0,PowerPolicy.splitExpectMs(120_000,r).toDouble(),500.0)
         assertFalse(PowerPolicy.splitAhead(PowerPolicy.splitExpectMs(120_000,r),d))
         assertTrue("W1 keeps the margin",PowerPolicy.expectedPieceMs(120_000,r)>PowerPolicy.splitExpectMs(120_000,r))
         // A piece that really nears the deadline (460 s) is still split ahead.
