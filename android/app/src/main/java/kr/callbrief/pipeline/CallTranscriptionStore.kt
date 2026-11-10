@@ -194,8 +194,12 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
     private fun nextShort(w:BatteryWindow):Job? {
         val at="coalesce(x.original_started_at_ms,x.modified_at_ms,0)"
         val bpm=w.bytesPerMs ?: 0.0
-        return db.query("""SELECT * FROM (SELECT j.state,j.reason,j.attempts,j.updated_ms AS job_updated_ms,x.*,$at AS q_at,${lengthSql("x.byte_count",at)} AS q_len
-            FROM call_transcription_jobs j JOIN ($select WHERE r.owner_key=? AND gone.ciphertext_sha256 IS NULL) x
+        // The call-log lookup is correlated on base tables (r0, l0): SQLite cannot reach a column of the derived table x there.
+        val at0="coalesce(r0.original_started_at_ms,l0.filename_time_candidate_ms,r0.modified_at_ms,0)"
+        return db.query("""SELECT * FROM (SELECT j.state,j.reason,j.attempts,j.updated_ms AS job_updated_ms,x.*,$at AS q_at,${lengthSql("r0.byte_count",at0)} AS q_len
+            FROM call_transcription_jobs j JOIN recordings r0 ON r0.recording_id=j.recording_id AND r0.source_version=j.source_version
+            LEFT JOIN local_files l0 ON l0.recording_id=j.recording_id
+            JOIN ($select WHERE r.owner_key=? AND gone.ciphertext_sha256 IS NULL) x
             ON x.recording_id=j.recording_id AND x.source_version=j.source_version AND x.audio_sha256=j.audio_sha
             WHERE j.state='QUEUED' AND j.charging_only=0) WHERE q_at>=CAST(? AS INTEGER) AND q_len>=CAST(? AS INTEGER) AND q_len<=CAST(? AS INTEGER)
             ORDER BY q_at DESC,job_updated_ms LIMIT 1""".trimIndent(),bpm,bpm,GeneralLocalStore.OWNER,w.fromMs,TranscriptionPower.SHORT_MIN_MS,TranscriptionPower.SHORT_MAX_MS)
