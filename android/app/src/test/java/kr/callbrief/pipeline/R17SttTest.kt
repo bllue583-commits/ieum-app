@@ -95,7 +95,7 @@ class R17SttTest:ProtectedTextHostTestBase() {
         assertFalse(PowerStats.slow(o,t2+7*minute))
         // The heartbeat splits hotSkips by cause.
         val hb=PowerText.heartbeat(o,false,t2+7*minute).getJSONObject("today").getJSONObject("hot")
-        assertEquals(1,hb.getInt("slow"));assertEquals(0,hb.getInt("headroom"));assertEquals(0,hb.getInt("temp"));assertEquals(0,hb.getInt("severe"))
+        assertEquals("two wakes skipped (the rest and the tick in it)",2,hb.getInt("slow"));assertEquals(0,hb.getInt("headroom"));assertEquals(0,hb.getInt("temp"));assertEquals(0,hb.getInt("severe"))
     }
     @Test fun theExpectedTimeCountsWindowsSoATailDoesNotSplitTheNextPiece() {
         // A tail piece measured alone (7 s in 50 s) used to read as 7.1 ms per audio ms: 120 s x 7.1 x 1.25 > 432 s split the
