@@ -11,6 +11,8 @@ calls.json: [{"dt": "2026-10-01T09:12:00", "dur": 77, "status": "없음"|"개인
 - battery: 하루 배터리 실행 예산(분). 0이면 충전 중에만. battery_max_sec: 배터리로 바꾸는 통화 길이 상한.
 - slots: 분석 루틴이 도는 시(매시 34분). 한 회차 cap건. 결과는 회차 시작 +12분에 폰에 적용된다고 본다.
 - cutoff: 아침 보고에 들어가려면 결과가 적용돼 있어야 하는 시각(보고일 기준 분, 음수는 전날).
+- "항목 1·2 통과 창": 평일 10일 창마다 9일 이상이 기준(포함률 95%; 하루 지연 p50 ≤ 180분·p90 ≤ 1,200분)을 채운 창 수.
+- 알려진 한계: "+T1+T2" 줄은 마감이 전날 21:15인데 순서는 05:00 보고일 기준이라 T2 효과가 안 보인다. 저녁 포함률은 18시 전에 끝난 통화만 센다(18시대까지 넣으면 4~6%p 낮다).
 충전 시각은 관측 3밤(23:48, 00:40, 03:30 시작 ~ 07:45)과 낮 두 번(12:50~13:50, 18:50~19:50)을 날짜마다 돌려 쓴다.
 """
 import argparse, datetime as dt, json, statistics, sys
@@ -18,15 +20,6 @@ import argparse, datetime as dt, json, statistics, sys
 NIGHT_STARTS = [23 * 60 + 48 - 1440, 40, 210]  # 자정 기준 분
 NIGHT_END = 7 * 60 + 45
 DAY_PLUGS = [(12 * 60 + 50, 13 * 60 + 50), (18 * 60 + 50, 19 * 60 + 50)]
-
-
-def plugged(day_index, minute, night_start):
-    start = NIGHT_STARTS[day_index % 3] if night_start is None else night_start
-    if minute < NIGHT_END and minute >= max(start, 0):
-        return True
-    if start < 0 and minute >= 1440 + start:  # 전날 밤에 꽂음(다음 날 것)
-        return False
-    return any(a <= minute < b for a, b in DAY_PLUGS)
 
 
 def plugged_abs(t, day0, night_start):
@@ -76,7 +69,7 @@ def simulate(calls, p):
             else:
                 old = [q for q in pool if t - q["end"] > 1440]
                 job = min(old, key=lambda q: q["end"]) if old else max(pool, key=lambda q: q["end"])
-            spend = min(capacity, job["left"] * rate)
+            spend = min(capacity, job["left"] * rate, capacity if on_power else max(budget_left, 0))  # 예산을 넘겨 쓰지 않는다
             job["left"] -= spend / rate
             capacity -= spend
             if not on_power:
@@ -100,7 +93,7 @@ def simulate(calls, p):
                 used[slot] = used.get(slot, 0) + 1; job["applied"] = slot + 12; break
             t = slot + 1
     # 지표(평일 통화만)
-    lat, cover, evening = [], [], []
+    lat, cover, evening, lat_ok = [], [], [], []
     by_day = {}
     for job in done:
         by_day.setdefault(job["end"] // 1440, []).append(job)
@@ -114,6 +107,8 @@ def simulate(calls, p):
         early = [j for j in jobs if j["end"] % 1440 < 18 * 60]
         if early:
             evening.append(sum(1 for j in early if j.get("applied", 10 ** 12) <= day * 1440 + 19 * 60) / len(early))
+        day_lat = sorted(j.get("applied", 10 ** 9) - j["end"] for j in jobs)
+        lat_ok.append(day_lat[len(day_lat) // 2] <= 180 and day_lat[int(len(day_lat) * .9)] <= 1200)  # 채점 항목 2의 하루 판정
         lat += [j["applied"] - j["end"] for j in jobs if "applied" in j]
     lat.sort()
     used_days = [v for v in battery_used.values()]
@@ -123,7 +118,14 @@ def simulate(calls, p):
         "lat_p50_h": round(lat[len(lat) // 2] / 60, 1), "lat_p90_h": round(lat[int(len(lat) * .9)] / 60, 1),
         "unfinished": len(queue), "battery_min_p90": round(sorted(used_days)[int(len(used_days) * .9)], 1) if used_days else 0,
         "days": len(cover),
+        # 채점표와 같은 판정: 평일 10일 창마다 9일 이상
+        "win_cover": windows([c >= .95 for c in cover]), "win_latency": windows(lat_ok),
     }
+
+
+def windows(flags):
+    wins = [sum(flags[i:i + 10]) >= 9 for i in range(len(flags) - 9)]
+    return f"{sum(wins)}/{len(wins)}"
 
 
 V36 = dict(rate=3.5, util=0.43, order="fifo", battery=0, battery_max_sec=180, slots=range(7, 23), cap=20, cap_night=20, cutoff=-165)
@@ -140,6 +142,9 @@ POLICIES = {
     "엔진 0.25배 + 배터리 25분(전부)": {**V36, "rate": 0.25, "util": 0.9, "order": "recent", "slots": [3, 4] + list(range(7, 23)), "cap_night": 40, "cutoff": 300, "battery": 25, "battery_max_sec": 10 ** 6},
     "엔진 유지 최적화 0.8배(포그라운드+q8_0) + 배터리 30분(전부)": {**V36, "rate": 0.8, "util": 0.9, "order": "recent", "slots": [3, 4] + list(range(7, 23)), "cap_night": 40, "cutoff": 300, "battery": 30, "battery_max_sec": 10 ** 6},
     "초벌 엔진 0.06배 + 배터리 10분(전부)": {**V36, "rate": 0.06, "util": 0.9, "order": "recent", "slots": [3, 4] + list(range(7, 23)), "cap_night": 40, "cutoff": 300, "battery": 10, "battery_max_sec": 10 ** 6},
+    "엔진 유지 1.0배 + 배터리 24분(전부)": {**V36, "rate": 1.0, "util": 0.9, "order": "recent", "slots": [3, 4] + list(range(7, 23)), "cap_night": 40, "cutoff": 300, "battery": 24, "battery_max_sec": 10 ** 6},
+    "엔진 유지 0.8배 + 배터리 24분(전부)": {**V36, "rate": 0.8, "util": 0.9, "order": "recent", "slots": [3, 4] + list(range(7, 23)), "cap_night": 40, "cutoff": 300, "battery": 24, "battery_max_sec": 10 ** 6},
+    "엔진 0.5배 + 배터리 20분(전부)": {**V36, "rate": 0.5, "util": 0.9, "order": "recent", "slots": [3, 4] + list(range(7, 23)), "cap_night": 40, "cutoff": 300, "battery": 20, "battery_max_sec": 10 ** 6},
     "엔진 0.25배 + 충전 중에만": {**V36, "rate": 0.25, "util": 0.9, "order": "recent", "slots": [3, 4] + list(range(7, 23)), "cap_night": 40, "cutoff": 300},
 }
 
@@ -162,10 +167,10 @@ def main(argv):
     calls = load(a.calls, a.speech)
     rows = {}
     print(f"통화 {len(calls)}건, 말소리 계수 {a.speech}, 밤 충전 시작 {'관측 3밤 순환' if a.night_start is None else a.night_start}")
-    print("| 정책 | 아침 보고 포함률 평균 | 95% 넘는 날 | 최저 | 저녁 7시 포함률 | 지연 p50(시간) | p90 | 배터리 분 p90 | 못 끝낸 통화 |\n|---|---|---|---|---|---|---|---|---|")
+    print("| 정책 | 아침 보고 포함률 평균 | 95% 넘는 날 | 항목 1 통과 창 | 항목 2 통과 창 | 저녁 7시(18시 전 통화) | 지연 p50(시간) | p90 | 배터리 분 p90 | 못 끝낸 통화 |\n|---|---|---|---|---|---|---|---|---|---|")
     for name, p in POLICIES.items():
         r = simulate([dict(c) for c in calls], {**p, "night_start": a.night_start}); rows[name] = r
-        print(f"| {name} | {r['coverage_mean']:.0%} | {r['coverage_days_ge95']:.0%} | {r['coverage_min']:.0%} | {r['evening_mean']:.0%} | {r['lat_p50_h']} | {r['lat_p90_h']} | {r['battery_min_p90']} | {r['unfinished']} |")
+        print(f"| {name} | {r['coverage_mean']:.0%} | {r['coverage_days_ge95']:.0%} | {r['win_cover']} | {r['win_latency']} | {r['evening_mean']:.0%} | {r['lat_p50_h']} | {r['lat_p90_h']} | {r['battery_min_p90']} | {r['unfinished']} |")
     if a.json:
         json.dump(rows, open(a.json, "w"), ensure_ascii=False, indent=1)
 

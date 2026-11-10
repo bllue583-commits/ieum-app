@@ -82,7 +82,7 @@ def parse_calllog(text: str, year: int) -> list[dict]:
         dur = DURATION.search(parts[2])
         seconds = int(dur.group(1)) * 60 + int(dur.group(2)) if dur else 0
         rows.append({
-            "key": (parts[0], parts[1], seconds, hash((parts[3], parts[4]))),
+            "key": (parts[0], parts[1], hash((parts[3], parts[4]))),  # 길이는 키에서 뺀다(나중에 고쳐진 같은 통화)
             "at": dt.datetime(year, month, day, hour, minute, tzinfo=KST),
             "seconds": seconds,
             "recorded": parts[6] == "O",
@@ -101,6 +101,7 @@ def calls_from_history(inbox: str, year: int) -> list[dict]:
             else:
                 old["recorded"] = old["recorded"] or row["recorded"]
                 old["personal"] = row["personal"]
+                old["seconds"] = max(old["seconds"], row["seconds"])
     return list(seen.values())
 
 
@@ -133,66 +134,76 @@ def result(ok: bool, value, reason: str = "") -> dict:
     return {"pass": bool(ok), "value": value, "reason": reason}
 
 
-def enough(days_ok: int, days_seen: int, window: dict) -> tuple[bool, str]:
+def enough(per_day: dict, window: dict) -> tuple[bool, str, dict]:
+    """per_day: {날짜: (통과 여부, 값)}. 관측된 가장 최근 평일 weekdays개로 판정한다(통화 없는 날·휴일은 건너뜀)."""
     need_seen, need_ok = window["weekdays"], window["min_pass_days"]
-    if days_seen < need_seen:
-        return False, f"관측 {days_seen}/{need_seen}일(통과 {days_ok}일)"
-    return days_ok >= need_ok, f"통과 {days_ok}/{days_seen}일(기준 {need_ok}일)"
+    recent = dict(sorted(per_day.items())[-need_seen:])
+    days_ok = sum(1 for ok, _ in recent.values() if ok)
+    values = {day: value for day, (_, value) in recent.items()}
+    if len(recent) < need_seen:
+        return False, f"관측 {len(recent)}/{need_seen}일(통과 {days_ok}일)", values
+    return days_ok >= need_ok, f"통과 {days_ok}/{len(recent)}일(기준 {need_ok}일)", values
 
 
 # ---------- 항목 ----------
 
 def item_report_coverage(cfg, window, days, daily, reports, calls):
     """1. 아침 보고 완전성: 어제 통화(녹음 대상, 개인 제외) 중 보고에 들어간 비율."""
-    per_day, ok = {}, 0
+    per_day = {}
     for day in days:
         report_day = day + dt.timedelta(days=1)
         beat = daily.get(report_day) or {}
         cov = (beat.get("report") or {}).get("coverage") or {}
+        approx = sum(1 for c in calls if c["at"].date() == day and c["seconds"] >= 20 and not c["personal"])
         if cov.get("yesterdayCalls"):
             total, inside, how = cov["yesterdayCalls"], cov.get("inReport", 0), "phone"
         else:  # v3.7 전: 대조표에서 어림(연결 20초 이상, 개인 제외)
-            total = sum(1 for c in calls if c["at"].date() == day and c["seconds"] >= 20 and not c["personal"])
             head = (reports.get(report_day.isoformat()) or {}).get("head") or {}
-            inside, how = head.get("calls"), "approx"
+            total, inside, how = approx, head.get("calls"), "approx"
             if inside is None:
                 continue
         if total < cfg["min_calls"]:
             continue
         ratio = min(1.0, inside / total)
-        per_day[day.isoformat()] = {"ratio": round(ratio, 3), "in": inside, "of": total, "how": how}
-        ok += ratio >= cfg["min_ratio"]
-    passed, why = enough(ok, len(per_day), window)
-    return result(passed, per_day, why)
+        trusted = how == "approx" or approx == 0 or total >= 0.7 * approx  # 폰이 분모를 줄여 보고하면 통과가 아님
+        per_day[day.isoformat()] = (ratio >= cfg["min_ratio"] and trusted,
+                                    {"ratio": round(ratio, 3), "in": inside, "of": total, "calllog": approx, "how": how})
+    passed, why, values = enough(per_day, window)
+    return result(passed, values, why)
 
 
 def item_timeliness(cfg, window, days, daily):
     """2. 적시성: 통화 끝에서 결과 적용까지."""
-    per_day, ok = {}, 0
+    per_day = {}
     for day in days:
         lat = (daily.get(day) or {}).get("latency") or {}
         lat = lat.get("day") or lat  # v3.7부터 그날 통화만의 값(latency.day), 그 전은 7일 이동값
         if lat.get("p50Min") is None:
             continue
-        per_day[day.isoformat()] = {"p50": lat["p50Min"], "p90": lat.get("p90Min")}
-        ok += lat["p50Min"] <= cfg["p50_max_min"] and (lat.get("p90Min") or 10 ** 9) <= cfg["p90_max_min"]
-    passed, why = enough(ok, len(per_day), window)
-    return result(passed, per_day, why)
+        ok = lat["p50Min"] <= cfg["p50_max_min"] and (lat.get("p90Min") or 10 ** 9) <= cfg["p90_max_min"]
+        per_day[day.isoformat()] = (ok, {"p50": lat["p50Min"], "p90": lat.get("p90Min")})
+    passed, why, values = enough(per_day, window)
+    return result(passed, values, why)
 
 
 def item_call_card(cfg, window, asof, daily):
     """3. 통화 카드: 최근 14일의 날짜별 today 묶음 합."""
     since = asof - dt.timedelta(days=window["calendar_days"])
-    calls = reached = 0
+    calls = reached = refused = 0
     per_day, latest = {}, None
     for day, beat in sorted(daily.items()):
         card = beat.get("callCard") or {}
         today = card.get("today") or {}
-        if not (since <= day < asof) or str(card.get("day")) != day.strftime("%Y%m%d") or not today.get("calls"):
+        if not (since <= day < asof) or str(card.get("day")) != day.strftime("%Y%m%d"):
             continue
-        base = today["calls"] - today.get("ignored", 0) - today.get("off", 0)
+        refused += today.get("fgsRefused", 0)
         # v3.6.1부터 drawn(창이 실제로 그려진 통화). 그 전은 shown+locked(창 추가만 확인 — 숨겨진 창도 셈)
         got = today["drawn"] if "drawn" in today else today.get("shown", 0) + today.get("locked", 0)
+        # calls가 덜 세진 날(프로세스가 먼저 죽음)도 실패가 있으면 분모에 넣는다
+        base = max(today.get("calls", 0) - today.get("ignored", 0) - today.get("off", 0),
+                   got + today.get("noPermission", 0) + today.get("fallback", 0))
+        if base <= 0:
+            continue
         calls, reached, latest = calls + base, reached + min(got, base), card
         per_day[day.isoformat()] = {"reached": min(got, base), "of": base, "noPermission": today.get("noPermission", 0)}
     if calls < cfg["min_calls"] or latest is None:
@@ -201,7 +212,7 @@ def item_call_card(cfg, window, asof, daily):
     ring = (latest.get("ringToCardMs") or {}).get("p50")
     cold = (latest.get("ringToCardMsCold") or {}).get("p50")
     ok = (reach >= cfg["min_reach"] and ring is not None and ring <= cfg["ring_p50_max_ms"]
-          and (cold is None or cold <= cfg["cold_p50_max_ms"]) and not latest.get("fgsRefused"))
+          and (cold is None or cold <= cfg["cold_p50_max_ms"]) and refused == 0)
     return result(ok, {"reach": round(reach, 3), "calls": calls, "ringP50": ring, "coldP50": cold, "days": per_day},
                   f"도달 {reached}/{calls}")
 
@@ -222,7 +233,7 @@ def item_gold(cfg, gold, keys, mins):
 
 def item_battery(cfg, window, days, daily, survey):
     """6. 배터리: 배터리로 돈 자막 분(다음 날 하트비트의 prev) + 배터리 화면 비중 1회."""
-    per_day, ok = {}, 0
+    per_day = {}
     for day in days:
         prev = ((daily.get(day + dt.timedelta(days=1)) or {}).get("power") or {}).get("prev") or {}
         if prev.get("day") != day.isoformat():
@@ -230,29 +241,31 @@ def item_battery(cfg, window, days, daily, survey):
         minutes = (prev.get("battery") or {}).get("min")
         if minutes is None:
             continue
-        per_day[day.isoformat()] = minutes
-        ok += minutes <= cfg["max_battery_run_min"]
-    passed, why = enough(ok, len(per_day), window)
+        per_day[day.isoformat()] = (minutes <= cfg["max_battery_run_min"], minutes)
+    passed, why, values = enough(per_day, window)
     share = (survey or {}).get("batterySharePct")
     if share is None:
-        return result(False, {"batteryRunMin": per_day, "sharePct": None}, why + ", 배터리 화면 비중 미확인")
-    return result(passed and share <= cfg["max_share_pct"], {"batteryRunMin": per_day, "sharePct": share}, why)
+        return result(False, {"batteryRunMin": values, "sharePct": None}, why + ", 배터리 화면 비중 미확인")
+    return result(passed and share <= cfg["max_share_pct"], {"batteryRunMin": values, "sharePct": share}, why)
 
 
 def item_storage(cfg, asof, daily):
-    """7. 저장소: 봉인 DB 사용률, 7일 기울기, 열기 시간."""
+    """7. 저장소: 봉인 DB 사용률(7일 최대), 7일 기울기(회귀), 열기 시간."""
     points = [(day, beat["dbPercent"]) for day, beat in sorted(daily.items())
               if beat.get("dbPercent") is not None and asof - dt.timedelta(days=8) <= day < asof]
-    if len(points) < 2:
-        return result(False, None, "관측 부족")
-    span = (points[-1][0] - points[0][0]).days or 1
-    slope = (points[-1][1] - points[0][1]) / span
+    if len(points) < 5:
+        return result(False, None, f"관측 {len(points)}/5일")
+    xs = [(day - points[0][0]).days for day, _ in points]
+    ys = [value for _, value in points]
+    mean_x, mean_y = statistics.mean(xs), statistics.mean(ys)
+    spread = sum((x - mean_x) ** 2 for x in xs)
+    slope = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys)) / spread if spread else 0.0
     opens = [beat["dbOpenMs"] for day, beat in daily.items()
-             if asof - dt.timedelta(days=8) <= day < asof and (beat.get("dbOpenMs") or 0) > 100]
+             if asof - dt.timedelta(days=8) <= day < asof and (beat.get("dbOpenMs") or 0) > 0]
     open_ms = statistics.median(opens) if opens else None
-    ok = (points[-1][1] <= cfg["max_db_percent"] and slope <= cfg["max_slope_per_day"]
+    ok = (max(ys) <= cfg["max_db_percent"] and slope <= cfg["max_slope_per_day"]
           and open_ms is not None and open_ms <= cfg["max_open_ms"])
-    return result(ok, {"dbPercent": points[-1][1], "slopePerDay": round(slope, 2), "openMsMedian": open_ms}, "")
+    return result(ok, {"dbPercentMax": max(ys), "slopePerDay": round(slope, 2), "openMsMedian": open_ms}, "")
 
 
 def item_security(cfg, version, latest, scan):
@@ -285,25 +298,31 @@ def cron_hours(cron: str) -> list[int]:
 
 
 def item_operations(cfg, window, asof, hourly_runs, tidy_runs, daily):
-    """9. 운영: 예약 작업 슬롯, 아침 보고서, 자막 실패율."""
-    since = asof - dt.timedelta(days=window["calendar_days"])
-    ran, cron = set(), None
+    """9. 운영: 예약 작업 슬롯, 아침 보고서, 카톡 전송일, 자막 실패율."""
+    span = window["calendar_days"]
+    since = asof - dt.timedelta(days=span)
+    ran, cron_by_day = set(), {}
     for run in hourly_runs:
         started = run.get("startedMs")
         if not isinstance(started, (int, float)):
             continue
         when = dt.datetime.fromtimestamp(started / 1000, KST)
         ran.add((when.date(), when.hour))
-        cron = run.get("cron") or cron
+        if run.get("cron"):
+            cron_by_day[when.date()] = run["cron"]  # 그날의 cron(바뀐 날 이전을 새 cron으로 세지 않는다)
     first = min((d for d, _ in ran), default=asof)
-    hours = cron_hours(cron) if cron else list(range(7, 23))
-    expected = [(since + dt.timedelta(days=i), hour) for i in range(window["calendar_days"]) for hour in hours
-                if since + dt.timedelta(days=i) >= first]
+    expected, cron = [], None
+    for i in range(span):
+        day = since + dt.timedelta(days=i)
+        earlier = [c for d, c in sorted(cron_by_day.items()) if d <= day]
+        cron = earlier[-1] if earlier else cron
+        if day >= first:
+            expected += [(day, hour) for hour in (cron_hours(cron) if cron else list(range(7, 23)))]
     days_seen = len({d for d, _ in expected})
     slot_ratio = sum(1 for slot in expected if slot in ran) / len(expected) if expected else 0.0
     report_days = {kst_day(int(run["startedMs"])) for run in tidy_runs
                    if run.get("reportWritten") and isinstance(run.get("startedMs"), (int, float))}
-    tidy_expected = [since + dt.timedelta(days=i) for i in range(window["calendar_days"])
+    tidy_expected = [since + dt.timedelta(days=i) for i in range(span)
                      if since + dt.timedelta(days=i) >= min(report_days, default=asof)]
     report_ratio = sum(1 for d in tidy_expected if d in report_days) / len(tidy_expected) if tidy_expected else 0.0
     beats = [b for d, b in sorted(daily.items()) if since <= d < asof]
@@ -314,19 +333,29 @@ def item_operations(cfg, window, asof, hourly_runs, tidy_runs, daily):
     elif len(beats) >= 2:  # 그 전: 누적 실패 수 차이로 어림(재큐된 녹음이 다시 실패하면 또 세므로 높게 나온다)
         failed = (beats[-1].get("transcriptionFailed") or 0) - (beats[0].get("transcriptionFailed") or 0)
         done = sum(sum(v for v in ((b.get("transcription") or {}).get("doneByLen48h") or {}).values()) for b in beats) / 2
-        fail_rate = failed / (failed + done) if failed + done > 0 else 0.0
+        if failed < 0:
+            fail_rate = 1.0  # 카운터가 줄었다 = 초기화. 통과로 치지 않는다
+        elif failed + done > 0:
+            fail_rate = failed / (failed + done)
+    # 카톡: 달력 날짜 기준. 하트비트가 없는 날은 안 간 날로 센다
     kakao_days = kakao_sent = 0
-    ordered = [daily[d] for d in sorted(daily) if since - dt.timedelta(days=1) <= d < asof]
-    for before, after in zip(ordered, ordered[1:]):
-        if (after.get("kakao") or {}).get("on"):
-            kakao_days += 1
-            kakao_sent += ((after.get("kakao") or {}).get("sent") or 0) > ((before.get("kakao") or {}).get("sent") or 0)
-    kakao_ratio = kakao_sent / kakao_days if kakao_days else None
+    previous = None
+    for day in sorted(daily):
+        beat = daily[day]
+        sent_now = (beat.get("kakao") or {}).get("sent")
+        if since <= day < asof and (beat.get("kakao") or {}).get("on") and previous is not None and sent_now is not None:
+            kakao_sent += sent_now > previous
+        if sent_now is not None:
+            previous = sent_now
+    kakao_on_since = min((d for d, b in daily.items() if (b.get("kakao") or {}).get("on")), default=None)
+    if kakao_on_since is not None:
+        kakao_days = sum(1 for i in range(span) if since + dt.timedelta(days=i) > kakao_on_since)
+    kakao_ratio = min(1.0, kakao_sent / kakao_days) if kakao_days else None
     value = {"slotRatio": round(slot_ratio, 3), "reportRatio": round(report_ratio, 3),
              "failRate": None if fail_rate is None else round(fail_rate, 3),
              "kakaoRatio": None if kakao_ratio is None else round(kakao_ratio, 3), "daysSeen": days_seen}
-    if days_seen < window["calendar_days"]:
-        return result(False, value, f"관측 {days_seen}/{window['calendar_days']}일")
+    if days_seen < span:
+        return result(False, value, f"관측 {days_seen}/{span}일")
     ok = (slot_ratio >= cfg["min_slot_ratio"] and report_ratio >= cfg["min_report_days_ratio"]
           and fail_rate is not None and fail_rate <= cfg["max_fail_rate"]
           and kakao_ratio is not None and kakao_ratio >= cfg["min_kakao_days_ratio"])
@@ -347,7 +376,7 @@ def item_use(cfg, window, asof, daily, survey):
     weeks = window["calendar_days"] / 7
     value = {"daysSeen": seen, "openDaysPerWeek": round(open_days / weeks, 1), "taskDonePerWeek": round(done / weeks, 1),
              "sus": (survey or {}).get("sus"), "veryDisappointed": (survey or {}).get("veryDisappointed")}
-    if seen < window["calendar_days"] - 1:
+    if seen < window["calendar_days"]:
         return result(False, value, f"사용 숫자 관측 {seen}/{window['calendar_days']}일")
     ok = (value["openDaysPerWeek"] >= cfg["min_open_days_per_week"] and value["taskDonePerWeek"] >= cfg["min_task_done_per_week"]
           and (value["sus"] or 0) >= cfg["min_sus"] and value["veryDisappointed"] is True)
@@ -360,7 +389,7 @@ def score(inbox: str, asof: dt.date, card: dict) -> dict:
     window, items = card["window"], card["items"]
     beats = json_history(inbox, "status/phone.json")
     daily = last_per_day(beats)
-    days = weekdays_before(asof, window["weekdays"])
+    days = weekdays_before(asof, window["weekdays"] + 5)  # 통화 없는 날·휴일을 건너뛸 여유(최대 평일 15일 전까지)
     reports = {}
     report_dir = os.path.join(inbox, "report")
     if os.path.isdir(report_dir):
