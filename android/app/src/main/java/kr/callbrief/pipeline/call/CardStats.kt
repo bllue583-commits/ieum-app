@@ -294,7 +294,9 @@ internal object CardStats {
         for(k in RECENT_KEYS) when(val v=o.opt(k)) {
             is Boolean -> put(k,v)
             is Number -> if(v !is Double || v.isFinite()) put(k,v)
-            is String -> v.take(60).filter { c -> c.code<128 && c.isLetterOrDigit() || c=='_' || c=='-' || c==':' }.takeIf { it.isNotEmpty() }?.let { put(k,it) }
+            // A code, never anything with as many digits as a phone number.
+            is String -> v.take(60).filter { c -> c.code<128 && c.isLetterOrDigit() || c=='_' || c=='-' || c==':' }
+                .takeIf { it.isNotEmpty() && it.count(Char::isDigit)<6 }?.let { put(k,it) }
         }
     }
     private fun numbers(a:JSONArray?):List<Long> = a?.let { (0 until it.length()).mapNotNull { i -> (it.opt(i) as? Number)?.toLong()?.takeIf { v -> v>=0 } } }.orEmpty()

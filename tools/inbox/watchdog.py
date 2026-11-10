@@ -65,7 +65,7 @@ def card_causes(card):
         if not isinstance(e, dict) or e.get("result") != "fallback" or e.get("day") != card.get("day"):
             continue
         c = w_code(e.get("cause"))
-        if c:
+        if c and sum(ch.isdigit() for ch in c) < 6:
             seen[c] = seen.get(c, 0) + 1
     return ", ".join(f"{c} {n}번" for c, n in sorted(seen.items(), key=lambda x: (-x[1], x[0])))
 

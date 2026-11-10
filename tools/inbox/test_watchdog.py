@@ -230,7 +230,10 @@ class WatchdogTest(unittest.TestCase):
         self.assertEqual([], titles(phone=phone(callCard={"today": {"noPermission": 5, "fallback": 2, "drawn": 9}})))
         # Bad recent entries are skipped.
         bad = dict(card, recent=[None, "x", {"result": "fallback", "day": 20261110, "cause": "김 010"}])
-        self.assertNotIn("김", problems(phone=phone(callCard=bad))[0]["body"])
+        bad["recent"].append({"result": "fallback", "day": 20261110, "cause": "010-0000-3333"})
+        body = problems(phone=phone(callCard=bad))[0]["body"]
+        self.assertNotIn("김", body)
+        self.assertNotIn("3333", body)
 
     def test_exempted_bucket_is_no_cause(self):
         body = problems(phone=phone(atMs=NOW - 20 * H, standbyBucket="EXEMPTED"))[0]["body"]
