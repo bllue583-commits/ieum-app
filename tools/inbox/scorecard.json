@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "registered": "2026-11-10",
+  "note": "문턱은 재기 전에 등록했다. 바꾸려면 version을 올리고 docs/SCORECARD.md에 이유와 날짜를 적는다. 점수는 통과한 항목 수(10점 만점).",
+  "window": {"weekdays": 10, "min_pass_days": 9, "calendar_days": 14},
+  "items": {
+    "1_report_coverage": {"min_ratio": 0.95, "min_calls": 5},
+    "2_timeliness": {"p50_max_min": 180, "p90_max_min": 1200},
+    "3_call_card": {"min_reach": 0.95, "min_calls": 30, "ring_p50_max_ms": 1000, "cold_p50_max_ms": 1500},
+    "4_commitments": {"min_recall": 0.90, "min_precision": 0.85, "min_number_exact": 0.98, "min_calls": 30},
+    "5_transcript": {"max_cer": 0.15, "min_number_acc": 0.95, "min_name_acc": 0.90, "min_minutes": 20},
+    "6_battery": {"max_battery_run_min": 25, "max_share_pct": 10},
+    "7_storage": {"max_db_percent": 40, "max_slope_per_day": 0.3, "max_open_ms": 800},
+    "8_security": {"build_type": "release", "cert_check": true, "seed_independent": true, "salted_hash": true, "max_secret_findings": 0},
+    "9_operations": {"min_slot_ratio": 0.98, "max_fail_rate": 0.02, "min_report_days_ratio": 1.0},
+    "10_use_and_satisfaction": {"min_open_days_per_week": 5, "min_task_done_per_week": 10, "min_sus": 80, "very_disappointed": true}
+  }
+}
