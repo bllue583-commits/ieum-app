@@ -60,7 +60,10 @@ internal object StatusLights {
         val kakaoOn:Boolean=true,val kakaoLastSentMs:Long=0,val kakaoFailed:Long=0,
         /** v3.6 (DESIGN_V6 3.2, r16-2), filled by [withPhone]: recordings waiting for the charger and since when the oldest of them
          * waits ([PowerText.waiting], from the power ledger r16-1 writes; null: not known). */
-        val chargeWaiting:Int=0,val chargeWaitOldestMs:Long?=null)
+        val chargeWaiting:Int=0,val chargeWaitOldestMs:Long?=null,
+        /** v3.6.1 (DESIGN_V7 K4), filled by [withPhone]: today's (KST) calls whose card window was tried ([CardStats] drawn plus
+         * fallback plus unconfirmed) and of them the ones whose window was really drawn. */
+        val cardTodayTried:Int=0,val cardTodayDrawn:Int=0)
 
     const val TRANSCRIBE_LATE_MS=6*3_600_000L
     const val ANALYZE_LATE_MS=3*3_600_000L
@@ -172,6 +175,8 @@ internal object StatusLights {
         return when {
             !i.cardOn -> Light(tag,label,true,"전화 올 때와 걸 때 모두 꺼 두었어요.")
             !i.cardOverlay -> Light(tag,label,false,"통화 화면 위에 카드를 띄울 수 없어요. 위 통화 카드 묶음에서 카드 보기를 허용해 주세요.",GROUP_CARD)
+            // v3.6.1 (K4): the permission read now may say yes while the calls of today did not get their card.
+            cardNotDrawnToday(i.cardTodayTried,i.cardTodayDrawn) -> Light(tag,label,false,cardTodayWords(i.cardTodayTried,i.cardTodayDrawn))
             !i.phoneState -> Light(tag,label,false,"전화가 오는 걸 알 수 없어 카드가 뜨지 않아요. 위 연결 묶음에서 전화 상태를 허용해 주세요.",GROUP_CONNECT)
             // v3.4 (4.2-5): the call log tells who called before (thin cards) and whether a call was connected.
             !i.callLog -> Light(tag,label,false,"통화기록을 읽을 수 없어 카드가 덜 채워져요. 위 연결 묶음에서 통화기록 읽기를 허용해 주세요.",GROUP_CONNECT)
@@ -186,6 +191,20 @@ internal object StatusLights {
             !i.cardRole -> Light(tag,label,true,"전화가 오면 카드가 떠요. 거는 전화에도 보려면 위 통화 카드 묶음에서 허용해 주세요.",GROUP_CARD)
             else -> Light(tag,label,true,OK)
         }
+    }
+
+    /** v3.6.1 (K4): amber from this many tried calls of today, when more than half of them were not drawn. */
+    const val CARD_TODAY_MIN=3
+    fun cardNotDrawnToday(tried:Int,drawn:Int)=tried>=CARD_TODAY_MIN && (tried-drawn.coerceIn(0,tried))*2>tried
+    fun cardTodayWords(tried:Int,drawn:Int)="통화 카드가 오늘 안 뜨고 있어요. 오늘 통화 ${tried}건 중 ${tried-drawn.coerceIn(0,tried)}건은 카드 대신 알림으로 보여 드렸어요."
+    /** Today's tried and drawn calls from the stored card counts [stats] (zeros when they are of another KST day). */
+    fun cardToday(stats:JSONObject?,now:Long):Pair<Int,Int> {
+        val st=stats ?: return 0 to 0
+        if(st.optInt("day",0)!=kr.callbrief.pipeline.call.CardStats.day(now)) return 0 to 0
+        val t=st.optJSONObject("today") ?: return 0 to 0
+        val drawn=t.optInt(kr.callbrief.pipeline.call.CardStats.DRAWN,0)
+        // v3.6.1 fix (review, critical): a window seen although the check said no is unconfirmed: tried, not drawn.
+        return drawn+t.optInt(kr.callbrief.pipeline.call.CardStats.FALLBACK,0)+t.optInt(kr.callbrief.pipeline.call.CardStats.UNCONFIRMED,0) to drawn
     }
 
     // ---- v3.4 (DESIGN_V4 4.2-5, r14-2) ------------------------------------------------------------------------------
@@ -236,6 +255,8 @@ internal object StatusLights {
             kakao=runCatching { kakaoLink(s) }.getOrDefault(KakaoReport.Link.UNAVAILABLE),
             kakaoOn=s.optBoolean(PipelineSettingsKeys.MORNING_KAKAO,true),kakaoLastSentMs=s.optLong(PipelineSettingsKeys.KAKAO_LAST_SENT_MS,0),
             kakaoFailed=s.optLong(PipelineSettingsKeys.KAKAO_FAILED_COUNT,0)).let { j ->
+                val (tried,drawn)=runCatching { cardToday(stats,i.now) }.getOrDefault(0 to 0)
+                j.copy(cardTodayTried=tried,cardTodayDrawn=drawn) }.let { j ->
                 val w=runCatching { PowerText.waiting(PowerText.ledger(s)) }.getOrNull() ?: return@let j
                 j.copy(chargeWaiting=w.n,chargeWaitOldestMs=w.oldestMs) }
     }

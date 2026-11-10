@@ -54,8 +54,12 @@ internal object TranscriptionPower {
     /** A piece that starts a run at least this long after the previous run is a "cold" piece (its speed is the reference). */
     const val COLD_AFTER_MS=20*60_000L
     /** Without a measurement: ms of work per ms of audio (2-minute piece in 300 s, DESIGN_V6 1.1). v3.6.1 (T1): per ms of
-     * encoder windows ([WINDOW_MS]), the same for a whole 2-minute piece. */
-    const val DEFAULT_RATE=2.5
+     * encoder windows ([WINDOW_MS]). v3.6.1 fix (review, high): per ms of the expected windows, one more than the audio fills
+     * ([PowerPolicy.expectedWindows]): a 2-minute piece (5 windows) still 300 s. */
+    const val DEFAULT_RATE=2.0
+    /** v3.6.1 fix (review, high): only pieces of at least this much audio say how long a whole piece takes (W1, W2); the cost
+     * of a tail or a short call follows its words, so it reads low per window. */
+    const val LONG_PIECE_MS=90_000L
     /** v3.6.1 (T1, DESIGN_V7 2): Whisper encodes a whole 30-second window however little audio is in it, so a piece costs by
      * its windows: speed = work ms per (windows x 30 s), and the expected time of a piece = speed x windows x 30 s. */
     const val WINDOW_MS=30_000L
@@ -200,8 +204,14 @@ internal object PowerPolicy {
     fun windowMs(audioMs:Long)=windows(audioMs)*TranscriptionPower.WINDOW_MS
     /** v3.6.1 (T1): the speed of a finished piece, work ms per window ms (null for nothing done). */
     fun rate(workMs:Long,audioMs:Long):Double? = if(workMs<=0 || audioMs<=0) null else workMs.toDouble()/windowMs(audioMs)
-    /** W1: how long a piece of [audioMs] audio is expected to take at [rate] (work ms per window ms, [rate]), with the margin. */
-    fun expectedPieceMs(audioMs:Long,rate:Double?)=(windowMs(audioMs)*(rate ?: TranscriptionPower.DEFAULT_RATE)*TranscriptionPower.PIECE_MARGIN).toLong()
+    /** v3.6.1 fix (review, high): the windows a piece is expected to take for W1 and W2: one more than its audio fills
+     * (Whisper moves on by its timestamps, so a 2-minute piece often takes 5 windows, not 4). */
+    fun expectedWindows(audioMs:Long)=if(audioMs<=0) 0L else windows(audioMs)+1
+    /** v3.6.1 fix: the speed of a finished piece as W1/W2 count it: work ms per ms of [expectedWindows]. */
+    fun expectRate(workMs:Long,audioMs:Long):Double? = if(workMs<=0 || audioMs<=0) null else workMs.toDouble()/(expectedWindows(audioMs)*TranscriptionPower.WINDOW_MS)
+    /** W1: how long a piece of [audioMs] audio is expected to take at [rate] (work ms per expected window ms,
+     * [PowerStats.rate]), with the margin. v3.6.1 fix: [expectedWindows] x 30 s. */
+    fun expectedPieceMs(audioMs:Long,rate:Double?)=(expectedWindows(audioMs)*TranscriptionPower.WINDOW_MS*(rate ?: TranscriptionPower.DEFAULT_RATE)*TranscriptionPower.PIECE_MARGIN).toLong()
     /** W1: start this piece? The first piece of a run always starts (else a hot phone would only wake and end, DESIGN_V6 W1). */
     fun startPiece(firstOfRun:Boolean,elapsedMs:Long,expectedMs:Long,limitMs:Long)=firstOfRun || elapsedMs+expectedMs<=limitMs
     /** W2: split a whole piece in two before it is begun when it is expected to run into the native deadline. */
@@ -309,16 +319,22 @@ internal object PowerStats {
         // v3.6.1 (T1): per encoder window, so a short tail piece is no "slow" piece.
         val rate=Math.round(PowerPolicy.rate(ms,audioMs)!!*1000)/1000.0
         val by=sub(c,"byThreads")
+        val lists=listOf("rates","coldRates","expect","expectLong")
         // A ledger from before v3.7: its lists belong to the thread count it last ran on.
         val was=c.optInt("threads",0)
         if(was>0 && !by.has(was.toString()) && (c.has("rates") || c.has("coldRates")))
-            by.put(was.toString(),JSONObject().apply { c.optJSONArray("rates")?.let { put("rates",JSONArray(it.toString())) };c.optJSONArray("coldRates")?.let { put("coldRates",JSONArray(it.toString())) } })
+            by.put(was.toString(),JSONObject().apply { for(k in lists) c.optJSONArray(k)?.let { put(k,JSONArray(it.toString())) } })
         val mine=sub(by,threads.toString())
-        fun push(k:String) { val a=mine.optJSONArray(k) ?: JSONArray();a.put(rate);while(a.length()>KEEP) a.remove(0);mine.put(k,a) }
+        fun push(k:String,v:Any=rate) { val a=mine.optJSONArray(k) ?: JSONArray();a.put(v);while(a.length()>KEEP) a.remove(0);mine.put(k,a) }
         push("rates");if(cold) push("coldRates")
+        // v3.6.1 fix (review, high): W1/W2's own samples, work ms per expected window ms ([rate]); the long pieces' kept apart,
+        // so a run of short calls does not push them out. Kept per thread count like the others (v3.7 T3).
+        val expect=Math.round(PowerPolicy.expectRate(ms,audioMs)!!*1000)/1000.0
+        push("expect",expect);if(audioMs>=TranscriptionPower.LONG_PIECE_MS) push("expectLong",expect)
         // The top-level lists are this thread count's (the "slow" check compares pieces of one thread count only).
-        c.remove("rates");c.remove("coldRates");c.remove("coldMedianMs")
-        mine.optJSONArray("rates")?.let { c.put("rates",JSONArray(it.toString())) };mine.optJSONArray("coldRates")?.let { c.put("coldRates",JSONArray(it.toString())) }
+        for(k in lists) c.remove(k)
+        c.remove("coldMedianMs")
+        for(k in lists) mine.optJSONArray(k)?.let { c.put(k,JSONArray(it.toString())) }
         c.put("lastMs",ms).put("lastAudioMs",audioMs).put("threads",threads).put("lastRate",rate).put("lastEndMs",now)
         median(c.optJSONArray("coldRates"))?.let { c.put("coldMedianMs",(it*PipelineAudioMath.MAX_CHUNK_MS).toLong()) }
         median(c.optJSONArray("rates"))?.let { c.put("p50Ms",(it*PipelineAudioMath.MAX_CHUNK_MS).toLong()) }
@@ -336,12 +352,19 @@ internal object PowerStats {
         if(v.isEmpty()) return null
         return if(v.size%2==1) v[v.size/2] else (v[v.size/2-1]+v[v.size/2])/2
     }
-    /** Work ms per window ms for W1/W2 ([PowerPolicy.rate]): the median of the recent pieces (same threads), null without any.
+    /** Work ms per expected window ms for W1/W2 ([PowerPolicy.expectedPieceMs]), null without any piece (the default then).
+     * v3.6.1 fix (review, high): never smaller than whole pieces really take. The median of the recent pieces (same threads)
+     * of at least [TranscriptionPower.LONG_PIECE_MS] audio ("expectLong"); without one, the largest of all of them ("expect"; a
+     * ledger from before this has no `expect` yet: the largest of its `rates`); never below [TranscriptionPower.DEFAULT_RATE]
+     * while no long piece was measured. The slow verdict keeps its own per-window median ([slow]).
      * v3.7 (T3): [threads] picks that thread count's samples (falling back to the last piece's when it has none). */
     fun rate(o:JSONObject?,threads:Int?=null):Double? {
-        val c=o?.optJSONObject("chunk") ?: return null
-        threads?.let { t -> median(c.optJSONObject("byThreads")?.optJSONObject(t.toString())?.optJSONArray("rates"))?.let { return it } }
-        return median(c.optJSONArray("rates"))
+        val top=o?.optJSONObject("chunk") ?: return null
+        val c=threads?.let { t -> top.optJSONObject("byThreads")?.optJSONObject(t.toString())?.takeIf { it.has("rates") || it.has("expect") } } ?: top
+        median(c.optJSONArray("expectLong"))?.let { return it }
+        val any=listOf("expect","rates").firstNotNullOfOrNull { k -> c.optJSONArray(k)?.let { a -> (0 until a.length()).map { a.optDouble(it) }.filter { it.isFinite() && it>0 }.maxOrNull() } }
+            ?: return null
+        return maxOf(any,TranscriptionPower.DEFAULT_RATE)
     }
 
     // ---- v3.7 T5 (DESIGN_V7 3.1): the plugged-in run in the foreground, today.fg{runs,ms,min,refused,timeout} ----
@@ -383,15 +406,19 @@ internal object PowerStats {
         val o=copy(old)
         // The rest starts at the first hot wake after the last piece: a tick during the rest does not make it longer.
         val rest=o.optLong("hotRestMs",0);val piece=o.optJSONObject("chunk")?.optLong("lastEndMs",0) ?: 0
-        if(rest<=0 || rest<piece || now<rest || now-rest>=TranscriptionPower.HOT_DELAY_MS) o.put("hotRestMs",now)
+        // v3.6.1 fix (review, medium): why the rest was taken, so only a rest for a slow piece makes the next piece a cold one.
+        if(rest<=0 || rest<piece || now<rest || now-rest>=TranscriptionPower.HOT_DELAY_MS) { o.put("hotRestMs",now);o.put("hotRestWhy",why ?: "") }
         why?.let { inc(sub(today(o,PowerPolicy.day(now)),"hot"),it) }
         return o
     }
     /** v3.6.1 (T1): the first piece of a run starting [now] counts as cold: the last run ended at least
-     * [TranscriptionPower.COLD_AFTER_MS] ago, or a hot rest was taken since it ended. */
+     * [TranscriptionPower.COLD_AFTER_MS] ago, or a hot rest was taken since it ended. v3.6.1 fix (review, medium): only a rest
+     * taken for a slow piece ("hotRestWhy" slow); after a rest for the headroom or the heat the phone may still be warm, and a
+     * warm piece among the cold ones would raise the cold reference until "slow" never holds. */
     fun coldStart(o:JSONObject?,now:Long):Boolean {
         val last=o?.optLong("lastRunEndMs",0) ?: 0
-        return now-last>=TranscriptionPower.COLD_AFTER_MS || (o?.optLong("hotRestMs",0) ?: 0).let { it>0 && it>=last }
+        return now-last>=TranscriptionPower.COLD_AFTER_MS ||
+            (o?.optLong("hotRestMs",0) ?: 0).let { it>0 && it>=last } && o?.optString("hotRestWhy","")=="slow"
     }
     /** Remembers the plug: when it was last seen, and a sample of the charge to tell a plug that falls short. Counts a
      * plug that stayed away past the debounce once (plugDropped). */

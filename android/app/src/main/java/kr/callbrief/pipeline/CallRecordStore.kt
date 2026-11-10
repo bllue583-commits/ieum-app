@@ -428,7 +428,11 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         StatusLights.dbPercent(bytes,total)
     }.getOrNull()
     private fun trimRows(now:Long,dbPercent:Int?) {
-        port.execute("UPDATE call_records SET transcript='',segments_json='[]' WHERE analyzed_ms IS NOT NULL AND analyzed_ms<CAST(? AS INTEGER) AND (transcript!='' OR segments_json!='[]')",now-transcriptKeepDays(dbPercent)*86_400_000L)
+        // v3.6.1 fix (review, medium): the 3-day rule of a filling store is for call transcripts only. A text ("sms:") keeps its
+        // words [TRANSCRIPT_KEEP_DAYS] days: the analysis of a call reads the same person's texts of the 7 days before it raw.
+        port.execute("""UPDATE call_records SET transcript='',segments_json='[]' WHERE analyzed_ms IS NOT NULL
+            AND analyzed_ms<(CASE WHEN recording_id LIKE 'sms:%' THEN CAST(? AS INTEGER) ELSE CAST(? AS INTEGER) END) AND (transcript!='' OR segments_json!='[]')""",
+            now-TRANSCRIPT_KEEP_DAYS*86_400_000L,now-transcriptKeepDays(dbPercent)*86_400_000L)
         rows("""SELECT record_id,analysis_json FROM call_records WHERE analysis_json LIKE '%"keyPoints"%' AND COALESCE(started_ms,created_ms)<CAST(? AS INTEGER) LIMIT 200""",now-ANALYSIS_KEEP_DAYS*86_400_000L).forEach { r ->
             val root=runCatching { JSONObject(r.str("analysis_json")!!) }.getOrNull() ?: return@forEach
             val a=root.optJSONObject("analysis") ?: return@forEach

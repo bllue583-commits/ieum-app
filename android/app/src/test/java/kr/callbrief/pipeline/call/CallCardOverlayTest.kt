@@ -54,6 +54,7 @@ class CallCardOverlayTest:ProtectedTextHostTestBase() {
     private val number="010-2222-3333";private val key="01022223333"
     private val stranger="010-9999-0000"
     private val outcomes=mutableListOf<String>()
+    private val verdicts=mutableListOf<CardStats.Attempt>()
     private val now=System.currentTimeMillis()
     private val day=86_400_000L
     private val h get()=app.resources.displayMetrics.heightPixels
@@ -72,6 +73,9 @@ class CallCardOverlayTest:ProtectedTextHostTestBase() {
         CallSession.isPrivate={ _,_ -> false };CallSession.afterCall={ true }
         CallCardOverlay.canDraw={ true };CallCardOverlay.locked={ false };CallCardOverlay.serviceUp={ false }
         CallCardOverlay.outcome={ _,w -> outcomes+=w };CallCardOverlay.onExpanded={};CallCardOverlay.onClosed={ _,_ -> }
+        // v3.6.1: Robolectric does not tell a hidden window from a shown one; the tests say whether the card was seen.
+        CallCardOverlay.drawnNow={ true };CallCardOverlay.probe={ CardStats.Probe(0,4242,30,false,false,null) }
+        CallCardOverlay.onVerdict={ _,a -> synchronized(verdicts) { verdicts+=a } }
         shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
         ContactCards.shutdown();ContactCards.clearPending()
         ContactCards.write(app,mapOf(key to card()),replaceAll=true)
@@ -231,7 +235,7 @@ class CallCardOverlayTest:ProtectedTextHostTestBase() {
     }
 
     @Test fun withoutPermissionASilentNoticeInTheCardsOrder() {
-        CallCardOverlay.canDraw={ false }
+        CallCardOverlay.canDraw={ false };CallCardOverlay.addWindow={ _,_,_ -> throw WindowManager.BadTokenException("synthetic") }
         ring();settle(50)
         assertTrue(windows.isEmpty())
         val n=notices.single()
@@ -251,7 +255,7 @@ class CallCardOverlayTest:ProtectedTextHostTestBase() {
         CallCardOverlay.locked={ true }
         ring();settle(50)
         assertEquals(1,windows.size);assertEquals(1,notices.size)
-        assertEquals("the window counts as shown (CardStats tells locked apart)",listOf(CallCardOverlay.SHOWN),outcomes)
+        assertEquals("v3.6.1: the card tells locked itself (CardStats reads nothing again)",listOf(CallCardOverlay.LOCKED),outcomes)
         CallCardOverlay.locked={ false }
         app.sendBroadcast(Intent(Intent.ACTION_USER_PRESENT));settle(50)
         assertEquals(1,windows.size);assertTrue(windows.single().complete)
@@ -430,5 +434,162 @@ class CallCardOverlayTest:ProtectedTextHostTestBase() {
         }
         shot("card_expanded")
         CallCardOverlay.collapse();settle();shot("card_collapsed")
+    }
+}
+
+/** v3.6.1 (DESIGN_V7 K1, K2): the window is tried whatever the overlay check says, and counts as drawn only once it was seen. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk=[35],qualifiers="w360dp-h800dp-xxhdpi",shadows=[ShadowTextKeys::class,ShadowTextKeys.ExistingApprovedSettings::class,ShadowTextAtomicFile::class])
+@SQLiteMode(SQLiteMode.Mode.NATIVE)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class R17CardWindowTest:ProtectedTextHostTestBase() {
+    private val app:android.app.Application get()=RuntimeEnvironment.getApplication()
+    private val wm get()=app.getSystemService(WindowManager::class.java)
+    private val windows get()=Shadow.extract<ShadowWindowManagerImpl>(wm).views.filterIsInstance<CallCardView>()
+    private val nm get()=shadowOf(app.getSystemService(NotificationManager::class.java))
+    private val notices get()=nm.allNotifications.filter { it.channelId==CallCardOverlay.CHANNEL }
+    private val number="010-2222-3333";private val key="01022223333"
+    private val outcomes=mutableListOf<String>()
+    private val verdicts=mutableListOf<CardStats.Attempt>()
+    private var seen=true
+    private val now=System.currentTimeMillis()
+
+    @Before fun setup() {
+        CallSession.resetForHost();CallCardOverlay.resetForHost()
+        CallSession.isPrivate={ _,_ -> false };CallSession.afterCall={ true }
+        CallCardOverlay.canDraw={ true };CallCardOverlay.locked={ false };CallCardOverlay.serviceUp={ false }
+        CallCardOverlay.outcome={ _,w -> outcomes+=w };CallCardOverlay.onExpanded={};CallCardOverlay.onClosed={ _,_ -> }
+        CallCardOverlay.drawnNow={ seen };CallCardOverlay.probe={ CardStats.Probe(1,4242,30,true,true,7) }
+        CallCardOverlay.onVerdict={ _,a -> synchronized(verdicts) { verdicts+=a } }
+        shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        ContactCards.shutdown();ContactCards.clearPending()
+        ContactCards.write(app,mapOf(key to ContactCard(key,listOf(ContactCard.Person("pe_1","김민수","대표",false)),ContactCard.Company("co_1","탄탄이엔씨","철근"),
+            now-86_400_000L,"in",listOf(ContactCard.Recent(now-86_400_000L,"통화","견적서는 금요일까지 보내 드리기로 했어요.")),emptyList(),emptyList(),emptyList(),now)),replaceAll=true)
+    }
+    @After fun reset() { CallCardOverlay.resetForHost();CallSession.resetForHost();ContactCards.shutdown();ContactCards.clearPending() }
+
+    private fun settle(ms:Long=0) { CallCardOverlay.awaitIdle();shadowOf(Looper.getMainLooper()).idle();if(ms>0) shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(ms));CallCardOverlay.awaitIdle() }
+    private fun ring() { CallSession.onPhoneState(app,TelephonyManager.EXTRA_STATE_RINGING,number);CallCardOverlay.show(app,number,CallSession.State.RINGING) }
+    private fun idle() { CallCardOverlay.show(app,null,CallSession.State.IDLE);CallSession.onPhoneState(app,TelephonyManager.EXTRA_STATE_IDLE,"");settle() }
+    private fun verdict()=synchronized(verdicts) { verdicts.single() }
+
+    @Test fun aSeenWindowIsDrawnWithItsCauseAndProbe() {
+        ring();settle(50)
+        assertEquals(1,windows.size);assertTrue(verdicts.isEmpty())
+        settle(CallCardOverlay.HIDDEN_AFTER_MS)
+        val v=verdict()
+        assertEquals(CardStats.DRAWN,v.result);assertEquals(CallCardOverlay.CAUSE_OK,v.cause);assertTrue(v.canDraw)
+        assertEquals(1,v.probe!!.mode);assertEquals(4242,v.probe!!.pid);assertNull(v.error)
+        assertEquals(listOf(CallCardOverlay.SHOWN),outcomes)
+        idle();assertEquals("told once per call",1,verdicts.size)
+    }
+    @Test fun aWindowAddedAlthoughTheCheckSaidNoAndSeenIsUnconfirmedAndTheNoticeStays() {
+        // v3.6.1 fix (review, critical): Android may hide such a window on its side only (MODE_IGNORED) while the view draws.
+        CallCardOverlay.canDraw={ false }
+        ring();settle(50)
+        assertEquals("the window is tried anyway",1,windows.size)
+        assertEquals("the notice too",1,notices.size)
+        assertEquals(listOf(CallCardOverlay.NO_PERMISSION),outcomes)
+        settle(CallCardOverlay.HIDDEN_AFTER_MS)
+        assertEquals(CardStats.UNCONFIRMED,verdict().result);assertEquals(CallCardOverlay.CAUSE_DRAWN_DESPITE_FALSE,verdict().cause)
+        assertFalse(verdict().canDraw)
+        assertEquals("seen, yet the notice stays",1,notices.size);assertEquals(1,windows.size)
+        // Later states of the call (the check says yes now, the unlock) do not take it away either; the call's end does.
+        CallCardOverlay.canDraw={ true }
+        CallCardOverlay.show(app,null,CallSession.State.OFFHOOK);settle(50)
+        assertEquals(1,notices.size)
+        app.sendBroadcast(Intent(Intent.ACTION_USER_PRESENT));settle(50)
+        assertEquals(1,notices.size)
+        idle();assertTrue(notices.isEmpty());assertEquals("told once",1,verdicts.size)
+    }
+    @Test fun aWindowAddedWhileTheCheckSaidYesAndSeenIsDrawnWithoutANotice() {
+        ring();settle(50)
+        assertTrue(notices.isEmpty())
+        settle(CallCardOverlay.HIDDEN_AFTER_MS)
+        assertEquals(CardStats.DRAWN,verdict().result);assertEquals(CallCardOverlay.CAUSE_OK,verdict().cause)
+        assertTrue(notices.isEmpty());assertEquals(1,windows.size)
+    }
+    @Test fun theFirstFrameMayTakeLongerThanOneAndAHalfSeconds() {
+        // v3.6.1 fix (review, medium): a cold start can hold the first frame; the window is judged at 3 seconds.
+        assertEquals(3_000L,CallCardOverlay.HIDDEN_AFTER_MS)
+        seen=false
+        ring();settle(2_000)
+        assertEquals("not judged at 2 s",1,windows.size);assertTrue(verdicts.isEmpty())
+        seen=true;settle(CallCardOverlay.HIDDEN_AFTER_MS)
+        assertEquals(CardStats.DRAWN,verdict().result);assertEquals(1,windows.size)
+    }
+    @Test fun anExceptionOfAddViewIsAFallbackWithItsName() {
+        CallCardOverlay.addWindow={ _,_,_ -> throw WindowManager.BadTokenException("synthetic") }
+        ring();settle(50)
+        assertTrue(windows.isEmpty());assertEquals(1,notices.size)
+        assertEquals(listOf(CallCardOverlay.NO_PERMISSION),outcomes)
+        assertEquals(CardStats.FALLBACK,verdict().result);assertEquals("addView:BadTokenException",verdict().cause)
+        assertEquals("addView:BadTokenException",verdict().error)
+        settle(CallCardOverlay.HIDDEN_AFTER_MS);idle();assertEquals(1,verdicts.size)
+    }
+    @Test fun aWindowNotSeenInTimeIsHiddenTakenAwayAndTheNoticeShows() {
+        seen=false
+        ring();settle(50)
+        assertEquals(1,windows.size);assertTrue(notices.isEmpty())
+        settle(CallCardOverlay.HIDDEN_AFTER_MS)
+        assertTrue("the hidden window goes",windows.isEmpty());assertEquals(1,notices.size)
+        // v3.6.1 fix (review, medium): the verdict waits for the one more try at the next state (or the call's end).
+        assertTrue(verdicts.isEmpty())
+        // The call's state changes (ringing to off hook): tried once more, hidden again: a fallback, told once.
+        CallCardOverlay.show(app,null,CallSession.State.OFFHOOK);settle(50)
+        assertEquals("tried once more",1,windows.size);assertEquals(1,notices.size)
+        settle(CallCardOverlay.HIDDEN_AFTER_MS)
+        assertTrue(windows.isEmpty());assertEquals(1,notices.size)
+        assertEquals(CardStats.FALLBACK,verdict().result);assertEquals(CardStats.HIDDEN,verdict().cause)
+        // Only once: a later state does not add it again.
+        CallCardOverlay.show(app,null,CallSession.State.RINGING);settle(50)
+        assertTrue(windows.isEmpty());assertEquals(1,verdicts.size)
+        idle();assertTrue(notices.isEmpty());assertEquals(1,verdicts.size)
+    }
+    @Test fun aHiddenWindowSeenOnTheSecondTryIsDrawn() {
+        seen=false
+        ring();settle(50);settle(CallCardOverlay.HIDDEN_AFTER_MS)
+        assertTrue(windows.isEmpty());assertEquals(1,notices.size);assertTrue(verdicts.isEmpty())
+        seen=true
+        CallCardOverlay.show(app,null,CallSession.State.OFFHOOK);settle(50)
+        assertEquals(1,windows.size)
+        settle(CallCardOverlay.HIDDEN_AFTER_MS)
+        assertEquals(CardStats.DRAWN,verdict().result);assertEquals(CallCardOverlay.CAUSE_OK_RETRY,verdict().cause)
+        assertTrue("seen with the check saying yes: the notice goes",notices.isEmpty())
+        idle();assertEquals(1,verdicts.size)
+    }
+    @Test fun aHiddenWindowWithoutASecondTryIsToldAtTheCallsEnd() {
+        seen=false
+        ring();settle(50);settle(CallCardOverlay.HIDDEN_AFTER_MS)
+        assertTrue(verdicts.isEmpty())
+        idle()
+        assertEquals(CardStats.FALLBACK,verdict().result);assertEquals(CardStats.HIDDEN,verdict().cause)
+    }
+    @Test fun aWindowGoneBeforeItWasJudgedIsToldOnce() {
+        seen=false
+        CallCardOverlay.canDraw={ false }
+        ring();settle(50);idle()
+        assertEquals(CardStats.FALLBACK,verdict().result);assertEquals(CallCardOverlay.CAUSE_SHORT,verdict().cause)
+        settle(CallCardOverlay.HIDDEN_AFTER_MS);assertEquals(1,verdicts.size)
+        // Seen before the call ended: drawn.
+        seen=true;verdicts.clear();CallCardOverlay.canDraw={ true }
+        ring();settle(50);idle()
+        assertEquals(CardStats.DRAWN,verdict().result)
+    }
+    @Test fun lockedTheWindowIsJudgedAfterTheUnlock() {
+        seen=false;CallCardOverlay.locked={ true }
+        ring();settle(CallCardOverlay.HIDDEN_AFTER_MS+100)
+        assertTrue("not judged while the lock covers it",verdicts.isEmpty());assertEquals(1,windows.size);assertEquals(1,notices.size)
+        assertEquals(listOf(CallCardOverlay.LOCKED),outcomes)
+        CallCardOverlay.locked={ false };seen=true
+        app.sendBroadcast(Intent(Intent.ACTION_USER_PRESENT));settle(CallCardOverlay.HIDDEN_AFTER_MS+100)
+        assertEquals(CardStats.DRAWN,verdict().result);assertTrue(verdict().locked)
+    }
+    @Test fun aViewDrawnOutsideAWindowIsNotSeen() {
+        val v=CallCardView(app)
+        v.measure(View.MeasureSpec.makeMeasureSpec(1000,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED))
+        v.layout(0,0,1000,maxOf(1,v.measuredHeight))
+        v.draw(Canvas(Bitmap.createBitmap(1000,maxOf(1,v.measuredHeight),Bitmap.Config.ARGB_8888)))
+        assertFalse(v.seen)
     }
 }

@@ -67,7 +67,7 @@ class R14OneCallTest:ProtectedTextHostTestBase() {
         CallCardService.clock={ now }
         CallCardService.startService={ _,i -> if(refuseStart) throw IllegalStateException("background start");synchronized(starts) { starts+=i } }
         CardStats.clock={ now };CardStats.elapsed={ el };CardStats.processStart={ 0L }
-        CardStats.canDraw={ true };CardStats.locked={ false };CardStats.notifyAllowed={ true };CardStats.isThin={ _,_ -> false }
+        CardStats.notifyAllowed={ true };CardStats.isThin={ _,_ -> false };CardStats.probe={ null }
     }
     @After fun done() {
         CallSession.resetForHost();CallCardService.resetForHost();CardStats.resetForHost()
@@ -157,29 +157,25 @@ class R14OneCallTest:ProtectedTextHostTestBase() {
         assertEquals(0,hb.getInt(CardStats.SHOWN));assertEquals(0,hb.getInt(CardStats.LOCKED));assertEquals(0,hb.getJSONObject("ringToCardMs").getInt("n"))
         assertEquals(1,hb.getJSONObject("today").getInt(CardStats.CALLS))
     }
+    /** v3.6.1 (DESIGN_V7 K2): what the card told is counted as told; the permission is not read again (it was, and a refused
+     * window then counted as locked when the check said yes a moment later). */
     @Test fun aLockedScreenIsNotAMissingPermission() {
-        CardStats.locked={ true }
-        phone(ringing,number);CardStats.record(app,CardStats.NO_PERMISSION);phone(idle)
+        phone(ringing,number);CardStats.record(app,CardStats.LOCKED);phone(idle)
         var hb=heartbeat()!!
         assertEquals(1,hb.getInt(CardStats.LOCKED));assertEquals(0,hb.getInt(CardStats.NO_PERMISSION))
-        // The overlay itself not allowed: that is noPermission.
-        CardStats.canDraw={ false };CardStats.locked={ false }
         phone(ringing,number);CardStats.record(app,CardStats.NO_PERMISSION);phone(idle)
         hb=heartbeat()!!
         assertEquals(1,hb.getInt(CardStats.LOCKED));assertEquals(1,hb.getInt(CardStats.NO_PERMISSION));assertEquals(0,hb.getInt(CardStats.NO_NOTIFY))
-        // A window and a notice when locked (r14-2): still locked.
-        CardStats.canDraw={ true };CardStats.locked={ true }
         phone(ringing,number);CardStats.record(app,CardStats.SHOWN);phone(idle)
-        assertEquals(2,heartbeat()!!.getInt(CardStats.LOCKED))
+        assertEquals(1,heartbeat()!!.getInt(CardStats.SHOWN))
     }
     @Test fun noNotificationPermissionIsNoNotify() {
-        CardStats.canDraw={ false };CardStats.notifyAllowed={ false }
-        // The card fell back to the notice, which could not be posted: the card says "shown", the counts know better.
-        phone(ringing,number);CardStats.record(app,CardStats.SHOWN);phone(idle)
+        CardStats.notifyAllowed={ false }
+        phone(ringing,number);CardStats.record(app,CardStats.NO_PERMISSION);phone(idle)
         val hb=heartbeat()!!
         assertEquals(1,hb.getInt(CardStats.NO_NOTIFY));assertEquals(1,hb.getInt(CardStats.NO_PERMISSION));assertEquals(0,hb.getInt(CardStats.SHOWN))
-        assertEquals(CardStats.LOCKED to true,CardStats.classify(CardStats.SHOWN,canDraw=true,locked=true,notify=false))
-        assertEquals(CardStats.SHOWN to false,CardStats.classify(CardStats.SHOWN,canDraw=true,locked=false,notify=false))
+        assertEquals(CardStats.LOCKED to true,CardStats.classify(CardStats.LOCKED,notify=false))
+        assertEquals(CardStats.SHOWN to false,CardStats.classify(CardStats.SHOWN,notify=false))
     }
     @Test fun ringToCardTimesColdApartThinAndTheCardsActions() {
         // The first broadcast of a process that started 1 s before: cold.
