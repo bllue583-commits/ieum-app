@@ -100,7 +100,9 @@ internal class CallRecordAnalysisRunner(
             db.inTransaction { for(g in got.filter { it.results!=null }) recordsOf(g).forEach { r -> if(db.receivedMs(r.recordId)==null) db.setReceived(r.recordId,clock()) } }
             // In call-time order, so the ledger and the check items follow the order things happened.
             val items=got.filter { it.results!=null }.flatMap { g -> g.results!!.map { (id,a) -> Triple(g.name,(byKey[id] ?: db.record(id)),a) } }
-                .filter { it.second!=null && it.second!!.state!=CallRecordStore.ANALYZED }.sortedBy { it.second!!.dayMs }
+                .filter { it.second!=null && it.second!!.state!=CallRecordStore.ANALYZED }
+                .filter { it.second!!.kind!="메일" } // v3.7: an answer for a mail record from before is ignored (the record is dropped below)
+                .sortedBy { it.second!!.dayMs }
             var duplicates=0
             for((name,record,analysis) in items) runCatching {
                 val isOld=FirstPass.stale(record!!.dayMs,clock())
@@ -133,6 +135,8 @@ internal class CallRecordAnalysisRunner(
             runCatching { takeTidy(store,db,consent) }
 
             fun due(r:CallRecord):Boolean {
+                // v3.7: mail is gone; a mail record left from before is dropped, not sent.
+                if(r.kind=="메일") { db.dropUnsentMail(r.recordId);return false }
                 if(!consent) { db.setState(r.recordId,CallRecordStore.WAITING_CONSENT);return false }
                 if(r.state!=CallRecordStore.TRANSCRIBED) db.setState(r.recordId,CallRecordStore.TRANSCRIBED)
                 if(r.transcript.isBlank()) { db.setState(r.recordId,CallRecordStore.FAILED,"EMPTY_TRANSCRIPT");return false }
@@ -363,20 +367,18 @@ internal class CallRecordAnalysisRunner(
         save { it.put(PipelineSettingsKeys.LATENCY,o.toString()) }
     }
 
-    /** From when old texts or mail may still come in (their first-pass reading goes forward from 10/1), or null when
-     * both are read to the end or cannot be read (no permission, no mailbox, a mailbox that refuses the password). */
+    /** From when old texts may still come in (their first-pass reading goes forward from 10/1), or null when they are read
+     * to the end or cannot be read (no permission). Mail was removed in v3.7 (DESIGN_V7 3.3). */
     private fun messagesBound(s:JSONObject):Long? {
         fun bound(reading:Boolean,cursorKey:String,untilKey:String):Long? {
             if(!reading) return null
             val until=s.optLong(untilKey,0);val cursor=s.optLong(cursorKey,0)
             return if(until>0 && cursor>=until) null else maxOf(cursor,FirstPass.FROM_MS)
         }
-        // Three days after the first pass started, old texts and mail no longer hold the calls back (a reader that never
+        // Three days after the first pass started, old texts no longer hold the calls back (a reader that never
         // finishes must not stop the first pass, round 2).
         if(FirstPass.start(s)?.let { clock()-it>3*86_400_000L }==true) return null
-        val mail=s.optString(PipelineSettingsKeys.MAIL_HOST).isNotBlank() && s.optString(PipelineSettingsKeys.MAIL_ERROR).isBlank()
-        return listOfNotNull(bound(smsAllowed(),PipelineSettingsKeys.SMS_BACKFILL_CURSOR,PipelineSettingsKeys.SMS_BACKFILL_UNTIL),
-            bound(mail,PipelineSettingsKeys.MAIL_BACKFILL_CURSOR,PipelineSettingsKeys.MAIL_BACKFILL_UNTIL)).minOrNull()
+        return bound(smsAllowed(),PipelineSettingsKeys.SMS_BACKFILL_CURSOR,PipelineSettingsKeys.SMS_BACKFILL_UNTIL)
     }
 }
 

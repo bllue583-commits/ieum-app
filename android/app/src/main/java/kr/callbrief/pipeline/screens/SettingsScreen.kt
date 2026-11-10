@@ -1,9 +1,5 @@
 package kr.callbrief.pipeline
 
-import android.os.Bundle
-import android.text.Editable
-import android.text.InputType
-import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.widget.*
@@ -29,7 +25,7 @@ internal object UpdateViews {
 }
 
 /** "설정": Claude key, consent, voice-model download, notification hours and a plain status. The key is never shown again.
- * r8-5: drawing again keeps the scroll place and what is typed in the mail fields; a switch or a slider shows its own state, so
+ * r8-5: drawing again keeps the scroll place; a switch or a slider shows its own state, so
  * changing one saves without drawing the page again (only its words and the status lights change); every action button goes
  * busy on its own ("연결하는 중이에요") and leaves the others alone. */
 internal class SettingsScreen(a:MainActivity):AppScreen(a) {
@@ -125,9 +121,6 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
     override fun leave() { ticker.removeCallbacks(tick);flushHours() }
     /** A tap on the settings tab while it is in front: the top of the page. */
     override fun reselect() { refresh();CallUi.scrollTo(page,0) }
-    override fun save(out:Bundle) { out.putString("settings_mail_service",mailService);out.putString("settings_mail_user",mailUser);out.putString("settings_mail_host",mailHost) }
-    override fun restore(saved:Bundle) {
-        saved.getString("settings_mail_service")?.let { mailService=it };mailUser=saved.getString("settings_mail_user") ?: "";mailHost=saved.getString("settings_mail_host") ?: "" }
 
     // ---- 앱 버전: getting the next version, with a bar while it comes (round 6 v2.5) ----
     private val ticker=android.os.Handler(android.os.Looper.getMainLooper())
@@ -333,7 +326,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         if(amber) { group(STATUS_NAME);statusLights(s,counts) }
         nowGroup(s,modelState,amber)
 
-        // ---- 연결: where the calls, texts and mail come from ----
+        // ---- 연결: where the calls and texts come from ----
         group("연결")
         sub("녹음 폴더",first=true)
         val folder=s.optString("treeUri").isNotBlank()
@@ -361,15 +354,12 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
             } else body.addView(button("전화 상태 허용") { ReadingPermission.markAsked(a,android.Manifest.permission.READ_PHONE_STATE);askPhoneState.launch(android.Manifest.permission.READ_PHONE_STATE) }.apply { tag="phone_state_allow" })
         }
 
-        sub("메일")
-        mailGroup(s)
-
         callCardGroup(s)
 
         // ---- 정리: what is sent for summaries, and when the reports come ----
         group("정리")
         sub("정리 동의",first=true)
-        body.addView(CallUi.text(a,"통화 녹음 파일은 휴대폰 밖으로 나가지 않아요. 휴대폰에서 글자로 바꾼 통화 내용과 업무 문자, 메일의 글만 Claude로 보내 요약하고, 결과는 이 휴대폰에만 저장해요. 언제든 끌 수 있어요."))
+        body.addView(CallUi.text(a,"통화 녹음 파일은 휴대폰 밖으로 나가지 않아요. 휴대폰에서 글자로 바꾼 통화 내용과 업무 문자의 글만 Claude로 보내 요약하고, 결과는 이 휴대폰에만 저장해요. 언제든 끌 수 있어요."))
         body.addView(switchRow("consent_switch",s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false),PipelineSettingsKeys.CONSENT_GRANTED) { on ->
             if(on) "켜짐: 통화 내용을 정리해요" else "꺼짐: 정리하지 않아요" })
 
@@ -692,12 +682,11 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
             val lines=buildList {
                 if(f.toTranscribe>0) f.hoursLeft?.let { h -> add("끝나기까지 약 ${if(h<1) "1시간 안" else "${Math.round(h)}시간"}") }
                 if(f.waiting>0) add("요약을 기다리는 통화 ${f.waiting}건")
-                if(f.toTranscribe==0 && f.waiting==0) add("지난 문자와 메일을 읽고 있어요")
+                if(f.toTranscribe==0 && f.waiting==0) add("지난 문자를 읽고 있어요")
             }
             lines.forEach { body.addView(CallUi.text(a,it,CallUi.BODY).apply { setPadding(0,CallUi.dp(a,4),0,0) }) }
             body.addView(aside("10월 1일부터 밀린 통화를 정리하는 중이에요. 오늘 통화는 지금처럼 바로 정리돼요. 충전해 두면 더 빨리 끝나요.").apply { tag="first_pass_note" })
         }
-        if(!f.mailConnected) body.addView(aside("메일을 연결하면 메일도 함께 정리해요. 아래 연결 묶음의 메일에서 연결할 수 있어요.").apply { tag="first_pass_mail" })
     }
 
     /** The voice model: "음성 인식 모델 받는 중 42% (241MB / 574MB)" with a bar, following the download every second; [다시 받기] after
@@ -840,91 +829,6 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
             body.addView(CallUi.text(a,ReadingPermission.restrictedHelp(what),CallUi.ASIDE,color=CallUi.SUBTLE))
             body.addView(button("앱 정보 열기") { ReadingPermission.openAppInfo(a) }.apply { this.tag=tag })
         } else body.addView(button("$what 읽기 허용") { ReadingPermission.markAsked(a,permission);ask.launch(permission) }.apply { this.tag=tag })
-    }
-
-    /** One line under the service buttons: where to switch IMAP on and make the app password. */
-    internal fun mailGuide(service:String)=when(service) {
-        "네이버" -> "네이버 메일 → 환경설정 → POP3/IMAP 설정에서 IMAP 사용, 앱 비밀번호는 네이버 계정 보안에서 만들어요."
-        "Gmail" -> "Gmail 설정 → 전달 및 POP/IMAP에서 IMAP 사용, 앱 비밀번호는 구글 계정 보안에서 만들어요."
-        else -> "메일 서비스 설정에서 IMAP을 켜고, 앱 비밀번호를 만들어 아래에 넣어 주세요."
-    }
-
-    /** Work mailbox: which service, address, app password, then one [연결하기] that checks before saving. What is typed is kept in
-     * these fields, so a redraw (coming back from the mail app with the app password) puts it back (review #8). The password is
-     * kept only while the screen lives, never in the saved state. */
-    private var mailService="네이버"
-    internal var mailUser=""
-        private set
-    private var mailPassword=""
-    private var mailHost=""
-    private fun watching(f:EditText,keep:(String)->Unit)=f.addTextChangedListener(object:TextWatcher {
-        override fun beforeTextChanged(s:CharSequence?,st:Int,c:Int,af:Int) {}
-        override fun onTextChanged(s:CharSequence?,st:Int,b:Int,c:Int) {}
-        override fun afterTextChanged(s:Editable?) { keep(s?.toString().orEmpty()) }
-    })
-
-    private fun mailGroup(s:JSONObject) {
-        val user=s.optString(PipelineSettingsKeys.MAIL_USER)
-        if(user.isNotBlank() && s.optString(PipelineSettingsKeys.MAIL_PASSWORD).isNotBlank()) {
-            val error=s.optString(PipelineSettingsKeys.MAIL_ERROR)
-            body.addView(CallUi.text(a,if(error.isBlank()) "연결됨 ✓  $user" else error,CallUi.BODY,true,if(error.isBlank()) CallUi.OK else CallUi.AMBER).apply { tag="mail_state" })
-            body.addView(CallUi.text(a,"받은 메일 중 업무 메일을 30분마다 가져와 통화와 함께 정리해요.",CallUi.ASIDE,color=CallUi.SUBTLE))
-            body.addView(act("메일 연결 끊기","mail_disconnect","끊는 중이에요") { done ->
-                save(done=done) { it.remove(PipelineSettingsKeys.MAIL_HOST);it.remove(PipelineSettingsKeys.MAIL_USER);it.remove(PipelineSettingsKeys.MAIL_PASSWORD);it.remove(PipelineSettingsKeys.MAIL_ERROR) } })
-            return
-        }
-        body.addView(CallUi.text(a,"업무 메일을 연결하면 메일도 업체와 사람별로 함께 정리해요. 메일 서비스 설정에서 IMAP을 켜고 앱 비밀번호를 만들어 아래에 넣어 주세요.",CallUi.BODY).apply { tag="mail_state" })
-        val choices=MessageIntake.MAIL_HOSTS.keys.toList()+"직접 입력"
-        // Two rows of two, so every name stays on one line at any width and letter size.
-        val row=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
-        val lines=List((choices.size+1)/2) { LinearLayout(a).apply { orientation=LinearLayout.HORIZONTAL }.also { l -> row.addView(l,LinearLayout.LayoutParams(-1,-2).apply { if(it>0) topMargin=CallUi.dp(a,6) }) } }
-        fun field(hint:String,password:Boolean=false)=EditText(a).apply {
-            this.hint=hint;textSize=CallUi.BODY;isSingleLine=true;minHeight=CallUi.dp(a,56);importantForAutofill=View.IMPORTANT_FOR_AUTOFILL_NO
-            inputType=if(password) InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD else InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
-            typeface=CallUi.font(a,CallUi.Weight.REGULAR)
-        }
-        val host=field("IMAP 서버 (예: imap.회사.com)").apply { tag="mail_host";setText(mailHost) }
-        watching(host) { mailHost=it }
-        val guide=aside(mailGuide(mailService),CallUi.SUBTLE).apply { tag="mail_guide";setPadding(0,CallUi.dp(a,8),0,0) }
-        val services=ArrayList<Pair<String,Button>>()
-        // A service button changes only the buttons' colours, the guide line and the server field; nothing typed is lost.
-        fun paint() {
-            services.forEach { (name,b) -> val on=name==mailService
-                b.typeface=CallUi.font(a,if(on) CallUi.Weight.SEMIBOLD else CallUi.Weight.MEDIUM)
-                b.setTextColor(if(on) CallUi.ON_ACCENT else CallUi.SUBTLE);b.background=CallUi.ripple(a,CallUi.sheet(a,if(on) CallUi.ACCENT else CallUi.CHIP,radius=14))
-                b.isSelected=on }
-            guide.text=mailGuide(mailService)
-            host.visibility=if(mailService=="직접 입력") View.VISIBLE else View.GONE
-        }
-        choices.forEachIndexed { i,name ->
-            val b=Button(a).apply {
-                text=name;textSize=16f;isAllCaps=false;stateListAnimator=null;minHeight=CallUi.dp(a,48);minimumHeight=minHeight;setPadding(0,0,0,0);maxLines=1
-                tag="mail_service_$i";CallUi.onTap(this) { mailService=name;paint() }
-            }
-            services+=name to b
-            lines[i/2].addView(b,LinearLayout.LayoutParams(0,-2,1f).apply { if(i%2==0) marginEnd=CallUi.dp(a,6) })
-        }
-        if(choices.size%2==1) lines.last().addView(View(a),LinearLayout.LayoutParams(0,1,1f).apply { marginStart=CallUi.dp(a,0) })
-        paint()
-        body.addView(row,LinearLayout.LayoutParams(-1,-2).apply { topMargin=CallUi.dp(a,10) })
-        body.addView(guide)
-        body.addView(host)
-        val address=field("메일 주소").apply { tag="mail_user";setText(mailUser) }
-        val password=field("앱 비밀번호",true).apply { tag="mail_password";setText(mailPassword) }
-        watching(address) { mailUser=it };watching(password) { mailPassword=it }
-        body.addView(address);body.addView(password)
-        body.addView(act("연결하기","mail_connect","연결하는 중이에요",big=true) { done ->
-            val h=if(mailService=="직접 입력") mailHost.trim() else MessageIntake.MAIL_HOSTS.getValue(mailService)
-            val u=mailUser.trim();val p=mailPassword
-            if(h.isEmpty()||u.isEmpty()||p.isEmpty()) { done();Toast.makeText(a,"서버, 메일 주소, 앱 비밀번호를 모두 넣어 주세요.",Toast.LENGTH_LONG).show();return@act }
-            a.lifecycleScope.launch {
-                val problem=withContext(Dispatchers.IO) { MessageIntake.checkMail(h,u,p) }
-                if(problem!=null) { done();Toast.makeText(a,problem,Toast.LENGTH_LONG).show();return@launch }
-                mailPassword="";mailUser="";mailHost=""
-                save(done=done) { it.put(PipelineSettingsKeys.MAIL_HOST,h).put(PipelineSettingsKeys.MAIL_USER,u).put(PipelineSettingsKeys.MAIL_PASSWORD,p).remove(PipelineSettingsKeys.MAIL_ERROR) }
-                Toast.makeText(a,"메일을 연결했어요.",Toast.LENGTH_SHORT).show()
-            }
-        })
     }
 
     private fun hourWords(h:Int)=when { h==0 -> "밤 12시";h<12 -> "오전 ${h}시";h==12 -> "낮 12시";else -> "오후 ${h-12}시" }

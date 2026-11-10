@@ -8,13 +8,12 @@ import androidx.work.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kr.callbrief.SecureSettings
-import java.util.Properties
 import java.util.concurrent.TimeUnit
 
-/** Text messages and mail, taken in like calls: each becomes a record the hourly analysis summarises into the same
+/** Text messages (SMS and MMS), taken in like calls: each becomes a record the hourly analysis summarises into the same
  * ledger and check items. All of them are read (user decision 10/30): the analysis decides work or personal, and a
- * personal one is deleted, never stored or summarised. Machine messages (ads, codes, card and bank alerts, mass mail)
- * are dropped on the phone first and never sent. Nothing is read before the user's 정리 동의. */
+ * personal one is deleted, never stored or summarised. Machine messages (ads, codes, card and bank alerts) are dropped
+ * on the phone first and never sent. Nothing is read before the user's 정리 동의. Mail was removed in v3.7. */
 internal object MessageIntake {
     private const val FIRST_LOOK_MS=2*86_400_000L
     private fun hhmm(ms:Long)=CallUi.time(ms)
@@ -102,141 +101,31 @@ internal object MessageIntake {
         return added
     }
 
-    // ---- mail -------------------------------------------------------------------------------------------------------
-    /** Mail services the settings screen offers; "직접 입력" takes any IMAP host. */
-    val MAIL_HOSTS=linkedMapOf("네이버" to "imap.naver.com","다음" to "imap.daum.net","Gmail" to "imap.gmail.com")
-
-    private fun connect(host:String,user:String,password:String):javax.mail.Store {
-        val props=Properties().apply {
-            put("mail.store.protocol","imaps");put("mail.imaps.ssl.enable","true");put("mail.imaps.ssl.checkserveridentity","true")
-            put("mail.imaps.connectiontimeout","20000");put("mail.imaps.timeout","20000")
-        }
-        return javax.mail.Session.getInstance(props).getStore("imaps").apply { connect(host,993,user,password) }
-    }
-    /** Settings screen's [연결 확인]: null when the mailbox opened, else the reason in plain words. */
-    fun checkMail(host:String,user:String,password:String):String? = try { connect(host,user,password).close();null }
-        catch(_:javax.mail.AuthenticationFailedException) { "메일 주소나 앱 비밀번호가 맞지 않아요. 메일 서비스에서 IMAP 사용과 앱 비밀번호를 확인해 주세요." }
-        catch(_:Exception) { "메일 서버에 연결하지 못했어요. 인터넷 연결과 서버 주소를 확인해 주세요." }
-
-    /** Mass mail is skipped: newsletters carry an unsubscribe header or a bulk precedence, and no-reply senders. */
-    internal fun isBulk(listUnsubscribe:Boolean,precedence:String?,from:String?)=
-        listUnsubscribe || precedence?.lowercase()?.let { it=="bulk" || it=="list" || it=="junk" }==true || from?.lowercase()?.contains(Regex("no-?reply"))==true
-
-    /** The new part of a reply: everything before the quoted earlier mail. */
-    internal fun newPart(body:String):String {
-        val lines=body.replace("\r","").lines()
-        val cut=lines.indexOfFirst { l -> val t=l.trim()
-            t.startsWith(">") || t.contains(Regex("^-{2,}\\s*(Original Message|원본 메시지|Forwarded message|전달된 메시지)")) ||
-                (t.startsWith("On ") && t.endsWith("wrote:")) || t.matches(Regex("^(보낸 사람|From)\\s*:.*")) }
-        return (if(cut>0) lines.take(cut) else lines).joinToString("\n").replace(Regex("\n{3,}"),"\n\n").trim()
-    }
-    /** "첨부: 견적서.pdf, 도면.dwg" under the body (design C4 rule 17: a sent file is a sign the "보내기" item is done); empty without files. */
-    /** The text of one mail as it is kept and later sent for analysis. v3.3 (DESIGN_V4 3.2-3, prompt v7): "보낸 사람" is
-     * the name only, never the address (the sender is known by the counterpart id); a name that is itself an address,
-     * or no name at all, becomes "이름 없음". Addresses quoted in the subject or body ("보낸 사람: x@y" of a forwarded
-     * mail, a signature) become [ADDRESS_MASK], so no request carries an address. A unit-price '@' ("단가 @15,000")
-     * is content and stays. */
-    internal fun mailContent(subject:String?,senderName:String?,body:String,files:List<String>):String {
-        val name=ClaudeCallAnalyzer.mailSender(senderName)?.takeIf { '@' !in it } ?: "이름 없음"
-        return noAddress("제목: ${subject.orEmpty()}\n보낸 사람: $name\n\n$body"+attachedLine(files))
-    }
+    /** "[메일 주소]": the mask [ClaudeCallAnalyzer.maskNumbers] puts over a mail address in a transcript or a text. Mail
+     * intake itself was removed in v3.7 (DESIGN_V7 3.3, user decision 11/7); addresses can still arrive inside texts. */
     internal const val ADDRESS_MASK="[메일 주소]"
-    private val ADDRESS=Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)+")
-    internal fun noAddress(text:String)=ADDRESS.replace(text,ADDRESS_MASK)
-    internal fun attachedLine(names:List<String>)=names.map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(10)
-        .takeIf { it.isNotEmpty() }?.joinToString(", ",prefix="\n첨부: ") { it.take(80) } ?: ""
-    private fun attachments(part:javax.mail.Part):List<String> = when {
-        part.isMimeType("multipart/*") -> (part.content as javax.mail.Multipart).let { mp -> (0 until mp.count).flatMap { attachments(mp.getBodyPart(it)) } }
-        else -> listOfNotNull(part.fileName?.let { runCatching { javax.mail.internet.MimeUtility.decodeText(it) }.getOrDefault(it) }
-            ?.takeIf { javax.mail.Part.ATTACHMENT.equals(part.disposition,true) || !part.isMimeType("text/*") })
-    }
-    private fun text(part:javax.mail.Part):String? = when {
-        part.isMimeType("text/plain") -> part.content as? String
-        part.isMimeType("multipart/*") -> (part.content as javax.mail.Multipart).let { mp ->
-            val parts=(0 until mp.count).map { mp.getBodyPart(it) }
-            parts.firstNotNullOfOrNull { p -> if(p.isMimeType("text/plain")) text(p) else null } ?: parts.firstNotNullOfOrNull { text(it) } }
-        part.isMimeType("text/html") -> (part.content as? String)?.let { android.text.Html.fromHtml(it,android.text.Html.FROM_HTML_MODE_COMPACT).toString() }
-        else -> null
-    }
 
-    fun takeMail(store:CallRecordStore,settings:SecureSettings):Int {
-        val s=settings.snapshot()
-        val host=s.optString(PipelineSettingsKeys.MAIL_HOST);val user=s.optString(PipelineSettingsKeys.MAIL_USER);val pass=s.optString(PipelineSettingsKeys.MAIL_PASSWORD)
-        if(host.isBlank() || user.isBlank() || pass.isBlank())return 0
-        val since=s.optLong(PipelineSettingsKeys.LAST_MAIL_MS,0).takeIf { it>0 } ?: (System.currentTimeMillis()-FIRST_LOOK_MS)
-        if(s.optLong(PipelineSettingsKeys.MAIL_BACKFILL_UNTIL,0)==0L) {
-            val until=listOfNotNull(store.earliestMessage(MessageKind.MAIL),since).minOrNull()!!
-            settings.update { it.put(PipelineSettingsKeys.MAIL_BACKFILL_UNTIL,until).put(PipelineSettingsKeys.MAIL_BACKFILL_CURSOR,FirstPass.FROM_MS) }
-        }
-        var added=0;var newest=since
-        try {
-            connect(host,user,pass).use { box ->
-                val inbox=box.getFolder("INBOX");inbox.open(javax.mail.Folder.READ_ONLY)
-                try {
-                    val uidFolder=inbox as? javax.mail.UIDFolder
-                    fun between(from:Long,end:Long)=inbox.search(javax.mail.search.ReceivedDateTerm(javax.mail.search.ComparisonTerm.GE,java.util.Date(from-86_400_000L)))
-                        .filter { val t=it.receivedDate?.time ?: 0L;t>=from && t<end }.sortedBy { it.receivedDate.time }.take(30)
-                    val recent=between(since+1,Long.MAX_VALUE)
-                    // First pass: one batch of mail from 10/1 up to where the regular intake began.
-                    val cursor=settings.snapshot().optLong(PipelineSettingsKeys.MAIL_BACKFILL_CURSOR,0);val end=settings.snapshot().optLong(PipelineSettingsKeys.MAIL_BACKFILL_UNTIL,0)
-                    val old=if(cursor>0 && cursor<end) between(cursor,end) else emptyList()
-                    for(m in recent+old) {
-                        val at=m.receivedDate.time;if(m in recent) newest=maxOf(newest,at)
-                        val from=(m.from?.firstOrNull() as? javax.mail.internet.InternetAddress)
-                        if(isBulk(m.getHeader("List-Unsubscribe")!=null,m.getHeader("Precedence")?.firstOrNull(),from?.address))continue
-                        val body=newPart(runCatching { text(m) }.getOrNull().orEmpty()).take(3000)
-                        // The address identifies the sender (design: 장부의 원본); the name is in the text.
-                        val who=from?.address?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: from?.personal
-                        val files=runCatching { attachments(m) }.getOrDefault(emptyList())
-                        val content=mailContent(m.subject,from?.personal,body,files)
-                        val id=MessageKind.MAIL+(uidFolder?.let { "${it.uidValidity}:${it.getUID(m)}" } ?: "${m.messageNumber}:$at")
-                        if(store.insertMessage(id,at,who,content)) added++
-                    }
-                    if(cursor>0 && cursor<end) settings.update { it.put(PipelineSettingsKeys.MAIL_BACKFILL_CURSOR,if(old.size>=30) old.last().receivedDate.time+1 else end) }
-                } finally { runCatching { inbox.close(false) } }
-            }
-            settings.update { it.put(PipelineSettingsKeys.LAST_MAIL_MS,newest).remove(PipelineSettingsKeys.MAIL_ERROR) }
-        } catch(e:javax.mail.AuthenticationFailedException) {
-            noteMailError(settings,mailErrorCode(e))
-            settings.update { it.put(PipelineSettingsKeys.MAIL_ERROR,"메일 앱 비밀번호가 맞지 않아요. 설정에서 다시 넣어 주세요.") }
-        } catch(e:Exception) {
-            // v3.4 (DESIGN_V4 4.3-8): not swallowed any more: its reason code is counted for the heartbeat's messages.mailError.
-            // Network and the like: the next run tries again.
-            noteMailError(settings,mailErrorCode(e))
-        }
-        return added
+    /** Settings keys the mail intake (v2.x to v3.6) kept: the mailbox server, address and app password, its progress and its
+     * errors. v3.7 removes them once at app start ([forgetMail]); nothing writes them any more. */
+    internal val REMOVED_MAIL_KEYS=listOf("mailImapHost","mailUser","mailAppPassword","messagesLastMailMs","mailLastError",
+        "firstPassMailCursor","firstPassMailUntil","mailErrorCodes")
+    /** Takes [REMOVED_MAIL_KEYS] out of [s]; true when one was there. */
+    internal fun clearMail(s:org.json.JSONObject):Boolean = REMOVED_MAIL_KEYS.filter { s.has(it) }.onEach { s.remove(it) }.isNotEmpty()
+    /** The one-time cleanup after the upgrade to v3.7 (DESIGN_V7 3.3): a saved mail address and app password are deleted from
+     * the sealed settings. A store without them is not written again, so this costs one read on later starts. */
+    fun forgetMail(settings:SecureSettings) {
+        if(!REMOVED_MAIL_KEYS.any { settings.snapshot().has(it) }) return
+        settings.update { clearMail(it) }
     }
-    /** A fixed reason code for a failed mail intake, never the message (it may hold the address): AUTH, TIMEOUT, NETWORK,
-     * FOLDER, SERVER (another mail protocol error) or OTHER. */
-    internal fun mailErrorCode(e:Throwable):String {
-        val chain=generateSequence(e) { it.cause }.take(5).toList()
-        return when {
-            chain.any { it is javax.mail.AuthenticationFailedException } -> "AUTH"
-            chain.any { it is java.net.SocketTimeoutException } -> "TIMEOUT"
-            chain.any { it is java.net.UnknownHostException || it is java.net.ConnectException || it is java.net.NoRouteToHostException } -> "NETWORK"
-            chain.any { it is javax.mail.FolderNotFoundException } -> "FOLDER"
-            chain.any { it is java.io.IOException } -> "NETWORK"
-            chain.any { it is javax.mail.MessagingException } -> "SERVER"
-            else -> "OTHER"
-        }
-    }
-    /** Adds one to [code] in [PipelineSettingsKeys.MAIL_ERROR_CODES] ({code: count}). */
-    internal fun noteMailError(settings:SecureSettings,code:String) = runCatching { settings.update { addMailError(it,code) } }
-    internal fun addMailError(s:org.json.JSONObject,code:String) {
-        val o=runCatching { org.json.JSONObject(s.optString(PipelineSettingsKeys.MAIL_ERROR_CODES,"{}")) }.getOrDefault(org.json.JSONObject())
-        s.put(PipelineSettingsKeys.MAIL_ERROR_CODES,o.put(code,o.optLong(code,0)+1).toString())
-    }
-    private inline fun <T> javax.mail.Store.use(block:(javax.mail.Store)->T):T = try { block(this) } finally { runCatching { close() } }
 }
 
-/** Every 30 minutes (and right after the user connects mail): take in new texts and mail, then queue the analysis. */
+/** Every 30 minutes (and right after consent): take in new texts, then queue the analysis. */
 internal class MessageWork(context:Context,params:WorkerParameters):CoroutineWorker(context,params) {
     override suspend fun doWork():Result=withContext(Dispatchers.IO) {
         if(kr.callbrief.BuildConfig.LOCAL_PREVIEW)return@withContext Result.success()
         val storage=CallPipelineStartup.storage(applicationContext);val settings=SecureSettings(storage)
         if(!settings.snapshot().optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false))return@withContext Result.success()
-        val added=kr.callbrief.IeumApplication.store(storage).let { store ->
-            runCatching { MessageIntake.takeSms(applicationContext,store,settings) }.getOrDefault(0)+runCatching { MessageIntake.takeMail(store,settings) }.getOrDefault(0) }
+        val added=kr.callbrief.IeumApplication.store(storage).let { store -> runCatching { MessageIntake.takeSms(applicationContext,store,settings) }.getOrDefault(0) }
         if(added>0) CallPipelineStartup.enqueueAnalysis(applicationContext)
         Result.success()
     }

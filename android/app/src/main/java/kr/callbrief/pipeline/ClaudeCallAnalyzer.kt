@@ -27,17 +27,17 @@ internal data class ClaudeCallRequest(
     val todayCalls:List<PastCall> =emptyList(),
     val companyNames:List<String> =emptyList(),
     val personNames:List<String> =emptyList(),
-    /** "통화", "문자" or "메일": what the text between the transcript tags is. */
+    /** "통화" or "문자": what the text between the transcript tags is ("메일" only on records stored before v3.7). */
     val kind:String="통화",
     /** "받은 전화" or "건 전화", from the call log. */
     val direction:String?=null,
     /** An old record of the first pass (처음 정리). */
     val firstPass:Boolean=false,
-    /** The person's id in the repository ledger: fixed by phone number (mail: address), which itself never leaves the phone. */
+    /** The person's id in the repository ledger: fixed by phone number, which itself never leaves the phone. */
     val counterpartId:String?=null,
     /** Cross-check material (design: 통화 분석, 대조 자료): the call log's view of this call. */
     val callLog:CallLogView?=null,
-    /** Recent work texts and mail with the same person, raw, newest first, already cut to size. Quotes may come from here. */
+    /** Recent work texts with the same person, raw, newest first, already cut to size. Quotes may come from here. */
     val recentTexts:String="",
     /** Same day, same company, other people. */
     val sameDayCompany:List<PastCall> =emptyList(),
@@ -50,7 +50,7 @@ internal data class ClaudeCallRequest(
     /** The user as entered under "내 정보" (name, company and site, title); null or blank: roles only. */
     val user:UserInfo?=null,
     /** v3.3 (DESIGN_V4 3.1-1): when each transcript line was said (and its unsure numbers), for the number guard; null for
-     * texts, mail and records stored before v3.3 (the guard then reads lines around the quote instead). Never sent. */
+     * texts and records stored before v3.3 (the guard then reads lines around the quote instead). Never sent. */
     val segmentTimes:NumberGuard.Times?=null,
 ) {
     data class UserInfo(val name:String?,val company:String?,val role:String?) {
@@ -83,7 +83,7 @@ internal data class ClaudeCallAnalysis(
     val siteMemo:String?=null,
     val companyMemo:String?=null,
     val companyTrade:String?=null,
-    /** False when a text or mail turns out personal: it is then dropped, not stored or summarised. */
+    /** False when a text turns out personal: it is then dropped, not stored or summarised. */
     val business:Boolean=true,
     /** v3.3 (DESIGN_V4 3.1-6, rules v7): the answer's own "corrected" mark (a mishearing it fixed), kept as JSON text, not shown yet. */
     val corrected:String?=null,
@@ -155,7 +155,7 @@ internal class ClaudeCallAnalyzer {
             "counterpartName" to nullable("string"),
             "counterpartCompany" to nullable("string"),
             "counterpart" to obj("personName" to nullable("string"),"companyName" to nullable("string"),"role" to nullable("string"),"isStaff" to JSONObject().put("type","boolean")),
-            "business" to JSONObject().put("type","boolean").put("description","업무와 관련 있으면 true, 개인적인 문자·메일이면 false"),
+            "business" to JSONObject().put("type","boolean").put("description","업무와 관련 있으면 true, 개인적인 통화나 문자면 false"),
             "speakerNotes" to nullable("string").put("description","누가 말했는지 판단한 근거 한두 문장, 화면에 쓰지 않음"),
             "tasks" to array(obj("op" to enum("create","update","done_suggested"),"taskId" to nullable("string"),"title" to str(),"due" to date(),
                 "quote" to str("자막이나 texts 원문 그대로, 8글자 이상"),"company" to nullable("string"),
@@ -170,8 +170,10 @@ internal class ClaudeCallAnalyzer {
          * the result format is the same as 5, so a 4 or 5 request is answered by the same rules.
          * 7 (v3.3): no person name in titles, number certainty, `corrected` (misheard names fixed from [이름 목록]).
          * 8 (v3.4, DESIGN_V4 4.3): the rules and the result format are 7's; the routine's way of running changed (a failed pull or
-         * push says "확인 필요: 저장소 접근", 20 items a run, its own self-report file, the watchdog as its last step). */
-        const val PROMPT_VERSION=8
+         * push says "확인 필요: 저장소 접근", 20 items a run, its own self-report file, the watchdog as its last step).
+         * 9 (v3.7, DESIGN_V7 3.3): mail is gone (rules 15, 17 to 19 and the business description speak of calls and texts only);
+         * the result keys are 8's, so an 8 request is answered by the same rules. */
+        const val PROMPT_VERSION=9
         const val FORMAT=3
         /** Site words the speech recogniser tends to mishear (design C5 [용어]). */
         val TERMS=listOf("타설","양생","레미콘","슬럼프","거푸집","동바리","배근","D10","D13","D16","D19","D22","D25","샵드로잉","기성","내역서","견적서","도면",
@@ -205,7 +207,7 @@ internal class ClaudeCallAnalyzer {
          * after '@'). The domain starts with a letter, so a unit price "단가 @15,000" or "개당@1,500" stays as content. */
         private val MAIL_ADDRESS=Regex("[A-Za-z0-9._%+-]+@[A-Za-z][A-Za-z0-9-]*(?:\\.[A-Za-z0-9-]+)*")
         /** Phone and account numbers in a transcript or text replaced by [NUMBER_MASK] (a date like 2026-11-04 stays), and since
-         * v3.4 mail addresses by [MessageIntake.ADDRESS_MASK] ("[메일 주소]", the mask rule 17 names), first, so the digits of an
+         * v3.4 mail addresses by [MessageIntake.ADDRESS_MASK] ("[메일 주소]", the mask rule 17 names; a text can carry one), first, so the digits of an
          * address are not half masked. */
         fun maskNumbers(text:String):String {
             val noMail=MAIL_ADDRESS.replace(text,MessageIntake.ADDRESS_MASK)
@@ -216,8 +218,6 @@ internal class ClaudeCallAnalyzer {
         }
         /** A name as it may leave the phone: number-shaped parts gone, any other long number masked; null when nothing is left. */
         fun safeName(name:String?):String? = CallRecordStore.noNumber(name)?.let { maskNumbers(it).trim() }?.takeIf { it.isNotEmpty() && it!=NUMBER_MASK }
-        /** The sender of a mail as sent: the name only, never the address (the person is known by id, review 18). */
-        fun mailSender(raw:String?):String? = raw?.trim()?.takeIf { it.isNotEmpty() && !(it.contains('@') && !it.contains(' ')) }?.let { safeName(it) }
         /** Who the user is, in roles only (no name, company or site): the first block of every request when "내 정보" is empty. */
         const val USER_PROFILE="건설사 직원(부장), 건설 현장 한 곳을 맡고 있습니다. 협력업체와 같은 회사 직원에게 일을 시키고 받는 통화가 많습니다. 상대가 \"부장님\"이라고 부르면 듣는 쪽이 사용자입니다."
         val SYSTEM="""
@@ -252,15 +252,15 @@ internal class ClaudeCallAnalyzer {
 [이름]
 13. counterpart에는 이번 통화 상대의 personName, companyName, role, isStaff(우리 회사 직원이면 true, 이때 companyName은 null)를 씁니다. 자막이나 [이름 목록]에서 확인되지 않으면 null로 두고, 자막과 [이름 목록]에 없는 이름은 절대 지어내지 마세요. counterpartName과 counterpartCompany에는 같은 값을 넣습니다. 호칭(과장, 소장, 님)은 이름에 붙이지 말고 role에 씁니다.
 14. 자막의 이름은 음성 인식 오타가 있을 수 있습니다. [이름 목록]에 비슷한 이름이 있으면 목록의 표기를 그대로 쓰세요. 목록에 "김민수(△△철강 과장, 오인식 김민서)"처럼 "오인식" 뒤에 적힌 이름은 다르게 들린 적이 있는 틀린 표기이니 같은 사람으로 보고 앞의 이름을 쓰세요. 호칭, 업체명, 사람 이름이 [이름 목록]의 것과 비슷하게 들렸으면(자막 "단단 이엔씨", 목록 "탄탄이엔씨") summary, keyPoints, title, company, counterpart에는 목록의 표기로 쓰고, 고친 것마다 corrected에 {"heard": 자막에 들린 표기, "written": 고쳐 쓴 표기}를 하나씩 넣으세요. quote는 고치지 말고 자막 그대로 두세요. 숫자, 날짜, 시각, 금액, 규격(철근 규격, 강도, 수량)은 비슷하게 들려도 절대 고치지 말고 corrected에도 넣지 마세요. 비슷한지 확신이 없으면 고치지 마세요. 고친 것이 없으면 corrected는 빈 배열입니다.
-15. "상대 id"가 있으면 그 상대는 전화번호(메일은 주소)로 확인된 사람입니다. 자막의 이름이 [상대]의 이름과 다르게 들려도 같은 사람이니 [상대]의 이름을 쓰세요. 다만 자막에서 상대가 자기 이름을 분명히 다르게 말하면 [이 번호를 쓰는 사람들]에서 고르고, 거기에도 없으면 그 이름을 쓰세요(사무실 번호를 여러 사람이 씁니다).
+15. "상대 id"가 있으면 그 상대는 전화번호로 확인된 사람입니다. 자막의 이름이 [상대]의 이름과 다르게 들려도 같은 사람이니 [상대]의 이름을 쓰세요. 다만 자막에서 상대가 자기 이름을 분명히 다르게 말하면 [이 번호를 쓰는 사람들]에서 고르고, 거기에도 없으면 그 이름을 쓰세요(사무실 번호를 여러 사람이 씁니다).
 16. 전화부 이름에 업체나 직책이 붙어 있으면(김과장 △△철강) 이름, 업체, 직책으로 나눠 쓰세요. 자막이나 전화부 이름에 '김 과장'처럼 성과 직책만 들리고 [상대]나 [이름 목록]에 같은 성의 그 직책 사람이 하나 있으면 그 사람의 이름을 쓰세요. 없으면 personName은 '김'이 아니라 null로 두고 role만 '과장'으로 씁니다.
 
-[문자와 메일]
-17. 메시지 맨 위 "종류"가 문자나 메일이면 <transcript> 안의 글은 업무 문자(시각과 보낸/받은 표시) 또는 메일(제목, 보낸 사람, 본문, 첨부 목록)입니다. 메일의 "보낸 사람"에는 이름만 있고 주소는 없습니다(보낸 사람은 "상대 id"로 확인됩니다). 본문의 [메일 주소]는 가려 둔 주소입니다. 자막 규칙을 똑같이 적용하고 quote도 그 글에서 복사하세요. 보낸 문자의 약속은 사용자의 약속(owner "me")입니다. "첨부: 견적서.pdf" 같은 줄은 그 서류가 실제로 갔다는 신호이므로 [열린 체크할 일]의 "보내기" 일이 끝난 것으로 보이면 done_suggested를 내세요.
-18. <texts>는 같은 상대와 최근 7일 동안 주고받은 업무 문자와 메일 원문입니다. 통화와 문자, 메일을 한 흐름으로 이어서 요약하고, 이미 문자로 끝난 일은 새 할 일로 만들지 마세요. "아직 정리 전" 표시는 아직 분석되지 않은 문자라는 뜻입니다.
+[문자]
+17. 메시지 맨 위 "종류"가 문자이면 <transcript> 안의 글은 업무 문자(시각과 보낸/받은 표시)입니다. 글 안의 [메일 주소]는 가려 둔 주소입니다. 자막 규칙을 똑같이 적용하고 quote도 그 글에서 복사하세요. 보낸 문자의 약속은 사용자의 약속(owner "me")입니다.
+18. <texts>는 같은 상대와 최근 7일 동안 주고받은 업무 문자 원문입니다. 통화와 문자를 한 흐름으로 이어서 요약하고, 이미 문자로 끝난 일은 새 할 일로 만들지 마세요. "아직 정리 전" 표시는 아직 분석되지 않은 문자라는 뜻입니다.
 
 [개인 내용]
-19. business는 이 통화·문자·메일이 사용자의 일(현장, 협력업체, 회사 업무)과 관련 있으면 true입니다. 가족, 지인, 쇼핑, 택배, 광고, 금융 알림 같은 개인적인 것이면 false로 하고, summary는 "개인 내용"이라고만 쓰고 나머지 목록은 비우며 이름과 업체도 모두 null로 두세요. 개인 내용은 요약하거나 옮겨 적지 마세요. [상대]에 업체가 있는 통화는 분명히 개인적인 내용일 때만 false입니다. 협력업체 사람의 명절 인사, 경조사 안내는 업무 관계이므로 business true이고 tasks는 비웁니다.
+19. business는 이 통화나 문자가 사용자의 일(현장, 협력업체, 회사 업무)과 관련 있으면 true입니다. 가족, 지인, 쇼핑, 택배, 광고, 금융 알림 같은 개인적인 것이면 false로 하고, summary는 "개인 내용"이라고만 쓰고 나머지 목록은 비우며 이름과 업체도 모두 null로 두세요. 개인 내용은 요약하거나 옮겨 적지 마세요. [상대]에 업체가 있는 통화는 분명히 개인적인 내용일 때만 false입니다. 협력업체 사람의 명절 인사, 경조사 안내는 업무 관계이므로 business true이고 tasks는 비웁니다.
 
 [예시 1] [열린 체크할 일]에 {"taskId":"w12","title":"수정 견적서 회신 확인"}이 있고 자막에 "수정 견적서는 어제 메일로 보내드렸습니다"가 있으면 → tasks: [{"op":"done_suggested","taskId":"w12","quote":"수정 견적서는 어제 메일로 보내드렸습니다","owner":"them","certainty":"sure"}]
 [예시 2] [열린 체크할 일]에 {"taskId":"w20","title":"3층 타설 일정표 공유","due":"2026-11-05"}가 있고 자막에 "타설 일정표는 금요일까지 드릴게요"(통화일 수요일 11/4)가 있으면 → tasks: [{"op":"update","taskId":"w20","title":"3층 타설 일정표 공유","due":"2026-11-06","quote":"타설 일정표는 금요일까지 드릴게요","owner":"them","certainty":"sure"}]
@@ -288,11 +288,10 @@ internal class ClaudeCallAnalyzer {
             if(r.firstPass) append("[처음 정리] 지난 기록이에요.\n")
             append("종류: ").append(r.kind).append('\n')
             append(r.kind).append(" 시각: ").append(r.callTimeKst).append('\n')
-            // A bare phone number is not sent: the person is known by id (design: 장부의 원본).
-            // Mail: the sender's name only, the address never (review 18); a name with a number in it loses the number.
-            val shown=if(r.kind=="메일") mailSender(r.counterpart) ?: r.person?.name?.let { safeName(it) }
-                else r.counterpart?.takeIf { it.isNotBlank() }?.let { c -> if(CallRecordStore.isContact(CallRecordStore.counterpartKey(c))) "전화부에 없는 번호" else safeName(c) ?: "전화부에 없는 번호" }
-            append(if(r.kind=="메일") "보낸 사람: " else "전화부 이름: ").append(shown ?: "미상").append('\n')
+            // A bare phone number (or an address on a record from before v3.7) is not sent: the person is known by id (design:
+            // 장부의 원본); a name with a number in it loses the number.
+            val shown=r.counterpart?.takeIf { it.isNotBlank() }?.let { c -> if(CallRecordStore.isContact(CallRecordStore.counterpartKey(c))) "전화부에 없는 번호" else safeName(c) ?: "전화부에 없는 번호" }
+            append("전화부 이름: ").append(shown ?: "미상").append('\n')
             r.counterpartId?.let { append("상대 id: ").append(it).append('\n') }
             r.callLog?.let { l -> append("[통화기록] ").append(listOfNotNull(safeName(l.phoneBookName)?.let { "전화부 이름 $it" },l.direction,"실제 시각 ${l.startTime}",
                 "길이 ${durationText(l.durationMs)}").joinToString(", ")).append('\n') }
@@ -330,7 +329,7 @@ internal class ClaudeCallAnalyzer {
             append("[이름 목록] 업체: ").append(companies.joinToString(", ").ifEmpty { "없음" }).append(" / 사람: ").append(people.joinToString(", ") { person(it) }.ifEmpty { "없음" })
             if(r.sameDayCompany.isNotEmpty()) append("\n[같은 날 같은 업체의 다른 기록]").append(pastCalls(r.sameDayCompany,5))
             if(r.recentlyDone.isNotEmpty()) append("\n[최근 끝낸 체크할 일] ").append(r.recentlyDone.take(15).joinToString(", ") { clip(it,60) })
-            if(r.recentTexts.isNotBlank()) append("\n\n[이 상대와 최근 7일 업무 문자와 메일]\n<texts>\n").append(maskNumbers(r.recentTexts)).append("\n</texts>")
+            if(r.recentTexts.isNotBlank()) append("\n\n[이 상대와 최근 7일 업무 문자]\n<texts>\n").append(maskNumbers(r.recentTexts)).append("\n</texts>")
             append("\n\n<transcript>\n").append(maskNumbers(r.transcript)).append("\n</transcript>")
         }
     }

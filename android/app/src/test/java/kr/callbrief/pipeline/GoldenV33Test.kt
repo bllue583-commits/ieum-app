@@ -9,8 +9,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
 
-/** v3.3 r13-2: the real-recording golden measurement (DESIGN_V4 3.2-4), its heartbeat block, the guard block, and the
- * mail sender without an address (3.2-3). */
+/** v3.3 r13-2: the real-recording golden measurement (DESIGN_V4 3.2-4), its heartbeat block and the guard block (the mail
+ * sender check left with the mail intake in v3.7). */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[35])
 class GoldenV33Test {
@@ -96,17 +96,6 @@ class GoldenV33Test {
         assertEquals(4,o.getJSONObject("guard").getInt("number"));assertFalse(o.getJSONObject("guard").has("note"))
         val none=PhoneStatus.build(PhoneStatus.Input(1L,"3.3",1L,0,null,0L,0L,"READY","","",1))
         assertTrue(none.isNull("golden"));assertTrue(none.isNull("guard"))
-    }
-
-    // ---- 3.2-3: the mail sender is a name, never an address ----
-    @Test fun mailContentHasNoAddress() {
-        val c=MessageIntake.mailContent("견적 회신 (문의 kim.ms@example.co.kr)","김민수","안녕하세요.\n보낸 사람: lee@test.com\n단가 @15,000원입니다.\n-- \nkim.ms@example.co.kr",listOf("견적서.pdf"))
-        assertTrue(c.contains("보낸 사람: 김민수\n"));assertFalse(Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\\.").containsMatchIn(c))
-        assertTrue("a unit price stays",c.contains("단가 @15,000원"));assertTrue(c.contains(MessageIntake.ADDRESS_MASK));assertTrue(c.contains("견적서.pdf"))
-        val line={ s:String -> s.lines().first { it.startsWith("보낸 사람:") } }
-        assertEquals("보낸 사람: 이름 없음",line(MessageIntake.mailContent("제목",null,"본문",emptyList())))
-        assertEquals("보낸 사람: 이름 없음",line(MessageIntake.mailContent("제목","kim@example.com","본문",emptyList())))
-        assertFalse(line(MessageIntake.mailContent("제목","\"Kim\" <kim@example.com>","본문",emptyList())).contains("@"))
     }
 
     @Suppress("unused") private fun arr(vararg s:String)=JSONArray(s.toList())

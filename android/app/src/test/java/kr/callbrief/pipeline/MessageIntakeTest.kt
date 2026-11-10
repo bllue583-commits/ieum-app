@@ -6,7 +6,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/** Text messages and mail are read narrowly: business numbers only, no mass mail, only the new part of a reply. */
+/** Text messages are read narrowly: business numbers only, no machine texts. Mail left in v3.7 (DESIGN_V7 3.3). */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[35])
 class MessageIntakeTest {
@@ -40,23 +40,9 @@ class MessageIntakeTest {
         assertTrue(ClaudeCallAnalysis.parse(org.json.JSONObject().put("summary","요약")).business) // older results: work
     }
 
-    @Test fun replyKeepsOnlyTheNewPart() {
-        val body="네, 금요일 오전 반입으로 하겠습니다.\n감사합니다.\n\n-----Original Message-----\nFrom: 김민수\n지난 메일 내용"
-        assertEquals("네, 금요일 오전 반입으로 하겠습니다.\n감사합니다.",MessageIntake.newPart(body))
-        assertEquals("새 내용",MessageIntake.newPart("새 내용\n> 인용된 줄"))
-        assertEquals("새 내용",MessageIntake.newPart("새 내용\n보낸 사람: 이영호"))
-    }
-
-    @Test fun massMailIsSkipped() {
-        assertTrue(MessageIntake.isBulk(true,null,"news@shop.com"))
-        assertTrue(MessageIntake.isBulk(false,"bulk","a@b.com"))
-        assertTrue(MessageIntake.isBulk(false,null,"no-reply@service.com"))
-        assertFalse(MessageIntake.isBulk(false,null,"kim@steel.co.kr"))
-    }
-
     @Test fun recordKindFollowsTheRecordingId() {
         assertEquals("문자",MessageKind.of("sms:01011112222:5"))
-        assertEquals("메일",MessageKind.of("mail:1:42"))
+        assertEquals("a mail record stored before v3.7 still reads","메일",MessageKind.of("mail:1:42"))
         assertEquals("통화",MessageKind.of("abc-recording"))
     }
 }

@@ -46,7 +46,7 @@ class HomeRestShotsTest:ProtectedTextHostTestBase() {
         shoot("1_rest_battery",HomeScreen.FirstPassView(37,9.0,4,2,audioMinutesLeft=190,lowBattery=true))
         shoot("2_rest_results",HomeScreen.FirstPassView(0,null,6,0,stalled=true))
         shoot("3_running",HomeScreen.FirstPassView(37,9.0,4,2,audioMinutesLeft=190))
-        shoot("4_rest_battery_short",HomeScreen.FirstPassView(3,0.5,0,0,audioMinutesLeft=25,lowBattery=true,mailConnected=false))
+        shoot("4_rest_battery_short",HomeScreen.FirstPassView(3,0.5,0,0,audioMinutesLeft=25,lowBattery=true))
     }
     @Config(qualifiers="w393dp-h852dp-night-xxhdpi")
     @Test fun restingAtNight() {

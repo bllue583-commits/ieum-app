@@ -58,6 +58,6 @@ S26 체크 (날짜):
 - `locked`가 1, 2번으로 늘었고 `noPermission`은 0 그대로다(잠금은 권한 문제가 아니다).
 - `cold`가 4번으로 늘었고 `ringToCardMsCold` 중앙값 < 1,500. `ringToCardMs` 중앙값 < 1,000.
 - `fgsRefused` = 0. 0이 아니면 삼성 "절전 앱" 목록에 이음이 들어가 있는지 본다(설정 › 배터리 › 백그라운드 사용 제한).
-- 9~11번에서 기록이 안 생기면 문자 읽기(`MessageWork`의 `content://mms` 조회)를 본다. `messages.mailError`는 메일 전용이라 이 경우와 관계없다.
+- 9~11번에서 기록이 안 생기면 문자 읽기(`MessageWork`의 `content://mms` 조회)를 본다.
 
 통과 기준(4.5): 1~8 모두 O(2번 창은 관찰만), 9·10 O, 11은 O 또는 "채팅+ 끄기" 안내 완료. 결과는 배포 보고와 `docs/HANDOFF.md`(오케스트레이터)에 옮긴다.

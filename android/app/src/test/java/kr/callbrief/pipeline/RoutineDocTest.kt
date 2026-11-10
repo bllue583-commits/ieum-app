@@ -92,7 +92,7 @@ class RoutineDocTest {
         listOf("title에 사람 이름이나 호칭(김민수 과장, 소장님)을 넣지 마세요","들린 대로 적되 그 일의 certainty를 \"tentative\"로",
             "숫자를 짐작해 바꾸지 마세요","corrected에 {\"heard\": 자막에 들린 표기, \"written\": 고쳐 쓴 표기}",
             "숫자, 날짜, 시각, 금액, 규격(철근 규격, 강도, 수량)은 비슷하게 들려도 절대 고치지 말고 corrected에도 넣지 마세요",
-            "quote는 고치지 말고 자막 그대로","메일의 \"보낸 사람\"에는 이름만 있고 주소는 없습니다").forEach { assertTrue(it,rules.contains(it)) }
+            "quote는 고치지 말고 자막 그대로").forEach { assertTrue(it,rules.contains(it)) }
         val corrected=JSONObject(block(text,"SCHEMA","json")).getJSONObject("properties").getJSONObject("corrected")
         assertEquals(listOf("heard","written"),corrected.getJSONObject("items").getJSONObject("properties").keys().asSequence().toList())
         assertTrue(corrected.getString("description").contains("숫자, 날짜, 규격은 고치지 않음"))
@@ -104,7 +104,14 @@ class RoutineDocTest {
         val prompt=text.substringAfter("\n---\n")
         listOf("\"확인 필요: 저장소 접근\"","`git pull`이 실패하면","결과를 만드는 항목은 20건까지","status/last-run-hourly.json","\"repoOk\":true","\"pushed\":true",
             "python3 tools/watchdog.py --root . --apply bllue583-commits/ieum-inbox","\"확인 필요: 감시 이슈 n건\"","renameCompany({\"from\",\"to\"}",
-            "\"promptVersion\": 7도 과도기 요청","과도기 버전 4, 5, 6, 7은 제외").forEach { assertTrue(it,prompt.contains(it)) }
+            "\"promptVersion\": 7도 과도기 요청","\"promptVersion\": 8도 과도기 요청","과도기 버전 4, 5, 6, 7, 8은 제외").forEach { assertTrue(it,prompt.contains(it)) }
+        // v9 (DESIGN_V7 3.3): mail is gone from the rules, the result format, the reply line and the self-report; the mask of an
+        // address inside a text stays (rule 17), and an old mail request from a phone not yet updated is answered and counted as sms.
+        assertFalse(rules.contains("[문자와 메일]"));assertFalse(rules.contains("보낸 사람"));assertFalse(rules.contains("첨부"))
+        assertTrue(rules.contains("[문자]"));assertTrue(rules.contains("[메일 주소]는 가려 둔 주소"))
+        assertFalse(block(text,"SCHEMA","json").contains("메일"))
+        assertTrue(prompt.contains("처리 N건 (통화 a, 문자 b, 처음 정리 d)"));assertTrue(prompt.contains("\"kinds\":{\"call\":0,\"sms\":0,\"selftest\":0}"))
+        assertFalse(prompt.contains("\"mail\":0"));assertTrue(prompt.contains("\"종류\"가 메일인 요청은 문자와 같은 규칙으로 처리해 sms로 센다"))
         assertFalse("hourly no longer writes the shared file",prompt.contains("`status/last-run.json`을 새로 써서"))
         // v3.3's rules for the merge edits stay.
         listOf("mergePeople({\"from\",\"into\"}","unmergePeople({\"from\",\"into\"}","keepApart").forEach { assertTrue(it,prompt.contains(it)) }
@@ -183,8 +190,9 @@ class RoutineDocTest {
     }
 
     private companion object {
-        /** The version docs/routines/hourly.md is at (v7: DESIGN_V4 3.2-3, r13-2; v8: DESIGN_V4 4.3, r14-3, same rules and format). */
-        const val DOC_VERSION=8
+        /** The version docs/routines/hourly.md is at (v7: DESIGN_V4 3.2-3, r13-2; v8: DESIGN_V4 4.3, r14-3, same rules and format;
+         * v9: DESIGN_V7 3.3, r17-0, mail removed, same result keys). */
+        const val DOC_VERSION=9
         /** The version docs/routines/tidy.md is at (v7: DESIGN_V5 2.2, r15-2, the morning report). */
         const val TIDY_VERSION=7
         /** True once ClaudeCallAnalyzer (r13-1's file) carries the doc's version (the orchestrator's integration step). */

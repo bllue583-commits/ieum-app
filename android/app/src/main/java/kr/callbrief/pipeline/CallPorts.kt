@@ -46,12 +46,6 @@ object PipelineSettingsKeys {
     const val MORNING_HOUR="callsMorningHour"
     /** Text messages: received/sent time of the newest message already taken in. */
     const val LAST_SMS_MS="messagesLastSmsMs"
-    /** Work mailbox (IMAP). The password is entered by the user only, stored encrypted, never shown again. */
-    const val MAIL_HOST="mailImapHost"
-    const val MAIL_USER="mailUser"
-    const val MAIL_PASSWORD="mailAppPassword"
-    const val LAST_MAIL_MS="messagesLastMailMs"
-    const val MAIL_ERROR="mailLastError"
     /** 처음 정리: when it started (records before are "old") and whether it is over. */
     const val FIRST_PASS_START_MS="firstPassStartMs"
     const val FIRST_PASS_DONE="firstPassDone"
@@ -75,11 +69,10 @@ object PipelineSettingsKeys {
     const val LAST_INBOX_ERROR_MS="lastInboxErrorMs"
     /** Mirrors the repository ledger's tidiedOnce: the morning tidy has read everything once. */
     const val TIDIED_ONCE="tidiedOnce"
-    /** Reading old texts and mail from 10/1 up to where the regular intake began: progress and end. */
+    /** Reading old texts from 10/1 up to where the regular intake began: progress and end. (The mail keys left in v3.7:
+     * [MessageIntake.REMOVED_MAIL_KEYS].) */
     const val SMS_BACKFILL_CURSOR="firstPassSmsCursor"
     const val SMS_BACKFILL_UNTIL="firstPassSmsUntil"
-    const val MAIL_BACKFILL_CURSOR="firstPassMailCursor"
-    const val MAIL_BACKFILL_UNTIL="firstPassMailUntil"
     /** A9: hallucinated segments and repeated sentences removed from transcripts (a running count). */
     const val TRANSCRIPT_CLEANED="transcriptCleaned"
     /** A2: when the daily self-check last had to register a lost work again (0/absent = never). */
@@ -171,8 +164,6 @@ object PipelineSettingsKeys {
     const val ROUTINE_CRONS="routineCrons"
     /** r14-3: the last update-check error code (heartbeat update.error); empty once a check goes through. */
     const val UPDATE_ERROR_CODE="updateErrorCode"
-    /** r14-3: mail intake error codes, a JSON object {code: count} (heartbeat messages.mailError). */
-    const val MAIL_ERROR_CODES="mailErrorCodes"
     /** r14-3: record time diagnosis, a JSON object {bucket: count} of created_ms − started_ms (heartbeat recordTime.fileVsRecordMin). */
     const val RECORD_TIME="recordTime"
     /** r14-1: the optional outgoing-call role offer in settings ("거는 전화에 번호를 더 빨리 알기") was dismissed. */
