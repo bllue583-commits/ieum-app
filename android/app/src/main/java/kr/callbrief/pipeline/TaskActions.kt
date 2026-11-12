@@ -41,6 +41,7 @@ internal object TaskActions {
             val ok=withContext(Dispatchers.IO) { runCatching { completeIo(app,item) }.isSuccess }
             synchronized(inFlight) { inFlight.remove(item.id) }
             saved.complete(ok)
+            if(ok) UseStats.add(UseStats.TASK_DONE) // v3.7 r17-3: in memory, written when the app goes to the background
             if(a.isFinishing||a.isDestroyed)return@launch
             if(!ok) {
                 CallUi.hideSnack(a)

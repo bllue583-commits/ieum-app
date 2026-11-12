@@ -273,7 +273,7 @@ class FirstSetupHomeTest:ProtectedTextHostTestBase() {
         assertEquals("지난 통화 정리 중, 녹음 120개 중 59개 남음",text(a,"first_pass_state"))
         val group=texts(tag(a,SettingsScreen.GROUP_NOW)).joinToString("\n")
         assertFalse("no call-log count on screen",group.contains("1028") || group.contains("통화기록 기준"))
-        assertTrue(group,group.contains("끝나기까지 약 9시간"))
+        assertTrue(group,group.contains(SettingsScreen.FIRST_PASS_GOING) && !group.contains("끝나기까지"))
         // Resting on battery: amber, why, and what is left in big numbers.
         SettingsScreen.firstPassHook={ HomeScreen.FirstPassView(37,9.0,4,2,audioMinutesLeft=190,lowBattery=true,recordings=80) }
         val b=settings()

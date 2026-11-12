@@ -51,8 +51,10 @@ class MainActivity:ComponentActivity() {
         const val TAP_MS=600L
         /** The fade between screens. */
         const val FADE_MS=120L
+        /** v3.7 r17-3: the Intent came from one of the app's notices (counted as [UseStats.NOTIF_TAP]). */
+        const val EXTRA_FROM_NOTICE="fromNotice"
         internal fun intent(c:Context,screen:Screen,dayMs:Long?=null,callId:String?=null)=Intent(c,MainActivity::class.java)
-            .putExtra(EXTRA_SCREEN,screen.name).apply { dayMs?.let { putExtra(EXTRA_DAY_MS,it) };callId?.let { putExtra(EXTRA_CALL_ID,it) } }
+            .putExtra(EXTRA_SCREEN,screen.name).putExtra(EXTRA_FROM_NOTICE,true).apply { dayMs?.let { putExtra(EXTRA_DAY_MS,it) };callId?.let { putExtra(EXTRA_CALL_ID,it) } }
         /** The host of the KakaoTalk message buttons (kakao<app key>://kakaolink?screen=…&dayMs=…, AndroidManifest). */
         const val KAKAO_HOST="kakaolink"
         /** v3.5 r15-3: the screen and day of a KakaoTalk button's execution parameters: "calls" (with its day, else today) and
@@ -139,11 +141,12 @@ class MainActivity:ComponentActivity() {
     }
     override fun onResume() {
         super.onResume();resumed=true
+        UseStats.add(UseStats.OPENS);UseStats.home(screen==Screen.HOME) // v3.7 r17-3: counts in memory only
         current.enter()
         if(intent?.getBooleanExtra("install_update",false)==true) { intent.removeExtra("install_update");home.updateNow() }
         else if(CallUpdate.ready(this)!=null && CallUpdate.takeInstallWish(this)) CallUpdate.install(this) // the asked-for download finished meanwhile
     }
-    override fun onPause() { super.onPause();resumed=false;current.leave() }
+    override fun onPause() { super.onPause();resumed=false;current.leave();UseStats.home(false);UseStats.flushLater(this) }
     override fun onNewIntent(intent:Intent) {
         super.onNewIntent(intent);setIntent(intent)
         // While resumed (rare: a notification tapped over the app) the screen is drawn here; otherwise onResume draws it.
@@ -157,7 +160,9 @@ class MainActivity:ComponentActivity() {
     /** Reads a notification's extras: the screen, the day of calls, the call to open. False when the Intent names no screen. */
     private fun take(i:Intent?):Boolean {
         // v3.5 r15-3 (DESIGN_V5 2.3-4): the KakaoTalk report's [이음에서 보기] button, read into the same extras.
-        if(i!=null && kakaoLink(i)) return take(i)
+        if(i!=null && kakaoLink(i)) { UseStats.add(UseStats.KAKAO_OPEN);return take(i) }
+        // v3.7 r17-3: opened from a notice of the app (the update notice too); read once.
+        if(i!=null && (i.getBooleanExtra(EXTRA_FROM_NOTICE,false) || i.getBooleanExtra("install_update",false))) { i.removeExtra(EXTRA_FROM_NOTICE);UseStats.add(UseStats.NOTIF_TAP) }
         val target=i?.getStringExtra(EXTRA_SCREEN)?.let { n -> runCatching { Screen.valueOf(n) }.getOrNull() }?.takeIf { it!=Screen.PERSON }
         val call=i?.getStringExtra(EXTRA_CALL_ID);val day=i?.getLongExtra(EXTRA_DAY_MS,0L)?.takeIf { it>0 }
         if(target==null && call==null) {
@@ -189,6 +194,7 @@ class MainActivity:ComponentActivity() {
     /** Brings [s] to the front: the old screen stops, the column is drawn again for the new one and fades in. */
     internal fun switchTo(s:Screen,enter:Boolean=true) {
         if(s!=screen) { current.leave();screen=s }
+        if(resumed) UseStats.home(s==Screen.HOME)
         CallUi.markTab(this,window.decorView.findViewWithTag("bottom_bar"),barTab(s))
         if(!enter) return
         // The old screen goes at once (its title too); the new one is drawn when its read is back, fading in over 120 ms.

@@ -166,7 +166,9 @@ internal object StatusLights {
     /** v3.6: recordings wait for the charger and the oldest of them for more than [TranscriptionPower.CHARGING_WAIT_WARN_MS]. */
     fun chargeLong(i:Input)=i.chargeWaiting>0 && i.chargeWaitOldestMs!=null && i.now-i.chargeWaitOldestMs>TranscriptionPower.CHARGING_WAIT_WARN_MS
     /** The settings groups the words name, said as below the lights (they lead the page). */
-    fun below(words:String)=listOf("연결","정리","통화 카드","아침 보고").fold(words) { w,g -> w.replace("위 $g 묶음","아래 $g 묶음") }
+    fun below(words:String)=BELOW.replace(words) { "${it.groupValues[1]}아래 ${it.groupValues[2]} 묶음" }
+    /** v3.7 r17-3: any "위 ○○ 묶음" (a group named later too), not only the four groups of v3.5; "화면 위에" is no group. */
+    private val BELOW=Regex("""(^|[ .(])위 ([가-힣]+(?: [가-힣]+)?) 묶음""")
 
     /** "통화 카드" (v3.0 r11-3): amber without the overlay permission (fixed in the 통화 카드 group) or without the call state
      * (fixed in 연결, where 전화 상태 허용 is). The role for calls that go out is optional: green, and the words say so. */

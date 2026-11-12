@@ -14,6 +14,9 @@ internal class VaultPruneWork(context:Context,params:WorkerParameters):Worker(co
         // an insert, which fails with the store once it is full). A failure here does not stop the vault prune.
         runCatching { trimRecords(applicationContext,System.currentTimeMillis()) }
             .onFailure { android.util.Log.w("ieum.prune","trim failed: ${it.javaClass.simpleName}") }
+        // v3.7 r17-3 (DESIGN_V7 3.3): the store's biggest tables, once a day, for the heartbeat's dbTables (after the trim).
+        runCatching { noteTables(applicationContext,System.currentTimeMillis()) }
+            .onFailure { android.util.Log.w("ieum.prune","tables not counted: ${it.javaClass.simpleName}") }
         GeneralLocalStore(CallPipelineStartup.storage(applicationContext)).use { it.pruneVault() }
         CallPipelineStartup.selfHeal(applicationContext) // A2: daily check that the other works are still registered
         Result.success()
@@ -23,6 +26,14 @@ internal class VaultPruneWork(context:Context,params:WorkerParameters):Worker(co
         const val NAME="ieum.calls.vault-prune"
         /** v3.6.1 (D1): [CallRecordStore.trim] at the store's present share (7 days, 3 from 60%), on the process store. */
         fun trimRecords(context:Context,now:Long) { val s=kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(context));s.trim(now,s.dbPercent()) }
+        /** v3.7 r17-3: [CallRecordStore.tableSizes] into [PipelineSettingsKeys.DB_TABLES] ([Telemetry.dbTables]); the heartbeat reads it. */
+        fun noteTables(context:Context,now:Long) {
+            val sizes=kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(context)).tableSizes()
+            val settings=kr.callbrief.SecureSettings(context.applicationContext)
+            val prev=runCatching { org.json.JSONObject(settings.snapshot().optString(PipelineSettingsKeys.DB_TABLES)) }.getOrNull()
+            val next=Telemetry.dbTables(sizes,prev,now)
+            settings.update { it.put(PipelineSettingsKeys.DB_TABLES,next.toString()) }
+        }
         fun schedule(context:Context) {
             WorkManager.getInstance(context.applicationContext).enqueueUniquePeriodicWork(NAME,ExistingPeriodicWorkPolicy.KEEP,
                 PeriodicWorkRequestBuilder<VaultPruneWork>(1,TimeUnit.DAYS)

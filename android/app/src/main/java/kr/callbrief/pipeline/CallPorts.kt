@@ -203,6 +203,23 @@ object PipelineSettingsKeys {
      * "pending", "atMs", "source"} (numbers and a code only), written right before the 05:30 send and by the 06:00 notice when
      * no send counted it. Read through [kr.callbrief.pipeline.report.ReportCoverage.snapshot] (the heartbeat's report.coverage). */
     const val REPORT_COVERAGE="reportCoverage"
+
+    // ---- v3.7 r17-3 (DESIGN_V7 3.3): measurement for the scorecard. Numbers, days and codes only. ----
+    /** r17-3: the day's use counts ([UseStats]): {"since": first KST day counted, "today":{day,opens,homeSec,taskDone,notifTap,
+     * cardExpand,kakaoOpen}, "prev":{same}}; written when the app goes to the background and at the heartbeat. */
+    const val USE_STATS="useStats"
+    /** r17-3: the sealed store's biggest tables, counted once a day by [VaultPruneWork] ([Telemetry.dbTables]): {"atMs","day",
+     * "top":[{name,rows,chars,dChars}]} (table names are schema names). */
+    const val DB_TABLES="dbTables"
+    /** r17-3: the call log match reasons of the KST day ([Telemetry.matchDay]): {"day","runs", the largest count of each reason
+     * seen in a pass that day}; folded in at the heartbeat from [CALLLOG_MATCH_STATS]' "last". */
+    const val CALLLOG_MATCH_DAY="callLogMatchDay"
+    /** r17-3: when a recording's text was first begun, {recording id: epoch ms}, the newest [Telemetry.TRACE_STARTS] kept
+     * (the heartbeat's trace[].textStartS; ids never leave the phone). */
+    const val TRACE_TEXT_START="traceTextStart"
+    /** r17-3: the last report coverages by report day, {"yyyy-MM-dd":[yesterdayCalls,inReport,pending]}, the newest 7
+     * (heartbeat report.recent, the watchdog's two-weekday rule). */
+    const val REPORT_COVERAGE_DAYS="reportCoverageDays"
 }
 
 /** Runtime wiring without a compile-time dependency between the two sides: the analysis side sets
