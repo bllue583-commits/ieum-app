@@ -1,11 +1,12 @@
 # 이음 새벽 정리 (매일) 지시문
-지시문 버전 8
+지시문 버전 9
 
 이 파일이 예약 작업 "이음 새벽 정리 (매일)" 프롬프트의 원본이다(설계도 C2, "새벽 정리" 절). v3.4(11/6)부터 예약 작업 프롬프트는 짧은 안내다(ieum-inbox를 pull하고, 실패하면 "확인 필요: 저장소 접근"만 답하고 끝냄, 아니면 저장소의 `routines/tidy.md`를 읽고 첫 "---" 다음부터 끝까지를 지시문으로 따름). 이 파일이 원본이고 배포 때 ieum-inbox `routines/tidy.md`로 복사한다.
 지금 예약 작업에 들어 있는 판(11/4 2판: 중복 방지, 자가 보고 설계도 B3 포함)과 같다. 저장소 문장만 clone 안내를 더해 고쳤다.
 v3.1(r12-3): 폰이 처음 정리 중(firstPassDone이 false)이어도 최근 14일 records를 올린다. 1번에서 firstPassDone으로 멈추지 않고, 그동안은 3번 대신 최근 14일만 읽고 tidiedOnce를 쓰지 않는다(처음 정리가 끝난 뒤 10월부터 전체 정리가 한 번 일어난다).
 v3.5(11/6, DESIGN_V5 1절, 2.2절, 버전 7): 9번 뒤에 9-1 "아침 보고서"를 더했다. 1절 형식의 `report/YYYY-MM-DD.json`(한국 시각 오늘)을 쓰고 `tools/report_check.py`로 검사한 뒤 10번 "tidy" 커밋에 넣는다. 폰이 05:30에 그 파일을 받아 카카오톡 "나와의 채팅"으로 보낸다. 30일 지난 report 파일은 지운다. 자가 보고에 `reportWritten`. 루틴 시각은 05:16에서 04:46으로 옮겼다(05:30 전에 끝나게).
 v3.7(11/10, DESIGN_V7 3.2 M1, M3, M4, 버전 8): 시각을 04:46에서 05:05로 옮겼다(매시간 분석이 03:34, 04:34에도 돌아 밤에 만든 자막이 분석된 뒤에 정리한다). 폰은 21:00부터 04:58까지 결과를 적용할 때마다 state를 올린다(전에는 21시대 한 번). state에 `pending{yesterdayCalls, yesterdayMin}`(어제 통화 중 아직 자막이나 분석을 기다리는 수와 분)과 records의 `doneMs`(폰이 결과를 적용한 시각)가 실린다. 9-1 보고서에 `head.pendingCalls`와 `late[]`(그제 이전 통화 중 지난 보고 뒤에 정리된 것, 최대 5줄)를 더했다. 카카오톡 첫 줄의 대기 수는 폰이 05:30 보내기 직전에 다시 센다. 같은 v3.7(r17-0)에서 메일 기능을 지웠다(9번 history와 9-1 `yesterday`의 메일 언급 삭제). 폰은 새 메일을 가져오지 않고, v3.7 전에 정리된 메일 기록만 records에 남을 수 있어 4번의 "지난 통화, 문자, 메일"은 그대로 둔다.
+r18(11/13, 사용자 결정, 버전 9): 카카오톡 아침 보고가 리스트 말풍선(챙길 일 top 10, 분류 썸네일)으로 바뀌었다. 9-1 보고서의 `today` 항목에 `tag`(분류 5종: important 중요, confirm 확인, request 요청, regular 정기, optional 선택, 근거가 없으면 request)를 더하고, `today`를 최대 8줄에서 최대 10줄로 늘렸다. 순서는 tag 순서가 먼저, 같은 tag 안에서는 전처럼 오늘과 어제 요청, 확인 필요, 최근 요청 순이다. state는 그대로다. 옛 폰(빌드 1053 이하)은 tag를 모르는 키로 건너뛰고 today 앞 8줄만 읽는다.
 루틴 시간: 매일 05:05 (`CRON_TZ=Asia/Seoul 5 5 * * *`, v3.7부터. 그 전 04:46은 `46 4`. 예약 작업 시각은 오케스트레이터가 배포 시각에 바꾼다).
 v3.4(11/6, DESIGN_V4 4.3-1, 4.3-2, 4.3-7, 버전 6): 저장소 접근 실패 길(`git pull`이나 push가 실패하면 고치지 않고 "확인 필요: 저장소 접근"으로 보고하고 끝냄), 2번에 업체 이름 고침(renameCompany), 6번 다시 쓰기에서 숫자를 바꾸지 않는 규칙(폰이 숫자가 달라진 다시 쓰기를 거부함), 자가 보고를 `status/last-run-tidy.json`으로 나눔(매시간 분석의 `status/last-run-hourly.json`을 덮어쓰지 않게)과 `repoOk`, `pushed`, 마지막에 워치독 실행(밤사이 빠진 매시간 실행을 아침에 한 번 더 본다). v3.3에서 넣은 합치기 장부 수정 규칙(mergePeople, unmergePeople, keepApart)과 mergeCandidates 형식은 그대로다.
 v2.6(11/5): state의 tasks에 rev, state에 mergeCandidates가 실린다. 6번에 "제안 항목에 rev를 그대로 적는다", 7번에 "없어지는 쪽은 지우지 않고 mergedInto만 적는다"를 보탰다. 폰은 rev가 지금과 다른 제안을 건너뛴다(밤사이 통화로 바뀐 일을 옛 판단으로 덮지 않는다). 바꿀 때는 이 파일을 먼저 고치고 ieum-inbox `routines/tidy.md`로 복사한 뒤(배포 때), 이름, 시각, 링크를 사용자에게 알린다.
@@ -54,16 +55,23 @@ v2.6(11/5): state의 tasks에 rev, state에 mergeCandidates가 실린다. 6번�
      "## 끝났는지 확인할 일" — done_suggested로 제안한 것.
      "## 어제와 달라진 것" — 어제 briefing과 비교해 새로 생긴 일, 끝난 일, 바뀐 날짜.
      각 줄은 기록(records)과 장부, 기억 파일에 근거가 있어야 하며, 업체·사람 표기는 장부를 따른다. 전화번호, 녹음, 자막과 문자 원문은 넣지 않는다.
-9-1. 아침 보고서. 9번까지 정리한 장부, state, 기억 파일로 `report/YYYY-MM-DD.json`(날짜는 한국 시각 오늘 = 보고 날짜)을 쓴다. 폰이 05:30에 이 파일을 받아 그림 한 장과 글 한 통으로 아내의 카카오톡 "나와의 채팅"에 그대로 보내므로, 아내가 아침에 읽고 바로 움직일 수 있게 쓴다. "어제"는 한국 시각 어제 00:00부터 24:00까지다. 형식은 아래 한 줄 JSON이다(키 이름과 순서 그대로).
+9-1. 아침 보고서. 9번까지 정리한 장부, state, 기억 파일로 `report/YYYY-MM-DD.json`(날짜는 한국 시각 오늘 = 보고 날짜)을 쓴다. 폰이 05:30에 이 파일을 받아 아내의 카카오톡 "나와의 채팅"에 보내므로(챙길 일은 분류 썸네일이 붙은 리스트 말풍선, 나머지는 웹 보기와 이음에서), 아내가 아침에 읽고 바로 움직일 수 있게 쓴다. "어제"는 한국 시각 어제 00:00부터 24:00까지다. 형식은 아래 한 줄 JSON이다(키 이름과 순서 그대로).
 
 ```json
-{"day":"YYYY-MM-DD","generatedMs":0,"tidyRev":0,"head":{"calls":0,"newChecks":0,"todayChecks":0,"issues":0,"pendingCalls":0},"yesterday":[{"who":"","what":""}],"today":[{"id":"","what":"","who":"","since":"","status":"","check":false}],"inProgress":[{"what":""}],"check":[{"what":"","who":""}],"late":[{"who":"","what":""}]}
+{"day":"YYYY-MM-DD","generatedMs":0,"tidyRev":0,"head":{"calls":0,"newChecks":0,"todayChecks":0,"issues":0,"pendingCalls":0},"yesterday":[{"who":"","what":""}],"today":[{"id":"","what":"","who":"","since":"","status":"","check":false,"tag":"request"}],"inProgress":[{"what":""}],"check":[{"what":"","who":""}],"late":[{"who":"","what":""}]}
 ```
 
    - `day`: 오늘 날짜(파일 이름과 같다). `generatedMs`: 쓰는 시각(`date +%s%3N`). `tidyRev`: 10번에서 올릴 장부의 rev(이번 실행 뒤의 값).
    - `head`: `calls`는 어제 업무 기록 중 통화 수, `newChecks`는 state tasks 중 createdMs가 어제인 열린 체크할 일 수, `todayChecks`는 `today` 줄 수, `issues`는 장부의 진행 중인 issues 수, `pendingCalls`는 state의 `pending.yesterdayCalls`(어제 통화 중 아직 글자로 바꾸는 중이거나 분석을 기다려 이 보고에 빠진 수, state에 없으면 0) 그대로. 모두 0 이상의 정수. 폰은 05:30 보내기 직전에 대기 수를 다시 세어 카카오톡 첫 줄("어제 통화 14건을 정리했어요. 9건은 아직 글자로 바꾸는 중이에요")에 쓴다.
    - `yesterday`: 어제 기록은 state의 records(atMs가 어제인 것)에서 읽고, records에 없는 어제 기록이 매시간 결과 요약(`story/today.json`의 day가 어제이면 그 text, `results/`에 폰이 아직 가져가지 않은 결과의 summary)에 보이면 보탠다(같은 일을 두 번 쓰지 않는다). 업무 통화와 문자를 **업체(업체가 없으면 사람) 단위로 묶어** 한 줄씩 쓴다. `who`는 장부 표기의 업체와 사람("△△철강 김민수 대표"), `what`은 무슨 일과 정해진 것("철근 단가 재협의, 견적서 금요일에 보내기로"). 약속, 금액, 날짜가 있는 줄을 먼저 두고 최대 8줄. 개인 통화(business가 false)는 넣지 않는다. 어제 업무 기록이 없으면 빈 배열 `[]`.
-   - `today`: state tasks의 열린 체크할 일 중 오늘과 어제 요청한 것(createdMs)과 확인 필요(status가 needs_confirmation)를 먼저, 그다음은 요청이 최근인 것부터 최대 8줄. `id`는 그 체크할 일의 id 그대로, `what`은 제목(숫자는 바꾸지 않는다), `who`는 업체(장부 표기, 없으면 빈 문자열), `since`는 요청 날짜 표현("오늘 요청", "어제 요청", "3일 전 요청"; 한국 시각 날짜 차이). `status`는 그 일 뒤의 문자, 메일, 후속 통화에서 이행 흔적이 보이면 맥락을 종합한 상태 글("메일 발송 확인 완료", "문자로 답 받음"), 흔적이 없으면 빈 문자열 `""`이다. 흔적이 있어도 완료 처리는 하지 않는다(6번의 done_suggested 제안과는 별개). `check`는 확인 필요 항목이면 `true`, 아니면 `false`.
+   - `today`: state tasks의 열린 체크할 일 중 가장 중요한 것 최대 10줄. 순서는 먼저 `tag` 순서(important, confirm, request, regular, optional)이고, 같은 tag 안에서는 오늘과 어제 요청한 것(createdMs)과 확인 필요(status가 needs_confirmation)를 먼저, 그다음은 요청이 최근인 것부터다. `id`는 그 체크할 일의 id 그대로, `what`은 제목(숫자는 바꾸지 않는다), `who`는 업체(장부 표기, 없으면 빈 문자열), `since`는 요청 날짜 표현("오늘 요청", "어제 요청", "3일 전 요청"; 한국 시각 날짜 차이). `status`는 그 일 뒤의 문자, 메일, 후속 통화에서 이행 흔적이 보이면 맥락을 종합한 상태 글("메일 발송 확인 완료", "문자로 답 받음"), 흔적이 없으면 빈 문자열 `""`이다. 흔적이 있어도 완료 처리는 하지 않는다(6번의 done_suggested 제안과는 별개). `check`는 확인 필요 항목이면 `true`, 아니면 `false`.
+   - `tag`: 그 일에 아내가 무엇을 해야 하는지 한 가지 기준으로 고른 분류 부호 하나(카카오톡 리스트의 썸네일이 된다). important, confirm, regular, optional 순서로 보고 처음 맞는 것을 쓰고, 어디에도 맞지 않으면 request를 쓴다(아래 표는 보여 주는 순서다).
+     - `important`(중요): 금액, 계약, 안전, 공정(일정)이 걸린 일, 그리고 기한(due)이 오늘이거나 지난 일, 통화에서 "오늘 중", "급하다"고 한 일.
+     - `confirm`(확인): 숫자나 대상이 애매해 되물어야 하는 일(status needs_confirmation, certainty tentative).
+     - `request`(요청): 그 밖의 보통 일(상대가 하기로 한 일도 여기). 근거가 없으면 이것(기본값).
+     - `regular`(정기): 매주, 매월 반복되는 보고, 점검, 정산.
+     - `optional`(선택): 제안, 개선처럼 하면 좋지만 안 해도 당장 문제없는 일.
+     "중요"는 기록에 근거(금액, 계약, 안전, 공정, 기한, 통화의 말)가 있을 때만 붙인다. 전부 중요면 아무것도 중요해 보이지 않는다. 이 다섯 부호 말고는 쓰지 않는다.
    - `inProgress`: 장부 issues 중 어제 움직임이 있던 것 먼저 최대 3줄, `what`은 "제목: 현황"(4번의 한 줄 현황). `check`: 확인이 필요한 것(확인 필요 체크할 일, 들린 숫자나 대상이 애매한 것) 최대 3줄, `what`은 무엇을 확인할지, `who`는 업체나 사람(없으면 빈 문자열).
    - `late`: 뒤늦게 정리된 통화. state records 중 atMs가 그제 00:00(한국 시각) 전이고 doneMs가 지난 보고(`report/<어제 날짜>.json`의 generatedMs, 그 파일이 없으면 지금부터 24시간 전) 뒤인 업무 기록을, 지난 보고에 없던 것만 doneMs가 최근인 것부터 최대 5줄. `who`는 장부 표기의 업체와 사람, `what`은 그 기록 summary의 첫 문장을 보고체로 짧게(`yesterday` 줄과 같은 형식). 개인 기록은 넣지 않는다. 없으면 빈 배열 `[]`. 폰이 카카오톡 글의 마지막 묶음 "뒤늦게 정리된 통화"로 보낸다.
    - 한 줄 60자: 화면에 한 줄로 나오는 글이 60자를 넘지 않는다. 한 줄은 `yesterday`와 `late`는 "who: what", `today`는 "what (who, since, status)"(빈 칸은 빼고), `inProgress`는 what, `check`는 "what (who)"이다. 넘치면 짧게 다시 쓴다(줄을 자르지 않는다).
@@ -83,7 +91,7 @@ v2.6(11/5): state의 tasks에 rev, state에 mergeCandidates가 실린다. 6번�
 마지막 단계(자가 보고). 모든 처리가 끝나면 (처리할 것이 없었어도, 일부가 실패했어도 항상) `status/last-run-tidy.json`을 새로 써서 그 파일만 커밋 "status"로 push한다(10번의 "tidy" 커밋을 push한 뒤 따로 하는 커밋이다). 파일이 이미 있으면 통째로 덮어쓴다. 매시간 분석의 `status/last-run-hourly.json`과 옛 `status/last-run.json`은 건드리지 않는다(옛 파일은 v3.3까지 두 작업이 함께 쓰던 것이라 새벽 정리가 매시간 분석의 상태를 가렸다). 형식은 아래 한 줄 JSON이다.
 
 ```json
-{"routine":"tidy","startedMs":0,"endedMs":0,"processed":0,"skipped":0,"failed":0,"batches":0,"model":"","limitHit":false,"ledgerRev":0,"promptVersion":"8","promptMismatch":false,"loggedTranscript":false,"repoOk":true,"pushed":true,"reportWritten":true}
+{"routine":"tidy","startedMs":0,"endedMs":0,"processed":0,"skipped":0,"failed":0,"batches":0,"model":"","limitHit":false,"ledgerRev":0,"promptVersion":"9","promptMismatch":false,"loggedTranscript":false,"repoOk":true,"pushed":true,"reportWritten":true}
 ```
 
 - `routine`: 이 작업은 `tidy`.
@@ -91,7 +99,7 @@ v2.6(11/5): state의 tasks에 rev, state에 mergeCandidates가 실린다. 6번�
 - `processed`: 읽은 기록 수. `skipped`: 건너뛴 수. `failed`: 처리하려다 실패한 수. `batches`: 제안한 항목 수.
 - `model`: 이번 실행에 쓴 모델 이름.
 - `limitHit`: 사용 한도 오류를 만났으면 `true`, 아니면 `false`.
-- `ledgerRev`: 이번에 쓴 장부의 rev. `promptVersion`은 "8"(이 지시문의 버전, 문자열)로 적고, `promptMismatch`는 `false`로 둔다.
+- `ledgerRev`: 이번에 쓴 장부의 rev. `promptVersion`은 "9"(이 지시문의 버전, 문자열)로 적고, `promptMismatch`는 `false`로 둔다.
 - `loggedTranscript`: 원문을 출력하거나 로그에 남기지 않았으므로 항상 `false`.
 - `repoOk`: 시작할 때 `git pull`이 됐으면 `true`. `pushed`: 10번의 "tidy" 커밋을 push했으면 `true`, 고칠 것이 없어 그 커밋이 없었어도 `true`, push가 실패했으면 `false`.
 - `reportWritten`: 이 실행이 끝날 때 오늘 날짜의 `report/YYYY-MM-DD.json`이 저장소에 push되어 있으면 `true`(이번에 썼거나 먼저 끝난 정리가 썼거나), 쓰지 않았거나("정리할 것 없음") 검사를 통과하지 못했거나 push가 실패했으면 `false`. 워치독이 05:30에 보고서가 없을 때 이 값으로 원인을 적는다.

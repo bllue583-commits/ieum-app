@@ -113,7 +113,7 @@
 | `golden`, `guard` (v3.3) | 골든 측정 점수, 숫자 가드 계수(숫자만, 측정 전 null) | |
 | `recordTime.fileVsRecordMin` (v3.4) | 기록 시각 차이 구간별 수 | |
 | `messages.mailError` (v3.4, **v3.7에서 지움**) | 메일 오류 코드별 수였다. 메일 기능을 지우면서 `messages` 묶음이 하트비트에서 빠졌다 | |
-| `kakao`, `report` (v3.5) | `kakao{on, linked, sent, failed, lastSentMs, error, texts(마지막 보고가 몇 통이었나, v3.7 빌드 1052), plainRetried(링크 없는 글이 안 가서 앱 링크로 다시 보낸 누계)}`: 스위치 "카카오톡으로 받기", 연결, 다 나간 날 누계, 실패 누계, 마지막으로 다 나간 시각, 오류 코드. `report{day, source}`: 마지막으로 보낸 보고 날짜와 출처(`routine` 새벽 정리 보고서, `phone` 06:00 폰 폴백). **v3.7:** `report.coverage`{day(보고 날짜), yesterdayCalls(녹음 있고 개인 번호 아닌 어제 통화), inReport(보고에 들어간 수, 폰 폴백이면 0), pending(아직 글자로 바꾸거나 분석 중인 수), atMs, source}(마지막 보고, 없으면 null), `report.recent[]`{day, yesterdayCalls, inReport, pending}(최근 7일 보고, 오래된 것부터) | `linked=true`인데 `lastSentMs`가 이틀 아침 연속 오늘이 아니면, 또는 `linked=false`에 `error`가 `TOKEN_*`이면 워치독 이슈. `inReport / yesterdayCalls` < 80%가 평일 이틀 연속이면 워치독 이슈 "아침 보고에 빠진 통화가 많아요" |
+| `kakao`, `report` (v3.5) | `kakao{on, linked, sent, failed, lastSentMs, error, texts(마지막 보고가 몇 통이었나, v3.7 빌드 1052), plainRetried(링크 없는 글이 안 가서 앱 링크로 다시 보낸 누계), **r18:** style(마지막 보고가 `list` 리스트 말풍선, `text` 글, `picture` 그림; 보낸 적 없으면 null), cards(마지막 보고의 리스트 말풍선 수), listFallback(리스트가 안 가서 글로 대신 보낸 누계), web(마지막 보고에 [웹으로 보기]가 붙었나), tags{important, confirm, request, regular, optional}(마지막 보고의 챙길 일 분류별 건수, 숫자만)}`: 스위치 "카카오톡으로 받기", 연결, 다 나간 날 누계, 실패 누계, 마지막으로 다 나간 시각, 오류 코드. `report{day, source}`: 마지막으로 보낸 보고 날짜와 출처(`routine` 새벽 정리 보고서, `phone` 06:00 폰 폴백). **v3.7:** `report.coverage`{day(보고 날짜), yesterdayCalls(녹음 있고 개인 번호 아닌 어제 통화), inReport(보고에 들어간 수, 폰 폴백이면 0), pending(아직 글자로 바꾸거나 분석 중인 수), atMs, source}(마지막 보고, 없으면 null), `report.recent[]`{day, yesterdayCalls, inReport, pending}(최근 7일 보고, 오래된 것부터) | `linked=true`인데 `lastSentMs`가 이틀 아침 연속 오늘이 아니면, 또는 `linked=false`에 `error`가 `TOKEN_*`이면 워치독 이슈. `inReport / yesterdayCalls` < 80%가 평일 이틀 연속이면 워치독 이슈 "아침 보고에 빠진 통화가 많아요" |
 | `use` (v3.7) | {today, prev}: 그날(KST) 사용 횟수 {day, opens(앱을 앞으로), homeSec(홈을 본 초), taskDone([다 됐어요]), notifTap(알림으로 엶), cardExpand(카드 띠 펼침 — 카드 자체 집계 `callCard.today.expanded` 값을 읽음), kakaoOpen(카톡 보고 버튼으로 엶)}. `prev`는 전날(앱을 안 연 날은 0, 첫 집계 전은 null). 내용·시각 없음 | 채점 항목 10(v4.0) |
 | `dbTables` (v3.7) | 봉인 저장소의 표별 크기: {day, atMs, totalRows, totalChars, top[]}, `top`은 글자 수(다음 행 수) 큰 표 8개 {name, rows, chars, dChars(지난 집계 뒤 글자 수 변화, 처음은 null)}. 표 이름만, 내용 없음. 첫 집계 전 null | v3.8 저장소 작업의 재료. `dbPercent` ≥ 70이면 워치독 이슈 본문에 큰 표 3개 |
 | `dbPrune` (v3.8) | 마지막 수집 원장 정리(하루 한 번, 업데이트 뒤 첫 실행): {day, atMs, deleted{표 이름: 지운 행 수}(`discovery_intake_requests` 같은 내용 확인 요청, `vault2_pending` 끝난 금고 접수), charsBefore, charsAfter(전체 글자 수, 건너뛰면 null), skipped(건너뛴 사유: `IN_CALL` 통화 중, `QUEUE_UNREADABLE` 수집 줄을 못 읽음, `COPY_FAILED` 사본 실패(3일 이어지면 사본 없이 정리), `NO_LEDGER` 원장 없음; 정리했으면 null. 건너뛰면 1시간 뒤 다시, 하루 최대 6번), ms(봉인까지 걸린 시간), copyAtMs(정리 전 사본을 만든 시각, 사본이 없으면 null), copy(`made` 이번에 만듦, `kept` 보관 중, `deleted` 7일 지나 지움, `none` 사본 없이 정리함, null 정리 전)}. 같은 날 뒤에 끝난 "지운 줄 0"이나 건너뜀은 그날 앞의 실제 삭제 결과를 덮지 않는다. 첫 정리 전 null | `dbTables`는 정리 뒤 다시 센 값. 워치독 저장소 이슈 본문에 한 줄. **판정 시점:** 첫 정리는 직전 3일치를 남기므로 `dbPercent`가 30 근처로 내려가는 것은 업데이트 3~4일 뒤다 |
@@ -208,6 +208,25 @@ v3.4(11/6)부터 워치독은 Actions가 아니라 두 예약 작업 안에서 �
 2. 예약 작업 환경에 ieum-inbox 이슈 쓰기 권한(gh 인증)이 있는지 본다. 없으면 워치독 단계만 건너뛰고 루틴은 계속 돈다.
 3. 수동 확인: ieum-inbox를 받은 폴더에서 `--apply` 없이 `python3 tools/watchdog.py --root . --out /tmp/ieum-watchdog-plan.json`을 돌리면 이슈를 열지 않고 지금 보이는 문제 목록만 쓴다. 실제 반영은 예약 작업 실행 기록의 마지막 줄 "watchdog: n opened, m closed"와 `gh issue list -R <owner>/ieum-inbox -l ieum-watch`로 본다.
 4. 이슈 본문은 고정 문장과 시각, 개수, 참거짓뿐이다. 우편함 파일 내용은 읽지 않는다.
+
+### 카카오 리스트 보고 설정 (r18, 사용자가 카카오 개발자 콘솔에서 할 일)
+
+빌드는 두 저장소 변수(비밀이 아님, GitHub 저장소 Settings > Secrets and variables > Actions > Variables)를 읽는다: `IEUM_KAKAO_WEB_BASE`(웹 보기 주소, 비면 [웹으로 보기] 없음)와 `IEUM_KAKAO_LIST_TEMPLATE_ID`(사용자 정의 리스트 템플릿 ID, 비면 기본 리스트 3개씩 top 6). 템플릿은 웹 주소가 있을 때만 쓰이므로 **웹 도메인을 먼저**, 템플릿을 다음에 한다. 둘 다 다음 release-apk 빌드부터 들어간다.
+
+웹 도메인 등록(웹 보기를 켤 때):
+1. 오케스트레이터가 사용자에게 알린 뒤 앱 저장소의 GitHub Pages를 켠다(기본 브랜치의 `/docs`). 보기 페이지는 `docs/report/index.html`이므로 주소는 `https://<계정>.github.io/ieum-app/report/`이다. 이 페이지가 기본 브랜치에 합쳐져 있어야 한다.
+2. 카카오 개발자 콘솔(developers.kakao.com) > 내 애플리케이션 > 이음 앱 > [앱] > [제품 링크 관리] > [웹 도메인]에 `https://<계정>.github.io`를 등록한다(카카오 문서: 등록되지 않은 도메인은 사용할 수 없다).
+3. 저장소 변수 `IEUM_KAKAO_WEB_BASE`에 `https://<계정>.github.io/ieum-app/report/`(끝의 `/`까지)를 넣는다.
+4. 카카오가 웹 버튼이 붙은 말풍선을 거부하면 폰은 웹 버튼 없이 한 번 더 보낸다(하트비트 `kakao.web=false`로 보임).
+
+사용자 정의 리스트 템플릿(항목 5개, top 10을 보낼 때):
+1. 콘솔 [도구] > [메시지 템플릿](`https://developers.kakao.com/tool/template-builder/app`)에서 이음 앱을 고른다(템플릿은 앱별이고 다른 앱의 ID는 쓸 수 없다).
+2. 새 템플릿을 **리스트형**으로 만든다.
+3. 헤더 제목에 `${H}`를 적는다. 헤더 링크는 앱 실행(Android 실행 파라미터 `screen=tasks`).
+4. 아이템 리스트에 아이템을 **5개** 만들고 n번째(1~5) 아이템에 제목 `${Tn}`, 설명 `${Dn}`, 이미지는 [사용자 인자]로 `${In}`를 넣는다(카카오 문서: 이미지를 사용자 인자로 넣으면 보낼 때 이미지 URL을 준다, 리스트 아이템 이미지 최대 800×800, 5MB). 아이템 링크는 공통 링크(앱 실행 `screen=tasks`).
+5. 버튼을 2개 둔다. 버튼 1 "웹으로 보기": 개별 링크, 모바일 웹과 PC 웹 모두 `https://<계정>.github.io/${WEB}`(카카오 문서: 웹 링크의 도메인이나 경로에 사용자 인자를 쓸 수 있다). 버튼 2 "앱으로 보기": 개별 링크, Android 앱 실행 파라미터 `screen=tasks`.
+6. 저장한 뒤 템플릿 설정 화면의 [메시지 템플릿 정보]에 나오는 템플릿 ID를 저장소 변수 `IEUM_KAKAO_LIST_TEMPLATE_ID`에 넣는다.
+7. 인자 이름은 영문, 숫자, `_`만 된다. 폰이 보내는 값: `H` 머리, `T1`~`T5` 제목, `D1`~`D5` 요청일과 업체, `I1`~`I5` 분류 그림 URL(올리기 실패면 빈 값), `WEB` 웹 보기 주소의 도메인 뒤 경로와 `#d=` 조각(예 `ieum-app/report/#d=` 뒤에 조각). 확인하지 못한 것: 인자 값에 `#` 조각이 그대로 살아 링크가 되는지, 빈 이미지 인자가 어떻게 보이는지, 콘솔의 정확한 버튼 문구. 첫 아침에 말풍선을 눌러 보고, 안 되면 템플릿 ID를 비우면 기본 리스트(3개씩)로 돌아간다.
 
 ## 5. 배포와 업데이트 흐름
 

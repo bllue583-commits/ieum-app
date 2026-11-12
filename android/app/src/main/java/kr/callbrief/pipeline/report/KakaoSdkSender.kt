@@ -14,6 +14,7 @@ import com.kakao.sdk.template.model.Button
 import com.kakao.sdk.template.model.Content
 import com.kakao.sdk.template.model.FeedTemplate
 import com.kakao.sdk.template.model.Link
+import com.kakao.sdk.template.model.ListTemplate
 import com.kakao.sdk.template.model.TextTemplate
 import com.kakao.sdk.user.UserApiClient
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -22,7 +23,8 @@ import kotlin.coroutines.resume
 
 /**
  * v3.5 (DESIGN_V5 2.1): the one place that calls the Kakao SDK (v2 2.24.0). Login (KakaoTalk app, else the Kakao account;
- * `talk_message` only), image upload ([ShareClient.uploadImage]) and "나에게 보내기" ([TalkApiClient.sendDefaultMemo]).
+ * `talk_message` only), image upload ([ShareClient.uploadImage]) and "나에게 보내기" ([TalkApiClient.sendDefaultMemo]; r18: the list
+ * bubbles, and [TalkApiClient.sendCustomMemo] for the user's own 5-item list template).
  * Everything else in [KakaoReport] runs and is tested without it, through [KakaoReport.Sender]. Errors come back as codes:
  * a token Kakao no longer takes is [KakaoReport.TOKEN_PREFIX]..., so the link goes down.
  */
@@ -38,7 +40,17 @@ internal class KakaoSdkSender(private val app:Context):KakaoReport.Sender {
     }
     override suspend fun send(message:KakaoReport.Message,imageUrl:String?):String? {
         val link=link(message.link)
+        // r18: a list bubble of five with the user's own template (its head, items and buttons are set in the Kakao console).
+        if(message is KakaoReport.Message.ListCard && message.templateId>0)
+            return suspendCancellableCoroutine { c -> TalkApiClient.instance.sendCustomMemo(message.templateId,KakaoReport.customArgs(message)) { error ->
+                c.resume(error?.let { code(it,"SEND") }) } }
         val template=when(message) {
+            is KakaoReport.Message.ListCard -> {
+                val web=message.webUrl?.let { Button(KakaoReport.WEB_BUTTON,Link(webUrl=it,mobileWebUrl=it)) }
+                ListTemplate(headerTitle=message.header,headerLink=link,
+                    contents=message.items.map { Content(title=it.title,imageUrl=it.imageUrl,link=link,description=it.desc) },
+                    buttons=listOfNotNull(web,Button(KakaoReport.APP_BUTTON,link)))
+            }
             is KakaoReport.Message.Feed -> {
                 val url=imageUrl ?: return "NO_IMAGE_URL"
                 val (w,h)=pngSize(message.png)
