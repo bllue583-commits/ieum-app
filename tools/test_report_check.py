@@ -204,6 +204,14 @@ class ReportCheckTest(unittest.TestCase):
         order["today"][1]["tag"] = "important"
         self.assertBreaks(order, "today: tag 순서가 아님")
         self.assertEqual(("important", "confirm", "request", "regular", "optional"), rc.TAGS)
+        # 11/13: important is three lines at most (the first v9 report tagged 8 of 10).
+        many = good()
+        many["today"] = [{"id": f"t_{i}", "what": "서류 보내기", "who": "△△철강", "since": "어제 요청", "status": "", "check": False,
+                          "tag": "important" if i < 4 else "request"} for i in range(6)]
+        many["head"]["todayChecks"] = 6
+        self.assertBreaks(many, "today: important가 3줄을 넘음")
+        many["today"][3]["tag"] = "request"
+        self.assertEqual([], rc.check(many))
         got = rc.check(bad)
         self.assertFalse(any("서류" in g or "견적" in g for g in got), "reasons only")
 

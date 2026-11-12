@@ -22,6 +22,7 @@ TOP_OPTIONAL = ("late",)
 # r18 (tidy.md v9, user 11/13): today[].tag, one of five in this order (the KakaoTalk list's thumbnails). Optional, so a v8
 # report (before the routine moves to v9 on the release day) still passes; the phone reads a missing tag as confirm or request.
 TAGS = ("important", "confirm", "request", "regular", "optional")
+MAX_IMPORTANT = 3
 ITEM_OPTIONAL = {"today": {"tag": str}}
 ITEM_KEYS = {
     "yesterday": {"who": str, "what": str},
@@ -194,6 +195,9 @@ def check(report, file_day=None):
         ranks = [TAGS.index(t["tag"]) for t in today if isinstance(t, dict) and t.get("tag") in TAGS]
         if any(a > b for a, b in zip(ranks, ranks[1:])):
             out.append("today: tag 순서가 아님(" + ", ".join(TAGS) + ")")
+        # 11/13: the first v9 report tagged 8 of 10 lines important; when everything is, nothing is.
+        if sum(1 for t in today if isinstance(t, dict) and t.get("tag") == "important") > MAX_IMPORTANT:
+            out.append(f"today: important가 {MAX_IMPORTANT}줄을 넘음(기한이 급한 것, 금액이 큰 것 순으로 {MAX_IMPORTANT}개만, 나머지는 request)")
     if isinstance(head, dict) and isinstance(report.get("today"), list) and is_int(head.get("todayChecks")) \
             and head["todayChecks"] != len(report["today"]):
         out.append("head.todayChecks: today 줄 수와 다름")
