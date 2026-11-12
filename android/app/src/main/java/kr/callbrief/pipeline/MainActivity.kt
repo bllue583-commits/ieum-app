@@ -102,6 +102,8 @@ class MainActivity:ComponentActivity() {
     /** The tab the bottom bar marks: the screen's own, or on the person page the one it was opened from. */
     internal fun barTab(s:Screen=screen):CallUi.Tab=if(s==Screen.PERSON) personFrom.tab else s.tab
     private var resumed=false
+    /** v3.7 (user 11/12): installs a waiting new version as the app opens ([OpenUpdate]). */
+    internal val updateCover=UpdateCover(this)
 
     // Results come back to the Activity; the screen in front reads again (the folder, a permission).
     internal val pickFolder=registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
@@ -137,16 +139,24 @@ class MainActivity:ComponentActivity() {
         // The pipeline is registered by IeumApplication (app start), the boot and update receivers, and the hourly tick.
         if(LaunchIntro.claim(this,intent?.action==Intent.ACTION_MAIN,savedInstanceState!=null)) LaunchIntro.show(this)
         // v3.1 (DESIGN_V4 2.2-5 가): a new version is looked for as the app opens, right after the intro, on any connection.
-        if(savedInstanceState==null) HomeScreen.checkNow(this) { if(!isFinishing && !isDestroyed && resumed && (screen==Screen.HOME || screen==Screen.SETTINGS)) current.enter() }
+        if(savedInstanceState==null) OpenUpdate.opened() // a new opening: a window closed or a [나중에] of the last one is over
+        if(savedInstanceState==null) HomeScreen.checkNow(this) {
+            if(!isFinishing && !isDestroyed && resumed && (screen==Screen.HOME || screen==Screen.SETTINGS)) current.enter()
+            updateCover.consider() // v3.7: the check found and got a new version: on to its install
+        }
     }
     override fun onResume() {
         super.onResume();resumed=true
         UseStats.add(UseStats.OPENS);UseStats.home(screen==Screen.HOME) // v3.7 r17-3: counts in memory only
         current.enter()
+        var installing=true
         if(intent?.getBooleanExtra("install_update",false)==true) { intent.removeExtra("install_update");home.updateNow() }
         else if(CallUpdate.ready(this)!=null && CallUpdate.takeInstallWish(this)) CallUpdate.install(this) // the asked-for download finished meanwhile
+        else installing=false
+        // v3.7 (user 11/12): a waiting new version installs by itself as the app comes to the front (not while a call goes on).
+        updateCover.resume(look=!installing)
     }
-    override fun onPause() { super.onPause();resumed=false;current.leave();UseStats.home(false);UseStats.flushLater(this) }
+    override fun onPause() { super.onPause();resumed=false;updateCover.pause();current.leave();UseStats.home(false);UseStats.flushLater(this) }
     override fun onNewIntent(intent:Intent) {
         super.onNewIntent(intent);setIntent(intent)
         // While resumed (rare: a notification tapped over the app) the screen is drawn here; otherwise onResume draws it.

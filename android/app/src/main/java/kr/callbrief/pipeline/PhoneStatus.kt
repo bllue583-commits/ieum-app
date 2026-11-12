@@ -77,7 +77,14 @@ internal object PhoneStatus {
     /** v3.4 (DESIGN_V4 4.1-5, 4.3-4, 4.3-5, 4.3-8): [updateError] = [PipelineSettingsKeys.UPDATE_ERROR_CODE] (a code, heartbeat
      * `update.error`); [recordTime] = [PipelineSettingsKeys.RECORD_TIME] ({bucket: count}, `recordTime.fileVsRecordMin`), through
      * [counts]. v3.7 (DESIGN_V7 3.3): `messages.mailError` left with the mail intake. */
-    data class V34(val updateError:String?=null,val recordTime:JSONObject?=null)
+    data class V34(val updateError:String?=null,val recordTime:JSONObject?=null,
+        /** v3.7 (user 11/12): why the background install did (not) happen, codes, numbers and yes/no only: [bg]
+         * ([PipelineSettingsKeys.UPDATE_BG], or noAnswer), [bgAtMs], [sessionOpen] (an install session is open now),
+         * [autoInstall] (the settings switch), [openInstalls] (installs the open app started), [open] (its last decision). */
+        val bg:String?=null,val bgAtMs:Long?=null,val sessionOpen:Boolean?=null,val autoInstall:Boolean?=null,
+        val openInstalls:Long=0,val open:String?=null,
+        /** v3.7: the "보안 위험 자동 차단" question shown ([blockAsk]) and its [설정 열기] pressed ([blockOpen]), counts. */
+        val blockAsk:Long=0,val blockOpen:Long=0,val blockStatus:Int?=null,val autoBack:String?=null,val blockCode:String?=null)
     /** v3.3: [golden] = [PipelineSettingsKeys.GOLDEN] (r13-2, [kr.callbrief.pipeline.GoldenMeasure]), [guard] =
      * [PipelineSettingsKeys.GUARD_STATS] (r13-1). Both go through [counts]: no text, no names, only numbers and yes/no. */
     data class V33(val golden:JSONObject?=null,val guard:JSONObject?=null)
@@ -199,7 +206,16 @@ internal object PhoneStatus {
         put(c.put("day",dayOrNull(e.optString("day")))) } }
     /** v3.4: always both objects, so the watchdog reads a key test; inside, a code or counts only (null: nothing yet). */
     private fun putV34(o:JSONObject,v:V34) {
-        o.put("update",JSONObject().put("error",v.updateError?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL))
+        val bg=v.bg?.let(::code)?.takeIf { it.isNotEmpty() }
+        // A check error first; else a blocked or unanswered install (v3.7), so the watchdog's one key shows it too.
+        val error=v.updateError?.let(::code)?.takeIf { it.isNotEmpty() } ?: listOfNotNull(bg,v.open?.let(::code)).firstOrNull { it==CallUpdate.BG_BLOCKED || it==CallUpdate.BG_NO_ANSWER }
+        o.put("update",JSONObject().put("error",error ?: JSONObject.NULL)
+            .put("bg",bg ?: JSONObject.NULL).put("bgAtMs",v.bgAtMs ?: JSONObject.NULL)
+            .put("sessionOpen",v.sessionOpen ?: JSONObject.NULL).put("autoInstall",v.autoInstall ?: JSONObject.NULL)
+            .put("openInstalls",v.openInstalls).put("open",v.open?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
+            .put("blockAsk",v.blockAsk).put("blockOpen",v.blockOpen).put("blockStatus",v.blockStatus ?: JSONObject.NULL)
+            .put("autoBack",v.autoBack?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
+            .put("blockCode",v.blockCode?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL))
         o.put("recordTime",JSONObject().put("fileVsRecordMin",v.recordTime?.let(::counts) ?: JSONObject.NULL))
     }
     /** v3.5: always both objects so the watchdog reads a key test. */
@@ -336,7 +352,7 @@ internal object PhoneStatus {
                 runCatching { kr.callbrief.pipeline.call.CardStats.heartbeat(s,now) }.getOrNull()),
             v31 = v31(app,s),
             v33 = V33(jsonOf(s,PipelineSettingsKeys.GOLDEN),jsonOf(s,PipelineSettingsKeys.GUARD_STATS)),
-            v34 = v34(s),
+            v34 = v34(app,s),
             v35 = v35(s),
             powerLedger = runCatching { PowerText.ledger(s) }.getOrNull(),
             chargingOnly = PowerText.chargingOnly(s),
@@ -366,7 +382,15 @@ internal object PhoneStatus {
     }
     /** The v3.4 keys r14-3 writes (read by name; absent until written). */
     internal fun v34(s:JSONObject):V34 = V34(s.optString(PipelineSettingsKeys.UPDATE_ERROR_CODE).takeIf { it.isNotBlank() },
-        jsonOf(s,PipelineSettingsKeys.RECORD_TIME))
+        jsonOf(s,PipelineSettingsKeys.RECORD_TIME),s.optString(PipelineSettingsKeys.UPDATE_BG).takeIf { it.isNotBlank() },
+        s.optLong(PipelineSettingsKeys.UPDATE_BG_AT_MS,0).takeIf { it>0 },null,s.optBoolean(PipelineSettingsKeys.AUTO_INSTALL,true),
+        s.optLong(PipelineSettingsKeys.UPDATE_OPEN_INSTALLS,0),s.optString(PipelineSettingsKeys.UPDATE_OPEN).takeIf { it.isNotBlank() },
+        s.optLong(PipelineSettingsKeys.UPDATE_BLOCK_ASK,0),s.optLong(PipelineSettingsKeys.UPDATE_BLOCK_OPEN,0),
+        (s.opt(PipelineSettingsKeys.UPDATE_BLOCK_STATUS) as? Number)?.toInt(),s.optString(PipelineSettingsKeys.UPDATE_AUTO_BACK).takeIf { it.isNotBlank() },
+        s.optString(PipelineSettingsKeys.UPDATE_BLOCK_CODE).takeIf { it.isNotBlank() })
+    /** [v34] plus what only the phone knows now: the open session, and `noAnswer` when it waited too long. */
+    internal fun v34(app:android.content.Context,s:JSONObject):V34 { val v=v34(s)
+        return v.copy(bg=runCatching { CallUpdate.bgCode(app,v.bg) }.getOrDefault(v.bg),sessionOpen=runCatching { CallUpdate.sessionInProgress(app) }.getOrNull()) }
     /** The v3.5 keys r15-1 writes. */
     internal fun v35(s:JSONObject):V35 = V35(s.optBoolean(PipelineSettingsKeys.KAKAO_LINKED,false),
         s.optLong(PipelineSettingsKeys.KAKAO_SENT_COUNT,0),s.optLong(PipelineSettingsKeys.KAKAO_FAILED_COUNT,0),

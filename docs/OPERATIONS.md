@@ -94,7 +94,11 @@
 | `newQueuedCount`, `newOldestQueuedMs`, `oldQueuedCount` (v2.6) | 자막 대기를 새 녹음과 처음 정리 녹음으로 나눈 수, 새 녹음 중 가장 오래 기다린 것이 대기열에 들어온 시각 | 워치독 "자막이 밀려요"는 이 값으로 판정 |
 | `lastDiscoveryAttemptMs`, `lastDiscoveryOutcome`, `inventoryTruncated`, `heldUnsupported` (v2.6) | 녹음 찾기 마지막 시도 시각과 결과 코드, 폴더 목록이 잘렸는지, 지원 안 하는 형식으로 보류한 수 | |
 | `dbPercent`, `dbRecovery`, `dbOpenMs`, `homeReadMs` | 보호 저장소 사용률(봉인 파일 16MB와 행 수 중 큰 쪽), 저장소 복구 코드, 저장소 열기와 홈 읽기 시간(ms) | `dbPercent` 80 넘으면 워치독 이슈 |
-| `updateAvailableCode`, `updateReadySinceMs`, `update.error` (v3.4) | 폰이 알고 있는 새 버전 번호, 받아 둔 뒤 기다린 시작 시각, 업데이트 오류 코드 | 24시간 넘게 설치 안 되면 워치독 이슈 |
+| `updateAvailableCode`, `updateReadySinceMs`, `update.error` (v3.4) | 폰이 알고 있는 새 버전 번호, 받아 둔 뒤 기다린 시작 시각, 업데이트 오류 코드(v3.7: 확인 오류가 없으면 `blocked`·`noAnswer`도) | 24시간 넘게 설치 안 되면 워치독 이슈 |
+| `update.bg`, `update.bgAtMs` (v3.7) | 백그라운드 설치·확인이 마지막으로 내린 결정 부호와 그 시각: `committed`, `sessionWaiting`, `sourceNotAllowed`, `notVerified`, `autoOff`, `wish`, `api`, `noFile`, `front`(앱이 앞에 있어 화면이 설치), `userAction`, `blocked`, `exception:<클래스>`, 세션이 30분 넘게 응답이 없으면 `noAnswer` | `committed`가 오래 그대로면 무인 설치가 조용히 멈춘 것 |
+| `update.sessionOpen`, `update.autoInstall` (v3.7) | 설치 세션이 지금 열려 있는지, 스위치 "새 버전은 자동으로 설치" | |
+| `update.open`, `update.openInstalls` (v3.7) | 앱을 열 때의 마지막 결정 부호(`start`, `replace`, `inFlight`, `bgFresh`, `downloading`, `inCall`, `declined`, `tried`, `blocked`, `failed`, `noAnswer`, `autoOff`)와 앱을 열어 시작한 설치 횟수 | |
+| `update.blockAsk`, `update.blockOpen`, `update.blockStatus`, `update.blockCode`, `update.autoBack` (v3.7) | "보안 위험 자동 차단" 시트를 띄운 횟수, [설정 열기] 횟수, 앱을 열어 시작한 설치가 실패한 상태 번호(막힘 2), 막힘 메시지의 부호 부분(예: `INSTALL_FAILED_VERIFICATION_FAILURE`, 원문은 남기지 않음), 설치 뒤 돌아온 방식(`front` 앱이 스스로 열기 시도, `notice` 알림만, `manual` 사람이 돌아옴) | 삼성 자동 차단이 실제로 어떤 번호를 주는지 배포 뒤 판정 |
 | `lastInboxErrorSinceMs` | 같은 우편함 오류 코드가 이어진 시작 시각(오류가 있을 때만) | 2시간 넘으면 워치독 이슈 |
 | `resultChain` | 결과 받기 사슬의 지금 회차(`round`, 0이면 끝)와 다음 시각(`nextMs`) | |
 | `callLogMatch` | 녹음과 통화기록 짝짓기 통계(숫자만). v3.7: `callLogMatch.day`{day, runs, 사유별 수(noTime, noCandidate, length, nameNull, nameDiffers, numberDiffers, several, matched, byEnd, byParty, records24h, open24h)} — 그날 패스 중 한 번에 본 가장 큰 수(같은 대기 기록이 패스마다 다시 세어지므로 합이 아님), `runs`는 본 패스 수 | 녹음 연결 91% → 95%의 재료(`noCandidate`·`length`) |

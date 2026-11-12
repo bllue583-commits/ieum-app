@@ -289,7 +289,12 @@ internal object CallUpdate {
         if(ready(c)?.versionCode==info.versionCode) {
             stage(c,Stage.DONE,100);markReady(c,info.versionCode)
             if(progress(c)?.optString("phase")!=P_WAITING_CONFIRM) progress(c,P_READY,info.versionCode)
-            if(!wantsInstall(c) && autoInstall(c)) installInBackground(c) // an earlier try failed or was lost: once more (never a second session)
+            when { // an earlier try failed or was lost: once more (never a second session)
+                wantsInstall(c) -> noteBg(c,BG_WISH)
+                !autoInstall(c) -> noteBg(c,BG_AUTO_OFF)
+                OpenUpdate.front -> { noteBg(c,BG_FRONT);tellFront() }
+                else -> installInBackground(c)
+            }
             return true
         }
         val f=file(c);f.parentFile?.mkdirs();val tmp=File(f.parentFile,"download.tmp")
@@ -317,7 +322,13 @@ internal object CallUpdate {
         progress(c,P_READY,info.versionCode,f.length(),f.length())
         markReady(c,info.versionCode)
         // Design 3.3: straight on to a background install. Asked for on the screen ([지금 업데이트]): the screen installs it.
-        if(wantsInstall(c) || !autoInstall(c) || !installInBackground(c)) notifyReady(c,info)
+        // v3.7: the app in front installs it itself ([OpenUpdate]), so no background session competes with the screen's.
+        when {
+            wantsInstall(c) -> { noteBg(c,BG_WISH);notifyReady(c,info) }
+            !autoInstall(c) -> { noteBg(c,BG_AUTO_OFF);notifyReady(c,info) }
+            OpenUpdate.front -> { noteBg(c,BG_FRONT);tellFront() }
+            !installInBackground(c) -> notifyReady(c,info)
+        }
         return true
     }
 
@@ -338,7 +349,7 @@ internal object CallUpdate {
     }
     /** Installed (or nothing newer): nothing waits any more; the session and the "새 버전" notification are over. */
     internal fun settleInstalled(c:Context) {
-        prefs(c).edit().remove(SESSION).remove(SESSION_CODE).remove(SESSION_MS).remove(WAIT_SINCE).remove(PROGRESS).apply()
+        prefs(c).edit().remove(SESSION).remove(SESSION_CODE).remove(SESSION_MS).remove(SESSION_BG).remove(WAIT_SINCE).remove(PROGRESS).apply()
         runCatching { if(settings(c).snapshot().has(PipelineSettingsKeys.UPDATE_PROGRESS)) settings(c).update { it.remove(PipelineSettingsKeys.UPDATE_PROGRESS) } }
         runCatching { c.getSystemService(NotificationManager::class.java)?.cancel(NOTIFY_TAG,NOTIFY_ID) }
         fun clear(s:JSONObject)=s.optInt(PipelineSettingsKeys.UPDATE_AVAILABLE_CODE,0)==0 && s.optLong(PipelineSettingsKeys.UPDATE_READY_SINCE_MS,0)==0L
@@ -360,25 +371,81 @@ internal object CallUpdate {
     }
     fun sessionInProgress(c:Context)=sessionId(c)!=0
     /** That session ended. A result without an id leaves the record alone: [sessionId] drops it once the system forgets the session. */
-    internal fun sessionDone(c:Context,id:Int) { val p=prefs(c);if(id!=0 && p.getInt(SESSION,0)==id) p.edit().remove(SESSION).remove(SESSION_CODE).remove(SESSION_MS).remove(WAIT_SINCE).apply() }
+    internal fun sessionDone(c:Context,id:Int) { val p=prefs(c);if(id!=0 && p.getInt(SESSION,0)==id) p.edit().remove(SESSION).remove(SESSION_CODE).remove(SESSION_MS).remove(SESSION_BG).remove(WAIT_SINCE).apply() }
     /** Commits the verified file to a PackageInstaller session that asks for no user action (API 31+). False when it cannot be
      * tried here (older Android, installs from this app not allowed yet, the file does not match, or an error now kept in
      * [PipelineSettingsKeys.LAST_UPDATE_ERROR]): then the notification and the home banner stay the way in. */
     internal fun installInBackground(c:Context):Boolean {
-        if(Build.VERSION.SDK_INT<31) return false
-        val r=ready(c) ?: return false
+        if(Build.VERSION.SDK_INT<31) { noteBg(c,BG_API);return false }
+        val r=ready(c) ?: run { noteBg(c,BG_NO_FILE);return false }
         sessionId(c).takeIf { it!=0 }?.let { old ->
             // One at a time: its result is still coming. v3.5 r15-0 (11/6 on the wife's phone): a session left waiting for the tap
             // for over a day (its notification swiped away) is given up and committed again, so Android shows a new one.
-            if(prefs(c).getInt(SESSION_CODE,0)==r.versionCode && !confirmOverdue(c)) return true
+            if(prefs(c).getInt(SESSION_CODE,0)==r.versionCode && !confirmOverdue(c)) {
+                val v=sessionView(c);noteBg(c,if(OpenUpdate.noAnswer(v.kind,v.ageMs,v.answered)) BG_NO_ANSWER else BG_SESSION_WAITING);return true }
             runCatching { c.packageManager.packageInstaller.abandonSession(old) };sessionDone(c,old) // gives way to a new session
         }
-        if(!c.packageManager.canRequestPackageInstalls()) { saveError(c,INSTALL_SOURCE_NOT_ALLOWED);return false } // setup step, notification
+        if(!c.packageManager.canRequestPackageInstalls()) { noteBg(c,BG_SOURCE);saveError(c,INSTALL_SOURCE_NOT_ALLOWED);return false } // setup step, notification
         if(errorCode(storedErrorText(c)) in setOf(INSTALL_SOURCE_NOT_ALLOWED,USER_ACTION_REQUIRED)) saveError(c,null) // a new try: that is over
-        if(!verified(c)) return false
-        return try { commit(c,file(c),background=true);true }
-        catch(e:Exception) { saveError(c,errorText(PackageInstaller.STATUS_FAILURE,e.javaClass.simpleName+" "+(e.message ?: "")));false }
+        if(!verified(c)) { noteBg(c,BG_NOT_VERIFIED);return false }
+        return try { commit(c,file(c),background=true);noteBg(c,BG_COMMITTED);true }
+        catch(e:Exception) { noteBg(c,"exception:"+e.javaClass.simpleName.take(40));saveError(c,errorText(PackageInstaller.STATUS_FAILURE,e.javaClass.simpleName+" "+(e.message ?: "")));false }
     }
+
+    // ---- v3.7 (user 11/12): why a background install did not happen, for the heartbeat `update.bg` ----
+    const val BG_COMMITTED="committed";const val BG_SESSION_WAITING="sessionWaiting";const val BG_SOURCE="sourceNotAllowed"
+    const val BG_NOT_VERIFIED="notVerified";const val BG_AUTO_OFF="autoOff";const val BG_WISH="wish";const val BG_API="api"
+    const val BG_NO_FILE="noFile";const val BG_FRONT="front";const val BG_BLOCKED="blocked";const val BG_NO_ANSWER="noAnswer"
+    const val BG_USER_ACTION="userAction"
+    /** Keeps the last decision of [installInBackground] / [check] ([PipelineSettingsKeys.UPDATE_BG]) and its time. */
+    internal fun noteBg(c:Context,code:String) {
+        runCatching { settings(c).update { it.put(PipelineSettingsKeys.UPDATE_BG,code).put(PipelineSettingsKeys.UPDATE_BG_AT_MS,clock()) } }
+    }
+    /** Keeps the last decision of the open app ([OpenUpdate.decide]'s reason) when it changed ([PipelineSettingsKeys.UPDATE_OPEN]). */
+    internal fun noteOpen(c:Context,code:String) {
+        runCatching { val s=settings(c);if(s.snapshot().optString(PipelineSettingsKeys.UPDATE_OPEN)!=code) s.update { it.put(PipelineSettingsKeys.UPDATE_OPEN,code) } }
+    }
+    /** The heartbeat's `update.bg`: the kept code, or `noAnswer` once the open session has waited too long without any answer. */
+    internal fun bgCode(c:Context,stored:String?):String? {
+        val v=runCatching { sessionView(c) }.getOrNull() ?: return stored
+        return if(stored in setOf(BG_COMMITTED,BG_SESSION_WAITING) && v.kind==OpenUpdate.Session.BACKGROUND && OpenUpdate.noAnswer(v.kind,v.ageMs,v.answered)) BG_NO_ANSWER else stored
+    }
+    private fun tellFront() {
+        val l=OpenUpdate.readyListener ?: return
+        android.os.Handler(android.os.Looper.getMainLooper()).post { runCatching { l() } }
+    }
+    /** The open session, its kind and age, and whether Android answered it with "wants a tap". */
+    data class SessionView(val kind:OpenUpdate.Session,val ageMs:Long,val answered:Boolean,val code:Int)
+    internal fun sessionView(c:Context,now:Long=clock()):SessionView {
+        if(sessionId(c)==0) return SessionView(OpenUpdate.Session.NONE,0,false,0)
+        val p=prefs(c);val since=p.getLong(SESSION_MS,0)
+        return SessionView(if(p.getBoolean(SESSION_BG,true)) OpenUpdate.Session.BACKGROUND else OpenUpdate.Session.FOREGROUND,
+            if(since>0) (now-since).coerceAtLeast(0) else 0,p.getLong(WAIT_SINCE,0)>0,p.getInt(SESSION_CODE,0))
+    }
+    /** What the open app decides now, from the files, the settings and the call state. Reads the disk: off the main thread. */
+    internal fun openInput(c:Context):OpenUpdate.Input {
+        val app=c.applicationContext;val r=ready(app);val code=r?.versionCode ?: available(app)?.versionCode ?: 0
+        val v=sessionView(app)
+        return OpenUpdate.Input(r!=null,r==null && fetchState(app).stage==Stage.DOWNLOADING,autoInstall(app),OpenUpdate.inCall(app),
+            OpenUpdate.declined(code),OpenUpdate.blocked(code),OpenUpdate.tried(code),v.kind,v.ageMs,v.answered)
+    }
+    /** The open app starts the install of the version that is here (background = false, so Android's window comes at once).
+     * Leaves the "opened by the app" mark first, counts it, and gives way to a background session (in [install]). */
+    internal fun installFromOpen(a:Activity):Boolean {
+        val code=ready(a)?.versionCode ?: return install(a) // not here yet: [install] gets it (the screen follows the download)
+        prefs(a).edit().putLong(RELAUNCH,clock()).commit()
+        OpenUpdate.noteTried(code)
+        bump(a,PipelineSettingsKeys.UPDATE_OPEN_INSTALLS)
+        return try { install(a) } catch(e:Exception) { clearRelaunchMark(a);throw e }
+    }
+    /** Keeps one plain value under [key] in the settings (heartbeat codes and numbers). */
+    internal fun noteSetting(c:Context,key:String,value:Any) { runCatching { settings(c).update { it.put(key,value) } } }
+    /** Adds one to the count kept under [key] in the settings (heartbeat numbers). */
+    internal fun bump(c:Context,key:String) { runCatching { settings(c).update { it.put(key,it.optLong(key,0)+1) } } }
+    private const val RELAUNCH="relaunch_ms";private const val SESSION_BG="session_bg"
+    /** Reads and removes the "opened by the app" mark (0 when there is none). */
+    internal fun takeRelaunchMark(c:Context):Long { val p=prefs(c);val ms=p.getLong(RELAUNCH,0);if(ms!=0L) p.edit().remove(RELAUNCH).commit();return ms }
+    internal fun clearRelaunchMark(c:Context) { prefs(c).edit().remove(RELAUNCH).apply() }
     /** Android asked for a tap on a background install: kept for the heartbeat (watchdog) and the screens' "설치 확인을 기다리는 중". */
     internal fun pendingUserAction(c:Context) {
         // v3.5 r15-0: since when this session waits for the tap (kept from its first answer; a new session starts a new wait).
@@ -415,7 +482,7 @@ internal object CallUpdate {
                 s.openWrite("ieum",0,f.length()).use { out -> f.inputStream().use { it.copyTo(out) };s.fsync(out) }
                 val status=PendingIntent.getBroadcast(app,id,Intent(app,UpdateStatusReceiver::class.java).putExtra(EXTRA_BACKGROUND,background),
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
-                prefs(app).edit().putInt(SESSION,id).putInt(SESSION_CODE,ready(app)?.versionCode ?: 0).putLong(SESSION_MS,clock()).remove(WAIT_SINCE).commit()
+                prefs(app).edit().putInt(SESSION,id).putInt(SESSION_CODE,ready(app)?.versionCode ?: 0).putLong(SESSION_MS,clock()).putBoolean(SESSION_BG,background).remove(WAIT_SINCE).commit()
                 s.commit(status.intentSender)
             }
         } catch(e:Exception) { runCatching { installer.abandonSession(id) };sessionDone(app,id);throw e }
@@ -533,21 +600,43 @@ class UpdateStatusReceiver:BroadcastReceiver() {
         val id=intent.getIntExtra(PackageInstaller.EXTRA_SESSION_ID,0)
         val background=intent.getBooleanExtra(CallUpdate.EXTRA_BACKGROUND,false)
         val app=context.applicationContext
+        val message=intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
         fun later(block:()->Unit) { val pending:PendingResult? =goAsync();Thread { try { runCatching(block) } finally { pending?.finish() } }.start() }
         when {
             status==PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                 // A background install that Android will not do without a tap (DESIGN_V4 2.2-4): a code for the watchdog.
-                if(background) later { CallUpdate.pendingUserAction(app) }
+                if(background) later { CallUpdate.pendingUserAction(app);CallUpdate.noteBg(app,CallUpdate.BG_USER_ACTION) }
                 @Suppress("DEPRECATION") val confirm=intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT) ?: return
                 if(background) CallUpdate.notifyConfirm(app,confirm) // UPDATE_READY_SINCE_MS stays: still not installed
                 else context.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
             status==PackageInstaller.STATUS_SUCCESS -> later { CallUpdate.saveError(app,null);CallUpdate.settleInstalled(app) }
             status==-99 -> {}
-            CallUpdate.isUserCancel(status) -> CallUpdate.sessionDone(app,id)
+            // v3.7: the phone blocked it (Samsung: most likely 보안 위험 자동 차단, which can also answer STATUS_FAILURE or
+            // STATUS_FAILURE_ABORTED with "INSTALL_FAILED_VERIFICATION_FAILURE: Install not allowed"): before "closed by the person".
+            OpenUpdate.blockedBy(status,message,OpenUpdate.samsung()) -> {
+                val code=OpenUpdate.messageCode(message)
+                if(!background) { OpenUpdate.noteBlocked(CallUpdate.ready(app)?.versionCode ?: 0);CallUpdate.clearRelaunchMark(app) }
+                later { CallUpdate.sessionDone(app,id)
+                    // Kept as "blocked" with the message's code only, so the screens say "휴대폰이 설치를 막았어요".
+                    CallUpdate.saveError(app,CallUpdate.errorText(PackageInstaller.STATUS_FAILURE_BLOCKED,code.ifEmpty { null }))
+                    CallUpdate.noteSetting(app,PipelineSettingsKeys.UPDATE_BLOCK_STATUS,status)
+                    CallUpdate.noteSetting(app,PipelineSettingsKeys.UPDATE_BLOCK_CODE,code)
+                    CallUpdate.noteBg(app,CallUpdate.BG_BLOCKED)
+                    if(!background) CallUpdate.noteOpen(app,CallUpdate.BG_BLOCKED)
+                    if(background) CallUpdate.notifyReadyAgain(app) }
+            }
+            CallUpdate.isUserCancel(status) -> {
+                // v3.7: closed after the open app started it: not again while the app stays open (no loop of windows).
+                if(!background) { OpenUpdate.noteDeclined(CallUpdate.ready(app)?.versionCode ?: 0);CallUpdate.clearRelaunchMark(app) }
+                CallUpdate.sessionDone(app,id)
+            }
             else -> {
-                val text=CallUpdate.errorText(status,intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE))
-                later { CallUpdate.sessionDone(app,id);CallUpdate.saveError(app,text);if(background) CallUpdate.notifyReadyAgain(app) }
+                val text=CallUpdate.errorText(status,message)
+                if(!background) CallUpdate.clearRelaunchMark(app)
+                later { CallUpdate.sessionDone(app,id);CallUpdate.saveError(app,text)
+                    if(!background) { CallUpdate.noteSetting(app,PipelineSettingsKeys.UPDATE_BLOCK_STATUS,status);CallUpdate.noteOpen(app,"failed") }
+                    if(background) CallUpdate.notifyReadyAgain(app) }
             }
         }
     }

@@ -164,6 +164,27 @@ object PipelineSettingsKeys {
     const val ROUTINE_CRONS="routineCrons"
     /** r14-3: the last update-check error code (heartbeat update.error); empty once a check goes through. */
     const val UPDATE_ERROR_CODE="updateErrorCode"
+    /** v3.7 (user 11/12): the last decision of the background install or the check (heartbeat `update.bg`): committed |
+     * sessionWaiting | sourceNotAllowed | notVerified | autoOff | wish | api | noFile | front | userAction | blocked |
+     * exception:<class>; `noAnswer` is worked out when the heartbeat is built. */
+    const val UPDATE_BG="updateBg"
+    /** v3.7: when [UPDATE_BG] was written (epoch ms, heartbeat `update.bgAtMs`). */
+    const val UPDATE_BG_AT_MS="updateBgAtMs"
+    /** v3.7: how many installs the open app started by itself (heartbeat `update.openInstalls`). */
+    const val UPDATE_OPEN_INSTALLS="updateOpenInstalls"
+    /** v3.7: the open app's last decision about installing ([OpenUpdate.decide]'s reason, heartbeat `update.open`). */
+    const val UPDATE_OPEN="updateOpen"
+    /** v3.7: how often the open app asked to turn off the phone's install block (heartbeat `update.blockAsk`). */
+    const val UPDATE_BLOCK_ASK="updateBlockAsk"
+    /** v3.7: how often [설정 열기] of that question was pressed (heartbeat `update.blockOpen`). */
+    const val UPDATE_BLOCK_OPEN="updateBlockOpen"
+    /** v3.7: the installer's status number of the last failed install the open app started (heartbeat `update.blockStatus`). */
+    const val UPDATE_BLOCK_STATUS="updateBlockStatus"
+    /** v3.7: the code part of that failure's message (INSTALL_FAILED_VERIFICATION_FAILURE), heartbeat `update.blockCode`. */
+    const val UPDATE_BLOCK_CODE="updateBlockCode"
+    /** v3.7: how the app came back after an install it started: front (opened by itself) | notice (its notification only) |
+     * manual (the person came back to it), heartbeat `update.autoBack`. */
+    const val UPDATE_AUTO_BACK="updateAutoBack"
     /** r14-3: record time diagnosis, a JSON object {bucket: count} of created_ms − started_ms (heartbeat recordTime.fileVsRecordMin). */
     const val RECORD_TIME="recordTime"
     /** r14-1: the optional outgoing-call role offer in settings ("거는 전화에 번호를 더 빨리 알기") was dismissed. */

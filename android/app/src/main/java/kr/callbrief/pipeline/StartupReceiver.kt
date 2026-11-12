@@ -8,6 +8,8 @@ import android.content.Intent
 class StartupReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         if (intent?.action != Intent.ACTION_BOOT_COMPLETED && intent?.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
+        // v3.7 (user 11/12): an install the open app started has ended: the new version opens again (or its notification).
+        if (intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) runCatching { OpenUpdate.afterReplaced(context) }
         val pending = goAsync()
         CallPipelineStartup.init(context) { pending.finish() }
     }

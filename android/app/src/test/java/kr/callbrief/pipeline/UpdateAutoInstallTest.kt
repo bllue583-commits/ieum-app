@@ -129,6 +129,103 @@ class UpdateAutoInstallTest:ProtectedTextHostTestBase() {
         assertTrue(s().optLong(PipelineSettingsKeys.UPDATE_READY_SINCE_MS)>0)
     }
 
+    // ---- v3.7 (user 11/12): the open app installs it; the heartbeat says why a background install did not happen ----
+    @Test fun theBackgroundDecisionIsKeptAsACode() {
+        assertTrue(CallUpdate.check(app,Store()))
+        assertEquals(CallUpdate.BG_COMMITTED,s().optString(PipelineSettingsKeys.UPDATE_BG))
+        assertTrue(s().optLong(PipelineSettingsKeys.UPDATE_BG_AT_MS)>0)
+        assertTrue(CallUpdate.check(app,Store()))
+        assertEquals("the next check waits for that session",CallUpdate.BG_SESSION_WAITING,s().optString(PipelineSettingsKeys.UPDATE_BG))
+    }
+    @Test fun switchedOffOrNotAllowedIsKeptAsACode() {
+        shadowOf(app.packageManager).setCanRequestPackageInstalls(false)
+        assertTrue(CallUpdate.check(app,Store()))
+        assertEquals(CallUpdate.BG_SOURCE,s().optString(PipelineSettingsKeys.UPDATE_BG))
+        SecureSettings(app).update { it.put(PipelineSettingsKeys.AUTO_INSTALL,false) }
+        assertTrue(CallUpdate.check(app,Store()))
+        assertEquals(CallUpdate.BG_AUTO_OFF,s().optString(PipelineSettingsKeys.UPDATE_BG))
+    }
+    @Test fun withTheAppInFrontTheScreenInstallsIt() {
+        var told=0
+        OpenUpdate.front=true;OpenUpdate.readyListener={ told++ }
+        try {
+            assertTrue(CallUpdate.check(app,Store()))
+            assertTrue("no background session competes with the screen's",installer.allSessions.isEmpty())
+            assertEquals(CallUpdate.BG_FRONT,s().optString(PipelineSettingsKeys.UPDATE_BG))
+            shadowOf(Looper.getMainLooper()).idle()
+            assertEquals(1,told)
+            assertNull(notes().getNotification("ieum.update",701))
+            val i=CallUpdate.openInput(app)
+            assertTrue(i.ready);assertEquals(OpenUpdate.Decision(true,true,"start"),OpenUpdate.decide(i))
+        } finally { OpenUpdate.reset() }
+    }
+    @Test fun aWaitingBackgroundSessionIsSeenByTheOpenApp() {
+        assertTrue(CallUpdate.check(app,Store()))
+        val v=CallUpdate.sessionView(app)
+        assertEquals(OpenUpdate.Session.BACKGROUND,v.kind);assertFalse(v.answered)
+        assertEquals("young: it may be installing",OpenUpdate.Decision(false,true,"bgFresh"),OpenUpdate.decide(CallUpdate.openInput(app)))
+        val id=installer.allSessions.single().sessionId
+        UpdateStatusReceiver().onReceive(app,Intent().putExtra(PackageInstaller.EXTRA_STATUS,PackageInstaller.STATUS_PENDING_USER_ACTION)
+            .putExtra(PackageInstaller.EXTRA_SESSION_ID,id).putExtra(CallUpdate.EXTRA_BACKGROUND,true)
+            .putExtra(Intent.EXTRA_INTENT,Intent("android.content.pm.action.CONFIRM_INSTALL")))
+        settle { CallUpdate.sessionView(app).answered }
+        assertEquals("it waits for a tap: the open app commits its own instead",OpenUpdate.Decision(true,true,"replace"),OpenUpdate.decide(CallUpdate.openInput(app)))
+        settle { s().optString(PipelineSettingsKeys.UPDATE_BG)==CallUpdate.BG_USER_ACTION }
+    }
+    @Test fun aClosedWindowAndABlockAreRememberedForThisOpening() {
+        OpenUpdate.reset();OpenUpdate.opened()
+        SecureSettings(app).update { it.put(PipelineSettingsKeys.AUTO_INSTALL,false) }
+        assertTrue(CallUpdate.check(app,Store()))
+        SecureSettings(app).update { it.put(PipelineSettingsKeys.AUTO_INSTALL,true) }
+        UpdateStatusReceiver().onReceive(app,Intent().putExtra(PackageInstaller.EXTRA_STATUS,PackageInstaller.STATUS_FAILURE_ABORTED)
+            .putExtra(PackageInstaller.EXTRA_SESSION_ID,0).putExtra(CallUpdate.EXTRA_BACKGROUND,false))
+        assertTrue(OpenUpdate.declined(next))
+        assertEquals("declined",OpenUpdate.decide(CallUpdate.openInput(app)).reason)
+        OpenUpdate.opened()
+        assertEquals("the next opening tries once more","start",OpenUpdate.decide(CallUpdate.openInput(app)).reason)
+        UpdateStatusReceiver().onReceive(app,Intent().putExtra(PackageInstaller.EXTRA_STATUS,PackageInstaller.STATUS_FAILURE_BLOCKED)
+            .putExtra(PackageInstaller.EXTRA_SESSION_ID,0).putExtra(CallUpdate.EXTRA_BACKGROUND,false))
+        assertTrue(OpenUpdate.blocked(next))
+        assertEquals("blocked",OpenUpdate.decide(CallUpdate.openInput(app)).reason)
+        settle { s().optString(PipelineSettingsKeys.UPDATE_BG)==CallUpdate.BG_BLOCKED }
+        settle { s().optString(PipelineSettingsKeys.UPDATE_OPEN)==CallUpdate.BG_BLOCKED }
+        settle { s().optInt(PipelineSettingsKeys.UPDATE_BLOCK_STATUS,-1)==PackageInstaller.STATUS_FAILURE_BLOCKED }
+        OpenUpdate.reset()
+    }
+    @Test fun aVerificationRefusalOnASamsungPhoneIsABlock() {
+        org.robolectric.shadows.ShadowBuild.setManufacturer("samsung")
+        try {
+            OpenUpdate.reset();OpenUpdate.opened()
+            SecureSettings(app).update { it.put(PipelineSettingsKeys.AUTO_INSTALL,false) }
+            assertTrue(CallUpdate.check(app,Store()))
+            UpdateStatusReceiver().onReceive(app,Intent().putExtra(PackageInstaller.EXTRA_STATUS,PackageInstaller.STATUS_FAILURE_ABORTED)
+                .putExtra(PackageInstaller.EXTRA_SESSION_ID,0).putExtra(CallUpdate.EXTRA_BACKGROUND,false)
+                .putExtra(PackageInstaller.EXTRA_STATUS_MESSAGE,"INSTALL_FAILED_VERIFICATION_FAILURE: Install not allowed"))
+            assertTrue(OpenUpdate.blocked(next));assertFalse("not taken for a closed window",OpenUpdate.declined(next))
+            settle { s().optString(PipelineSettingsKeys.UPDATE_BLOCK_CODE)=="INSTALL_FAILED_VERIFICATION_FAILURE" }
+            assertEquals(PackageInstaller.STATUS_FAILURE_ABORTED,s().optInt(PipelineSettingsKeys.UPDATE_BLOCK_STATUS))
+            assertTrue(s().optString(PipelineSettingsKeys.LAST_UPDATE_ERROR).startsWith("STATUS_FAILURE_BLOCKED"))
+            assertFalse("no message words kept",s().toString().contains("Install not allowed"))
+        } finally { org.robolectric.shadows.ShadowBuild.reset();OpenUpdate.reset() }
+    }
+    @Test fun theNewVersionOpensAgainOnlyAfterAnInstallTheOpenAppStarted() {
+        val p=app.getSharedPreferences("ieum.update",android.content.Context.MODE_PRIVATE)
+        OpenUpdate.afterReplaced(app)
+        assertNull("a background install stays quiet",shadowOf(app).nextStartedActivity)
+        assertNull(notes().getNotification("ieum.update.done",702))
+        p.edit().putLong("relaunch_ms",System.currentTimeMillis()-60_000L).commit()
+        OpenUpdate.afterReplaced(app)
+        assertEquals(MainActivity::class.java.name,shadowOf(app).nextStartedActivity?.component?.className)
+        val n=notes().getNotification("ieum.update.done",702)
+        assertNotNull(n);assertEquals(OpenUpdate.DONE_TITLE,n.extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString())
+        assertEquals("the mark is used once",0L,p.getLong("relaunch_ms",0))
+        assertEquals("front",s().optString(PipelineSettingsKeys.UPDATE_AUTO_BACK))
+        OpenUpdate.clearDone(app);assertNull(notes().getNotification("ieum.update.done",702))
+        p.edit().putLong("relaunch_ms",System.currentTimeMillis()-11*60_000L).commit()
+        OpenUpdate.afterReplaced(app)
+        assertNull("older than ten minutes",shadowOf(app).nextStartedActivity)
+    }
+
     // ---- v3.1 (DESIGN_V4 2.2-4, 2.2-5) ----
     @org.junit.After fun resetHooks() { CallUpdate.storeHook=null;CallUpdate.clock={ System.currentTimeMillis() } }
     @Suppress("DEPRECATION")
