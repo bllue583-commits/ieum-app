@@ -31,7 +31,9 @@ internal object BlockRetry {
     @Volatile private var verifiedOnce=false
     @Volatile private var moved=false
     @Volatile internal var clock:()->Long={ System.currentTimeMillis() }
-    private val step=Runnable { worker.execute { runCatching { tick() }.onFailure { finish() } } }
+    /** Where a step runs: the loop's own thread (the APK is copied into the session there). Tests run it in place. */
+    @Volatile internal var runOn:(Runnable)->Unit={ worker.execute(it) }
+    private val step=Runnable { runOn(Runnable { runCatching { tick() }.onFailure { finish() } }) }
     private val progress=object:PackageInstaller.SessionCallback() {
         override fun onCreated(id:Int) {};override fun onBadgingChanged(id:Int) {};override fun onActiveChanged(id:Int,active:Boolean) {}
         override fun onProgressChanged(id:Int,p:Float) {
@@ -111,5 +113,5 @@ internal object BlockRetry {
     }
     internal fun clearProgress(c:Context) { runCatching { c.getSystemService(NotificationManager::class.java)?.cancel(TAG,ID) } }
     /** For tests. */
-    internal fun resetForTest() { running=false;main.removeCallbacks(step);pendingId=0;taken=false;app=null;clock={ System.currentTimeMillis() } }
+    internal fun resetForTest() { running=false;main.removeCallbacks(step);pendingId=0;taken=false;app=null;clock={ System.currentTimeMillis() };runOn={ worker.execute(it) } }
 }

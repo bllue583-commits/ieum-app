@@ -212,7 +212,7 @@ class UpdateAutoInstallTest:ProtectedTextHostTestBase() {
         OpenUpdate.reset();OpenUpdate.opened()
         SecureSettings(app).update { it.put(PipelineSettingsKeys.AUTO_INSTALL,false) }
         assertTrue(CallUpdate.check(app,Store()))
-        var now=100_000L;BlockRetry.clock={ now }
+        var now=100_000L;BlockRetry.clock={ now };BlockRetry.runOn={ it.run() } // the shadow installer wants the main thread
         fun until(step:String,check:()->Boolean) { repeat(300) { shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(1));if(check()) return;Thread.sleep(10) }
             fail("$step did not settle: running=${BlockRetry.running} retries=${s().optLong(PipelineSettingsKeys.UPDATE_BLOCK_RETRIES)} session=${CallUpdate.sessionId(app)} sessions=${installer.allSessions.size} ready=${CallUpdate.ready(app)!=null} inCall=${OpenUpdate.inCall(app)}") }
         try {
