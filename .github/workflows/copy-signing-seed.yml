@@ -1,0 +1,25 @@
+# One-off (11/13): copies the value of the secret IEUM_INBOX_TOKEN into a new secret IEUM_SIGNING_SEED, inside GitHub,
+# so the app's signing key no longer follows the inbox token (DESIGN_V7 4.2 step 1). Nobody sees the value: it is never
+# printed, and GitHub masks secrets in the log. Run it once by hand (Actions > copy-signing-seed > Run workflow), then
+# this file is deleted. It does nothing when IEUM_SIGNING_SEED already exists.
+name: copy-signing-seed
+on: workflow_dispatch
+permissions: {}
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Copy IEUM_INBOX_TOKEN into IEUM_SIGNING_SEED
+        env:
+          GH_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
+          VALUE: ${{ secrets.IEUM_INBOX_TOKEN }}
+        run: |
+          set -eu
+          [ -n "$VALUE" ] || { echo "::error::IEUM_INBOX_TOKEN is not set"; exit 1; }
+          names=$(gh secret list --repo "$GITHUB_REPOSITORY" --json name --jq '.[].name') || {
+            echo "::error::this token may not manage this repository's secrets: nothing was changed"; exit 1; }
+          if printf '%s\n' "$names" | grep -qx IEUM_SIGNING_SEED; then echo "IEUM_SIGNING_SEED already exists: left as it is"; exit 0; fi
+          printf '%s' "$VALUE" | gh secret set IEUM_SIGNING_SEED --repo "$GITHUB_REPOSITORY"
+          gh secret list --repo "$GITHUB_REPOSITORY" --json name --jq '.[].name' | grep -qx IEUM_SIGNING_SEED
+          echo "IEUM_SIGNING_SEED is set (same value as IEUM_INBOX_TOKEN)"
