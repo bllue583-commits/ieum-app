@@ -302,7 +302,7 @@ internal class CallRecordAnalysisRunner(
         db.applyLedger(o)
         save { it.put(PipelineSettingsKeys.LEDGER_REV,rev).put(PipelineSettingsKeys.TIDIED_ONCE,o.optBoolean("tidiedOnce",false)) }
     }
-    /** The morning tidy's side: its proposal is applied once (by rev), and at night ([tidyWindow], 21:00 to 04:58 KST) the open
+    /** The morning tidy's side: its proposal is applied once (by rev), and at night ([tidyWindow], 21:00 to 05:03 KST) the open
      * check items and record summaries go up for it. v3.7 r17-2 (DESIGN_V7 3.2 M2): a pass that applied [applied] results (one
      * or more) sends at once, whatever the gap; otherwise when the content changed, at most every [TIDY_GAP_MS] (30 minutes).
      * Before, once in 12 hours: the 05:05 tidy read a 21:00 snapshot. */
@@ -453,10 +453,11 @@ internal fun mergeCandidates(s:JSONObject):JSONArray?=when(val v=s.opt(MERGE_CAN
 internal const val TIDY_STATE_HASH="tidyStateHash"
 /** v3.7 r17-2 (M2): the least time between two tidy states that went up with no result applied in between. */
 internal const val TIDY_GAP_MS=30*60_000L
-/** v3.7 r17-2 (M2): the night the tidy state may go up, 21:00 to 04:58 KST (the 05:05 tidy reads it); by minutes, not hours. */
+/** v3.7 r17-2 (M2): the night the tidy state may go up, 21:00 to 05:03 KST (the 05:05 tidy reads it); by minutes, not hours.
+ * Review fix: 04:58 left out the results the 04:34 run's +25 min fetch (04:59) applies, and the phone has deleted their files by then. */
 internal fun tidyWindow(now:Long):Boolean {
     val t=java.time.Instant.ofEpochMilli(now).atZone(CallRecordStore.KST).toLocalTime()
-    return !t.isBefore(java.time.LocalTime.of(21,0)) || !t.isAfter(java.time.LocalTime.of(4,58))
+    return !t.isBefore(java.time.LocalTime.of(21,0)) || !t.isAfter(java.time.LocalTime.of(5,3))
 }
 /** The tidy state's content hash: generatedMs is left out, everything else counts. */
 internal fun tidyHash(state:JSONObject):String {

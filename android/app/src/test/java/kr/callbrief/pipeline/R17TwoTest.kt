@@ -82,7 +82,7 @@ class R17TwoTest:ProtectedTextHostTestBase() {
     // ---- M2: the night's state goes up after every applied result ----
     @Test fun theNightWindowIsByMinutes() {
         assertTrue(tidyWindow(kst(21,0)));assertTrue(tidyWindow(kst(0,0)));assertTrue(tidyWindow(kst(4,58)))
-        assertFalse(tidyWindow(kst(20,59)));assertFalse(tidyWindow(kst(4,59)));assertFalse(tidyWindow(kst(5,0)));assertFalse(tidyWindow(kst(12,0)))
+        assertFalse(tidyWindow(kst(20,59)));assertTrue("the 04:34 run's +25 min fetch",tidyWindow(kst(4,59)));assertTrue(tidyWindow(kst(5,3)));assertFalse(tidyWindow(kst(5,4)));assertFalse(tidyWindow(kst(12,0)))
     }
     private class Inbox:CallInboxStore {
         val files=LinkedHashMap<String,String>();var states=0

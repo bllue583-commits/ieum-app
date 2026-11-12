@@ -431,7 +431,8 @@ def previous_weekday(day):
 def coverage_rules(now_ms, phone, history, add):
     """v3.7 (DESIGN_V7 3.3): the latest report (today's or yesterday's) and the one of the weekday before it each covered under
     80% of their calls (the calls of two weekdays in a row; a weekend in between is skipped). phone: the current heartbeat."""
-    days = coverage_by_call_day(phone, history)
+    # Review fix: a day with under 5 calls says nothing (0 of 1 is not a broken report).
+    days = {d: v for d, v in coverage_by_call_day(phone, history).items() if v[1] >= 5}
     today = datetime.date.fromisoformat(kst_date(now_ms))
     weekdays = sorted(d for d in days if d.weekday() < 5)
     if not weekdays:

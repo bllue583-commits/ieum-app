@@ -51,7 +51,8 @@ internal object UseStats {
             val s=settings.snapshot()
             val old=stored(s)
             val next=merge(old,adds,now,cardExpandToday(s,now))
-            if(old?.toString()!=next.toString()) settings.update { it.put(PipelineSettingsKeys.USE_STATS,next.toString()) }
+            // Review fix: merged again inside the update, on the stored value of that moment (two flushes at once lost one's counts).
+            if(old?.toString()!=next.toString()) settings.update { st -> st.put(PipelineSettingsKeys.USE_STATS,merge(stored(st),adds,now,cardExpandToday(st,now)).toString()) }
         } catch(e:Exception) { putBack(adds);android.util.Log.w("ieum.use","not written: ${e.javaClass.simpleName}") }
     }
     /** [flush] on its own thread (the app going to the background). */

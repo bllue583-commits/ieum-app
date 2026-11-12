@@ -652,6 +652,10 @@ internal object TranscriptionForeground {
     /** Asks WorkManager to run [worker] in the foreground; false when the system refused (ForegroundServiceStartNotAllowedException
      * and the like, or no answer in 10 seconds): the run then goes on in the background. */
     fun start(worker:androidx.work.ListenableWorker):Boolean = runCatching {
+        // Review fix: asked only when the app is exempt from battery optimization (the documented exemption for a start from
+        // the background). A refused start leaves WorkManager holding the work as foreground: its stops are then ignored.
+        val app=worker.applicationContext
+        if(app.getSystemService(android.os.PowerManager::class.java)?.isIgnoringBatteryOptimizations(app.packageName)!=true) return@runCatching false
         worker.setForegroundAsync(info(worker.applicationContext)).get(10,TimeUnit.SECONDS);true }.getOrDefault(false)
     /** A stop with [reason] ends the run as a yield, not a stall: the foreground service's time limit, or (while in the
      * foreground) the user stopping the app from its notice or the task manager. */
