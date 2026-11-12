@@ -305,7 +305,12 @@ v4.0 배포는 버전 규칙대로 v4.0이고, **"완료"는 배포가 아니라
 
 | 묶음 | 설계 | 구현 | 이유 |
 | --- | --- | --- | --- |
-| | | | |
+| r17-1 (T3) | 배터리 대기열의 녹음 길이를 `call_log`에서, 짝짓기 창(녹음 시각 2분 전~1분 뒤) 안에서 녹음 시각에 **가장 가까운** 받은·건 통화의 길이로 | 창 안 받은·건 통화 길이의 **`MAX(duration_ms)`**, 상관 부질의는 기본 테이블(`r0`, `l0`)에 걸음(`CallTranscriptionStore.kt` `lengthSql`) | 호스트 시험(Robolectric)의 SQLite가 상관 부질의 안의 `ORDER BY abs(cl.start_ms-$at)`와 파생 테이블 열 참조를 풀지 못함. 가장 긴 것을 고르면 애매한 짝은 길게 잡혀 충전 쪽으로 감(보수적) |
+| r17-3 | `latency.day{p50Min, p90Min}`: 그날 통화만의 지연 | `latency.day{p50Min, p90Min, n, waiting}`: 오늘 끝난 통화 중 아직 결과가 없는 것도 지금까지 기다린 분을 **하한으로 넣고** `waiting`에 그 수 | 결과가 내일 적용될 통화를 빼면 늦은 날이 빨라 보임(채점 항목 2를 거짓 통과) |
+| r17-3 | `report.coverage{yesterdayCalls, inReport, pending}` 마지막 보고 하나 | `report.coverage`에 `day`, `atMs`, `source`를 더하고 **`report.recent[]`**(최근 7일 보고 {day, yesterdayCalls, inReport, pending}) 추가 | 워치독 "평일 이틀 연속 < 80%"를 하트비트 하나로 판정(지난 하트비트 이력이 없어도) |
+| r17-3 | `use{opens, homeSec, taskDone, notifTap, cardExpand, kakaoOpen}` 앱이 직접 셈 | `cardExpand`는 따로 세지 않고 카드 자체 집계(`CardStats`의 오늘 `expanded`)를 읽어 씀(`UseStats.cardExpandToday`). 사용 숫자는 메모리에 모아 화면이 뒤로 갈 때와 하트비트 때만 봉인 설정에 씀 | 묶음 지시문이 기존 `expanded`를 그대로 써도 된다고 함(같은 사건을 두 곳에서 세면 어긋남). 누를 때마다 봉인 DB 전체를 다시 쓰지 않음 |
+| r17-3 | 자막 실행마다 **스레드** CPU 시간(`/proc/self/task/*/stat`) | **프로세스 전체** CPU 시간(`/proc/self/stat`의 utime+stime) 차이를 `power.today.cpuMs`·`cpuRuns`에, 배터리 실행의 `CHARGE_COUNTER` 차이를 `batteryUah`에 | 묶음 지시문(r17-3 8번 "가능한 범위")이 프로세스 값으로 정함. 실행 동안 같은 프로세스의 다른 작업(카드·결과 받기)의 CPU도 섞이므로 통화 1건당 CPU는 상한으로 읽는다 |
+| r17-3 | `dbTables`: 테이블별 행 수와 글자 길이 합 상위 8개, 하루 증가분 | `dbTables{day, atMs, totalRows, totalChars, top[{name, rows, chars, dChars}]}`: 증가분은 표마다 **`dChars`**(지난 집계 뒤 글자 수 변화, 처음은 null). 전체 표 수치는 설정에만 두고 하트비트에는 상위 8개만 | 하루 증가분을 표 단위로 보아야 v3.8에서 어느 표를 줄일지 정함 |
 
 ## 12. 사용자가 할 일 (이것만)
 

@@ -6,12 +6,12 @@
 
 ```
 폰: 통화 녹음 발견 → 폰 안에서 자막 → 우편함 inbox/ 에 요청 (녹음은 폰 밖으로 안 나감)
-예약 작업(매시간): 요청 분석 → results/ 에 결과, ledger/ledger.json 장부 고침, status/last-run-hourly.json 자가 보고 → 워치독(루틴 안)
+예약 작업(매시간, v3.7부터 03:34·04:34·07:34~22:34): 요청 분석 → results/ 에 결과, ledger/ledger.json 장부 고침, status/last-run-hourly.json 자가 보고 → 워치독(루틴 안)
 폰(결과 받기: 루틴 cron의 다음 예정 실행 +3, +8, +15분, 그리고 매시간 틱): 장부·story/today.json·app/version.json 받기 → 결과 적용 후 결과 파일 지움
 폰(매시간 틱): 새 요청 올림 → status/phone.json 하트비트 → status/calllog.txt
-폰(밤 21:00~04:59, 하루 한 번): tidy/state.json 올림(처음 정리 중이면 최근 14일만)
-예약 작업(새벽 04:46): 장부 정리 + tidy/proposal.json 제안 + report/YYYY-MM-DD.json 아침 보고서 → 폰이 받아 체크할 일에 반영 → 워치독(루틴 안)
-폰(05:30, 없으면 05:35·05:45·06:00, 09:00까지): report/<오늘>.json 받기 → 카카오톡 "나와의 채팅"으로 전송(v3.5) → 06:00 앱 알림
+폰(밤 21:00~04:58, v3.7): 결과를 1건 이상 적용한 패스마다 곧바로, 그 밖에는 내용이 바뀌었을 때 30분에 한 번 tidy/state.json 올림(처음 정리 중이면 최근 14일만; v3.6까지는 21시대 하루 한 번)
+예약 작업(새벽 05:05, v3.6까지 04:46): 장부 정리 + tidy/proposal.json 제안 + report/YYYY-MM-DD.json 아침 보고서 → 폰이 받아 체크할 일에 반영 → 워치독(루틴 안)
+폰(05:30, 없으면 05:35·05:45·06:00, 09:00까지): report/<오늘>.json 받기 → 카카오톡 "나와의 채팅"으로 전송(v3.5; v3.7부터 보내기 직전에 아직 글자로 바꾸는 중인 어제 통화 수를 다시 세어 첫 줄에 적음) → 06:00 앱 알림
 ```
 
 우편함은 비공개 저장소 `bllue583-commits/ieum-inbox`이다. 앱 저장소는 `bllue583-commits/ieum-app`이다.
@@ -20,32 +20,33 @@
 
 | 이름 | 시각(한국) | 모델 | 지시문 원본 | 기억 파일 | 하는 일 |
 |---|---|---|---|---|---|
-| 이음 통화 분석 (매시간) | 07:34~22:34 매시 34분(하루 16번) | Sonnet 5.5 | `docs/routines/hourly.md`(v8)의 "---" 아래 | `status/last-run-hourly.json` | inbox 요청 분석(한 실행 20건까지), 결과 쓰기, 장부 고치기, 자가 보고, 워치독, 세 줄 보고 |
-| 이음 새벽 정리 (매일) | 04:46(v3.5, 전에는 05:16) | Opus 5.5 | `docs/routines/tidy.md`(v7)의 "---" 아래 | `tidy/project.md`, `tidy/history/YYYY-MM.md`, `tidy/briefing.md`, 자가 보고 `status/last-run-tidy.json`(`reportWritten`) | 진행 중인 일 묶기, 팔로업 제안, 중복 합치기, 아침 보고서 `report/YYYY-MM-DD.json`(9-1번, `tools/report_check.py` 통과 뒤 커밋, 30일 지난 것은 지움), 현황 파일과 다섯 줄 알림, 워치독. 폰이 밤에 올린 `tidy/state.json`(24시간 안)이 있어야 일을 한다. v3.1부터 폰이 처음 정리 중이어도 최근 14일 기록을 올리므로 처음 정리를 기다리지 않는다(state가 없거나 오래됐으면 "정리할 것 없음: 이유"가 정상, 같은 날 이미 "tidy" 커밋이 있으면 "이미 정리됨") |
+| 이음 통화 분석 (매시간) | 매시 34분, 03:34·04:34와 07:34~22:34(하루 18번, v3.7. v3.6까지 07:34~22:34 16번) | Sonnet 5.5 | `docs/routines/hourly.md`(v9, v3.7에서 메일 종류 삭제)의 "---" 아래 | `status/last-run-hourly.json` | inbox 요청 분석(한 실행 20건까지, 03:34·04:34 밤 실행은 40건까지이고 남으면 07:34로), 결과 쓰기, 장부 고치기, 자가 보고, 워치독, 세 줄 보고 |
+| 이음 새벽 정리 (매일) | 05:05(v3.7; v3.5~v3.6은 04:46, 그 전 05:16) | Opus 5.5 | `docs/routines/tidy.md`(v8)의 "---" 아래 | `tidy/project.md`, `tidy/history/YYYY-MM.md`, `tidy/briefing.md`, 자가 보고 `status/last-run-tidy.json`(`reportWritten`) | 진행 중인 일 묶기, 팔로업 제안, 중복 합치기, 아침 보고서 `report/YYYY-MM-DD.json`(9-1번, `tools/report_check.py` 통과 뒤 커밋, 30일 지난 것은 지움), 현황 파일과 다섯 줄 알림, 워치독. 폰이 밤에 올린 `tidy/state.json`(24시간 안)이 있어야 일을 한다. v3.1부터 폰이 처음 정리 중이어도 최근 14일 기록을 올리므로 처음 정리를 기다리지 않는다(state가 없거나 오래됐으면 "정리할 것 없음: 이유"가 정상, 같은 날 이미 "tidy" 커밋이 있으면 "이미 정리됨") |
 | 이음 통화 목록 검증 (매일) | 09:00 | Opus 5.5 | 예약 작업 프롬프트가 원본 | `status/verify-log.md`(숫자만) | 폰 통화기록(`status/calllog.txt`)과 저장·분석 결과 대조, 검증 파일과 다섯 줄 알림. 프롬프트는 아직 옛 `status/last-run.json`을 읽는다(새 루틴별 파일로 바꾸지 않았음) |
 
-- **v3.7에서 바뀔 시각표(DESIGN_V7 3.2, 배포와 같은 시각에 적용):** 매시간 분석 cron `34 7-22` → `34 3-4,7-22`(밤에 만든 자막을 아침 보고 전에 분석), 새벽 정리 04:46 → 05:05, 카톡 05:30은 그대로. 지시문 안 cron 문자열과 자가 보고 `cron`도 같이 바꾼다(폰이 그 값으로 결과 받는 시각을 정함).
-- 매시간·새벽 예약 작업 프롬프트(11/6부터)는 짧은 안내다: ieum-inbox를 pull(실패하면 "[이음 분석 HH:MM] 확인 필요: 저장소 접근", 새벽은 "[이음 새벽 정리 MM/DD HH:MM] 확인 필요: 저장소 접근"만 답함) → 우편함의 `routines/hourly.md`(또는 `routines/tidy.md`)를 Read로 끝까지 읽고 첫 "---" 아래를 지시문으로 따른다. cron은 매시간 `CRON_TZ=Asia/Seoul 34 7-22 * * *`, 새벽 `CRON_TZ=Asia/Seoul 46 4 * * *`, 검증 `CRON_TZ=Asia/Seoul 0 9 * * *`. ID는 매시간 `trig_016vQxos9z6p1pdPJ28MjrsV`, 새벽 `trig_01Sp6piuvasw52ZR1KPupumB`, 검증 `trig_01KyuDNZWkmrQpJj8e8cr661`.
+- **v3.7 시각표(DESIGN_V7 3.2 M1):** 매시간 분석 `CRON_TZ=Asia/Seoul 34 3-4,7-22 * * *`(하루 18번: 03:34, 04:34, 07:34~22:34. 밤에 만든 자막을 새벽 정리와 아침 보고 전에 분석, 밤 두 실행은 처리 상한 40건, 지시문 v9), 새벽 정리 `CRON_TZ=Asia/Seoul 5 5 * * *`(05:05, 지시문 v8), 카톡 05:30은 그대로. 폰 기본값(`CallRecordWork.DEFAULT_CRON`)과 워치독 기본값(`watchdog.py`의 `DEFAULT_CRON`)은 이미 새 cron이다. 폰은 자가 보고 `cron`으로 결과 받는 시각을 정하고, 03시·04시 실행 뒤에는 +3·+8·+15분에 더해 +25분에도 한 번 더 받는다(`NIGHT_EXTRA_MS`).
+- **배포 때 cron 바꾸는 절차(v3.7):** 실제 예약 작업의 cron은 v3.7 배포 때 바꾼다 — release-apk가 우편함 `routines/`에 hourly v9·tidy v8을 올리고 `app/version.json`(promptVersion "9", tidyVersion "8")을 올린 뒤, **매시간 분석을 먼저**(`trig_016vQxos9z6p1pdPJ28MjrsV`, `34 7-22` → `34 3-4,7-22`), **새벽 정리를 다음에**(`trig_01Sp6piuvasw52ZR1KPupumB`, `46 4` → `5 5`) 바꾼다. 05:05 새벽 정리는 03:34·04:34 분석이 적용된 state를 재료로 삼으므로, 밤 분석이 먼저 자리 잡게 매시간을 먼저 바꾼다. 바꾼 뒤 예약 작업 목록에서 두 cron을 확인하고, 다음 매시간 자가 보고의 `cron`이 새 문자열인지 본다. 배포 전까지 지금 예약 작업은 옛 cron(매시간 `34 7-22`, 새벽 `46 4`)으로 돈다.
+- 매시간·새벽 예약 작업 프롬프트(11/6부터)는 짧은 안내다: ieum-inbox를 pull(실패하면 "[이음 분석 HH:MM] 확인 필요: 저장소 접근", 새벽은 "[이음 새벽 정리 MM/DD HH:MM] 확인 필요: 저장소 접근"만 답함) → 우편함의 `routines/hourly.md`(또는 `routines/tidy.md`)를 Read로 끝까지 읽고 첫 "---" 아래를 지시문으로 따른다. cron은 v3.7 배포 전까지 매시간 `CRON_TZ=Asia/Seoul 34 7-22 * * *`, 새벽 `CRON_TZ=Asia/Seoul 46 4 * * *`이고 배포 때 위 절차로 매시간 `CRON_TZ=Asia/Seoul 34 3-4,7-22 * * *`, 새벽 `CRON_TZ=Asia/Seoul 5 5 * * *`으로 바꾼다. 검증 `CRON_TZ=Asia/Seoul 0 9 * * *`은 그대로. ID는 매시간 `trig_016vQxos9z6p1pdPJ28MjrsV`, 새벽 `trig_01Sp6piuvasw52ZR1KPupumB`, 검증 `trig_01KyuDNZWkmrQpJj8e8cr661`.
 - 지시문을 바꿀 때: 이 저장소의 원본 파일(`docs/routines/*.md`)을 고치고 배포한다. release-apk가 version.json보다 먼저 우편함 `routines/`와 `tools/watchdog.py`에 바뀐 것만 올린다. 배포 없이 급히 바꿀 때만 우편함 `routines/`에 직접 커밋한다. 매시간 지시문의 [분석 규칙]과 [결과 형식]은 앱 코드(`ClaudeCallAnalyzer.SYSTEM`, `SCHEMA`)와 같아야 하며 `RoutineDocTest`가 검사한다. 규칙을 바꾸면 `ClaudeCallAnalyzer.PROMPT_VERSION`과 지시문 버전을 함께 올린다.
 - 실행 확인: claude.ai의 예약 작업 화면에서 실행 기록을 본다. 실행 로그에는 통화 내용이 남지 않게 지시돼 있다. 빈 실행은 "새 기록 없음" 한 줄로 끝나는 것이 정상이다.
 - 우편함에서 확인: 매시간 작업이 처리하면 커밋 "analyze N calls", 새벽 정리는 "tidy"가 생기고, 어느 경우든(할 일이 없었어도) 그 뒤에 자가 보고만 담은 "status" 커밋이 따로 생긴다(매시간 `status/last-run-hourly.json`, 새벽 `status/last-run-tidy.json`). 루틴이 저장소에 닿지 못하면 처리하지 않고 "확인 필요: 저장소 접근"으로 답하고 끝난다. 예약 작업 알림은 "확인 필요" 답일 때만 의미가 있다.
 - 종단 시험: 앱 저장소의 `inbox-e2e`를 수동 실행(또는 그 파일 push)하면 `inbox/selftest-<번호>.json`을 넣고, 매시 40분(07:40~23:40)에 결과를 폰과 같은 파서로 검증한 뒤 지운다. 예약 작업은 이 요청으로 장부를 고치지 않고, 폰은 `selftest-` 결과를 무시한다.
-- 두 작업과 개발 세션은 같은 Claude 구독 한도를 쓴다. 한도에 걸리면 실행이 몇 초 만에 실패하고, 한도가 풀린 뒤 다음 실행이 밀린 요청을 이어서 처리한다.
+- 두 작업과 개발 세션은 같은 Claude 구독 한도를 쓴다(v3.7부터 매시간 분석이 하루 18번; 밤 두 실행은 개발 세션과 잘 겹치지 않음). 한도에 걸리면 실행이 몇 초 만에 실패하고, 한도가 풀린 뒤 다음 실행이 밀린 요청을 이어서 처리한다.
 
 ## 3. 우편함 폴더 구조 (ieum-inbox 기본 브랜치)
 
 | 경로 | 쓰는 쪽 | 내용 |
 |---|---|---|
-| `inbox/<해시 32자>.json` | 폰 | 새 기록 하나의 분석 요청(통화, 문자, 메일). 이름에 번호나 이름이 없다 |
+| `inbox/<해시 32자>.json` | 폰 | 새 기록 하나의 분석 요청(통화, 문자. 메일은 v3.7에서 지움). 이름에 번호나 이름이 없다 |
 | `inbox/b-<시각>-<해시>.json` | 폰 | 처음 정리(10월 1일부터의 지난 기록) 묶음 요청. 매시간 2개까지 처리 |
 | `inbox/selftest-<번호>.json` | CI `inbox-e2e` | 종단 시험 요청. 결과만 쓰고 장부는 고치지 않는다 |
 | `results/<같은 이름>.json` | 예약 작업 | 분석 결과. 폰이 적용한 뒤 지운다. `selftest-`는 CI가 검증 후 지운다 |
 | `bad/` | 양쪽 | 형식이 깨진 요청이나 세 번 적용에 실패한 결과를 치워 둔 곳 |
 | `ledger/ledger.json` | 예약 작업 | 장부(원본). rev가 오르면 폰이 받아 반영 |
 | `ledger/edits/*.json` | 폰 | 사용자가 앱에서 고친 이름 등. 예약 작업이 장부에 반영하고 지운다 |
-| `tidy/state.json`, `tidy/proposal.json` | 폰 / 새벽 정리 | 새벽 정리의 입력과 제안 |
+| `tidy/state.json`, `tidy/proposal.json` | 폰 / 새벽 정리 | 새벽 정리의 입력과 제안. v3.7부터 state에 `pending{yesterdayCalls, yesterdayMin}`과 records의 `doneMs` |
 | `tidy/project.md`, `tidy/history/YYYY-MM.md`, `tidy/briefing.md` | 새벽 정리 | 새벽 정리의 기억(공사 전체, 날짜별 일지, 오늘 현황판) |
-| `report/YYYY-MM-DD.json` | 새벽 정리(v3.5) | 아침 보고서(한국 시각 오늘). 폰이 05:30부터 ETag로 읽어 카카오톡으로 보낸다. 이름·업체·요약이 들어 있으니 내용은 옮기지 않는다 |
+| `report/YYYY-MM-DD.json` | 새벽 정리(v3.5) | 아침 보고서(한국 시각 오늘). v3.7부터 `head.pendingCalls`와 `late[]`(뒤늦게 정리된 통화). 폰이 05:30부터 ETag로 읽어 카카오톡으로 보낸다. 이름·업체·요약이 들어 있으니 내용은 옮기지 않는다 |
 | `story/today.json` | 매시간 분석 | 오늘 통화 이야기(v3.2, 홈 맨 위) {day, text, calls, atMs}. 폰이 결과 받기 때 가져감 |
 | `status/phone.json` | 폰 | 하트비트 |
 | `status/calllog.txt` | 폰 | 통화 목록 대조표(이름·번호 포함, 4절) |
@@ -81,7 +82,7 @@
 | `folder` | 녹음 폴더가 골라져 있고 읽기 권한이 살아 있는가 | false면 새 녹음을 못 가져옴(앱에서 폴더 다시 고르기) |
 | `notifyAllowed` | 알림 권한과 앱 알림이 켜져 있는가 | false면 저녁·아침 보고와 자가 진단 알림이 안 보임 |
 | `batteryFree` | 배터리 최적화 예외인가 | false면 작업이 자주 미뤄짐 |
-| `power` (v3.6, DESIGN_V6 3.1) | 자막 전력 장부(`transcriptionPower`, r16-1이 씀)를 숫자·코드로: `batteryPct`, `plugged`(ac, usb, wireless, none), `status`, `powerSave`, `thermal`, `headroom`, `tempDeciC`, `currentUa`, `cpuset`, `cpusAllowed`; `today`·`prev`{`day`(KST "yyyy-MM-dd" 문자열 — 숫자면 번호 누설 검사에 걸림), `battery`{runs, ms, min, audioMin, mAhScreenOff}, `plugged`{runs, ms, min, audioMin}, `budgetMin`(20), `budgetHit`(min, pct, none), `gapSkips`, `hotSkips`, `inCallSkips`, `morningSkips`, `lowSkips`, `powerSaveSkips`, `chargingOnlySkips`, `budgetSkips`, `plugDropped`, `levelFallingSkips`, `killedChunkMs`, `deadlineMs`, `yieldCount`, `yieldMs`, `modelLoads`, `modelLoadMs`, `decodeAudioMs`, `stopReasons`{코드: 수}}; `chunk`{coldMedianMs, p50Ms, lastMs, threads, tokensLast(null, r16-3 전), perTokenMsLast(null)}; `waiting`{n: 충전을 기다리는 녹음 수, oldestMin: 가장 오래 기다린 분}; `chargingOnly`(스위치 [충전 중에만 글자로 바꾸기]). 장부가 없으면 null·0으로 채워 늘 있음 | `today.battery.min` > 60이 2일이면 배터리를 많이 씀(예산 20분), `waiting.oldestMin` > 2160(36시간)이면 충전 대기가 쌓임, `killedChunkMs + deadlineMs`가 실행 ms의 20% 넘음이 2일이면 조각 낭비. `chunk.coldMedianMs` ≤ 280,000, `cpusAllowed` = `threads`가 확인 기준(DESIGN_V6 6절) |
+| `power` (v3.6, DESIGN_V6 3.1) | 자막 전력 장부(`transcriptionPower`, r16-1이 씀)를 숫자·코드로: `batteryPct`, `plugged`(ac, usb, wireless, none), `status`, `powerSave`, `thermal`, `headroom`, `tempDeciC`, `currentUa`, `cpuset`, `cpusAllowed`; `today`·`prev`{`day`(KST "yyyy-MM-dd" 문자열 — 숫자면 번호 누설 검사에 걸림), `battery`{runs, ms, min, audioMin, mAhScreenOff}, `plugged`{runs, ms, min, audioMin}, `budgetMin`(20), `budgetHit`(min, pct, none), `gapSkips`, `hotSkips`, `inCallSkips`, `morningSkips`, `lowSkips`, `powerSaveSkips`, `chargingOnlySkips`, `budgetSkips`, `plugDropped`, `levelFallingSkips`, `killedChunkMs`, `deadlineMs`, `yieldCount`, `yieldMs`, `modelLoads`, `modelLoadMs`, `decodeAudioMs`, `stopReasons`{코드: 수}}; `chunk`{coldMedianMs, p50Ms, lastMs, threads, tokensLast(null, r16-3 전), perTokenMsLast(null)}; `waiting`{n: 충전을 기다리는 녹음 수, oldestMin: 가장 오래 기다린 분}; `chargingOnly`(스위치 [충전 중에만 글자로 바꾸기]). 장부가 없으면 null·0으로 채워 늘 있음. **v3.6.1:** `today`·`prev`에 `hot`{headroom, temp, slow, severe}(달궈짐으로 쉰 사유별 수). **v3.7(r17-1 T5, r17-3):** `today`·`prev`에 `cpuMs`(자막 실행 동안 쓴 프로세스 전체 CPU 시간 ms, `/proc/self/stat`), `cpuRuns`(잰 실행 수), `batteryUah`(배터리 실행이 쓴 전하 µAh, `CHARGE_COUNTER` 차이), `fg`{runs, min, refused, timeout}(꽂힘 실행을 포그라운드로 돌린 횟수·분·시작 거부·시간 초과), `pieceMedianMs`{fg, bg, fgN, bgN}(그날 2분 조각 중앙값 ms를 포그라운드·백그라운드로 나눈 것과 표본 수); 맨 위에 `fgSetting`(`transcribeForeground` 설정: auto, on, off)과 `fgOn`(마지막 실행이 본 그날이 포그라운드 날인지; auto면 KST 날짜가 짝수인 날) | `today.battery.min` > 60이 2일이면 배터리를 많이 씀(예산 20분), `waiting.oldestMin` > 2160(36시간)이면 충전 대기가 쌓임, `killedChunkMs + deadlineMs`가 실행 ms의 20% 넘음이 2일이면 조각 낭비. `chunk.coldMedianMs` ≤ 280,000, `cpusAllowed` = `threads`가 확인 기준(DESIGN_V6 6절). T5 채택: 켠 밤 `pieceMedianMs.fg`가 끈 밤 `bg`의 70% 이하(DESIGN_V7 3.4), `fg.refused`·`fg.timeout`이 늘면 포그라운드가 막힘 |
 | `standbyBucket` | 앱 대기 버킷: `EXEMPTED`(배터리 제한 없음, 가장 좋음), `ACTIVE`, `WORKING_SET`, `FREQUENT`, `RARE`, `RESTRICTED`, `NEVER`, 그 밖은 `B<번호>`, 못 읽으면 `UNKNOWN`(Android 9 미만은 `NONE`) | `RARE`/`RESTRICTED`/`NEVER`면 작업이 하루 몇 번만 돎. 앱을 한 번 열면 풀림 |
 | `lastDiscoveryMs` | 녹음 폴더를 마지막으로 다 살펴본 시각(0: v2.4 전 앱이거나 아직 없음) | 폰은 살아 있는데 12시간 넘게 그대로면 녹음 찾기가 멈춤 |
 | `lastUploadMs` | 정리 요청을 우편함에 마지막으로 올린 시각(0: 없음) | 통화가 있었는데 오래 그대로면 동의, 토큰, 네트워크 확인 |
@@ -96,17 +97,23 @@
 | `updateAvailableCode`, `updateReadySinceMs`, `update.error` (v3.4) | 폰이 알고 있는 새 버전 번호, 받아 둔 뒤 기다린 시작 시각, 업데이트 오류 코드 | 24시간 넘게 설치 안 되면 워치독 이슈 |
 | `lastInboxErrorSinceMs` | 같은 우편함 오류 코드가 이어진 시작 시각(오류가 있을 때만) | 2시간 넘으면 워치독 이슈 |
 | `resultChain` | 결과 받기 사슬의 지금 회차(`round`, 0이면 끝)와 다음 시각(`nextMs`) | |
-| `callLogMatch` | 녹음과 통화기록 짝짓기 통계(숫자만) | |
-| `callCard` (v3.0, v3.4) | 통화 카드 횟수: `shown`, `shownOutgoing`, `eligibleOutgoing`, `noCard`, `thin`, `noNumber`, `locked`, `cold`, `fgsRefused`, `noPermission`, `ringToCardMs` 등과 오늘 묶음 `today`. 통화를 본 적 없으면 null | `today.noPermission`이 하루 3번 이상이면 워치독 이슈 |
-| `permissions` (v3.1) | `phoneState`, `overlay`, `redirectRole`, `installAllowed` | `phoneState=false` 24시간이면 워치독 이슈 |
+| `callLogMatch` | 녹음과 통화기록 짝짓기 통계(숫자만). v3.7: `callLogMatch.day`{day, runs, 사유별 수(noTime, noCandidate, length, nameNull, nameDiffers, numberDiffers, several, matched, byEnd, byParty, records24h, open24h)} — 그날 패스 중 한 번에 본 가장 큰 수(같은 대기 기록이 패스마다 다시 세어지므로 합이 아님), `runs`는 본 패스 수 | 녹음 연결 91% → 95%의 재료(`noCandidate`·`length`) |
+| `callCard` (v3.0, v3.4, v3.6.1) | 통화 카드 횟수: `shown`, `shownOutgoing`, `eligibleOutgoing`, `noCard`, `thin`, `noNumber`, `locked`, `cold`, `fgsRefused`, `noPermission`, `expanded`, `ringToCardMs` 등과 오늘 묶음 `today`. 통화를 본 적 없으면 null. **v3.6.1(DESIGN_V7 K1~K3):** `drawn`(창이 실제로 화면에 그려짐 — 채점 항목 3은 이것만 셈), `fallback`(창을 못 붙였거나 숨겨졌거나 보이기 전에 통화가 끝나 알림으로 대신함), `hidden`(fallback 중 예외 없이 붙었는데 3초 안에 안 보인 것), `unconfirmed`(권한 검사는 거짓인데 보인 것 — 그려진 쪽으로 세지 않고 알림 유지), `recent[]`(최근 20통화, 한 통화에 `day`, `at`(시:분), `result`, `cause`(ok, okRetry, drawnDespiteFalse, hidden, `addView:<예외>` 등), `canDraw`, `canDrawAfter`, `mode`(AppOps 원래 모드), `pid`, `ageS`, `cold`, `locked`, `car`, `btAudio`, `commDevice`, `drawMs`, `error`, `out`만) | `today.fallback + today.unconfirmed`(옛 앱은 `noPermission`)가 하루 3번 이상이면 워치독 이슈 "통화 카드가 통화 순간에 뜨지 않아요"(원인 코드는 `recent[]`) |
+| `permissions` (v3.1, v3.6.1) | `phoneState`, `overlay`, `redirectRole`, `installAllowed`; v3.6.1부터 `pid`(하트비트를 쓴 프로세스 번호), `processAgeS`(프로세스 나이 초), `overlayMode`(`SYSTEM_ALERT_WINDOW` AppOps 원래 모드: 0 허용, 1 무시, 2 거부, 3 기본, 4 포그라운드, -1 못 읽음) — 카드 `recent[]`의 `pid`·`mode`와 맞춰 봄 | `phoneState=false` 24시간이면 워치독 이슈 |
 | `recordingGap`, `recordingGapVerdict` (v3.1) | 최근 하루 통화와 녹음 파일·연결 수, 판정 코드(`ok`, `noRecording`, `partial`, `noMatch`, `folder`, `tooMany`) | `ok`가 아닌 같은 판정이 2일이면 워치독 이슈 |
-| `followup`, `results`, `storeOpenError`, `transcriptionFailed`, `droppedItems`, `duplicateSkipped`, `latency` (v3.1) | 녹음 없음 알림 수, 결과 적용 실패·bad·받고 못 적용한 수, 저장소 열기 오류 코드(있을 때만), 자막 실패 수, 근거 부족으로 버린 수, 중복 건너뜀 수, 통화 끝→결과 지연 분위수 | `latency`는 기록 시각 오염 진단 전까지 판단 근거로 쓰지 않음 |
+| `followup`, `results`, `storeOpenError`, `transcriptionFailed`, `droppedItems`, `duplicateSkipped`, `latency` (v3.1) | 녹음 없음 알림 수, 결과 적용 실패·bad·받고 못 적용한 수, 저장소 열기 오류 코드(있을 때만), 자막 실패 수, 근거 부족으로 버린 수, 중복 건너뜀 수, 통화 끝→결과 지연 분위수(7일 이동) | `latency`의 옛 분위수는 기록 시각 오염 진단 전까지 판단 근거로 쓰지 않음. v3.7 값은 아래 `latency` 줄 |
 | `transcription` (v3.2) | 자막 실패 사유별 수, 길이 구간별 대기·완료, `long48h`(100초 넘는 통화 완료율), `oldestWaitMin`, 실행 수 | `long48h.ratePct` 80 미만 24시간이면 워치독 이슈 |
+| `latency.segments`, `latency.day`, `latency.over7d` (v3.7 r17-3) | 옛 `latency` 안에 더해짐. `segments`{`endToText`(통화 끝→자막 끝), `textToUpload`(자막 끝→요청 올림), `uploadToApplied`(올림→결과 적용)}, 각각 {p50Min, p90Min, n, over7d}(최근 7일 결과가 적용된 통화, 처음 정리 제외; 7일 넘는 값은 버리지 않고 `over7d`로 셈). `day`{p50Min, p90Min, n, waiting}: 오늘(KST) 끝난 통화만의 통화 끝→결과 적용 분 — 아직 결과가 없는 통화도 지금까지 기다린 시간으로 넣고(하한) `waiting`이 그 수. `over7d`: 통화 끝→적용이 7일 넘은 수 | 채점 항목 2(`day`). 가장 긴 구간이 어디인지는 `segments`와 `trace` |
+| `trace[]` (v3.7) | 최근 50통화(통화 끝 기준, 오래된 것부터)의 단계 시각: `endMin`(그날 0시부터 분), `day`, `durS`, `foundS`(녹음 발견), `textStartS`, `textEndS`, `uploadS`, `appliedS` — 모두 통화 끝에서 몇 초 뒤인지, 못 간 단계는 null. id·상대 정보 없음 | 지연이 가장 긴 단계를 하나로 특정(DESIGN_V7 3.4) |
+| `transcription.window14` (v3.7) | {created, failed, failedPermanent, days(14)}: 최근 14일에 대기열에 들어온 녹음 수, 그중 FAILED로 끝난 서로 다른 녹음 수, 그중 영구 실패 수(누적 `transcriptionFailed`는 재큐 때마다 부풂) | 채점 항목 9 |
 | `golden`, `guard` (v3.3) | 골든 측정 점수, 숫자 가드 계수(숫자만, 측정 전 null) | |
-| `messages.mailError`, `recordTime.fileVsRecordMin` (v3.4) | 메일 오류 코드별 수, 기록 시각 차이 구간별 수 | |
-| `kakao`, `report` (v3.5) | `kakao{on, linked, sent, failed, lastSentMs, error}`: 스위치 "카카오톡으로 받기", 연결, 다 나간 날 누계, 실패 누계, 마지막으로 다 나간 시각, 오류 코드. `report{day, source}`: 마지막으로 보낸 보고 날짜와 출처(`routine` 새벽 정리 보고서, `phone` 06:00 폰 폴백) | `linked=true`인데 `lastSentMs`가 이틀 아침 연속 오늘이 아니면, 또는 `linked=false`에 `error`가 `TOKEN_*`이면 워치독 이슈 |
+| `recordTime.fileVsRecordMin` (v3.4) | 기록 시각 차이 구간별 수 | |
+| `messages.mailError` (v3.4, **v3.7에서 지움**) | 메일 오류 코드별 수였다. 메일 기능을 지우면서 `messages` 묶음이 하트비트에서 빠졌다 | |
+| `kakao`, `report` (v3.5) | `kakao{on, linked, sent, failed, lastSentMs, error}`: 스위치 "카카오톡으로 받기", 연결, 다 나간 날 누계, 실패 누계, 마지막으로 다 나간 시각, 오류 코드. `report{day, source}`: 마지막으로 보낸 보고 날짜와 출처(`routine` 새벽 정리 보고서, `phone` 06:00 폰 폴백). **v3.7:** `report.coverage`{day(보고 날짜), yesterdayCalls(녹음 있고 개인 번호 아닌 어제 통화), inReport(보고에 들어간 수, 폰 폴백이면 0), pending(아직 글자로 바꾸거나 분석 중인 수), atMs, source}(마지막 보고, 없으면 null), `report.recent[]`{day, yesterdayCalls, inReport, pending}(최근 7일 보고, 오래된 것부터) | `linked=true`인데 `lastSentMs`가 이틀 아침 연속 오늘이 아니면, 또는 `linked=false`에 `error`가 `TOKEN_*`이면 워치독 이슈. `inReport / yesterdayCalls` < 80%가 평일 이틀 연속이면 워치독 이슈 "아침 보고에 빠진 통화가 많아요" |
+| `use` (v3.7) | {today, prev}: 그날(KST) 사용 횟수 {day, opens(앱을 앞으로), homeSec(홈을 본 초), taskDone([다 됐어요]), notifTap(알림으로 엶), cardExpand(카드 띠 펼침 — 카드 자체 집계 `callCard.today.expanded` 값을 읽음), kakaoOpen(카톡 보고 버튼으로 엶)}. `prev`는 전날(앱을 안 연 날은 0, 첫 집계 전은 null). 내용·시각 없음 | 채점 항목 10(v4.0) |
+| `dbTables` (v3.7) | 봉인 저장소의 표별 크기: {day, atMs, totalRows, totalChars, top[]}, `top`은 글자 수(다음 행 수) 큰 표 8개 {name, rows, chars, dChars(지난 집계 뒤 글자 수 변화, 처음은 null)}. 표 이름만, 내용 없음. 첫 집계 전 null | v3.8 저장소 작업의 재료. `dbPercent` ≥ 70이면 워치독 이슈 본문에 큰 표 3개 |
 
-v3.1 이전 앱(11/6 아침 폰은 v3.1, 1040)은 v3.2 이후 키(`transcription`, `update`, `messages`, `recordTime`, `golden`, `guard`)를 보내지 않는다. 워치독은 키가 없으면 그 규칙을 건너뛴다.
+v3.1 이전 앱(11/6 아침 폰은 v3.1, 1040)은 v3.2 이후 키(`transcription`, `update`, `messages`, `recordTime`, `golden`, `guard`)를 보내지 않는다. v3.6 이하 앱은 v3.6.1·v3.7 키(`callCard.drawn` 등, `latency.segments`·`day`, `trace`, `use`, `dbTables`, `report.coverage`)를 보내지 않고, v3.7 앱은 `messages`를 보내지 않는다. 워치독은 키가 없으면 그 규칙을 건너뛴다.
 
 `callLog` 안:
 
@@ -160,29 +167,31 @@ v3.4(11/6)부터 워치독은 Actions가 아니라 두 예약 작업 안에서 �
 | 자막이 밀려요 | 처음 정리 중(`firstPass.done=false`)이면 남은 자막이 있는데 마지막 자막(`lastTranscribedMs`)이 24시간 넘었을 때만. 아니면 `newQueuedCount`가 있는 하트비트(v2.6~)는 새 녹음의 `newOldestQueuedMs`가, 옛 하트비트는 `oldestQueuedMs`가 6시간 넘음. v3.6부터 충전을 기다리는 녹음(`power.waiting.n`)은 빼고 센다 |
 | 새 버전이 설치되지 않아요 | 폰이 받아 둔 새 버전(`updateAvailableCode` > `versionCode`)이 `updateReadySinceMs`부터 24시간 넘게 그대로 |
 | 폰 저장 공간이 거의 찼어요 | `dbPercent`가 80 넘음 |
+| 폰 저장소를 70% 넘게 쓰고 있어요 (v3.7) | `dbPercent`가 70 이상 80 이하(80 넘으면 위 이슈 하나만). 본문에 `dbTables.top`의 큰 표 3개 |
 | 우편함 오류가 계속돼요 | 같은 `lastInboxError`가 `lastInboxErrorSinceMs`부터 2시간 넘음 |
-| 통화 카드 권한이 꺼져 있어요 | 하트비트 `callCard.today.noPermission`이 하루 3번 이상(잠금이라 알림만 띄운 `locked`는 세지 않음) |
+| 통화 카드가 통화 순간에 뜨지 않아요 (v3.6.1, 전 제목 "통화 카드 권한이 꺼져 있어요") | 하트비트 `callCard.today.fallback + unconfirmed`(옛 앱은 `noPermission`)가 하루 3번 이상(잠금이라 알림만 띄운 `locked`는 세지 않음). 본문에 `drawn` 수와 `recent[]`의 최근 원인 코드 |
 | 업데이트 실패 | `lastUpdateError`가 있음(단 `USER_ACTION_REQUIRED`, `INSTALL_SOURCE_NOT_ALLOWED`는 아래 옛 버전 규칙이 말함) |
 | 폰이 옛 버전에 머물러 있어요 | `app/version.json`의 versionCode가 하트비트 `versionCode`보다 높고, version.json이 마지막으로 바뀐 커밋부터 24시간 넘음(하트비트가 12시간 안일 때만) |
 | 루틴 지시문이 옛 버전이에요 | 루틴별 자가 보고의 `promptVersion`이 version.json의 `promptVersion`(매시간)·`tidyVersion`(새벽)과 다름. version.json이 바뀐 뒤 끝난 실행만 본다 |
 | 전화 상태 권한이 빠졌어요 | 하트비트 `permissions.phoneState=false`가 24시간(v3.1~ 하트비트만) |
 | 통화가 녹음되지 않고 있어요 / 통화가 일부만 녹음되고 있어요 / 녹음 폴더를 읽지 못해요 / 녹음 폴더에 파일이 너무 많아요 / 녹음은 있는데 통화기록과 이어지지 않아요 | `recordingGapVerdict`가 `noRecording` / `partial` / `folder` / `tooMany` / `noMatch`로 2일(48시간) 같음 |
 | 긴 통화의 자막이 끝나지 않아요 | `transcription.long48h.ratePct`(100초 넘는 통화 완료율)가 80% 아래로 24시간 |
-| 분석이 멈췄어요 | inbox/의 가장 오래된 요청이 루틴이 도는 시간(07~23시)으로만 세어 3시간 넘음(파일이 처음 커밋된 시각 기준) |
+| 분석이 멈췄어요 | inbox/의 가장 오래된 요청이 루틴이 도는 시간(03~05시와 07~23시, v3.7. 전에는 07~23시)으로만 세어 3시간 넘음(파일이 처음 커밋된 시각 기준) |
 | 루틴이 일을 안 해요 | 매시간 자가 보고의 `processed`가 0인데 inbox에 요청이 있음(한도에 걸린 실행은 제외) |
 | 루틴이 한도에 걸렸어요 | 매시간 자가 보고의 `limitHit`가 true |
 | 루틴 지시문 버전이 달라요 | 매시간 자가 보고의 `promptMismatch`가 true |
 | 매시간 분석이 예정 시각에 돌지 않았어요 | `status/last-run-hourly.json`(또는 옛 `last-run.json`)의 "status" 커밋이 자가 보고 cron상 2슬롯 연속 없음(슬롯 40분 뒤부터 셈, analyze 커밋 기준이 아니다. 조용한 날엔 원래 없다). 매시간 자가 보고가 한 번도 없으면 건너뜀 |
 | 루틴이 결과를 저장소에 올리지 못했어요 | 매시간·새벽 자가 보고의 `pushed`가 false |
 | 우편함 토큰이 곧 만료돼요 | 폰이 올린 `tokenExpiresMs`가 14일 안(없으면 건너뜀) |
-| 아침 보고서가 안 만들어졌어요 (v3.5) | 한국 시각 05:30이 지났는데 `report/<오늘>.json`이 없음(파일이 있는지만 봄). 새벽 정리 자가 보고 `promptVersion`이 7 이상일 때만. 04:46 워치독은 05:30 전이라 실제로는 07:34부터의 매시간 워치독이 본다. 본문에 `reportWritten` |
+| 아침 보고서가 안 만들어졌어요 (v3.5) | 한국 시각 05:30이 지났는데 `report/<오늘>.json`이 없음(파일이 있는지만 봄). 새벽 정리 자가 보고 `promptVersion`이 7 이상일 때만. 새벽 정리(v3.7부터 05:05, 전에는 04:46)의 워치독은 05:30 전이라 실제로는 07:34부터의 매시간 워치독이 본다. 본문에 `reportWritten` |
 | 카카오톡 보고가 안 갔어요 (v3.5) | 하트비트 `kakao.on`이 참(키가 없으면 참으로 봄), `kakao.linked=true`, 09:00이 지났는데 `lastSentMs`가 어제 00:00 전(두 아침 연속), 어제 09:00 전부터 연결돼 있었을 때만 |
 | 카카오톡 연결이 풀렸어요 (v3.5) | `kakao.on`이 거짓이 아니고 `kakao.linked=false`, `kakao.error`가 `TOKEN_`으로 시작 |
 | 폰 배터리를 많이 써요 (v3.6) | 하트비트 `power.today.battery.min`이 60분 넘고, 같은 하트비트의 `power.prev`나 다른 날의 이전 하트비트 `today`도 60분 넘음(2일, 하루 예산 20분의 3배) |
 | 충전을 기다리는 녹음이 쌓여요 (v3.6) | `power.waiting.n` > 0이고 `power.waiting.oldestMin`이 36시간(2160분) 넘음. 이 녹음들은 "자막이 밀려요"에서 빼고 센다(`newQueuedCount`가 `waiting.n`보다 많을 때만) |
 | 자막 조각이 버려지고 있어요 (v3.6) | `power.today`와 `power.prev` 모두 `killedChunkMs + deadlineMs`가 실행 ms(`battery.ms + plugged.ms`, 없으면 분 × 60,000)의 20% 넘음 |
+| 아침 보고에 빠진 통화가 많아요 (v3.7) | 하트비트 `report.coverage`·`report.recent[]`(와 지난 하트비트)로 본 가장 최근 보고와 그 앞 평일 보고가 모두 `inReport / yesterdayCalls` < 80%(통화 날짜 기준 평일 이틀 연속, 주말은 건너뜀). 가장 최근 보고가 어제 보고보다 오래됐으면 건너뜀 |
 
-위가 `tools/inbox/watchdog.py`의 규칙 전부다(11/7, v3.5 규칙 3개와 v3.6 규칙 3개 포함 이슈 제목 31개).
+위가 `tools/inbox/watchdog.py`의 규칙 전부다(11/12, v3.5 규칙 3개, v3.6 규칙 3개, v3.7 규칙 2개 포함 이슈 제목 33개; v3.6.1에서 카드 규칙 제목이 바뀜).
 
 토큰 이슈가 열리면: 새 토큰을 만들어 앱 저장소 비밀 `IEUM_INBOX_TOKEN`을 바꾸고 배포한다. 만료 뒤에는 폰이 업데이트도 못 받으므로 만료 전에 해야 한다. `IEUM_SIGNING_SEED` 비밀이 없으면 서명 키가 토큰에서 나오므로 토큰을 바꾸면 서명이 바뀌어 업데이트가 막힌다. 먼저 확인한다. 폰이 새 버전을 받고 다음 하트비트를 올리면 이슈는 저절로 닫힌다.
 
