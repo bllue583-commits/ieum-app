@@ -97,7 +97,7 @@
 | `updateAvailableCode`, `updateReadySinceMs`, `update.error` (v3.4) | 폰이 알고 있는 새 버전 번호, 받아 둔 뒤 기다린 시작 시각, 업데이트 오류 코드(v3.7: 확인 오류가 없으면 `blocked`·`noAnswer`도) | 24시간 넘게 설치 안 되면 워치독 이슈 |
 | `update.bg`, `update.bgAtMs` (v3.7) | 백그라운드 설치·확인이 마지막으로 내린 결정 부호와 그 시각: `committed`, `sessionWaiting`, `sourceNotAllowed`, `notVerified`, `autoOff`, `wish`, `api`, `noFile`, `front`(앱이 앞에 있어 화면이 설치), `userAction`, `blocked`, `exception:<클래스>`, 세션이 30분 넘게 응답이 없으면 `noAnswer` | `committed`가 오래 그대로면 무인 설치가 조용히 멈춘 것 |
 | `update.sessionOpen`, `update.autoInstall` (v3.7) | 설치 세션이 지금 열려 있는지, 스위치 "새 버전은 자동으로 설치" | |
-| `update.open`, `update.openInstalls` (v3.7) | 앱을 열 때의 마지막 결정 부호(`start`, `replace`, `inFlight`, `bgFresh`, `downloading`, `inCall`, `declined`, `tried`, `blocked`, `failed`, `noAnswer`, `autoOff`)와 앱을 열어 시작한 설치 횟수 | |
+| `update.open`, `update.openInstalls` (v3.7) | 앱을 열 때의 마지막 결정 부호(`start`, `replace`, `inFlight`, `bgFresh`, `downloading`, `inCall`, `declined`, `tried`, `blocked`, `backoff`(24시간 물러남), `failed`, `noAnswer`, `autoOff`)와 앱을 열어 시작한 설치 횟수 | |
 | `update.blockAsk`, `update.blockOpen`, `update.blockStatus`, `update.blockCode`, `update.autoBack` (v3.7) | "보안 위험 자동 차단" 시트를 띄운 횟수, [설정 열기] 횟수, 앱을 열어 시작한 설치가 실패한 상태 번호(막힘 2), 막힘 메시지의 부호 부분(예: `INSTALL_FAILED_VERIFICATION_FAILURE`, 원문은 남기지 않음), 설치 뒤 돌아온 방식(`front` 앱이 스스로 열기 시도, `notice` 알림만, `manual` 사람이 돌아옴, `retry` 설정 화면에 있는 동안 다시 시도한 설치가 움직임); `update.blockRetries`는 그 다시 시도 횟수 | 삼성 자동 차단이 실제로 어떤 번호를 주는지 배포 뒤 판정 |
 | `lastInboxErrorSinceMs` | 같은 우편함 오류 코드가 이어진 시작 시각(오류가 있을 때만) | 2시간 넘으면 워치독 이슈 |
 | `resultChain` | 결과 받기 사슬의 지금 회차(`round`, 0이면 끝)와 다음 시각(`nextMs`) | |
