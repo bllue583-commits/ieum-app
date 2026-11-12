@@ -194,7 +194,8 @@ class WatchdogTest(unittest.TestCase):
     def test_db_percent_over_80(self):
         self.assertEqual([w.T_DB_FULL], titles(phone=phone(dbPercent=81)))
         self.assertIn("81%", problems(phone=phone(dbPercent=81))[0]["body"])
-        self.assertEqual([], titles(phone=phone(dbPercent=80)))
+        # v3.7: 70% to 80% is the early warning (one issue at a time).
+        self.assertEqual([w.T_DB_HIGH], titles(phone=phone(dbPercent=80)))
         self.assertEqual([], titles(phone=phone(dbPercent=None)))
 
     def test_call_card_permission_off_three_times_a_day(self):
@@ -748,6 +749,56 @@ class V36PowerTest(unittest.TestCase):
         self.assertEqual([w.T_PIECES_WASTED], [p["title"] for p in self.got(phone(power=pw(today=mins, prev=mins)))])
         # No run time at all.
         self.assertEqual([], self.got(phone(power=pw(today={"killedChunkMs": 5}, prev={"killedChunkMs": 5}))))
+
+
+class V37RulesTest(unittest.TestCase):
+    """v3.7 (DESIGN_V7 3.3, r17-3): report coverage under 80% on two weekdays in a row, and the store at 70%."""
+
+    @staticmethod
+    def cov(day, i, n):
+        return {"day": day, "yesterdayCalls": n, "inReport": i, "pending": n - i}
+
+    def test_db_seventy(self):
+        self.assertEqual([w.T_DB_HIGH], titles(phone=phone(dbPercent=70)))
+        self.assertEqual([], titles(phone=phone(dbPercent=69)))
+        self.assertEqual([w.T_DB_FULL], titles(phone=phone(dbPercent=90)))
+        body = problems(phone=phone(dbPercent=72, dbTables={"top": [{"name": "call_records", "rows": 9, "chars": 123}]}))[0]["body"]
+        self.assertIn("72%", body)
+        self.assertIn("call_records 123자", body)
+
+    def test_coverage_two_weekdays(self):
+        # NOW is Friday 2027-01-15 17:00 KST: today's report covers Thursday, yesterday's Wednesday.
+        rep = {"coverage": self.cov("2027-01-15", 7, 10), "recent": [self.cov("2027-01-14", 6, 10), self.cov("2027-01-15", 7, 10)]}
+        got = problems(phone=phone(report=rep))
+        self.assertEqual([w.T_REPORT_COVERAGE], [p["title"] for p in got])
+        self.assertIn("7/10", got[0]["body"])
+        self.assertIn("6/10", got[0]["body"])
+        # One good day of the two: nothing.
+        good = {"coverage": self.cov("2027-01-15", 9, 10), "recent": [self.cov("2027-01-14", 6, 10)]}
+        self.assertEqual([], titles(phone=phone(report=good)))
+        # Only one day known: nothing.
+        self.assertEqual([], titles(phone=phone(report={"coverage": self.cov("2027-01-15", 1, 10)})))
+        # 80% is enough.
+        self.assertEqual([], titles(phone=phone(report={"coverage": self.cov("2027-01-15", 8, 10), "recent": [self.cov("2027-01-14", 0, 10)]})))
+
+    def test_coverage_skips_the_weekend_and_reads_history(self):
+        # Tuesday's report covers Monday; the weekday before Monday is Friday (Saturday's report), found in history.
+        tue = NOW + 4 * DAY - 8 * H  # Tuesday 2027-01-19 09:00 KST
+        now = {"atMs": tue - H, "report": {"coverage": self.cov("2027-01-19", 1, 10)}}
+        old = {"atMs": tue - 3 * DAY, "report": {"coverage": self.cov("2027-01-16", 2, 10)}}
+        got = w.evaluate(tue, now, {"processed": 1}, None, 0, history=[old])
+        self.assertIn(w.T_REPORT_COVERAGE, [p["title"] for p in got])
+        # Sunday's calls (Monday's report) are no weekday: Monday + the Sunday do not make two.
+        mon = {"atMs": tue - DAY, "report": {"coverage": self.cov("2027-01-18", 0, 10)}}
+        got = w.evaluate(tue, {"atMs": tue - H, "report": {"coverage": self.cov("2027-01-19", 1, 10)}}, {"processed": 1}, None, 0, history=[mon])
+        self.assertNotIn(w.T_REPORT_COVERAGE, [p["title"] for p in got])
+
+    def test_coverage_old_report_says_nothing(self):
+        rep = {"recent": [self.cov("2027-01-11", 1, 10), self.cov("2027-01-12", 1, 10)]}
+        self.assertEqual([], titles(phone=phone(report=rep)))
+        # No calls, or nothing known: nothing.
+        self.assertEqual([], titles(phone=phone(report={"coverage": None, "recent": []})))
+        self.assertEqual([], titles(phone=phone(report={"coverage": self.cov("2027-01-15", 0, 0)})))
 
 
 if __name__ == "__main__":

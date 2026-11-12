@@ -177,6 +177,8 @@ internal class CallTranscriptionRunner(
         fun modelLoad(ms:Long) {}
         /** A piece is about to begin (the first of the run: the battery run's start is written before it). */
         fun started() {}
+        /** v3.7 r17-3: a recording's text is begun (claimed), for the heartbeat's trace[].textStartS. */
+        fun begun(recordingId:String) {}
         companion object { val NONE=object:Events {} }
     }
     data class Pass(val state:String,val done:Int,val failed:Int,val pieces:Int=0)
@@ -311,6 +313,7 @@ internal class CallTranscriptionRunner(
             if(holdOld(c))return Pass("WAIT_POWER",done,failed) // new ones come first: everything after this is old too
             if(!store.claim(c.key))return@repeat
             lastStopHarmless=false;laterInRun=taken++>0
+            runCatching { events.begun(c.key.recordingId) }
             try {
                 val started=now()
                 val (decoded,segments)=read(c).use { input -> transcribeRecording(c.key,input,c.mime,file,keepSession=true) }
@@ -445,6 +448,8 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
         val threads=PowerPolicy.threads(run.threads,cores)
         val severe={ BatterySnapshot.read(storage).thermal>=PowerManager.THERMAL_STATUS_SEVERE }
         val began=android.os.SystemClock.elapsedRealtime()
+        // v3.7 r17-3 (DESIGN_V7 3.3): the run's process CPU time, start to end (/proc/self/stat).
+        val cpuAtStart=Telemetry.processCpuMs()
         // v3.6.1 (T1): also the first piece after a hot rest is a cold one (one slow piece, one rest).
         val coldStart=PowerStats.coldStart(power(settings),now)
         var lastCheck=0L;var lastOk=true
@@ -473,6 +478,8 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
             override fun yielded() { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"yieldCount") } }
             override fun yieldLeft(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"yieldMs",ms) } }
             override fun decodeAudio(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"decodeAudioMs",ms) } }
+            override fun begun(recordingId:String) { runCatching { settings.update { s -> val prev=runCatching { JSONObject(s.optString(PipelineSettingsKeys.TRACE_TEXT_START)) }.getOrNull()
+                if(prev?.has(recordingId)!=true) s.put(PipelineSettingsKeys.TRACE_TEXT_START,Telemetry.noteTextStart(prev,recordingId,System.currentTimeMillis()).toString()) } } }
             override fun modelLoad(ms:Long) { savePower(settings) { o -> PowerStats.add(PowerStats.add(o,System.currentTimeMillis(),"modelLoads"),System.currentTimeMillis(),"modelLoadMs",ms) } }
         }
         return try {
@@ -517,7 +524,10 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                             val since=o.optLong("lastPluggedMs",now).coerceIn(now,end)
                             x=PowerStats.noteRun(x,end,PowerPolicy.Mode.BATTERY,end-since,0,null)
                         }
-                        if(pass.state=="STOPPED") x=PowerStats.noteStop(x,end,if(timeLimitStop(began)) "timeout" else "other");x }
+                        if(pass.state=="STOPPED") x=PowerStats.noteStop(x,end,if(timeLimitStop(began)) "timeout" else "other")
+                        // v3.7 r17-3: CPU ms of the run and, on battery, the charge counter's drop (whatever the screen did).
+                        val drop=if(run.mode==PowerPolicy.Mode.BATTERY) start.chargeUah?.let { a -> endSnap.chargeUah?.let { b -> (a-b).takeIf { it>0 } } } else null
+                        PowerStats.noteCpu(x,end,cpuAtStart?.let { a -> Telemetry.processCpuMs()?.let { b -> (b-a).takeIf { it>=0 } } },drop) }
                 }
                 runCatching { val (n,oldest)=store.powerWaiting(CallTranscriptionStore.BatteryWindow(PowerPolicy.dayStartMs(end),store.bytesPerMs()),chargingOnly(settings))
                     savePower(settings) { PowerStats.noteWaiting(it,n,oldest) } }

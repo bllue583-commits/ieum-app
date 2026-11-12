@@ -30,6 +30,8 @@ internal object UpdateViews {
  * busy on its own ("연결하는 중이에요") and leaves the others alone. */
 internal class SettingsScreen(a:MainActivity):AppScreen(a) {
     companion object { const val TICK_MS=1000L
+        /** v3.7 r17-3: the first pass under way, said without a time it cannot keep. */
+        const val FIRST_PASS_GOING="남은 녹음을 차례로 글자로 바꾸고 있어요."
         /** [지금 확인] says "확인하는 중이에요" at most this long. */
         const val CHECK_WAIT_MS=30_000L
         /** A slider is saved this long after it last moved (also when moved with TalkBack, review #31). */
@@ -680,7 +682,8 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
             if(f.lowBattery) body.addView(aside("배터리가 절반 넘게 차도 이어서 해요."))
         } else {
             val lines=buildList {
-                if(f.toTranscribe>0) f.hoursLeft?.let { h -> add("끝나기까지 약 ${if(h<1) "1시간 안" else "${Math.round(h)}시간"}") }
+                // v3.7 r17-3: no time promise (it could not be kept); what helps instead.
+                if(f.toTranscribe>0) add(FIRST_PASS_GOING)
                 if(f.waiting>0) add("요약을 기다리는 통화 ${f.waiting}건")
                 if(f.toTranscribe==0 && f.waiting==0) add("지난 문자를 읽고 있어요")
             }

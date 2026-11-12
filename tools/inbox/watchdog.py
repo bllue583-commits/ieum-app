@@ -24,6 +24,9 @@ for two days in a row. r15-4: the second rule only while kakao.on is true (a hea
 v3.6 (DESIGN_V6 3.3): three rules on the heartbeat's power block: battery runs over 60 minutes two days running, a recording
 waiting for the charger over 36 hours, and killed plus deadline piece time over 20% of the run time two days running. The
 recordings waiting for the charger by design are not counted in "자막이 밀려요".
+
+v3.7 (DESIGN_V7 3.3, r17-3): the morning report covered under 80% of yesterday's calls (report.coverage, report.recent) on two
+weekdays in a row, and the sealed store at 70% (dbPercent; the 80% rule stays for "거의 찼어요").
 """
 import argparse, datetime, json, os, subprocess, sys, time
 
@@ -137,6 +140,12 @@ T_BATTERY_HEAVY = "폰 배터리를 많이 써요"
 T_CHARGER_WAIT = "충전을 기다리는 녹음이 쌓여요"
 T_PIECES_WASTED = "자막 조각이 버려지고 있어요"
 BATTERY_HEAVY_MIN = 60
+
+# v3.7 (DESIGN_V7 3.3, r17-3).
+T_REPORT_COVERAGE = "아침 보고에 빠진 통화가 많아요"
+REPORT_COVERAGE_MIN = 0.8
+T_DB_HIGH = "폰 저장소를 70% 넘게 쓰고 있어요"
+DB_HIGH_PERCENT = 70
 CHARGER_WAIT_MIN = 36 * 60
 PIECES_WASTED_SHARE = 0.2
 
@@ -385,6 +394,60 @@ def power_rules(now_ms, phone, history, add):
         add(T_PIECES_WASTED, f"자막 실행 시간 중 버려진 조각의 몫이 오늘 {round(a * 100)}%, 전날 {round(b * 100)}%예요 (기준 20%, 2일 연속).\n"
             f"오늘 버린 조각 {(num(today.get('killedChunkMs')) or 0) // 1000}초, 기한 초과 {(num(today.get('deadlineMs')) or 0) // 1000}초.\n"
             "\n추정 원인: 실행에 안 들어갈 조각을 시작하지 않기(W1)나 미리 반으로 나누기(W2)가 작동하지 않아요.")
+
+
+def coverage_by_call_day(phone, history):
+    """{call day (date): (inReport, yesterdayCalls)} from the heartbeats' report.coverage and report.recent (v3.7). The call day
+    is the report day's day before; a later heartbeat's value for the same day wins."""
+    out = {}
+    beats = sorted((h for h in (history or []) if isinstance(h, dict)), key=lambda h: ms(h, "atMs"))
+    if isinstance(phone, dict):
+        beats.append(phone)
+    for h in beats:
+        rep = sub(h, "report")
+        entries = list(rep.get("recent") or []) if isinstance(rep.get("recent"), list) else []
+        if sub(rep, "coverage"):
+            entries.append(sub(rep, "coverage"))
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            try:
+                day = datetime.date.fromisoformat(str(e.get("day")))
+            except ValueError:
+                continue
+            calls, inside = num(e.get("yesterdayCalls")), num(e.get("inReport"))
+            if calls and inside is not None:
+                out[day - datetime.timedelta(days=1)] = (min(inside, calls), calls)
+    return out
+
+
+def previous_weekday(day):
+    day -= datetime.timedelta(days=1)
+    while day.weekday() >= 5:
+        day -= datetime.timedelta(days=1)
+    return day
+
+
+def coverage_rules(now_ms, phone, history, add):
+    """v3.7 (DESIGN_V7 3.3): the latest report (today's or yesterday's) and the one of the weekday before it each covered under
+    80% of their calls (the calls of two weekdays in a row; a weekend in between is skipped). phone: the current heartbeat."""
+    days = coverage_by_call_day(phone, history)
+    today = datetime.date.fromisoformat(kst_date(now_ms))
+    weekdays = sorted(d for d in days if d.weekday() < 5)
+    if not weekdays:
+        return
+    last = weekdays[-1]
+    if last + datetime.timedelta(days=1) < today - datetime.timedelta(days=1):
+        return  # no fresh report: the coverage is too old to say anything now
+    before = previous_weekday(last)
+    if before not in days:
+        return
+    low = [(d, days[d]) for d in (before, last) if days[d][0] / days[d][1] < REPORT_COVERAGE_MIN]
+    if len(low) == 2:
+        add(T_REPORT_COVERAGE, "평일 이틀 연속 아침 보고가 전날 통화의 80%를 담지 못했어요 (기준 80%, 평일 2일 연속).\n"
+            + "".join(f"{d.isoformat()} 통화: {i}/{n}건 ({round(i * 100 / n)}%)\n" for d, (i, n) in low)
+            + "\n추정 원인: 밤사이 자막이 새벽 분석(03:34, 04:34) 전에 끝나지 않았어요(폰을 늦게 충전했거나 발열로 쉼), 분석 루틴이 "
+              "밀렸어요. 하트비트 latency.segments와 trace로 어느 단계가 늦었는지 확인해 주세요.")
 
 
 def held_since(phone, history, pred):
@@ -649,6 +712,12 @@ def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count, version=None
         if isinstance(db, (int, float)) and not isinstance(db, bool) and db > DB_FULL_PERCENT:
             add(T_DB_FULL, f"폰의 보호 저장소를 {int(db)}% 쓰고 있어요 (기준 80%). 다 차면 모든 저장이 멈춰요.\n\n"
                 "해야 할 일: 오래된 기록 정리 규칙을 확인하거나 저장소 한도를 늘린 새 버전을 배포해 주세요.")
+        elif isinstance(db, (int, float)) and not isinstance(db, bool) and db >= DB_HIGH_PERCENT:
+            # v3.7 (DESIGN_V7 3.3): early warning; above 80% the rule above says it instead (one issue at a time).
+            top = [t for t in (sub(phone, "dbTables").get("top") or []) if isinstance(t, dict)][:3]
+            add(T_DB_HIGH, f"폰의 보호 저장소를 {int(db)}% 쓰고 있어요 (기준 70%). 100%가 되면 모든 저장이 조용히 실패해요.\n"
+                + ("큰 표: " + ", ".join(f"{w_code(t.get('name'))} {num(t.get('chars')) or 0}자" for t in top) + ".\n" if top else "")
+                + "\n추정 원인: 자막 보존(7일, 60%부터 3일)이 줄이는 것보다 빨리 쌓여요. 저장소 줄이기(v3.8)를 서둘러야 해요.")
         ie, ie_since = w_code(phone.get("lastInboxError")), ms(phone, "lastInboxErrorSinceMs")
         # The phone keeps since when the code has been the same (lastInboxErrorSinceMs), so no state is kept here.
         if ie and ie_since and now_ms - ie_since > INBOX_ERROR_STUCK_MS:
@@ -685,6 +754,7 @@ def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count, version=None
     v31_rules(now_ms, fresh, [last_run, tidy_run], version, version_ms, history, add)
     routine_rules(now_ms, last_run, tidy_run, status_commits, add)
     report_rules(now_ms, fresh, history, tidy_run, report_exists, add)
+    coverage_rules(now_ms, fresh, history, add)
     power_rules(now_ms, fresh, history, add)
 
     if inbox_oldest_ms is not None:

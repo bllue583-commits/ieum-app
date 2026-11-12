@@ -349,6 +349,15 @@ internal object PowerStats {
         }
         return o
     }
+    /** v3.7 r17-3 (DESIGN_V7 3.3): one transcription run's process CPU time ([cpuMs], /proc/self/stat) and, on battery, the
+     * charge it took ([uah], the CHARGE_COUNTER difference, the whole phone's use: an upper bound) into today.cpuMs,
+     * today.batteryUah and today.cpuRuns. */
+    fun noteCpu(old:JSONObject?,now:Long,cpuMs:Long?,uah:Long?):JSONObject {
+        val o=copy(old);val t=today(o,PowerPolicy.day(now))
+        if(cpuMs!=null && cpuMs>=0) { inc(t,"cpuMs",cpuMs);inc(t,"cpuRuns") }
+        if(uah!=null && uah>0) inc(t,"batteryUah",uah)
+        return o
+    }
     /** v3.7 T5: pieces of one day kept per way (foreground or not) for the day's median. */
     private const val DAY_PIECES=80
     fun median(a:JSONArray?):Double? {

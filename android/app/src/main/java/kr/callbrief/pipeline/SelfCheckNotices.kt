@@ -71,7 +71,7 @@ internal object SelfCheckNotices {
         if(i.modelState=="READY" && i.queued>0 && (i.oldestQueuedMs ?: i.now)<=i.now-TRANSCRIBE_LATE_MS && i.now-i.lastTranscribedMs>TRANSCRIBE_LATE_MS)
             add(Notice(TRANSCRIBE_LATE,"통화 글자 바꾸기가 밀려 있어요","충전기에 꽂아 두면 밤에 끝나요."))
         if(i.modelState=="FAILED")
-            add(Notice(MODEL_FAILED,"음성 인식 모델을 다시 받아야 해요","와이파이에 연결한 뒤 이음 설정을 열어 주세요."))
+            add(Notice(MODEL_FAILED,"음성 인식 모델을 다시 받아야 해요","인터넷에 연결된 상태에서 이음 설정을 열어 주세요."))
         if(i.folderChosen && !i.folderReadable)
             add(Notice(FOLDER_LOST,"녹음 폴더 연결이 풀렸어요","이음 설정에서 녹음 폴더를 다시 골라 주세요."))
         if(i.sending && i.oldestWaitingMs!=null && i.now-i.oldestWaitingMs>=WAIT_LATE_MS && i.now-i.lastAnalyzedMs>=NO_RESULT_MS &&

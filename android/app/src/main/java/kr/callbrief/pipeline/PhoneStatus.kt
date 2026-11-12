@@ -57,7 +57,18 @@ internal object PhoneStatus {
         val v35:V35=V35(),
         /** DESIGN_V6 3.1 (v3.6, r16-2): the power ledger r16-1 writes ([PipelineSettingsKeys.TRANSCRIPTION_POWER]) and the switch
          * [충전 중에만 글자로 바꾸기]; the heartbeat's `power` block ([PowerText.heartbeat]), always there, numbers and codes only. */
-        val powerLedger:JSONObject?=null,val chargingOnly:Boolean=false)
+        val powerLedger:JSONObject?=null,val chargingOnly:Boolean=false,
+        /** DESIGN_V7 3.3 (v3.7, r17-3): the scorecard's measurement ([V37]). */
+        val v37:V37=V37())
+    /** v3.7 r17-3 (DESIGN_V7 3.3, SCORECARD): [latency] goes into `latency` beside the 7-day numbers ({segments{endToText,
+     * textToUpload,uploadToApplied}, day{p50Min,p90Min,n,waiting}, over7d}); [window14] into `transcription.window14`
+     * {created,failed,failedPermanent,days}; [coverage] is `report.coverage` ([kr.callbrief.pipeline.report.ReportCoverage.snapshot])
+     * and [coverageRecent] `report.recent[]`; [use] is `use{today,prev}` ([UseStats.heartbeat]); [dbTables] `dbTables`
+     * ([Telemetry.dbTablesJson]); [matchDay] `callLogMatch.day` ([Telemetry.matchDayJson]); [trace] `trace[]` ([Telemetry.trace]).
+     * Every one is numbers, KST days and codes only. */
+    data class V37(val latency:JSONObject?=null,val window14:JSONObject?=null,val coverage:JSONObject?=null,
+        val coverageRecent:org.json.JSONArray?=null,val use:JSONObject?=null,val dbTables:JSONObject?=null,val matchDay:JSONObject?=null,
+        val trace:org.json.JSONArray?=null)
     /** v3.5: heartbeat `kakao{on,linked,sent,failed,lastSentMs,error}` and `report{day,source}`; numbers, dates and codes only. */
     data class V35(val kakaoLinked:Boolean=false,val kakaoSent:Long=0,val kakaoFailed:Long=0,val kakaoLastSentMs:Long?=null,
         val kakaoError:String?=null,val reportDay:String?=null,val reportSource:String?=null,
@@ -135,6 +146,8 @@ internal object PhoneStatus {
             .put("dbOpenMs",w.dbOpenMs ?: JSONObject.NULL).put("homeReadMs",w.homeReadMs ?: JSONObject.NULL)
             .put("resultChain",w.resultChainRound?.let { r -> JSONObject().put("round",r).put("nextMs",w.resultChainNextMs ?: JSONObject.NULL) } ?: JSONObject.NULL)
         val match=w.callLogMatch?.let(::counts)
+        // v3.7 r17-3: the day's reasons (a "day" string, so after the counts filter).
+        if(match!=null) i.v37.matchDay?.let(Telemetry::matchDayJson)?.let { match.put("day",it) }
         o.put("callLogMatch",match ?: JSONObject.NULL)
         // Counts only (the same filter as the match statistics), whatever is stored under the key.
         o.put("callCard",w.callCard?.let(::callCardJson) ?: JSONObject.NULL)
@@ -155,8 +168,35 @@ internal object PhoneStatus {
         putV34(o,i.v34)
         putV35(o,i.v35)
         o.put("power",runCatching { PowerText.heartbeat(i.powerLedger,i.chargingOnly,i.nowMs) }.getOrElse { JSONObject.NULL })
+        putV37(o,i.v37)
         return o
     }
+    /** v3.7 r17-3: the scorecard's blocks. `use` and `report.coverage` always (null inside until known), the rest when known. */
+    private fun putV37(o:JSONObject,v:V37) {
+        v.latency?.let(::counts)?.let { extra -> val lat=o.optJSONObject("latency") ?: JSONObject().also { o.put("latency",it) }
+            extra.keys().forEach { k -> lat.put(k,extra.get(k)) } }
+        v.window14?.let(::counts)?.let { win -> (o.optJSONObject("transcription") ?: JSONObject().also { o.put("transcription",it) }).put("window14",win) }
+        o.optJSONObject("report")?.let { r ->
+            r.put("coverage",v.coverage?.let(::coverageJson) ?: JSONObject.NULL)
+            r.put("recent",v.coverageRecent?.let(::recentJson) ?: org.json.JSONArray())
+        }
+        o.put("use",v.use?.let(::useJson) ?: JSONObject().put("today",JSONObject.NULL).put("prev",JSONObject.NULL))
+        o.put("dbTables",v.dbTables?.let(Telemetry::dbTablesJson) ?: JSONObject.NULL)
+        o.put("trace",v.trace?.let(::traceJson) ?: org.json.JSONArray())
+    }
+    private val DAY=Regex("""\d{4}-\d{2}-\d{2}""")
+    private fun dayOrNull(v:String?)=v?.takeIf { DAY.matches(it) } ?: JSONObject.NULL
+    /** {day, yesterdayCalls, inReport, pending, atMs, source}: numbers, the report day and a letters-only source code. */
+    internal fun coverageJson(c:JSONObject):JSONObject = counts(c).put("day",dayOrNull(c.optString("day")))
+        .put("source",c.optString("source").filter { it.isLetter() && it.code<128 }.take(16))
+    private fun recentJson(a:org.json.JSONArray)=org.json.JSONArray().apply { for(k in 0 until a.length()) a.optJSONObject(k)?.let { e -> put(counts(e).put("day",dayOrNull(e.optString("day")))) } }
+    private fun dayBlock(d:JSONObject?)=d?.let { counts(it).put("day",dayOrNull(it.optString("day"))) } ?: JSONObject.NULL
+    internal fun useJson(u:JSONObject)=JSONObject().put("today",dayBlock(u.optJSONObject("today"))).put("prev",dayBlock(u.optJSONObject("prev")))
+    private fun traceJson(a:org.json.JSONArray)=org.json.JSONArray().apply { for(k in 0 until minOf(a.length(),Telemetry.TRACE_MAX)) a.optJSONObject(k)?.let { e ->
+        val c=counts(e)
+        // Null stages stay as null (the counts filter drops them).
+        for(key in listOf("durS","foundS","textStartS","textEndS","uploadS","appliedS")) if(!c.has(key)) c.put(key,JSONObject.NULL)
+        put(c.put("day",dayOrNull(e.optString("day")))) } }
     /** v3.4: always both objects, so the watchdog reads a key test; inside, a code or counts only (null: nothing yet). */
     private fun putV34(o:JSONObject,v:V34) {
         o.put("update",JSONObject().put("error",v.updateError?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL))
@@ -265,6 +305,8 @@ internal object PhoneStatus {
     }
 
     private fun collect(app:Context,now:Long):Input {
+        // v3.7 r17-3: the use counts gathered in memory go to the settings first (this is a background thread).
+        UseStats.flush(app,now)
         val s=kr.callbrief.SecureSettings(app).snapshot()
         // Review #10, #11: the queue since 10/1 by the time each row entered it (not the call time), new and old apart.
         val store=StatusLights.read(app,s,now)
@@ -297,7 +339,30 @@ internal object PhoneStatus {
             v34 = v34(s),
             v35 = v35(s),
             powerLedger = runCatching { PowerText.ledger(s) }.getOrNull(),
-            chargingOnly = PowerText.chargingOnly(s))
+            chargingOnly = PowerText.chargingOnly(s),
+            v37 = runCatching { v37(app,s,now) }.onFailure { Log.w(TAG,"v3.7 numbers not read: ${it.javaClass.simpleName}") }.getOrDefault(V37()))
+    }
+    /** v3.7 r17-3: the scorecard's numbers. The day's match reasons and the report days are folded into the settings here (one
+     * write when they changed); the stages come from the process store (never on the ring path or a screen draw). */
+    private fun v37(app:Context,s:JSONObject,now:Long):V37 {
+        val coverage=runCatching { kr.callbrief.pipeline.report.ReportCoverage.snapshot(s) }.getOrNull()
+        val matchDay=runCatching { Telemetry.matchDay(jsonOf(s,PipelineSettingsKeys.CALLLOG_MATCH_DAY),matchStats(s),now) }.getOrNull()
+        val covDays=Telemetry.coverageDays(jsonOf(s,PipelineSettingsKeys.REPORT_COVERAGE_DAYS),coverage)
+        val matchChanged=matchDay!=null && matchDay.toString()!=jsonOf(s,PipelineSettingsKeys.CALLLOG_MATCH_DAY)?.toString()
+        val covChanged=covDays.toString()!=(jsonOf(s,PipelineSettingsKeys.REPORT_COVERAGE_DAYS) ?: JSONObject()).toString()
+        if(matchChanged || covChanged) runCatching { kr.callbrief.SecureSettings(app).update { st ->
+            if(matchChanged) st.put(PipelineSettingsKeys.CALLLOG_MATCH_DAY,matchDay.toString())
+            if(covChanged) st.put(PipelineSettingsKeys.REPORT_COVERAGE_DAYS,covDays.toString()) } }
+        val starts=jsonOf(s,PipelineSettingsKeys.TRACE_TEXT_START)
+        var latency:JSONObject?=null;var trace:org.json.JSONArray?=null;var window:JSONObject?=null
+        runCatching { kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(app)).let { db ->
+            val rows=db.stageRows(now-LATENCY_DAYS*Telemetry.DAY_MS) { id -> starts?.optLong(id,0)?.takeIf { it>0 } }
+            latency=JSONObject().put("segments",Telemetry.segments(rows)).put("day",Telemetry.dayLatency(rows,now)).put("over7d",Telemetry.over7d(rows))
+            trace=Telemetry.trace(rows)
+            db.transcriptionWindow(now-14*Telemetry.DAY_MS)?.let { (c,f,p) -> window=Telemetry.window14(c,f,p) }
+        } }.onFailure { Log.w(TAG,"stages not read: ${it.javaClass.simpleName}") }
+        return V37(latency,window,coverage,Telemetry.coverageRecent(covDays),UseStats.heartbeat(UseStats.stored(s),now),
+            jsonOf(s,PipelineSettingsKeys.DB_TABLES),matchDay,trace)
     }
     /** The v3.4 keys r14-3 writes (read by name; absent until written). */
     internal fun v34(s:JSONObject):V34 = V34(s.optString(PipelineSettingsKeys.UPDATE_ERROR_CODE).takeIf { it.isNotBlank() },

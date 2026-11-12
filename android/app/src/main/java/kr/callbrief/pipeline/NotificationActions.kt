@@ -49,6 +49,8 @@ internal object NotificationActions {
             if(item!=null) {
                 TaskActions.completeIo(context,OpenItem(item.id,item.title,item.due,item.status,item.revision,"",null,item.company,item.createdMs,item.aiNote,item.tentative))
                 done=true
+                // v3.7 r17-3: counted and written now (this worker thread; the process may end soon after the press).
+                UseStats.add(UseStats.TASK_DONE);UseStats.flush(context)
             }
         } catch(e:Exception) {
             Log.w(TAG,"not done: ${e.javaClass.simpleName}") // class only, never a title

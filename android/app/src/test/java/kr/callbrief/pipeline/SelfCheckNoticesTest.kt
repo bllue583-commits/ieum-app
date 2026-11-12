@@ -96,7 +96,7 @@ class SelfCheckNoticesTest:ProtectedTextHostTestBase() {
         assertEquals("통화 글자 바꾸기가 밀려 있어요",one.title);assertEquals("충전기에 꽂아 두면 밤에 끝나요.",one.text)
         val many=SelfCheckNotices.message(all)!!
         assertEquals("이음에서 살펴볼 일이 4가지 있어요",many.title)
-        assertEquals("음성 인식 모델을 다시 받아야 해요. 와이파이에 연결한 뒤 이음 설정을 열어 주세요.",many.lines.first())
+        assertEquals("음성 인식 모델을 다시 받아야 해요. 인터넷에 연결된 상태에서 이음 설정을 열어 주세요.",many.lines.first())
         assertEquals(4,many.lines.size)
     }
 

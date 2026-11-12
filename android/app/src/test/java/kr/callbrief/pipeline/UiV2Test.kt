@@ -401,7 +401,7 @@ class UiV2Test:ProtectedTextHostTestBase() {
             val (_,stalled)=show(HomeScreen.FirstPassView(0,null,6,0,stalled=true))
             assertTrue(stalled,stalled.contains("잠시 쉬고 있어요") && stalled.contains("결과가 오면 이어서 정리해요") && !stalled.contains("충전기"))
             val (runPage,running)=show(HomeScreen.FirstPassView(37,9.0,4,2,audioMinutesLeft=190))
-            assertNull(tag(runPage,"first_pass_rest"));assertTrue(running,running.contains("녹음 37개 남음") && running.contains("끝나기까지 약 9시간"))
+            assertNull(tag(runPage,"first_pass_rest"));assertTrue(running,running.contains("녹음 37개 남음") && running.contains(SettingsScreen.FIRST_PASS_GOING) && !running.contains("끝나기까지"))
             for(t in listOf(low,stalled)) { assertFalse(t,t.contains("·")) }
             // 50대 기준: the rest line is a heading, the reason reading size, the numbers big.
             assertTrue((tag(lowPage,"first_pass_rest") as TextView).textSize/lowPage.resources.displayMetrics.scaledDensity>=CallUi.HEADING)

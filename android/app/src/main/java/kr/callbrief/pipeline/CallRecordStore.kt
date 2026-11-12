@@ -1647,6 +1647,70 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         return o
     }
     // ---- r14-3 end ----
+
+    // ---- v3.7 r17-3 (DESIGN_V7 3.3): measurement reads for the heartbeat. Read only, numbers out. ----------------------------
+    private fun hasTable(name:String)=rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",name).isNotEmpty()
+    /** Every call (not texts or mail) that ended, or got its result, since [sinceEndMs], with its stages ([Telemetry.Stage]): the recording found
+     * (recordings.first_seen_ms), its text stored (created_ms), the request sent (call_inbox_sent.sent_ms), the result applied
+     * (analyzed_ms). Recordings of such calls still waiting for their text (no record yet) come too, with what is known.
+     * [textStart]: the recording id to when its text was first begun ([PipelineSettingsKeys.TRACE_TEXT_START]). */
+    fun stageRows(sinceEndMs:Long,textStart:(String)->Long?={ null }):List<Telemetry.Stage> {
+        val found=hasTable("recordings")
+        val out=LinkedHashMap<String,Telemetry.Stage>()
+        rows("""SELECT c.recording_id,c.started_ms+c.duration_ms AS end_ms,c.duration_ms,c.created_ms,c.analyzed_ms,c.state,
+            CASE WHEN c.summary IS NOT NULL THEN 1 ELSE 0 END AS has_summary,s.sent_ms${if(found) ",r.first_seen_ms" else ""}
+            FROM call_records c LEFT JOIN call_inbox_sent s ON s.record_id=c.record_id
+            ${if(found) "LEFT JOIN recordings r ON r.recording_id=c.recording_id" else ""}
+            WHERE c.started_ms IS NOT NULL AND (c.started_ms+c.duration_ms>=CAST(? AS INTEGER) OR c.analyzed_ms>=CAST(? AS INTEGER))
+            AND c.recording_id NOT LIKE 'sms:%' AND c.recording_id NOT LIKE 'mail:%' ORDER BY c.created_ms""",sinceEndMs,sinceEndMs).forEach { r ->
+            val id=r.str("recording_id") ?: return@forEach;val end=r.long("end_ms") ?: return@forEach
+            val created=r.long("created_ms")
+            val applied=r.str("state")==ANALYZED && r.long("analyzed_ms")!=null && r.long("has_summary")==1L
+            // The newest version of a recording wins (a later version replaces an earlier one).
+            out[id]=Telemetry.Stage(end,r.long("duration_ms"),r.long("first_seen_ms"),textStart(id),created,r.long("sent_ms"),
+                r.long("analyzed_ms"),applied,firstPass=created!=null && created-end>FirstPass.LIVE_MS)
+        }
+        if(found && hasTable("call_transcription_jobs") && hasTable("local_files")) runCatching {
+            val at="coalesce(r.original_started_at_ms,l.filename_time_candidate_ms)"
+            rows("""SELECT j.recording_id,$at AS at,j.audio_ms,r.first_seen_ms FROM call_transcription_jobs j
+                JOIN recordings r ON r.recording_id=j.recording_id AND r.source_version=j.source_version
+                LEFT JOIN local_files l ON l.recording_id=j.recording_id
+                WHERE j.state IN('QUEUED','RUNNING') AND $at IS NOT NULL AND $at>=CAST(? AS INTEGER)
+                AND NOT EXISTS(SELECT 1 FROM call_records c WHERE c.recording_id=j.recording_id)""",sinceEndMs-2*3_600_000L).forEach { r ->
+                val id=r.str("recording_id") ?: return@forEach;if(id in out) return@forEach
+                val start=r.long("at") ?: return@forEach;val len=r.long("audio_ms")
+                val end=start+(len ?: 0L);if(end<sinceEndMs) return@forEach
+                out[id]=Telemetry.Stage(end,len,r.long("first_seen_ms"),textStart(id),null,null,null,false)
+            }
+        }
+        return out.values.toList()
+    }
+    /** `transcription.window14` (SCORECARD item 9): recordings whose call is from [fromMs] on and that entered the transcription
+     * queue (not skipped before it, a recording with no speech counts), and how many different ones of them are FAILED now
+     * with no version of them done (for good: failedPermanent). A recording sent back to the queue and failing again is one. */
+    fun transcriptionWindow(fromMs:Long):Triple<Int,Int,Int>? {
+        if(!hasTable("call_transcription_jobs") || !hasTable("recordings") || !hasTable("local_files")) return null
+        val at="coalesce(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,r.first_seen_ms)"
+        val list=rows("""SELECT j.recording_id,j.state,j.permanent FROM call_transcription_jobs j
+            JOIN recordings r ON r.recording_id=j.recording_id AND r.source_version=j.source_version
+            LEFT JOIN local_files l ON l.recording_id=j.recording_id
+            WHERE $at>=CAST(? AS INTEGER) AND (j.state!='SKIPPED' OR j.reason='NO_SPEECH')""",fromMs)
+        val byRecording=list.groupBy { it.str("recording_id") ?: "" }.filterKeys { it.isNotEmpty() }
+        val failed=byRecording.filterValues { v -> v.none { it.str("state")=="DONE" } && v.any { it.str("state")=="FAILED" } }
+        val forGood=failed.count { (_,v) -> v.any { it.str("state")=="FAILED" && it.long("permanent")==1L } }
+        return Triple(byRecording.size,failed.size,forGood)
+    }
+    /** Each table of the sealed store: (name, rows, characters in its text and blob columns), for `dbTables` (once a day). */
+    fun tableSizes():List<Triple<String,Long,Long>> =
+        rows("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").mapNotNull { it.str("name") }.mapNotNull { t ->
+            runCatching {
+                val q="\"${t.replace("\"","\"\"")}\""
+                val cols=rows("PRAGMA table_info($q)").filter { c -> val type=(c.str("type") ?: "").uppercase();type.isEmpty() || "TEXT" in type || "BLOB" in type || "CHAR" in type }
+                    .mapNotNull { it.str("name") }.map { "coalesce(length(\"${it.replace("\"","\"\"")}\"),0)" }
+                val r=rows("SELECT count(*) AS n${if(cols.isEmpty()) "" else ",coalesce(sum(${cols.joinToString("+")}),0) AS c"} FROM $q").single()
+                Triple(t,r.long("n") ?: 0L,r.long("c") ?: 0L)
+            }.getOrNull() }
+    // ---- r17-3 end ----
 }
 
 /** r14-3: a call end to result time beyond this is an outlier (DESIGN_V4 4.3-5). */
