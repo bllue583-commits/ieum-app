@@ -259,8 +259,8 @@ class R16OneTest:ProtectedTextHostTestBase() {
         val sizes=mutableListOf<Int>()
         val t=CallTranscriber { _,pcm,_ -> sizes+=pcm.size;listOf(CallTranscript.Segment(0,pcm.size*1000L/rate,"말")) }
         CallTranscriptionStore(context,{ clock },{}).use { s ->
-            // 5 windows x 30 s x 2.4 x 1.25 = 450 s > 432 s: two halves from the start (v3.6.1 fix: per expected window).
-            runner(s,t,rate=2.4,limit=hour).run()
+            // 5 windows x 30 s x 3.0 = 450 s > 432 s: two halves from the start (v3.6.1: per expected window, no margin in W2).
+            runner(s,t,rate=3.0,limit=hour).run()
             assertEquals(2,sizes.size);assertTrue("$sizes",sizes.all { it<=96*rate })
             assertEquals("DONE",state(s,"hot").first)
         }

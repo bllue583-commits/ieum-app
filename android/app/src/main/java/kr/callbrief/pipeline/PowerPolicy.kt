@@ -58,8 +58,9 @@ internal object TranscriptionPower {
      * ([PowerPolicy.expectedWindows]): a 2-minute piece (5 windows) still 300 s. */
     const val DEFAULT_RATE=2.0
     /** v3.6.1 fix (review, high): only pieces of at least this much audio say how long a whole piece takes (W1, W2); the cost
-     * of a tail or a short call follows its words, so it reads low per window. */
-    const val LONG_PIECE_MS=90_000L
+     * of a tail or a short call follows its words, so it reads low per window. 60 s (final review): the halves of a split
+     * 2-minute piece count too, or a slow measurement that split the pieces could never be replaced by a faster one. */
+    const val LONG_PIECE_MS=60_000L
     /** v3.6.1 (T1, DESIGN_V7 2): Whisper encodes a whole 30-second window however little audio is in it, so a piece costs by
      * its windows: speed = work ms per (windows x 30 s), and the expected time of a piece = speed x windows x 30 s. */
     const val WINDOW_MS=30_000L
@@ -216,6 +217,10 @@ internal object PowerPolicy {
     fun startPiece(firstOfRun:Boolean,elapsedMs:Long,expectedMs:Long,limitMs:Long)=firstOfRun || elapsedMs+expectedMs<=limitMs
     /** W2: split a whole piece in two before it is begun when it is expected to run into the native deadline. */
     fun splitAhead(expectedMs:Long,deadlineSeconds:Int)=expectedMs>deadlineSeconds*1000L*TranscriptionPower.SPLIT_SHARE
+    /** v3.6.1 fix (final review): what W2 compares: the expectation without [TranscriptionPower.PIECE_MARGIN]. [SPLIT_SHARE]
+     * is already its margin; with both, a 2-minute piece measured at 376 s (the S26, under the 540 s deadline) read as 470 s
+     * and every whole piece was halved. W1 keeps the margin. */
+    fun splitExpectMs(audioMs:Long,rate:Double?)=(expectedWindows(audioMs)*TranscriptionPower.WINDOW_MS*(rate ?: TranscriptionPower.DEFAULT_RATE)).toLong()
 
     /** KST yyyymmdd. */
     fun day(now:Long)=Instant.ofEpochMilli(now).atZone(TranscriptionPower.KST).toLocalDate().let { it.year*10000+it.monthValue*100+it.dayOfMonth }

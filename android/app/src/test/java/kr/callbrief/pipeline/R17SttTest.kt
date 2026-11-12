@@ -115,6 +115,23 @@ class R17SttTest:ProtectedTextHostTestBase() {
         assertFalse(PowerPolicy.splitAhead(PowerPolicy.expectedPieceMs(120_000,PowerStats.rate(o2)),CallTranscriptionRunner.NATIVE_DEADLINE_SECONDS))
     }
 
+    // ---- v3.6.1 fix (final review): W2 without the margin; halves refresh the long-piece speed ----
+    @Test fun aMeasuredTwoMinutePieceUnderTheDeadlineIsNotSplitAhead() {
+        val d=CallTranscriptionRunner.NATIVE_DEADLINE_SECONDS
+        // The S26's real 2-minute piece: 376 s. With the margin it read as 470 s > 432 s and every whole piece was halved.
+        var o=PowerStats.notePiece(null,376_000,120_000,6,cold=true,now=base)
+        val r=PowerStats.rate(o)
+        assertEquals(376_000.0,PowerPolicy.splitExpectMs(120_000,r).toDouble(),500.0)
+        assertFalse(PowerPolicy.splitAhead(PowerPolicy.splitExpectMs(120_000,r),d))
+        assertTrue("W1 keeps the margin",PowerPolicy.expectedPieceMs(120_000,r)>PowerPolicy.splitExpectMs(120_000,r))
+        // A piece that really nears the deadline (460 s) is still split ahead.
+        o=PowerStats.notePiece(null,460_000,120_000,6,cold=true,now=base)
+        assertTrue(PowerPolicy.splitAhead(PowerPolicy.splitExpectMs(120_000,PowerStats.rate(o)),d))
+        // ...and its halves (60 s of audio each), once the phone is faster, bring the speed back down: whole pieces again.
+        for(i in 1..6) o=PowerStats.notePiece(o,150_000,60_000,6,cold=false,now=base+i*minute)
+        assertFalse(PowerPolicy.splitAhead(PowerPolicy.splitExpectMs(120_000,PowerStats.rate(o)),d))
+    }
+
     // ---- v3.6.1 fix (review, high): W1/W2 never expect a whole piece smaller than it really takes ----
     @Test fun shortPiecesDoNotShrinkTheExpectedTimeOfATwoMinutePiece() {
         // Two whole 2-minute pieces at 300 s, then ten short calls (12 s in 15 s: cheap per window) fill the recent samples.
