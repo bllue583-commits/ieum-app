@@ -77,8 +77,8 @@ internal object SelfCheckNotices {
         if(i.sending && i.oldestWaitingMs!=null && i.now-i.oldestWaitingMs>=WAIT_LATE_MS && i.now-i.lastAnalyzedMs>=NO_RESULT_MS &&
             i.stallWarnedDay!=today && i.disconnectWarnedDay!=today)
             add(Notice(NO_RESULT,"정리가 늦어지고 있어요","통화 정리 결과가 오래 오지 않아요. 휴대폰이 인터넷에 연결되어 있으면 매시간 다시 받아 봐요."))
-        StatusLights.dbPercent(i.dbBytes,i.dbRows)?.takeIf { it>=STORAGE_SHARE_PERCENT }?.let { p ->
-            add(Notice(STORAGE_FULL,"이음 저장 공간이 거의 찼어요","저장 공간을 ${p}% 쓰고 있어요. 관리하는 분께 이 알림을 보여 주세요.")) }
+        StatusLights.dbPercent(i.dbBytes,i.dbRows)?.takeIf { it>=STORAGE_SHARE_PERCENT }?.let {
+            add(Notice(STORAGE_FULL,"이음 저장 공간이 거의 찼어요","새 통화가 저장되지 않을 수 있어요. 관리하는 분께 이 알림을 보여 주세요.")) }
         // v3.4: four scheduled analysis runs missed (the 통화 정리 light turns amber at two).
         if(i.routineMissed>=StatusLights.ROUTINE_NOTICE && i.routineEndedMs>0)
             add(Notice(ROUTINE_LATE,"분석이 ${StatusLights.hoursSince(i.routineEndedMs,i.now)}시간 안 돌았어요","통화 정리 결과가 늦게 올 수 있어요. 관리하는 분께 이 알림을 보여 주세요."))

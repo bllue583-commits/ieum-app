@@ -396,7 +396,8 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         updateBlock=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;tag="update_block" }.also { body.addView(it) };updateKey=null;fillUpdate()
         CallUpdate.errorWords(s.optString(PipelineSettingsKeys.LAST_UPDATE_ERROR))?.let {
             body.addView(CallUi.text(a,it.reason,CallUi.ASIDE,color=CallUi.AMBER).apply { tag="update_error" }) }
-        storagePercent?.let { body.addView(CallUi.text(a,"저장 공간 ${it}% 사용",CallUi.BODY).apply { tag="storage_use" }) }
+        // User 11/13: the share of the store in use is not shown here (a number that means nothing to the person using the
+        // app). It still goes up in the heartbeat, and the light and the notice say so in words when the store is nearly full.
 
         // The voice model once it is ready (or cannot be used here) stays in this group; while it is not, it is in the first one.
         if(!modelNow) { sub("음성 인식 모델");modelRows(modelState) }

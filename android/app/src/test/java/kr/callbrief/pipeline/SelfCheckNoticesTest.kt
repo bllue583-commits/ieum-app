@@ -165,9 +165,10 @@ class SelfCheckNoticesTest:ProtectedTextHostTestBase() {
         assertEquals(listOf(SelfCheckNotices.STORAGE_FULL),full.map { it.code })
         val a=launchMain(Screen.SETTINGS)
         fun find(t:String)=a.window.decorView.findViewWithTag<View>(t)
-        repeat(400) { shadowOf(Looper.getMainLooper()).idle();if(find("storage_use")!=null) return@repeat;Thread.sleep(10) }
-        val line=(find("storage_use") as TextView).text.toString()
-        assertTrue(line,Regex("""저장 공간 \d+% 사용""").matches(line))
+        repeat(400) { shadowOf(Looper.getMainLooper()).idle();if(find("app_version")!=null) return@repeat;Thread.sleep(10) }
+        // User 11/13: the settings screen shows no share of the store in use; the notice and the light say it in words.
+        assertNotNull(find("app_version"));assertNull(find("storage_use"))
+        assertFalse(full.single().text.contains("%"))
     }
 
     @Test fun settingsShowNoAmberForAStoredCancel() {

@@ -134,7 +134,7 @@ internal object StatusLights {
             // v3.8 r18 (S4): a write was refused for the store's size; saying it beats the share below.
             DbStore.fullRecent(i.dbFullMs,i.now) -> DbStore.FULL_WORDS
             i.dbPercent!=null && i.dbPercent>=SelfCheckNotices.STORAGE_SHARE_PERCENT ->
-                "저장 공간을 ${i.dbPercent}% 쓰고 있어요. 관리하는 분께 알려 주세요."
+                "저장 공간이 거의 찼어요. 관리하는 분께 알려 주세요."
             i.failed>0 -> "정리하지 못한 통화가 ${i.failed}건 있어요. 아래 기다리는 통화 다시 정리하기를 눌러 주세요."
             i.waiting>0 -> (i.oldestWaitMs?.let { "통화 ${i.waiting}건이 ${waitWords(it)} 밀렸어요. " } ?: "정리가 늦어지고 있어요. ")+"순서대로 정리하고 있으니 기다려 주세요."
             else -> null }
