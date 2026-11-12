@@ -208,30 +208,28 @@ class UpdateAutoInstallTest:ProtectedTextHostTestBase() {
             assertFalse("no message words kept",s().toString().contains("Install not allowed"))
         } finally { org.robolectric.shadows.ShadowBuild.reset();OpenUpdate.reset() }
     }
-    @Test fun behindTheSettingsTheLoopTriesOneSessionAtATimeAndStopsInFront() {
+    @Test fun aTryBehindTheSettingsIsOneQuietSessionAndGivesWayToTheNext() {
         OpenUpdate.reset();OpenUpdate.opened()
         SecureSettings(app).update { it.put(PipelineSettingsKeys.AUTO_INSTALL,false) }
         assertTrue(CallUpdate.check(app,Store()))
-        var now=100_000L;BlockRetry.clock={ now };BlockRetry.runOn={ it.run() } // the shadow installer wants the main thread
-        fun until(step:String,check:()->Boolean) { repeat(300) { shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(1));if(check()) return;Thread.sleep(10) }
-            fail("$step did not settle: running=${BlockRetry.running} retries=${s().optLong(PipelineSettingsKeys.UPDATE_BLOCK_RETRIES)} session=${CallUpdate.sessionId(app)} sessions=${installer.allSessions.size} ready=${CallUpdate.ready(app)!=null} inCall=${OpenUpdate.inCall(app)}") }
-        try {
-            BlockRetry.start(app)
-            until("first try") { installer.allSessions.size==1 && CallUpdate.sessionId(app)!=0 }
-            val first=installer.allSessions.single().sessionId
-            assertEquals(1,s().optLong(PipelineSettingsKeys.UPDATE_BLOCK_RETRIES))
-            assertTrue("the new version opens again once it is on",app.getSharedPreferences("ieum.update",android.content.Context.MODE_PRIVATE).getLong("relaunch_ms",0)>0)
-            // Blocked again: no notification from the loop's tries, the next try after five seconds, still one session.
-            UpdateStatusReceiver().onReceive(app,Intent().putExtra(PackageInstaller.EXTRA_STATUS,PackageInstaller.STATUS_FAILURE_BLOCKED)
-                .putExtra(PackageInstaller.EXTRA_SESSION_ID,first).putExtra(CallUpdate.EXTRA_BACKGROUND,true).putExtra(CallUpdate.EXTRA_RETRY,true))
-            until("blocked answer") { CallUpdate.sessionId(app)==0 }
-            now+=OpenUpdate.RETRY_EVERY_MS
-            until("second try") { s().optLong(PipelineSettingsKeys.UPDATE_BLOCK_RETRIES)==2L }
-            assertTrue(installer.allSessions.size<=1)
-            assertNull("the loop's blocked tries stay quiet",notes().getNotification("ieum.update",701))
-            OpenUpdate.front=true
-            BlockRetry.stop();assertFalse(BlockRetry.running)
-        } finally { OpenUpdate.reset() }
+        val first=CallUpdate.commitRetry(app,verify=true)
+        assertTrue(first!=0);assertEquals(first,CallUpdate.sessionId(app))
+        assertEquals(1,s().optLong(PipelineSettingsKeys.UPDATE_BLOCK_RETRIES))
+        assertTrue("the new version opens again once it is on",app.getSharedPreferences("ieum.update",android.content.Context.MODE_PRIVATE).getLong("relaunch_ms",0)>0)
+        // Blocked: quiet (no "새 버전" notification for the loop's tries), and the session is given up.
+        UpdateStatusReceiver().onReceive(app,Intent().putExtra(PackageInstaller.EXTRA_STATUS,PackageInstaller.STATUS_FAILURE_BLOCKED)
+            .putExtra(PackageInstaller.EXTRA_SESSION_ID,first).putExtra(CallUpdate.EXTRA_BACKGROUND,true).putExtra(CallUpdate.EXTRA_RETRY,true))
+        settle { CallUpdate.sessionId(app)==0 }
+        settle { s().optString(PipelineSettingsKeys.UPDATE_BG)==CallUpdate.BG_BLOCKED }
+        assertNull("the loop's blocked tries stay quiet",notes().getNotification("ieum.update",701))
+        val second=CallUpdate.commitRetry(app,verify=false)
+        assertTrue(second!=0 && second!=first)
+        // A session still open gives way: never two at once.
+        val third=CallUpdate.commitRetry(app,verify=false)
+        assertEquals(third,CallUpdate.sessionId(app))
+        assertEquals(3,s().optLong(PipelineSettingsKeys.UPDATE_BLOCK_RETRIES))
+        BlockRetry.stop();assertFalse(BlockRetry.running)
+        OpenUpdate.reset()
     }
     @Test fun theNewVersionOpensAgainOnlyAfterAnInstallTheOpenAppStarted() {
         val p=app.getSharedPreferences("ieum.update",android.content.Context.MODE_PRIVATE)
