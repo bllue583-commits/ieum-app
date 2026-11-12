@@ -109,13 +109,35 @@ class OpenUpdateTest {
         assertEquals("INSTALL_FAILED_VERIFICATION_FAILURE",OpenUpdate.messageCode(msg))
         assertEquals("",OpenUpdate.messageCode("Install not allowed"));assertEquals("",OpenUpdate.messageCode(null))
     }
+    @Test fun behindTheSettingsItTriesEveryFiveSecondsForTwoMinutesOneAtATime() {
+        fun st(now:Long,last:Long=0,pending:Boolean=false,front:Boolean=false,later:Boolean=false,inCall:Boolean=false,taken:Boolean=false)=
+            OpenUpdate.retryStep(1_000L,now,last,pending,front,later,inCall,taken)
+        assertEquals(OpenUpdate.RetryStep(OpenUpdate.RetryAct.TRY,"try"),st(1_000L))
+        assertEquals("one session at a time",OpenUpdate.RetryAct.WAIT,st(10_000L,last=2_000L,pending=true).act)
+        assertEquals("interval",st(5_000L,last=1_000L).reason)
+        assertEquals(OpenUpdate.RetryAct.TRY,st(6_000L,last=1_000L).act)
+        assertEquals("timeout",st(1_000L+OpenUpdate.RETRY_FOR_MS).reason)
+        assertEquals("timeout before waiting",st(1_000L+OpenUpdate.RETRY_FOR_MS,pending=true).reason)
+        assertEquals("back in front: onResume goes on","front",st(2_000L,front=true).reason)
+        assertEquals("later",st(2_000L,later=true).reason);assertEquals("inCall",st(2_000L,inCall=true).reason)
+        assertEquals("taken",st(2_000L,taken=true).reason)
+        assertEquals(5_000L,OpenUpdate.RETRY_EVERY_MS);assertEquals(120_000L,OpenUpdate.RETRY_FOR_MS)
+    }
+    @Test fun theRetryBelongsToTheOpeningWithSettingsOpened() {
+        OpenUpdate.reset();OpenUpdate.opened()
+        assertFalse(OpenUpdate.retryPending())
+        OpenUpdate.noteSettingsOpened();assertTrue(OpenUpdate.retryPending())
+        assertTrue(OpenUpdate.takeRetry());assertFalse("used once",OpenUpdate.retryPending())
+        OpenUpdate.noteSettingsOpened();OpenUpdate.opened();assertFalse("a new opening",OpenUpdate.retryPending())
+        OpenUpdate.reset()
+    }
     @Test fun theCoverShowsThePercentWhenThereIsOne() {
         assertEquals("최신 버전으로 업데이트하는 중이에요 42%",OpenUpdate.coverTitle(42))
         assertEquals(OpenUpdate.UPDATING_WORDS,OpenUpdate.coverTitle(-1))
         assertEquals(0,OpenUpdate.percentOf(-0.1f));assertEquals(80,OpenUpdate.percentOf(0.8f));assertEquals(100,OpenUpdate.percentOf(1.2f))
     }
     @Test fun theWordsKeepTheScreenRules() {
-        for(w in listOf(OpenUpdate.UPDATING_WORDS,OpenUpdate.UPDATING_NOTE,OpenUpdate.BLOCK_ASK_WORDS,OpenUpdate.BLOCK_ASK_PATH,OpenUpdate.BLOCK_ASK_AGAIN,OpenUpdate.BLOCK_ASK_TITLE,
+        for(w in listOf(OpenUpdate.UPDATING_WORDS,OpenUpdate.UPDATING_NOTE,OpenUpdate.BLOCK_ASK_WORDS,OpenUpdate.BLOCK_ASK_PATH,OpenUpdate.BLOCK_ASK_AGAIN,OpenUpdate.BLOCK_ASK_AUTO,OpenUpdate.BLOCK_ASK_TITLE,
                 OpenUpdate.OTHER_BLOCKED_WORDS,OpenUpdate.SAMSUNG_NO_ANSWER_WORDS,OpenUpdate.OTHER_NO_ANSWER_WORDS,OpenUpdate.DONE_TITLE)) {
             assertFalse(w,w.contains("…") || w.contains("...") || w.contains("·"))
         }
@@ -139,6 +161,8 @@ class OpenUpdateTest {
         val back=PhoneStatus.build(base.copy(v34=PhoneStatus.v34(org.json.JSONObject().put(PipelineSettingsKeys.UPDATE_BLOCK_STATUS,2)
             .put(PipelineSettingsKeys.UPDATE_AUTO_BACK,"manual")))).getJSONObject("update")
         assertEquals(2,back.getInt("blockStatus"));assertEquals("manual",back.getString("autoBack"))
+        assertEquals(0,u.getLong("blockRetries"))
+        assertEquals(3,PhoneStatus.build(base.copy(v34=PhoneStatus.v34(org.json.JSONObject().put(PipelineSettingsKeys.UPDATE_BLOCK_RETRIES,3)))).getJSONObject("update").getLong("blockRetries"))
         assertTrue("no check error, nothing blocked",u.isNull("error"))
         // A blocked install shows in update.error too (a check error goes first).
         val blocked=PhoneStatus.build(base.copy(v34=PhoneStatus.v34(org.json.JSONObject().put(PipelineSettingsKeys.UPDATE_BG,"blocked")))).getJSONObject("update")

@@ -51,12 +51,15 @@ internal class UpdateCover(private val a:MainActivity) {
     /** [MainActivity.onResume]: the app is in front. [look]: decide now (false when the screen already installs by itself). */
     fun resume(look:Boolean=true) {
         OpenUpdate.front=true;OpenUpdate.readyListener={ consider() }
+        BlockRetry.stop() // back in front: the onResume path goes on, never two tries at once
         OpenUpdate.clearDone(a)
         if(!callbackOn) callbackOn=runCatching { a.packageManager.packageInstaller.registerSessionCallback(progressCallback,main) }.isSuccess
         if(look) consider()
         if(cover!=null) { main.removeCallbacks(tick);main.post(tick) }
     }
     fun pause() { OpenUpdate.front=false;OpenUpdate.readyListener=null
+        // Behind the settings after [설정 열기]: the app's own install is asked again until the block is off (BlockRetry).
+        if(OpenUpdate.retryPending() && !a.isFinishing) BlockRetry.start(a)
         if(callbackOn) { runCatching { a.packageManager.packageInstaller.unregisterSessionCallback(progressCallback) };callbackOn=false }
         main.removeCallbacks(tick);main.removeCallbacks(again) }
 
@@ -150,7 +153,7 @@ internal class UpdateCover(private val a:MainActivity) {
         if(!OpenUpdate.askBlocked(samsung,OpenUpdate.asksThisOpen(),OpenUpdate.laterThisOpen())) return
         OpenUpdate.noteAsked()
         Thread { CallUpdate.bump(a,PipelineSettingsKeys.UPDATE_BLOCK_ASK) }.start()
-        sheet=if(samsung) CallUi.sheetDialog(a,OpenUpdate.BLOCK_ASK_TITLE,OpenUpdate.BLOCK_ASK_WORDS+"\n\n"+OpenUpdate.BLOCK_ASK_PATH+"\n\n"+OpenUpdate.BLOCK_ASK_AGAIN,
+        sheet=if(samsung) CallUi.sheetDialog(a,OpenUpdate.BLOCK_ASK_TITLE,OpenUpdate.BLOCK_ASK_WORDS+"\n\n"+OpenUpdate.BLOCK_ASK_PATH+" "+OpenUpdate.BLOCK_ASK_AUTO+"\n\n"+OpenUpdate.BLOCK_ASK_AGAIN,
                 primary="설정 열기",onPrimary={
                     OpenUpdate.noteSettingsOpened()
                     Thread { CallUpdate.bump(a,PipelineSettingsKeys.UPDATE_BLOCK_OPEN) }.start()

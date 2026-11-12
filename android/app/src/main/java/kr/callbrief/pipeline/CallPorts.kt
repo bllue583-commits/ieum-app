@@ -182,6 +182,8 @@ object PipelineSettingsKeys {
     const val UPDATE_BLOCK_STATUS="updateBlockStatus"
     /** v3.7: the code part of that failure's message (INSTALL_FAILED_VERIFICATION_FAILURE), heartbeat `update.blockCode`. */
     const val UPDATE_BLOCK_CODE="updateBlockCode"
+    /** v3.7: how many installs [BlockRetry] tried while the app was behind the settings (heartbeat `update.blockRetries`). */
+    const val UPDATE_BLOCK_RETRIES="updateBlockRetries"
     /** v3.7: how the app came back after an install it started: front (opened by itself) | notice (its notification only) |
      * manual (the person came back to it), heartbeat `update.autoBack`. */
     const val UPDATE_AUTO_BACK="updateAutoBack"

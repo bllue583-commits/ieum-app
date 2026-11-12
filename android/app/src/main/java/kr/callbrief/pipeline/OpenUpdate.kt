@@ -81,8 +81,28 @@ internal object OpenUpdate {
     fun noteTried(code:Int) { triedMark=Mark(openId,code) }
     /** [다시 설치] on the guide: the person asks for it, so the block of this open is over. */
     fun clearBlocked() { blockedMark=null;triedMark=null }
+    // ---- v3.7: [BlockRetry], the app's own install tried again while it is behind the settings ----
+    enum class RetryAct { TRY, WAIT, STOP }
+    data class RetryStep(val act:RetryAct,val reason:String)
+    /** One try every this often (after the last try's answer came). */
+    const val RETRY_EVERY_MS=5_000L
+    /** Tries for at most this long after the app went behind the settings. */
+    const val RETRY_FOR_MS=2*60_000L
+    /** What the loop does now: stop when the app is in front again (onResume goes on), after [나중에], when a call starts, once
+     * a try was taken (not blocked) or after [RETRY_FOR_MS]; wait while a try's answer is still coming (one session at a time)
+     * or [RETRY_EVERY_MS] has not passed since the last try; else try. */
+    fun retryStep(startMs:Long,now:Long,lastTryMs:Long,pending:Boolean,front:Boolean,later:Boolean,inCall:Boolean,taken:Boolean):RetryStep = when {
+        front -> RetryStep(RetryAct.STOP,"front")
+        taken -> RetryStep(RetryAct.STOP,"taken")
+        later -> RetryStep(RetryAct.STOP,"later")
+        inCall -> RetryStep(RetryAct.STOP,"inCall")
+        now-startMs>=RETRY_FOR_MS -> RetryStep(RetryAct.STOP,"timeout")
+        pending -> RetryStep(RetryAct.WAIT,"pending")
+        lastTryMs>0 && now-lastTryMs<RETRY_EVERY_MS -> RetryStep(RetryAct.WAIT,"interval")
+        else -> RetryStep(RetryAct.TRY,"try")
+    }
     /** For tests. */
-    internal fun reset() { declinedMark=null;blockedMark=null;triedMark=null;front=false;readyListener=null;askOpen=-1;asks=0;later=false;retryOpen=-1 }
+    internal fun reset() { declinedMark=null;blockedMark=null;triedMark=null;front=false;readyListener=null;askOpen=-1;asks=0;later=false;retryOpen=-1;BlockRetry.resetForTest() }
 
     // ---- the phone blocked the install (Samsung: 보안 위험 자동 차단, user 11/12) ----
     /** The question "설정을 열까요?" comes at most this often per opening of the app: once, and once more after the person
@@ -99,6 +119,8 @@ internal object OpenUpdate {
     /** [설정 열기]: when the person comes back to the app, the install is tried once more by itself. */
     fun noteSettingsOpened() { retryOpen=openId }
     /** True once after [noteSettingsOpened] in this opening: the blocked mark goes, so [decide] starts again. */
+    /** [설정 열기] was pressed in this opening and its retry is not used yet ([BlockRetry] starts when the app goes behind). */
+    fun retryPending()=retryOpen==openId
     fun takeRetry():Boolean { if(retryOpen!=openId) return false;retryOpen=-1;clearBlocked();return true }
     /** The phone blocked the install: STATUS_FAILURE_BLOCKED anywhere, and on a Samsung phone also a failure whose message says
      * the verification refused it ("INSTALL_FAILED_VERIFICATION_FAILURE: Install not allowed", seen with Auto Blocker on), even
@@ -113,7 +135,8 @@ internal object OpenUpdate {
     fun messageCode(message:String?):String = Regex("[A-Z][A-Z0-9_]{5,59}").find(message.orEmpty())?.value.orEmpty()
     const val BLOCK_ASK_TITLE="보안 위험 자동 차단을 잠시 꺼 주세요"
     const val BLOCK_ASK_WORDS="새 버전을 설치하려면 휴대폰의 '보안 위험 자동 차단'을 잠시 꺼야 해요. 설정을 열까요?"
-    const val BLOCK_ASK_PATH="설정 › 보안 및 개인정보 보호 › 보안 위험 자동 차단에서 끌 수 있어요. 끄고 이음으로 돌아오면 바로 다시 설치해요."
+    const val BLOCK_ASK_PATH="설정 › 보안 및 개인정보 보호 › 보안 위험 자동 차단에서 끌 수 있어요."
+    const val BLOCK_ASK_AUTO="스위치를 끄면 잠시 뒤 이음이 알아서 업데이트하고 다시 열려요."
     const val BLOCK_ASK_AGAIN="설정에 '자동으로 다시 켜기'가 있으면 꺼 두세요. 그러면 다음부터는 묻지 않고 알아서 설치해요."
     const val OTHER_BLOCKED_TITLE="새 버전을 설치하지 못했어요"
 

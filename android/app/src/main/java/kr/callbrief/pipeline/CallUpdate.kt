@@ -336,6 +336,8 @@ internal object CallUpdate {
     private const val SESSION="session_id";private const val SESSION_CODE="session_code"
     /** Status intent extra: the session was committed by [installInBackground], so a needed confirmation goes to a notification. */
     internal const val EXTRA_BACKGROUND="ieum.update.background"
+    /** v3.7: the session was committed by [BlockRetry] (the app is behind the settings): its result goes back to that loop. */
+    internal const val EXTRA_RETRY="ieum.update.retry"
     private const val NOTIFY_TAG="ieum.update";private const val NOTIFY_ID=701
     private fun settings(c:Context)=kr.callbrief.SecureSettings(CallPipelineStartup.storage(c))
     /** Settings switch "새 버전은 자동으로 설치" ([PipelineSettingsKeys.AUTO_INSTALL]): on unless turned off. */
@@ -440,6 +442,18 @@ internal object CallUpdate {
     }
     /** Keeps one plain value under [key] in the settings (heartbeat codes and numbers). */
     internal fun noteSetting(c:Context,key:String,value:Any) { runCatching { settings(c).update { it.put(key,value) } } }
+    /** [BlockRetry]: one more try of this app's own install while the app is behind the settings. Commits as a background session
+     * (a needed tap goes to the usual notification, no window from behind) and returns its id, or 0 when it cannot be tried
+     * (nothing here, installs from this app not allowed, the file does not match when [verify]). Gives way to an open session. */
+    internal fun commitRetry(c:Context,verify:Boolean):Int {
+        val app=c.applicationContext
+        if(Build.VERSION.SDK_INT<31 || ready(app)==null || !app.packageManager.canRequestPackageInstalls()) return 0
+        if(verify && !verified(app)) return 0
+        sessionId(app).takeIf { it!=0 }?.let { old -> runCatching { app.packageManager.packageInstaller.abandonSession(old) };sessionDone(app,old) }
+        prefs(app).edit().putLong(RELAUNCH,clock()).commit() // the new version opens again once it is on
+        bump(app,PipelineSettingsKeys.UPDATE_BLOCK_RETRIES)
+        return commit(app,file(app),background=true,retry=true)
+    }
     /** Adds one to the count kept under [key] in the settings (heartbeat numbers). */
     internal fun bump(c:Context,key:String) { runCatching { settings(c).update { it.put(key,it.optLong(key,0)+1) } } }
     private const val RELAUNCH="relaunch_ms";private const val SESSION_BG="session_bg"
@@ -468,7 +482,7 @@ internal object CallUpdate {
      * ([CallDigestText.UPDATE_LINE]); the home banner keeps its own words. */
     fun installWaiting(c:Context):Boolean = runCatching { ready(c.applicationContext)!=null }.getOrDefault(false)
     /** Writes [f] into a new session and commits it; the result comes to [UpdateStatusReceiver]. The id is kept until it ends. */
-    private fun commit(c:Context,f:File,background:Boolean):Int {
+    private fun commit(c:Context,f:File,background:Boolean,retry:Boolean=false):Int {
         val app=c.applicationContext
         val installer=app.packageManager.packageInstaller
         val params=PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
@@ -480,7 +494,7 @@ internal object CallUpdate {
         try {
             installer.openSession(id).use { s ->
                 s.openWrite("ieum",0,f.length()).use { out -> f.inputStream().use { it.copyTo(out) };s.fsync(out) }
-                val status=PendingIntent.getBroadcast(app,id,Intent(app,UpdateStatusReceiver::class.java).putExtra(EXTRA_BACKGROUND,background),
+                val status=PendingIntent.getBroadcast(app,id,Intent(app,UpdateStatusReceiver::class.java).putExtra(EXTRA_BACKGROUND,background).putExtra(EXTRA_RETRY,retry),
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
                 prefs(app).edit().putInt(SESSION,id).putInt(SESSION_CODE,ready(app)?.versionCode ?: 0).putLong(SESSION_MS,clock()).putBoolean(SESSION_BG,background).remove(WAIT_SINCE).commit()
                 s.commit(status.intentSender)
@@ -599,6 +613,9 @@ class UpdateStatusReceiver:BroadcastReceiver() {
         val status=intent.getIntExtra(PackageInstaller.EXTRA_STATUS,-99)
         val id=intent.getIntExtra(PackageInstaller.EXTRA_SESSION_ID,0)
         val background=intent.getBooleanExtra(CallUpdate.EXTRA_BACKGROUND,false)
+        val retry=intent.getBooleanExtra(CallUpdate.EXTRA_RETRY,false)
+        // v3.7: a try of [BlockRetry]: blocked again means the loop tries once more later; anything else ends the loop.
+        if(retry) BlockRetry.result(context.applicationContext,status,OpenUpdate.blockedBy(status,intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE),OpenUpdate.samsung()))
         val app=context.applicationContext
         val message=intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
         fun later(block:()->Unit) { val pending:PendingResult? =goAsync();Thread { try { runCatching(block) } finally { pending?.finish() } }.start() }
@@ -624,7 +641,7 @@ class UpdateStatusReceiver:BroadcastReceiver() {
                     CallUpdate.noteSetting(app,PipelineSettingsKeys.UPDATE_BLOCK_CODE,code)
                     CallUpdate.noteBg(app,CallUpdate.BG_BLOCKED)
                     if(!background) CallUpdate.noteOpen(app,CallUpdate.BG_BLOCKED)
-                    if(background) CallUpdate.notifyReadyAgain(app) }
+                    if(background && !retry) CallUpdate.notifyReadyAgain(app) } // the loop's tries stay quiet
             }
             CallUpdate.isUserCancel(status) -> {
                 // v3.7: closed after the open app started it: not again while the app stays open (no loop of windows).

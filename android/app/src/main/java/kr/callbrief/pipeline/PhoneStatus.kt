@@ -84,7 +84,7 @@ internal object PhoneStatus {
         val bg:String?=null,val bgAtMs:Long?=null,val sessionOpen:Boolean?=null,val autoInstall:Boolean?=null,
         val openInstalls:Long=0,val open:String?=null,
         /** v3.7: the "보안 위험 자동 차단" question shown ([blockAsk]) and its [설정 열기] pressed ([blockOpen]), counts. */
-        val blockAsk:Long=0,val blockOpen:Long=0,val blockStatus:Int?=null,val autoBack:String?=null,val blockCode:String?=null)
+        val blockAsk:Long=0,val blockOpen:Long=0,val blockStatus:Int?=null,val autoBack:String?=null,val blockCode:String?=null,val blockRetries:Long=0)
     /** v3.3: [golden] = [PipelineSettingsKeys.GOLDEN] (r13-2, [kr.callbrief.pipeline.GoldenMeasure]), [guard] =
      * [PipelineSettingsKeys.GUARD_STATS] (r13-1). Both go through [counts]: no text, no names, only numbers and yes/no. */
     data class V33(val golden:JSONObject?=null,val guard:JSONObject?=null)
@@ -215,7 +215,7 @@ internal object PhoneStatus {
             .put("openInstalls",v.openInstalls).put("open",v.open?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
             .put("blockAsk",v.blockAsk).put("blockOpen",v.blockOpen).put("blockStatus",v.blockStatus ?: JSONObject.NULL)
             .put("autoBack",v.autoBack?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
-            .put("blockCode",v.blockCode?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL))
+            .put("blockCode",v.blockCode?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL).put("blockRetries",v.blockRetries))
         o.put("recordTime",JSONObject().put("fileVsRecordMin",v.recordTime?.let(::counts) ?: JSONObject.NULL))
     }
     /** v3.5: always both objects so the watchdog reads a key test. */
@@ -387,7 +387,7 @@ internal object PhoneStatus {
         s.optLong(PipelineSettingsKeys.UPDATE_OPEN_INSTALLS,0),s.optString(PipelineSettingsKeys.UPDATE_OPEN).takeIf { it.isNotBlank() },
         s.optLong(PipelineSettingsKeys.UPDATE_BLOCK_ASK,0),s.optLong(PipelineSettingsKeys.UPDATE_BLOCK_OPEN,0),
         (s.opt(PipelineSettingsKeys.UPDATE_BLOCK_STATUS) as? Number)?.toInt(),s.optString(PipelineSettingsKeys.UPDATE_AUTO_BACK).takeIf { it.isNotBlank() },
-        s.optString(PipelineSettingsKeys.UPDATE_BLOCK_CODE).takeIf { it.isNotBlank() })
+        s.optString(PipelineSettingsKeys.UPDATE_BLOCK_CODE).takeIf { it.isNotBlank() },s.optLong(PipelineSettingsKeys.UPDATE_BLOCK_RETRIES,0))
     /** [v34] plus what only the phone knows now: the open session, and `noAnswer` when it waited too long. */
     internal fun v34(app:android.content.Context,s:JSONObject):V34 { val v=v34(s)
         return v.copy(bg=runCatching { CallUpdate.bgCode(app,v.bg) }.getOrDefault(v.bg),sessionOpen=runCatching { CallUpdate.sessionInProgress(app) }.getOrNull()) }
