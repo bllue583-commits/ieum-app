@@ -213,19 +213,20 @@ class UpdateAutoInstallTest:ProtectedTextHostTestBase() {
         SecureSettings(app).update { it.put(PipelineSettingsKeys.AUTO_INSTALL,false) }
         assertTrue(CallUpdate.check(app,Store()))
         var now=100_000L;BlockRetry.clock={ now }
-        fun until(check:()->Boolean) { repeat(300) { shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(1));if(check()) return;Thread.sleep(10) };fail("did not settle") }
+        fun until(step:String,check:()->Boolean) { repeat(300) { shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(1));if(check()) return;Thread.sleep(10) }
+            fail("$step did not settle: running=${BlockRetry.running} retries=${s().optLong(PipelineSettingsKeys.UPDATE_BLOCK_RETRIES)} session=${CallUpdate.sessionId(app)} sessions=${installer.allSessions.size} ready=${CallUpdate.ready(app)!=null} inCall=${OpenUpdate.inCall(app)}") }
         try {
             BlockRetry.start(app)
-            until { installer.allSessions.size==1 && CallUpdate.sessionId(app)!=0 }
+            until("first try") { installer.allSessions.size==1 && CallUpdate.sessionId(app)!=0 }
             val first=installer.allSessions.single().sessionId
             assertEquals(1,s().optLong(PipelineSettingsKeys.UPDATE_BLOCK_RETRIES))
             assertTrue("the new version opens again once it is on",app.getSharedPreferences("ieum.update",android.content.Context.MODE_PRIVATE).getLong("relaunch_ms",0)>0)
             // Blocked again: no notification from the loop's tries, the next try after five seconds, still one session.
             UpdateStatusReceiver().onReceive(app,Intent().putExtra(PackageInstaller.EXTRA_STATUS,PackageInstaller.STATUS_FAILURE_BLOCKED)
                 .putExtra(PackageInstaller.EXTRA_SESSION_ID,first).putExtra(CallUpdate.EXTRA_BACKGROUND,true).putExtra(CallUpdate.EXTRA_RETRY,true))
-            until { CallUpdate.sessionId(app)==0 }
+            until("blocked answer") { CallUpdate.sessionId(app)==0 }
             now+=OpenUpdate.RETRY_EVERY_MS
-            until { s().optLong(PipelineSettingsKeys.UPDATE_BLOCK_RETRIES)==2L }
+            until("second try") { s().optLong(PipelineSettingsKeys.UPDATE_BLOCK_RETRIES)==2L }
             assertTrue(installer.allSessions.size<=1)
             assertNull("the loop's blocked tries stay quiet",notes().getNotification("ieum.update",701))
             OpenUpdate.front=true

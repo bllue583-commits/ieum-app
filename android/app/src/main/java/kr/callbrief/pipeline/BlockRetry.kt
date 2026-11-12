@@ -18,7 +18,8 @@ import kr.callbrief.R
  * session at a time: the next try comes only after the last one's answer. Only while this process lives (a handler and one
  * thread, no service). The rules are [OpenUpdate.retryStep]. */
 internal object BlockRetry {
-    private val main=Handler(Looper.getMainLooper())
+    /** Made at [start]: the main looper of now (a handler kept from an earlier start could point at an old one in tests). */
+    @Volatile private var main=Handler(Looper.getMainLooper())
     private val worker=Executors.newSingleThreadExecutor { r -> Thread(r,"ieum-update-retry").apply { isDaemon=true } }
     @Volatile private var app:Context?=null
     @Volatile var running=false
@@ -47,6 +48,7 @@ internal object BlockRetry {
     fun start(c:Context) {
         if(running) return
         val a=c.applicationContext;app=a
+        main.removeCallbacks(step);main=Handler(Looper.getMainLooper())
         running=true;startMs=clock();lastTryMs=0;pendingId=0;taken=false;verifiedOnce=false;moved=false
         main.post { if(!callbackOn) callbackOn=runCatching { a.packageManager.packageInstaller.registerSessionCallback(progress,main) }.isSuccess }
         main.post(step)

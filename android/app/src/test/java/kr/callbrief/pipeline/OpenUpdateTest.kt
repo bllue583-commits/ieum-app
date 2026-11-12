@@ -117,7 +117,7 @@ class OpenUpdateTest {
         assertEquals("interval",st(5_000L,last=1_000L).reason)
         assertEquals(OpenUpdate.RetryAct.TRY,st(6_000L,last=1_000L).act)
         assertEquals("timeout",st(1_000L+OpenUpdate.RETRY_FOR_MS).reason)
-        assertEquals("timeout before waiting",st(1_000L+OpenUpdate.RETRY_FOR_MS,pending=true).reason)
+        assertEquals("timeout before waiting","timeout",st(1_000L+OpenUpdate.RETRY_FOR_MS,pending=true).reason)
         assertEquals("back in front: onResume goes on","front",st(2_000L,front=true).reason)
         assertEquals("later",st(2_000L,later=true).reason);assertEquals("inCall",st(2_000L,inCall=true).reason)
         assertEquals("taken",st(2_000L,taken=true).reason)
