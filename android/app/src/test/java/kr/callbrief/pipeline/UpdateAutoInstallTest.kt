@@ -212,6 +212,7 @@ class UpdateAutoInstallTest:ProtectedTextHostTestBase() {
         OpenUpdate.reset();OpenUpdate.opened()
         SecureSettings(app).update { it.put(PipelineSettingsKeys.AUTO_INSTALL,false) }
         assertTrue(CallUpdate.check(app,Store()))
+        app.getSystemService(NotificationManager::class.java).cancel("ieum.update",701) // the check's own "새 버전" notification
         val first=CallUpdate.commitRetry(app,verify=true)
         assertTrue(first!=0);assertEquals(first,CallUpdate.sessionId(app))
         assertEquals(1,s().optLong(PipelineSettingsKeys.UPDATE_BLOCK_RETRIES))
