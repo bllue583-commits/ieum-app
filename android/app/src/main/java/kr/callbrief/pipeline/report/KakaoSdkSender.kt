@@ -45,7 +45,10 @@ internal class KakaoSdkSender(private val app:Context):KakaoReport.Sender {
                 FeedTemplate(content=Content(title=message.title,imageUrl=url,link=link,description=message.body,imageWidth=w,imageHeight=h),
                     buttons=listOf(Button(KakaoReport.BUTTON,link)))
             }
-            is KakaoReport.Message.Text -> TextTemplate(text=message.text,link=link,buttons=listOf(Button(KakaoReport.BUTTON,link)))
+            // v3.7: a text to read in the chat ([KakaoReport.NO_LINK]) has no button of its own; its link fits no Android phone,
+            // so KakaoTalk shows no button and a touch leads nowhere (Kakao: a link that fits no environment is not applied).
+            is KakaoReport.Message.Text -> if(message.link==KakaoReport.NO_LINK) TextTemplate(text=message.text,link=link)
+                else TextTemplate(text=message.text,link=link,buttons=listOf(Button(KakaoReport.BUTTON,link)))
         }
         return suspendCancellableCoroutine { c -> TalkApiClient.instance.sendDefaultMemo(template) { error ->
             c.resume(error?.let { code(it,"SEND") }) } }
@@ -80,7 +83,7 @@ internal class KakaoSdkSender(private val app:Context):KakaoReport.Sender {
         /** "screen=calls&dayMs=…" to the button's Android execution parameters. */
         internal fun params(link:String):Map<String,String> = link.split('&').mapNotNull { p ->
             val i=p.indexOf('=');if(i<=0) null else p.substring(0,i) to p.substring(i+1) }.toMap()
-        private fun link(raw:String)=Link(androidExecutionParams=params(raw))
+        private fun link(raw:String)=if(raw==KakaoReport.NO_LINK) Link(iosExecutionParams=mapOf("screen" to "none")) else Link(androidExecutionParams=params(raw))
         /** Width and height from a PNG's IHDR (the first chunk). */
         internal fun pngSize(png:ByteArray):Pair<Int,Int> {
             if(png.size<24) return KakaoReport.WIDTH to KakaoReport.MAX_HEIGHT

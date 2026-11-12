@@ -73,7 +73,9 @@ internal object PhoneStatus {
     data class V35(val kakaoLinked:Boolean=false,val kakaoSent:Long=0,val kakaoFailed:Long=0,val kakaoLastSentMs:Long?=null,
         val kakaoError:String?=null,val reportDay:String?=null,val reportSource:String?=null,
         /** r15-4 (M2): `kakao.on`, the settings switch [카카오톡으로 받기] ([PipelineSettingsKeys.MORNING_KAKAO], default on). */
-        val kakaoOn:Boolean=true)
+        val kakaoOn:Boolean=true,
+        /** v3.7 (user 11/12): `kakao.texts` (messages of the last report) and `kakao.plainRetried` ([KakaoReport.PLAIN_RETRIED]). */
+        val kakaoTexts:Long=0,val kakaoPlainRetried:Long=0)
     /** v3.4 (DESIGN_V4 4.1-5, 4.3-4, 4.3-5, 4.3-8): [updateError] = [PipelineSettingsKeys.UPDATE_ERROR_CODE] (a code, heartbeat
      * `update.error`); [recordTime] = [PipelineSettingsKeys.RECORD_TIME] ({bucket: count}, `recordTime.fileVsRecordMin`), through
      * [counts]. v3.7 (DESIGN_V7 3.3): `messages.mailError` left with the mail intake. */
@@ -222,7 +224,8 @@ internal object PhoneStatus {
     private fun putV35(o:JSONObject,v:V35) {
         o.put("kakao",JSONObject().put("on",v.kakaoOn).put("linked",v.kakaoLinked).put("sent",v.kakaoSent).put("failed",v.kakaoFailed)
             .put("lastSentMs",v.kakaoLastSentMs ?: JSONObject.NULL)
-            .put("error",v.kakaoError?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL))
+            .put("error",v.kakaoError?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
+            .put("texts",v.kakaoTexts).put("plainRetried",v.kakaoPlainRetried))
         o.put("report",JSONObject().put("day",v.reportDay?.takeIf { Regex("""\d{4}-\d{2}-\d{2}""").matches(it) } ?: JSONObject.NULL)
             .put("source",v.reportSource?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL))
     }
@@ -398,7 +401,8 @@ internal object PhoneStatus {
         s.optString(PipelineSettingsKeys.KAKAO_LAST_ERROR).takeIf { it.isNotBlank() },
         s.optString(PipelineSettingsKeys.REPORT_DAY).takeIf { it.isNotBlank() },
         s.optString(PipelineSettingsKeys.REPORT_SOURCE).takeIf { it.isNotBlank() },
-        s.optBoolean(PipelineSettingsKeys.MORNING_KAKAO,true))
+        s.optBoolean(PipelineSettingsKeys.MORNING_KAKAO,true),
+        s.optLong(kr.callbrief.pipeline.report.KakaoReport.LAST_TEXTS,0),s.optLong(kr.callbrief.pipeline.report.KakaoReport.PLAIN_RETRIED,0))
     private fun jsonOf(s:JSONObject,key:String):JSONObject? = when(val v=s.opt(key)) {
         is JSONObject -> v
         is String -> runCatching { JSONObject(v) }.getOrNull()

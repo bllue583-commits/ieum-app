@@ -57,6 +57,8 @@ class KakaoReportTest:ProtectedTextHostTestBase() {
         KakaoReport.coverageOf={ _,_,_ -> null } // the report's own count unless a test sets one
         ReportFetch.scheduler={ _,p -> plans+=p }
         link(true)
+        // The tests below this line were written for the picture report (v3.5 to v3.6); the chat report's own tests turn it off.
+        SecureSettings(app).update { it.put(KakaoReport.PICTURE,true) }
     }
     @After fun reset() {
         KakaoReport.appKey={ kr.callbrief.BuildConfig.KAKAO_APP_KEY };KakaoReport.pause={ kotlinx.coroutines.delay(it) }
@@ -441,5 +443,62 @@ class KakaoReportTest:ProtectedTextHostTestBase() {
         assertEquals("ABC_1",KakaoReport.code("ABC_1 김 ★"))
         val png=KakaoReport.render(one,app)
         assertEquals(1080,KakaoSdkSender.pngSize(png).first)
+    }
+
+    // ---- v3.7 (user 11/12): the whole report as texts read inside KakaoTalk ----
+    @Test fun theChatReportCarriesEveryLineInFewTextsAndOnlyTheLastHasTheButton() {
+        val c=KakaoReport.compose(eight(),picture=false)
+        assertNull("no picture is drawn",c.feed)
+        val chat=c.chat
+        assertTrue("some texts, eight at most: ${chat.size}",chat.size in 2..KakaoReport.MAX_TEXTS)
+        chat.forEach { assertTrue(it.text,KakaoReport.length(it.text)<=KakaoReport.LIMIT) }
+        assertTrue(chat[0].text.startsWith("[이음 아침 보고] 11/7(토)\n"))
+        // Read in the chat: no link but on the last text, which opens the to-dos.
+        assertTrue(chat.dropLast(1).all { it.link==KakaoReport.NO_LINK });assertEquals(KakaoReport.TASKS_LINK,chat.last().link)
+        val all=chat.joinToString("\n") { it.text }
+        // Every line of every block is there: nothing is left to "외 n건".
+        assertFalse(all,Regex("외 \\d+건").containsMatchIn(all));assertFalse(all.contains(KakaoReport.CHAT_MORE))
+        val r=KakaoReport.read(eight(),false)
+        (r.today+r.yesterday+r.inProgress+r.check).forEach { assertTrue(it,all.contains(it)) }
+        // The to-dos come before yesterday's calls, each block under its title; a block that goes on says so.
+        assertTrue(all.indexOf("[오늘 챙길 일]") in 0 until all.indexOf("[어제 정리]"))
+        chat.drop(1).forEach { assertTrue(it.text,it.text.startsWith("[")) }
+        assertFalse("a title is never the last line of a text",chat.any { it.text.lines().last().startsWith("[") })
+    }
+    @Test fun aSmallReportIsOneTextWithTheButton() {
+        val chat=KakaoReport.compose(report(calls=0),picture=false).chat
+        assertEquals(1,chat.size);assertEquals(KakaoReport.TASKS_LINK,chat[0].link)
+        assertTrue(chat[0].text,chat[0].text.contains("\n\n[어제 정리]\n어제 업무 통화 없음"))
+    }
+    @Test fun aReportTooLongForEightTextsShortensItsLinesAndSaysWhereTheRestIs() {
+        val long=(1..8).map { "아주 긴 일 ".repeat(8)+it }
+        val r=KakaoReport.Report(day,40,8,8,long,long,long.take(3),long.take(3),false,0,long.take(5))
+        val chat=KakaoReport.chat(r,"11/7(토)")
+        assertTrue(chat.size<=KakaoReport.MAX_TEXTS)
+        chat.forEach { assertTrue(KakaoReport.length(it.text)<=KakaoReport.LIMIT) }
+        assertEquals(KakaoReport.TASKS_LINK,chat.last().link)
+    }
+    @Test fun aTextWithoutALinkThatDoesNotGoIsSentAgainWithTheAppLink() = runBlocking {
+        val seen=mutableListOf<KakaoReport.Message>()
+        val sender=object:KakaoReport.Sender {
+            override suspend fun uploadImage(png:ByteArray):String?=null
+            override suspend fun send(message:KakaoReport.Message,imageUrl:String?):String? {
+                seen+=message;return if(message.link==KakaoReport.NO_LINK) "SEND_API_IllegalParams" else null }
+        }
+        val c=KakaoReport.compose(eight(),picture=false)
+        val out=KakaoReport.deliver(sender,c.copy(feed=null,todayText=null,fallback=c.chat))
+        assertNull(out.error);assertEquals(c.chat.size,out.sent);assertEquals(c.chat.size-1,out.plainRetried)
+        assertEquals("each text without a link: once as it is, once with the app link",(c.chat.size-1)*2+1,seen.size)
+    }
+    @Test fun byDefaultTheMorningReportGoesAsTextsOnly() = runBlocking {
+        SecureSettings(app).update { it.remove(KakaoReport.PICTURE) }
+        assertNull(KakaoReport.send(app,eight(),KakaoReport.SOURCE_ROUTINE))
+        assertEquals("no picture goes up",0,fake.uploads)
+        assertTrue(fake.sent.size in 2..KakaoReport.MAX_TEXTS);assertTrue(fake.sent.all { it is KakaoReport.Message.Text })
+        assertEquals(KakaoReport.TASKS_LINK,fake.sent.last().link);assertTrue(fake.sent.dropLast(1).all { it.link==KakaoReport.NO_LINK })
+        val s=settings()
+        assertEquals(1L,s.getLong(PipelineSettingsKeys.KAKAO_SENT_COUNT));assertEquals(fake.sent.size.toLong(),s.getLong(KakaoReport.LAST_TEXTS))
+        val k=PhoneStatus.build(PhoneStatus.Input(1_000L,"v3.7",1052,0,null,5,6,"READY","","",12,v35=PhoneStatus.v35(s))).getJSONObject("kakao")
+        assertEquals(fake.sent.size.toLong(),k.getLong("texts"));assertEquals(0L,k.getLong("plainRetried"))
     }
 }

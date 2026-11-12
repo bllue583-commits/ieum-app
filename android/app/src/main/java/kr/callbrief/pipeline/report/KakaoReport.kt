@@ -25,7 +25,8 @@ import java.time.LocalDate
  * v3.5 (DESIGN_V5): the morning report over KakaoTalk "나에게 보내기". Key commit: shapes only; r15-1 fills the bodies,
  * r15-3 calls [linkState]/[sendNow] from settings and reads [sentToday] in the morning notice. Signatures stay as they are.
  *
- * Every morning two messages (0-1절 결정 B+A): a feed with the whole report drawn as one picture ([render]) and one text
+ * v3.7 (user 11/12): every morning the whole report as texts read inside KakaoTalk ([chat], [MAX_TEXTS] at most); the
+ * picture below only with the [PICTURE] setting. Before (v3.5 to v3.6) two messages (0-1절 결정 B+A): a feed with the whole report drawn as one picture ([render]) and one text
  * of "오늘 챙길 일" (200 characters at most). When the picture cannot go, the text-only fallback (up to 4 texts). All the
  * words pass [ClaudeCallAnalyzer.maskNumbers] once more, so no phone number reaches Kakao. The Kakao SDK is used only by
  * [KakaoSdkSender]; tests and device-test put a fake [Sender] in [senderFactory].
@@ -38,7 +39,9 @@ object KakaoReport {
         data class Text(val text:String,override val link:String):Message()
     }
     /** What [compose] makes from a report: the image report and the "오늘 챙길 일" text, plus the text-only fallback. */
-    data class Composed(val feed:Message.Feed?,val todayText:Message.Text?,val fallback:List<Message.Text>)
+    data class Composed(val feed:Message.Feed?,val todayText:Message.Text?,val fallback:List<Message.Text>,
+        /** v3.7 (user 11/12): the whole report as texts to read inside KakaoTalk ([chat]); what goes out by default. */
+        val chat:List<Message.Text> = emptyList())
     /** Sending seam (real Kakao SDK in the app, a fake in tests and device-test). Returns null on success, else an error code.
      * [uploadImage] returns the uploaded image's URL (null, or a thrown [Failure] with its code, when it did not go up). */
     interface Sender {
@@ -60,6 +63,15 @@ object KakaoReport {
     /** "오늘 챙길 일" in the daily text. */
     const val TODAY_TEXT_ITEMS=4
     const val BUTTON="이음에서 보기"
+    /** v3.7 (user 11/12, "카톡 안에서 다 보고 싶다"): the report goes as texts only, each read in the chat as it is; a text with
+     * this link has no button and a touch leads nowhere. Only the last text carries [BUTTON]. */
+    const val NO_LINK=""
+    /** The whole report in at most this many texts; lines are shortened step by step ([CHAT_LINE_STEPS]) until it fits. */
+    const val MAX_TEXTS=8
+    internal val CHAT_LINE_STEPS=intArrayOf(LINE_MAX,60,45,32)
+    const val CHAT_MORE="나머지는 이음에서 볼 수 있어요"
+    /** Settings key (no screen): true brings the picture report (v3.5 to v3.6) back. */
+    const val PICTURE="kakaoPicture"
     const val WIDTH=1080
     const val MAX_HEIGHT=2400
     const val MAX_PNG=5*1024*1024
@@ -202,7 +214,7 @@ object KakaoReport {
     }
 
     /** Builds the messages for [report] (the report/YYYY-MM-DD.json object, DESIGN_V5 1절); [phoneFallback] marks the 06:00 phone report. */
-    fun compose(report:JSONObject,phoneFallback:Boolean=false):Composed {
+    fun compose(report:JSONObject,phoneFallback:Boolean=false,picture:Boolean=true):Composed {
         val r=read(report,phoneFallback)
         val label=dayLabel(r.day)
         if(phoneFallback) {
@@ -213,10 +225,47 @@ object KakaoReport {
             val more=(r.today.size-TODAY_TEXT_ITEMS).coerceAtLeast(0)
             return Composed(null,Message.Text(fit(head,items,more=more).first,TASKS_LINK),emptyList())
         }
-        val feed=runCatching { render(report,appContext) }.onFailure { Log.w(TAG,"report not drawn: ${it.javaClass.simpleName}") }.getOrNull()
+        val feed=if(!picture) null else runCatching { render(report,appContext) }.onFailure { Log.w(TAG,"report not drawn: ${it.javaClass.simpleName}") }.getOrNull()
             ?.takeIf { it.size<=MAX_PNG }
             ?.let { Message.Feed(it,"[이음 아침 보고] $label",headLine(r)+"\n"+countsLine(r),callsLink(r.day)) }
-        return Composed(feed,todayText(r,label),fallback(r,label))
+        return Composed(feed,todayText(r,label),fallback(r,label),chat(r,label))
+    }
+    // ---- v3.7 (user 11/12): the whole report as texts, read inside KakaoTalk ----
+    private class Block(val title:String,val items:List<String>)
+    /** The head, then 오늘 챙길 일, 진행 중, 확인 필요, 어제 정리 and 뒤늦게 정리된 통화, every line of each (nothing is left to
+     * "외 n건"), packed into as few texts as hold them: a text is [LIMIT] at most, a block starts with its "[제목]" after an
+     * empty line, and a block that goes on in the next text starts there with "[제목 계속]". More than [MAX_TEXTS]: the lines
+     * are shortened ([CHAT_LINE_STEPS]) and packed again; still more: the first [MAX_TEXTS], the last one ending with
+     * [CHAT_MORE]. Only the last text has the [BUTTON] (to the to-dos); the others have [NO_LINK]. */
+    internal fun chat(r:Report,label:String):List<Message.Text> {
+        val head=listOf("[이음 아침 보고] $label",headLine(r),countsLine(r))
+        val blocks=listOf(Block("오늘 챙길 일",numbered(r.today)),Block("진행 중",r.inProgress.map { "· $it" }),
+            Block("확인 필요",r.check.map { "· $it" }),
+            Block("어제 정리",numbered(r.yesterday).ifEmpty { if(r.calls>0) emptyList() else listOf("어제 업무 통화 없음") }),
+            Block(LATE_TITLE,numbered(r.late))).filter { it.items.isNotEmpty() }
+        var packed=emptyList<String>()
+        for(cap in CHAT_LINE_STEPS) { packed=pack(head,blocks,cap);if(packed.size<=MAX_TEXTS) break }
+        if(packed.size>MAX_TEXTS) {
+            val last=packed[MAX_TEXTS-1].lines().toMutableList()
+            while(last.size>1 && length((last+CHAT_MORE).joinToString("\n"))>LIMIT) last.removeAt(last.size-1)
+            packed=packed.take(MAX_TEXTS-1)+(last+CHAT_MORE).joinToString("\n")
+        }
+        return packed.mapIndexed { i,t -> Message.Text(cut(t,LIMIT),if(i==packed.size-1) TASKS_LINK else NO_LINK) }
+    }
+    private fun pack(head:List<String>,blocks:List<Block>,lineMax:Int):List<String> {
+        val out=mutableListOf<String>();var cur=head.joinToString("\n")
+        for(b in blocks) {
+            var first=true
+            for(raw in b.items) {
+                val item=cut(raw,lineMax)
+                val add=if(first) "\n\n[${b.title}]\n$item" else "\n$item"
+                if(length(cur)+length(add)<=LIMIT) cur+=add
+                else { out+=cur;cur="[${b.title}${if(first) "" else " 계속"}]\n$item" }
+                first=false
+            }
+        }
+        out+=cur
+        return out
     }
     /** The text after the picture: "오늘 챙길 일" (top [TODAY_TEXT_ITEMS], the rest told), then as its last block
      * [LATE_TITLE] (r17-2 M4) when it still fits in [LIMIT]; null when there is neither. */
@@ -375,7 +424,10 @@ object KakaoReport {
         val cov=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { (coverageOf ?: ::storeCoverage)(app,reportDay.minusDays(1),gen) }.getOrNull() }
         val sent=if(cov==null) report else JSONObject(report.toString()).apply {
             put("head",(optJSONObject("head")?.let { JSONObject(it.toString()) } ?: JSONObject()).put("pendingCalls",cov.pending)) }
-        val composed=compose(sent,source==SOURCE_PHONE)
+        // v3.7 (user 11/12): texts read inside KakaoTalk; the picture only when the PICTURE setting asks for it.
+        val picture=s.optBoolean(PICTURE,false)
+        val made=compose(sent,source==SOURCE_PHONE,picture)
+        val composed=if(picture || source==SOURCE_PHONE || made.chat.isEmpty()) made else made.copy(feed=null,todayText=null,fallback=made.chat)
         val sender=senderFactory?.invoke(app) ?: KakaoSdkSender(app.applicationContext)
         val out=deliver(sender,composed)
         val now=clock()
@@ -390,6 +442,8 @@ object KakaoReport {
             if(out.sent>0) o.put(PipelineSettingsKeys.REPORT_DAY,day).put(PipelineSettingsKeys.REPORT_SOURCE,source)
             // The heartbeat's report.coverage (DESIGN_V7 3.3): the phone's own count; the phone's 06:00 report lists no call of yesterday.
             if(out.sent>0 && cov!=null) ReportCoverage.note(o,reportDay,cov,if(source==SOURCE_PHONE) 0 else cov.analyzed,source,now)
+            if(out.plainRetried>0) o.put(PLAIN_RETRIED,o.optLong(PLAIN_RETRIED,0)+out.plainRetried)
+            if(out.sent>0) o.put(LAST_TEXTS,out.sent)
             if(out.error==null) {
                 o.put(PipelineSettingsKeys.KAKAO_LAST_SENT_MS,now).put(PipelineSettingsKeys.KAKAO_SENT_COUNT,o.optLong(PipelineSettingsKeys.KAKAO_SENT_COUNT,0)+1)
                     .put(PipelineSettingsKeys.KAKAO_LAST_ERROR,"")
@@ -402,11 +456,16 @@ object KakaoReport {
         out.error
     }
     /** How a delivery went: messages that went out, and the first error that stayed (null: all went). */
-    internal data class Outcome(val sent:Int,val error:String?)
+    internal data class Outcome(val sent:Int,val error:String?,
+        /** Texts without a link ([NO_LINK]) that failed once and went (or were tried) again with the app's link. */
+        val plainRetried:Int=0)
+    /** Settings keys (heartbeat `kakao.plainRetried`, `kakao.texts`): how often a text without a link had to be tried again
+     * with the app's link (Kakao may not take a text that leads nowhere), and how many messages the last report was. */
+    const val PLAIN_RETRIED="kakaoPlainRetried";const val LAST_TEXTS="kakaoLastTexts"
     /** The feed, then after a pause the text; when the picture or the feed fails, the text fallback, each text tried twice.
      * A token error stops at once (nothing else would go either). */
     internal suspend fun deliver(sender:Sender,c:Composed):Outcome {
-        var sent=0
+        var sent=0;var plain=0
         suspend fun once(m:Message,url:String?):String? =
             runCatching { sender.send(m,url) }.getOrElse { (it as? Failure)?.code ?: "SEND_"+it.javaClass.simpleName }?.let(::code)
         /** One text, and once more after a pause when it failed (not for a token error). */
@@ -414,7 +473,9 @@ object KakaoReport {
             val e=once(m,null) ?: run { sent++;return null }
             if(e.startsWith(TOKEN_PREFIX)) return e
             pause(GAP_MS)
-            return once(m,null) ?: run { sent++;null }
+            // v3.7: a text without a link that did not go is tried again as before, with the app's link and button.
+            val again=if(m is Message.Text && m.link==NO_LINK) { plain++;m.copy(link=TASKS_LINK) } else m
+            return once(again,null) ?: run { sent++;null }
         }
         suspend fun texts(list:List<Message.Text>):String? {
             var first:String?=null
@@ -434,23 +495,23 @@ object KakaoReport {
             val error=upload.second ?: once(feed,upload.first)
             if(error==null) {
                 sent++
-                val t=c.todayText ?: return Outcome(sent,null)
+                val t=c.todayText ?: return Outcome(sent,null,plain)
                 pause(GAP_MS)
                 val e=twice(t)
-                return Outcome(sent,e)
+                return Outcome(sent,e,plain)
             }
-            if(error.startsWith(TOKEN_PREFIX)) return Outcome(0,error)
+            if(error.startsWith(TOKEN_PREFIX)) return Outcome(0,error,plain)
             Log.w(TAG,"feed not sent ($error): text fallback")
             val list=c.fallback.ifEmpty { listOfNotNull(c.todayText) }
-            if(list.isEmpty()) return Outcome(0,error)
+            if(list.isEmpty()) return Outcome(0,error,plain)
             val e=texts(list)
-            return Outcome(sent,e)
+            return Outcome(sent,e,plain)
         }
         // No picture (the phone's own report, or a drawing that failed): the texts.
         val list=c.fallback.ifEmpty { listOfNotNull(c.todayText) }
-        if(list.isEmpty()) return Outcome(0,NO_REPORT)
+        if(list.isEmpty()) return Outcome(0,NO_REPORT,plain)
         val e=texts(list)
-        return Outcome(sent,e)
+        return Outcome(sent,e,plain)
     }
 
     /** Settings [지금 보내 보기]: today's report if fetched, else the phone fallback, as a test send (once a day by
