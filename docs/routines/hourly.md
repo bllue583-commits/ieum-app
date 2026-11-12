@@ -290,7 +290,7 @@ analysis 객체는 아래 JSON 스키마에 정확히 맞아야 한다. 모든 �
 마지막 단계(자가 보고). 모든 처리가 끝나면 (처리할 것이 없었어도, 일부가 실패했어도 항상) `status/last-run-hourly.json`을 새로 써서 그 파일만 커밋 "status"로 push한다(결과 커밋 "analyze N calls"를 push한 뒤 따로 하는 커밋이다). 파일이 이미 있으면 통째로 덮어쓴다. 새벽 정리는 `status/last-run-tidy.json`을 쓰므로 이 파일을 덮어쓰지 않는다. 옛 `status/last-run.json`은 v3.3까지 쓰던 파일이다. 더 쓰지 않고 지우지도 않는다(워치독과 폰은 새 파일이 없을 때만 그것을 읽는다). 형식은 아래 한 줄 JSON이다.
 
 ```json
-{"routine":"hourly","startedMs":0,"endedMs":0,"processed":0,"skipped":0,"failed":0,"batches":0,"kinds":{"call":0,"sms":0,"selftest":0},"firstPassItems":0,"formats":{"v3":0,"old":0},"requestVersions":[],"model":"","limitHit":false,"ledgerRev":0,"promptVersion":"8","promptMismatch":false,"loggedTranscript":false,"repoOk":true,"pushed":true,"leftover":0,"cron":"CRON_TZ=Asia/Seoul 34 3-4,7-22 * * *"}
+{"routine":"hourly","startedMs":0,"endedMs":0,"processed":0,"skipped":0,"failed":0,"batches":0,"kinds":{"call":0,"sms":0,"selftest":0},"firstPassItems":0,"formats":{"v3":0,"old":0},"requestVersions":[],"model":"","limitHit":false,"ledgerRev":0,"promptVersion":"9","promptMismatch":false,"loggedTranscript":false,"repoOk":true,"pushed":true,"leftover":0,"cron":"CRON_TZ=Asia/Seoul 34 3-4,7-22 * * *"}
 ```
 
 - `routine`: 이 작업은 `hourly`.

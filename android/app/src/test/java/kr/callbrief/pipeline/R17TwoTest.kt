@@ -50,9 +50,9 @@ class R17TwoTest:ProtectedTextHostTestBase() {
         .put(ClaudeCallAnalyzerTest.task("create",null,"견적서 보내기","견적서는 내일까지 메일로 보내드릴게요"))))) }
     /** Transcription jobs as CallTranscriptionStore keeps them (only the columns read here). */
     private fun job(rec:String,state:String,audioMs:Long?) = port().use { p ->
-        p.execute("CREATE TABLE IF NOT EXISTS call_transcription_jobs(recording_id TEXT NOT NULL,source_version INTEGER NOT NULL,audio_sha TEXT NOT NULL,state TEXT NOT NULL,audio_ms INTEGER,PRIMARY KEY(recording_id,source_version,audio_sha))")
+        p.execute("CREATE TABLE IF NOT EXISTS call_transcription_jobs(recording_id TEXT NOT NULL,source_version INTEGER NOT NULL,audio_sha TEXT NOT NULL,state TEXT NOT NULL,audio_ms INTEGER,reason TEXT,updated_ms INTEGER,PRIMARY KEY(recording_id,source_version,audio_sha))")
         p.execute("CREATE TABLE IF NOT EXISTS local_files(recording_id TEXT PRIMARY KEY,filename_time_candidate_ms INTEGER)")
-        p.execute("INSERT INTO call_transcription_jobs VALUES(?,1,'s',?,?)",rec,state,audioMs) }
+        p.execute("INSERT INTO call_transcription_jobs(recording_id,source_version,audio_sha,state,audio_ms) VALUES(?,1,'s',?,?)",rec,state,audioMs) }
 
     // ---- M3: the report's base and what still waits ----
     @Test fun theDayCoverageCountsRecordedCallsNotPersonalOnes() {

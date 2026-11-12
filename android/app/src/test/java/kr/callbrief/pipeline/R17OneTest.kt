@@ -179,8 +179,9 @@ class R17OneTest:ProtectedTextHostTestBase() {
         o=PowerStats.notePiece(o,245_000,120_000,6,cold=true,now=night+day+5*hour)
         val c6=o.getJSONObject("chunk")
         assertEquals(3,c6.getJSONArray("rates").length());assertEquals(2,c6.getJSONArray("coldRates").length())
-        assertEquals(245_000.0/120_000,PowerStats.rate(o,6)!!,0.01)
-        assertEquals(400_000.0/120_000,PowerStats.rate(o,4)!!,0.01)
+        // v3.6.1: the speed W1/W2 use is per expected window (a 2-minute piece: 5 windows, 150 s), the median of the long pieces.
+        assertEquals(245_000.0/150_000,PowerStats.rate(o,6)!!,0.01)
+        assertEquals(400_000.0/150_000,PowerStats.rate(o,4)!!,0.01)
         assertEquals("unknown count: the last one's",PowerStats.rate(o)!!,PowerStats.rate(o,6)!!,0.0)
         assertEquals("no samples for 2: the last count's",PowerStats.rate(o,6)!!,PowerStats.rate(o,2)!!,0.0)
         // A v3.6 ledger: its top-level lists move under the thread count they were made on.
