@@ -656,22 +656,23 @@ class KakaoReportTest:ProtectedTextHostTestBase() {
     @Test fun thumbnailsAreKeptAndGoUpAgainAfterTenDays() = runBlocking {
         val sender=listOn(ListSender())
         assertNull(KakaoReport.send(app,tagged(8),KakaoReport.SOURCE_ROUTINE))
-        assertEquals("the five tags of the day, once each",5,sender.uploads)
+        // Only the tags of the six shown (2 important, 2 confirm, 2 request), once each.
+        assertEquals(3,sender.uploads)
         val kept=JSONObject(settings().getString(KakaoReport.TAG_IMAGES))
-        assertEquals(KakaoReport.TAGS.toSet(),kept.keys().asSequence().toSet());assertEquals(at530,kept.getJSONObject("confirm").getLong("atMs"))
+        assertEquals(setOf("important","confirm","request"),kept.keys().asSequence().toSet());assertEquals(at530,kept.getJSONObject("confirm").getLong("atMs"))
         // Nine days on: the kept ones.
         KakaoReport.clock={ at530+9*86_400_000L }
         assertNull(KakaoReport.send(app,tagged(8).put("day",day.plusDays(9).toString()),KakaoReport.SOURCE_ROUTINE))
-        assertEquals(5,sender.uploads)
+        assertEquals(3,sender.uploads)
         assertEquals(kept.getJSONObject("request").getString("url"),cards(sender.sent).last().items.first { it.tag=="request" }.imageUrl)
         // Ten days on: up again.
         KakaoReport.clock={ at530+10*86_400_000L }
         assertNull(KakaoReport.send(app,tagged(8).put("day",day.plusDays(10).toString()),KakaoReport.SOURCE_ROUTINE))
-        assertEquals(10,sender.uploads)
+        assertEquals(6,sender.uploads)
         // Only the tags a day needs.
         KakaoReport.clock={ at530+30*86_400_000L }
         assertNull(KakaoReport.send(app,report(today=listOf(tg("가","request"),tg("나","request"))).put("day",day.plusDays(30).toString()),KakaoReport.SOURCE_ROUTINE))
-        assertEquals(11,sender.uploads)
+        assertEquals(7,sender.uploads)
         assertEquals(10L,KakaoReport.TAG_IMAGE_DAYS)
     }
     @Test fun theTagPicturesAreThereAndSquare() {
