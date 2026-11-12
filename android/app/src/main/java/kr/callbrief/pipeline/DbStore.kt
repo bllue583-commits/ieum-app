@@ -59,7 +59,7 @@ internal object DbStore {
     }
     /** The last refusal as stored in the settings ([install] writes each one soon after it happens; no IO here). */
     fun lastFullMs(s:JSONObject):Long = jsonOf(s.opt(FULL))?.optLong("lastMs",0) ?: 0L
-    fun fullRecent(lastMs:Long,now:Long):Boolean = lastMs>0 && now-lastMs in 0..FULL_RECENT_MS
+    fun fullRecent(lastMs:Long,now:Long):Boolean = lastMs>0 && now-lastMs<=FULL_RECENT_MS // a time just after [now] (another clock read) counts too
 
     fun rowTooBigHeartbeat(stored:Any?):JSONObject {
         val o=jsonOf(stored) ?: JSONObject()
