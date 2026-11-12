@@ -188,6 +188,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     private val openPort=run { OPEN_STAGE.set(STAGE_OPEN);AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql")) }
     /** Every read and write goes through here: never on the main thread (r9-1, see [MAIN_THREAD_CHECK]). */
     private val port:AndroidSqlPort get() { checkThread();return openPort }
+    /** v3.8 r18: the sealed file, measured the way the lights and the heartbeat measure the store ([StatusLights.read]). */
+    private val sealedFile=StatusLights.dbFile(context.applicationContext ?: context)
     init {
         // The schema check, column additions, migration and repairs run once per loaded store state (r8-1): the state stays
         // in memory while the app holds its store (IeumApplication.store), so a later open skips this transaction.
@@ -420,11 +422,11 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
      * summary and names. The check items' quotes (in analysis_json) stay. v3.6.1 (D1): its own transaction, also run daily by
      * [VaultPruneWork] without an insert, so a full store that refuses inserts still gets trimmed. */
     fun trim(now:Long,dbPercent:Int?=null) { port.transaction { trimRows(now,dbPercent);null } }
-    /** v3.6.1 (D1): the store's share of its limit, as the lights count it ([StatusLights.dbPercent]: bytes or rows). */
+    /** v3.6.1 (D1): the store's share of its limit ([StatusLights.dbPercent]: bytes or rows). v3.8 r18: the bytes are the sealed
+     * file's length, as the lights and the heartbeat count them (before: the memory database's pages, which a delete does not
+     * give back until the next load, and which are not what the 16 MiB limit is measured on). */
     fun dbPercent():Int? = runCatching {
-        // v3.8 r18: pages freed by a delete stay in the memory database until the next load; they are no share of the file.
-        val pages=(rows("PRAGMA page_count").single().long("page_count") ?: 0)-(runCatching { rows("PRAGMA freelist_count").single().long("freelist_count") }.getOrNull() ?: 0)
-        val bytes=pages.coerceAtLeast(0)*(rows("PRAGMA page_size").single().long("page_size") ?: 0)
+        val bytes=sealedFile.takeIf { it.isFile }?.length()
         val tables=rows("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").mapNotNull { it.str("name") }
         val total=tables.sumOf { t -> rows("SELECT count(*) AS n FROM \"${t.replace("\"","\"\"")}\"").single().long("n") ?: 0L }
         StatusLights.dbPercent(bytes,total)

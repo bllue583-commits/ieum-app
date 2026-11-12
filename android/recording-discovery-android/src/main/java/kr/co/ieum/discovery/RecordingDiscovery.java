@@ -100,7 +100,15 @@ public final class RecordingDiscovery {
     /** A stored file is read again at most every {@code recheckMs} of wall time. Rows hashed before this rule count as hashed now. */
     private boolean recheckDue(Row r,Moment now){
         if(!WALL_CLOCK.equals(r.lastHashBoot)||now.wallMs<r.lastHashAt){r.lastHashBoot=WALL_CLOCK;r.lastHashAt=now.wallMs;return false;}
-        return now.wallMs-r.lastHashAt>=config.recheckMs;
+        return now.wallMs-r.lastHashAt>=config.recheckMs+recheckSpread(r,config.recheckMs);
+    }
+    /** v3.8 r18: files hashed on the same day (all of them, the last day of the daily look) would all come due on the same day
+     * again and write their looks at once. A long interval (a week or more) gets a fixed share of up to a quarter of it more
+     * per file, at most 7 days, from the document id (the same file always waits the same). A short interval stays exact. */
+    public static long recheckSpread(Row r,long recheckMs){
+        if(recheckMs<7L*86_400_000L||r.metadata==null)return 0;
+        long span=Math.min(7L*86_400_000L,recheckMs/4);
+        return Math.floorMod((long)r.metadata.documentId.hashCode()*2654435761L,span);
     }
     private static void hashed(Row r,Moment now){r.lastHashBoot=WALL_CLOCK;r.lastHashAt=now.wallMs;}
     private Status blocked(Metadata m,Decision d){

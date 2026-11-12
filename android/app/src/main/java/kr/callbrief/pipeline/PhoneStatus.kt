@@ -70,7 +70,7 @@ internal object PhoneStatus {
         val coverageRecent:org.json.JSONArray?=null,val use:JSONObject?=null,val dbTables:JSONObject?=null,val matchDay:JSONObject?=null,
         val trace:org.json.JSONArray?=null,
         /** v3.8 r18 (DESIGN_V7 4.1): `dbPrune` and `dbFull` ([DbStore.pruneHeartbeat], [DbStore.fullHeartbeat]), as stored. */
-        val dbPrune:Any?=null,val dbFull:Any?=null)
+        val dbPrune:Any?=null,val dbFull:Any?=null,val dbRowTooBig:Any?=null)
     /** v3.5: heartbeat `kakao{on,linked,sent,failed,lastSentMs,error}` and `report{day,source}`; numbers, dates and codes only. */
     data class V35(val kakaoLinked:Boolean=false,val kakaoSent:Long=0,val kakaoFailed:Long=0,val kakaoLastSentMs:Long?=null,
         val kakaoError:String?=null,val reportDay:String?=null,val reportSource:String?=null,
@@ -196,6 +196,7 @@ internal object PhoneStatus {
         o.put("trace",v.trace?.let(::traceJson) ?: org.json.JSONArray())
         o.put("dbPrune",DbStore.pruneHeartbeat(v.dbPrune) ?: JSONObject.NULL)
         o.put("dbFull",DbStore.fullHeartbeat(v.dbFull))
+        o.put("dbRowTooBig",DbStore.rowTooBigHeartbeat(v.dbRowTooBig))
     }
     private val DAY=Regex("""\d{4}-\d{2}-\d{2}""")
     private fun dayOrNull(v:String?)=v?.takeIf { DAY.matches(it) } ?: JSONObject.NULL
@@ -386,7 +387,7 @@ internal object PhoneStatus {
             db.transcriptionWindow(now-14*Telemetry.DAY_MS)?.let { (c,f,p) -> window=Telemetry.window14(c,f,p) }
         } }.onFailure { Log.w(TAG,"stages not read: ${it.javaClass.simpleName}") }
         return V37(latency,window,coverage,Telemetry.coverageRecent(covDays),UseStats.heartbeat(UseStats.stored(s),now),
-            jsonOf(s,PipelineSettingsKeys.DB_TABLES),matchDay,trace,s.opt(DbStore.PRUNE),s.opt(DbStore.FULL))
+            jsonOf(s,PipelineSettingsKeys.DB_TABLES),matchDay,trace,s.opt(DbStore.PRUNE),s.opt(DbStore.FULL),s.opt(DbStore.ROW_TOO_BIG))
     }
     /** The v3.4 keys r14-3 writes (read by name; absent until written). */
     internal fun v34(s:JSONObject):V34 = V34(s.optString(PipelineSettingsKeys.UPDATE_ERROR_CODE).takeIf { it.isNotBlank() },

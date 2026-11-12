@@ -44,21 +44,35 @@ public final class ProtectedDatabase implements AutoCloseable {
     /** How long the last State creation (read, decrypt, restore or first schema) took, or -1 before any. */
     public static long lastStateMs(){return lastStateMs;}
     public static long lastTransactionMs(){return lastTransactionMs;}
-    /** v3.8 r18 (DESIGN_V7 4.1 S4): the store refused a write or an open for its size (TEXT_STORE_CAPACITY_REQUIRES_REVIEW).
-     * Callers often swallow the exception; this count and time do not go away with it (measurement only, no content). */
+    /** v3.8 r18 (DESIGN_V7 4.1 S4): the store refused a write or an open for its size (the capacity code below).
+     * Callers often swallow the exception; these counts and times do not go away with it (measurement only, no content).
+     * Counted per cause and store: [CAPACITY_TOTAL] (the 16 MiB or 100,000 row limit of the whole store) or [CAPACITY_ROW]
+     * (one row over 1 MiB), with the store name as given to open. */
     public static final String CAPACITY_CODE="TEXT_STORE_CAPACITY_REQUIRES_REVIEW";
+    public static final String CAPACITY_TOTAL="TOTAL",CAPACITY_ROW="ROW";
     private static final java.util.concurrent.atomic.AtomicLong CAPACITY_FAILURES=new java.util.concurrent.atomic.AtomicLong();
+    private static final Map<String,java.util.concurrent.atomic.AtomicLong> CAPACITY_BY=new java.util.concurrent.ConcurrentHashMap<>();
+    private static final Map<String,Long> CAPACITY_LAST=new java.util.concurrent.ConcurrentHashMap<>();
+    private static final ThreadLocal<String> CAPACITY_KIND=new ThreadLocal<>();
     private static volatile long lastCapacityMs=-1;
     private static volatile Runnable capacityListener;
-    /** Capacity refusals in this process so far. */
+    /** Capacity refusals in this process so far, all causes and stores. */
     public static long capacityFailures(){return CAPACITY_FAILURES.get();}
+    /** Refusals of one cause ([CAPACITY_TOTAL] or [CAPACITY_ROW]) in one store ([name], as given to open) in this process. */
+    public static long capacityFailures(String kind,String name){java.util.concurrent.atomic.AtomicLong n=CAPACITY_BY.get(kind+":"+name);return n==null?0:n.get();}
+    /** Wall time of the last refusal of that cause in that store in this process, or -1. */
+    public static long lastCapacityFailureMs(String kind,String name){Long t=CAPACITY_LAST.get(kind+":"+name);return t==null?-1:t;}
     /** Wall time of the last capacity refusal in this process, or -1. */
     public static long lastCapacityFailureMs(){return lastCapacityMs;}
     /** Told after each capacity refusal, on the refusing thread while the store is locked: it must only hand the work on. */
     public static void onCapacityFailure(Runnable listener){capacityListener=listener;}
-    private static void noteCapacity(CoreException e){
+    private static CoreException capacity(String kind){CAPACITY_KIND.set(kind);return error(CAPACITY_CODE);}
+    private static void noteCapacity(CoreException e,File path){
+        String kind=CAPACITY_KIND.get();CAPACITY_KIND.remove();
         if(e==null||!CAPACITY_CODE.equals(e.code))return;
-        CAPACITY_FAILURES.incrementAndGet();lastCapacityMs=System.currentTimeMillis();
+        long now=System.currentTimeMillis();String key=(kind==null?CAPACITY_TOTAL:kind)+":"+storeName(path);
+        CAPACITY_FAILURES.incrementAndGet();lastCapacityMs=now;
+        CAPACITY_BY.computeIfAbsent(key,k->new java.util.concurrent.atomic.AtomicLong()).incrementAndGet();CAPACITY_LAST.put(key,now);
         Runnable l=capacityListener;if(l!=null)try{l.run();}catch(RuntimeException ignored){}
     }
     private static volatile String lastRecovery;
@@ -145,7 +159,7 @@ public final class ProtectedDatabase implements AutoCloseable {
     private static String quote(String identifier){return "\""+identifier.replace("\"","\"\"")+"\"";}
     private static byte[] readBounded(InputStream in,int maximum)throws IOException{
         ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buffer=new byte[8192];int n;
-        try{while((n=in.read(buffer))!=-1){if(out.size()+n>maximum)throw error("TEXT_STORE_CAPACITY_REQUIRES_REVIEW");out.write(buffer,0,n);}return out.toByteArray();}
+        try{while((n=in.read(buffer))!=-1){if(out.size()+n>maximum)throw capacity(CAPACITY_TOTAL);out.write(buffer,0,n);}return out.toByteArray();}
         finally{Arrays.fill(buffer,(byte)0);}
     }
     private static final class State {
@@ -183,7 +197,7 @@ public final class ProtectedDatabase implements AutoCloseable {
                     for(String statement:schema.split("\n-- statement-break\n"))db.execSQL(statement);
                     byte[] plain=snapshot(db);try{SecretKey key=keys.existing(alias);if(key==null)key=keys.createForEmptyStore(alias);if(key==null)throw error("TEXT_STORE_KEY_UNAVAILABLE");persist(plain,key);lastPlain=plain.clone();keyProof=sealProof(key);verified=true;sealedNow();}finally{Arrays.fill(plain,(byte)0);}
                 }
-            }catch(Exception e){close();if(e instanceof CoreException){noteCapacity((CoreException)e);throw e;}throw error("TEXT_STORE_AUTHENTICATION_OR_OPEN_FAILED");}
+            }catch(Exception e){close();if(e instanceof CoreException){noteCapacity((CoreException)e,path);throw e;}throw error("TEXT_STORE_AUTHENTICATION_OR_OPEN_FAILED");}
         }
         byte[] sealProof(SecretKey key)throws Exception{
             Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.ENCRYPT_MODE,key);cipher.updateAAD(aad);
@@ -203,7 +217,7 @@ public final class ProtectedDatabase implements AutoCloseable {
         void sealedNow(){sealedChanges=changes();sealedSchema=schemaVersion();}
         /** Bounded raw bytes of a sealed file, or null when it is missing, unreadable or too large. */
         byte[] sealedBytes(File f){if(!f.isFile()||f.length()>MAX_PLAIN_BYTES+128)return null;
-            try(InputStream in=new FileInputStream(f)){return readBounded(in,MAX_PLAIN_BYTES+128);}catch(Exception e){return null;}}
+            try(InputStream in=new FileInputStream(f)){return readBounded(in,MAX_PLAIN_BYTES+128);}catch(Exception e){CAPACITY_KIND.remove();return null;}}
         /** The bytes pass the AEAD check under [key] and hold a snapshot (the plain text is wiped at once). */
         boolean opens(byte[] encoded,SecretKey key){
             if(encoded==null)return false;
@@ -271,7 +285,7 @@ public final class ProtectedDatabase implements AutoCloseable {
                 }}
                 db.setTransactionSuccessful();if(outer&&plain!=null){if(lastPlain!=null)Arrays.fill(lastPlain,(byte)0);lastPlain=plain.clone();sealedChanges=changesAfter;sealedSchema=schemaAfter;}
                 done.addAll(pendingDone);return result;
-            }catch(CoreException e){noteCapacity(e);throw e;}catch(RuntimeException e){if(durable)held=true;throw e;}
+            }catch(CoreException e){noteCapacity(e,path);throw e;}catch(RuntimeException e){if(durable)held=true;throw e;}
             finally{try{db.endTransaction();}catch(RuntimeException e){held=true;throw error("TEXT_STORE_COMMIT_REVIEW_REQUIRED");}finally{depth--;pendingDone.clear();if(plain!=null)Arrays.fill(plain,(byte)0);
                 lastTransactionMs=(System.nanoTime()-t0)/1_000_000L;if(lastTransactionMs>=100)android.util.Log.i(TAG,"transaction ms="+lastTransactionMs);}}
         }
@@ -312,12 +326,12 @@ public final class ProtectedDatabase implements AutoCloseable {
                     while(info.moveToNext())sizeExpression.append("+coalesce(length(CAST(").append(quote(info.getString(info.getColumnIndexOrThrow("name")))).append(" AS BLOB)),0)");
                 }
                 try(Cursor size=db.rawQuery("SELECT max("+sizeExpression+") FROM "+quote(table),null)){
-                    if(size.moveToFirst()&&!size.isNull(0)&&size.getLong(0)>MAX_ROW_BYTES)throw error("TEXT_STORE_CAPACITY_REQUIRES_REVIEW");
+                    if(size.moveToFirst()&&!size.isNull(0)&&size.getLong(0)>MAX_ROW_BYTES)throw capacity(CAPACITY_ROW);
                 }
                 try(Cursor c=db.rawQuery("SELECT rowid AS __eum_rowid__,* FROM "+quote(table)+" ORDER BY rowid",null)){
                     for(String column:c.getColumnNames())columns.put(column);
                     while(c.moveToNext()){
-                        if(++rows>100000)throw error("TEXT_STORE_CAPACITY_REQUIRES_REVIEW");JSONArray row=new JSONArray();
+                        if(++rows>100000)throw capacity(CAPACITY_TOTAL);JSONArray row=new JSONArray();
                         for(int i=0;i<c.getColumnCount();i++){
                             switch(c.getType(i)){
                                 case Cursor.FIELD_TYPE_NULL:row.put(JSONObject.NULL);break;
@@ -332,7 +346,7 @@ public final class ProtectedDatabase implements AutoCloseable {
             }
         }
         byte[] result=new JSONObject().put("format",1).put("objects",objects).put("tables",tables).toString().getBytes(StandardCharsets.UTF_8);
-        if(result.length>MAX_PLAIN_BYTES){Arrays.fill(result,(byte)0);throw error("TEXT_STORE_CAPACITY_REQUIRES_REVIEW");}return result;
+        if(result.length>MAX_PLAIN_BYTES){Arrays.fill(result,(byte)0);throw capacity(CAPACITY_TOTAL);}return result;
     }catch(CoreException e){throw e;}catch(Exception e){throw error("TEXT_STORE_SNAPSHOT_FAILED");}}
     private static void restore(SQLiteDatabase db,byte[] plain){try{
         JSONObject root=new JSONObject(new String(plain,StandardCharsets.UTF_8));if(root.getInt("format")!=1)throw error("TEXT_STORE_FORMAT_REQUIRES_REVIEW");

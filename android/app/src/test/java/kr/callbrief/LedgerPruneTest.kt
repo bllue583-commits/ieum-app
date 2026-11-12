@@ -68,7 +68,7 @@ class LedgerPruneTest {
     /** Quiet 10 ms, lease 10 s, a stored file is read again after 1 s (the daily look of the phone, made short). */
     private val config=Config(10,10000,1000,25000000,4)
     @Before fun fresh(){context=RuntimeEnvironment.getApplication();IeumApplication.shutdown()
-        listOf("protected-databases-v1","local-recordings-v2","protected-databases-prune-copy-v1").forEach { File(context.noBackupFilesDir,it).deleteRecursively() }
+        listOf("protected-databases-v1","local-recordings-v2","protected-databases-prune-copy-v1").forEach { File(context.noBackupFilesDir,it).let { f -> f.deleteRecursively();f.delete() } }
         ShadowTextKeys.KEYS.clear();ShadowTextKeys.CREATES.set(0);ShadowTextKeys.deny=false;ShadowTextAtomicFile.failNext=false;keys=Keys()}
     @After fun done(){io.shutdown();assertTrue(io.awaitTermination(5,TimeUnit.SECONDS))}
     private fun store(fault:(String)->Unit={})=GeneralLocalStore(context,{c->
@@ -144,7 +144,9 @@ class LedgerPruneTest {
             }}
     }
 
-    @Test fun L04NotDuringACallOrARunningTranscription()=worker {
+    /** A call skips the run (the seal must not hold up the call card); a running transcription does not (one lock for every
+     * write, and transcription never touches these tables). */
+    @Test fun L04NotDuringACallButAlongsideATranscription()=worker {
         val src=Source().apply{put()};val t=Time()
         store().use{s->s.initializeEmpty();session(s,src,t).use{n->stored(n,t);recheck(n,t)
             val call=s.pruneLedger(now+5*day,LedgerPrune.SKIP_IN_CALL)
@@ -152,9 +154,8 @@ class LedgerPruneTest {
             kr.callbrief.pipeline.CallTranscriptionStore(context).close()
             val ref=rows("SELECT * FROM vault2_refs").single()
             port().use{p->p.requireProtectedPersistence();p.execute("INSERT INTO call_transcription_jobs(recording_id,source_version,audio_sha,state,updated_ms) VALUES(?,?,?,'RUNNING',?)",ref["recording_id"],ref["source_version"],ref["plaintext_sha256"],now+5*day)}
-            assertEquals(LedgerPrune.SKIP_TRANSCRIBING,s.pruneLedger(now+5*day).skipped);assertEquals(2,count("discovery_intake_requests"))
-            assertNull("a RUNNING line left by a dead worker does not hold it for ever",s.pruneLedger(now+6*day).skipped)
-            assertEquals(1,count("discovery_intake_requests"))
+            assertNull(s.pruneLedger(now+5*day).skipped);assertEquals(1,count("discovery_intake_requests"))
+            assertEquals("RUNNING",rows("SELECT state FROM call_transcription_jobs").single()["state"])
         }}
     }
 
@@ -192,23 +193,35 @@ class LedgerPruneTest {
         }}
     }
 
-    /** S4: a write the store refuses for its size is counted, written to the settings, said by the light and the heartbeat. */
-    @Test fun L07ACapacityRefusalIsCountedAndShown()=worker {
-        val before=ProtectedDatabase.capacityFailures()
+    /** S4: a row over 1 MiB (here in another sealed store) is counted apart and says nothing on the light; the whole call store
+     * at its limit is "다 찼어요" on the light and in the heartbeat. */
+    @Test fun L07ACapacityRefusalIsCountedByCauseAndShown()=worker {
+        val db=GeneralLocalStore.DATABASE
+        val rowBefore=ProtectedDatabase.capacityFailures(ProtectedDatabase.CAPACITY_ROW,"capacity-canary.db")
         AndroidSqlPort(context,"capacity-canary.db","CREATE TABLE t(x TEXT)".byteInputStream()).use{p->p.requireProtectedPersistence()
             try{p.execute("INSERT INTO t VALUES(?)","x".repeat(1_100_000));fail("refused")}catch(e:CoreException){assertEquals(ProtectedDatabase.CAPACITY_CODE,e.code)}}
-        assertEquals(before+1,ProtectedDatabase.capacityFailures());assertTrue(ProtectedDatabase.lastCapacityFailureMs()>0)
+        assertEquals(rowBefore+1,ProtectedDatabase.capacityFailures(ProtectedDatabase.CAPACITY_ROW,"capacity-canary.db"))
         DbStore.flush(context)
-        val s=SecureSettings(context).snapshot();val full=JSONObject(s.getString(DbStore.FULL))
-        assertTrue(full.getLong("count")>=1);assertTrue(full.getLong("lastMs")>0)
+        var s=SecureSettings(context).snapshot()
+        assertTrue(JSONObject(s.getString(DbStore.ROW_TOO_BIG)).getLong("count")>=1)
         val at=System.currentTimeMillis()
         val ok=StatusLights.Input(now=at,folderConnected=true,modelState="READY",consent=true,lastTranscribedMs=at,lastAnalyzedMs=at,lastDiscoveryMs=at)
-        assertTrue(StatusLights.lights(ok).single{it.tag=="status_analyze"}.ok)
+        assertTrue("a big row is no full store",StatusLights.lights(ok.copy(dbFullMs=DbStore.lastFullMs(s))).single{it.tag=="status_analyze"}.ok)
+        val fullBefore=ProtectedDatabase.capacityFailures(ProtectedDatabase.CAPACITY_TOTAL,db)
+        port().use{p->p.requireProtectedPersistence()
+            try{p.transaction{p.execute("CREATE TABLE synthetic_rows(x INTEGER)")
+                p.execute("INSERT INTO synthetic_rows(x) WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<100001) SELECT x FROM c");null}
+                fail("over the row limit")}catch(e:CoreException){assertEquals(ProtectedDatabase.CAPACITY_CODE,e.code)}
+            assertEquals("nothing of it stays",0,p.query("SELECT name FROM sqlite_master WHERE name='synthetic_rows'").size)}
+        assertEquals(fullBefore+1,ProtectedDatabase.capacityFailures(ProtectedDatabase.CAPACITY_TOTAL,db))
+        DbStore.flush(context)
+        s=SecureSettings(context).snapshot();val full=JSONObject(s.getString(DbStore.FULL))
+        assertTrue(full.getLong("count")>=1);assertTrue(full.getLong("lastMs")>0)
         val shown=StatusLights.lights(ok.copy(dbFullMs=DbStore.lastFullMs(s))).single{it.tag=="status_analyze"}
         assertFalse(shown.ok);assertEquals(DbStore.FULL_WORDS,shown.words)
         assertTrue("a day later it is green again",StatusLights.lights(ok.copy(now=at+2*day,lastTranscribedMs=at+2*day,lastAnalyzedMs=at+2*day,lastDiscoveryMs=at+2*day,dbFullMs=DbStore.lastFullMs(s))).single{it.tag=="status_analyze"}.ok)
-        val beat=PhoneStatus.build(PhoneStatus.Input(at,"3.8",1L,0,null,0L,0L,"READY","","",1,v37=PhoneStatus.V37(dbFull=s.opt(DbStore.FULL))))
-        assertTrue(beat.getJSONObject("dbFull").getLong("count")>=1);assertTrue(beat.isNull("dbPrune"))
+        val beat=PhoneStatus.build(PhoneStatus.Input(at,"3.8",1L,0,null,0L,0L,"READY","","",1,v37=PhoneStatus.V37(dbFull=s.opt(DbStore.FULL),dbRowTooBig=s.opt(DbStore.ROW_TOO_BIG))))
+        assertTrue(beat.getJSONObject("dbFull").getLong("count")>=1);assertTrue(beat.getJSONObject("dbRowTooBig").getLong("count")>=1);assertTrue(beat.isNull("dbPrune"))
     }
 
     @Test fun L08TheHeartbeatBlockIsNumbersAndCodesOnly() {
@@ -223,7 +236,43 @@ class LedgerPruneTest {
         assertEquals(0L,PhoneStatus.build(PhoneStatus.Input(now,"3.8",1L,0,null,0L,0L,"READY","","",1)).getJSONObject("dbFull").getLong("count"))
     }
 
-    @Test fun L09TheRecheckOfAStoredFileIsMonthly() {
-        assertEquals(30L*day,kr.co.ieum.discovery.DiscoveryTypes.Config.conservative().recheckMs)
+    @Test fun L09TheRecheckOfAStoredFileIsMonthlyAndSpreadOverAWeek() {
+        val month=kr.co.ieum.discovery.DiscoveryTypes.Config.conservative().recheckMs
+        assertEquals(30L*day,month)
+        fun row(id:String)=Row().apply{metadata=Metadata(id,"SYNTHETIC.wav","audio/wav",10L,1L,false,false)}
+        val spread=(0 until 500).map{kr.co.ieum.discovery.RecordingDiscovery.recheckSpread(row("doc$it"),month)}
+        assertTrue(spread.all{it in 0 until 7*day})
+        assertTrue("spread over the week, not one day: ${spread.map{it/day}.toSet()}",spread.map{it/day}.toSet().size==7)
+        assertEquals("the same file always waits the same",spread[3],kr.co.ieum.discovery.RecordingDiscovery.recheckSpread(row("doc3"),month))
+        assertEquals("a short interval stays exact",0L,kr.co.ieum.discovery.RecordingDiscovery.recheckSpread(row("doc3"),day))
+    }
+
+    /** Phone storage full: the copy cannot be made. Three days of that, and the prune runs without one ("none"). */
+    @Test fun L10ACopyThatKeepsFailingNoLongerHoldsThePruneBack()=worker {
+        val src=Source().apply{put()};val t=Time()
+        copy.parentFile!!.parentFile!!.mkdirs();copy.parentFile!!.writeText("blocked") // a file where the copy folder goes
+        store().use{s->s.initializeEmpty();session(s,src,t).use{n->stored(n,t);recheck(n,t)
+            assertEquals(LedgerPrune.SKIP_COPY_FAILED,s.pruneLedger(now+4*day).skipped)
+            assertEquals(LedgerPrune.SKIP_COPY_FAILED,s.pruneLedger(now+6*day).skipped);assertEquals(2,count("discovery_intake_requests"))
+            val r=s.pruneLedger(now+7*day)
+            assertNull(r.skipped);assertEquals(LedgerPrune.COPY_NONE,r.copy);assertNull(r.copyAtMs);assertEquals(1,count("discovery_intake_requests"))
+            assertEquals("none",DbStore.pruneHeartbeat(DbStore.pruneJson(r,now))!!.getString("copy"))
+            assertEquals(LedgerPrune.COPY_NONE,s.pruneLedger(now+8*day).copy)
+        }}
+    }
+
+    @Test fun L11AnOldCopyGoesByItsFileTimeAlone() {
+        copy.parentFile!!.mkdirs();copy.writeText("synthetic sealed bytes")
+        copy.setLastModified(now-6*day);assertFalse(LedgerPrune.dropOldCopy(context,now));assertTrue(copy.isFile)
+        copy.setLastModified(now-7*day);assertTrue(LedgerPrune.dropOldCopy(context,now));assertFalse(copy.exists())
+    }
+
+    @Test fun L12ALaterEmptyResultOfTheSameDayKeepsTheDeletion() {
+        val real=DbStore.pruneJson(LedgerPrune.Result(mapOf(LedgerPrune.REQUESTS to 30,LedgerPrune.PENDING to 2),900,400,null,12,now),now)
+        val empty=DbStore.pruneJson(LedgerPrune.Result(mapOf(LedgerPrune.REQUESTS to 0,LedgerPrune.PENDING to 0),400,400,null,5,now),now+3_600_000)
+        val skipped=DbStore.pruneJson(LedgerPrune.Result(emptyMap(),-1,-1,"IN_CALL",1,now),now+3_600_000)
+        assertTrue(DbStore.keepEarlier(real.toString(),empty));assertTrue(DbStore.keepEarlier(real.toString(),skipped))
+        assertFalse("the next day replaces it",DbStore.keepEarlier(real.toString(),DbStore.pruneJson(LedgerPrune.Result(mapOf(LedgerPrune.REQUESTS to 0),1,1,null,1,now),now+day)))
+        assertFalse(DbStore.keepEarlier(empty.toString(),real));assertFalse(DbStore.keepEarlier(null,empty))
     }
 }
