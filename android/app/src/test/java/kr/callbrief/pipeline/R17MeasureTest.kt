@@ -21,7 +21,7 @@ import java.time.LocalDate
 
 /** v3.7 r17-3 (DESIGN_V7 3.3): the scorecard's measurement in the heartbeat. Generated rows only. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk=[35],shadows=[ShadowTextKeys::class,ShadowTextAtomicFile::class])
+@Config(sdk=[35],shadows=[ShadowTextKeys::class,ShadowTextKeys.ExistingApprovedSettings::class,ShadowTextAtomicFile::class])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class R17MeasureTest:ProtectedTextHostTestBase() {
     private lateinit var context:Context
@@ -176,7 +176,7 @@ class R17MeasureTest:ProtectedTextHostTestBase() {
         assertEquals(20,c.getInt("yesterdayCalls"));assertEquals(17,c.getInt("inReport"));assertEquals(3,c.getInt("pending"));assertEquals("2027-01-19",c.getString("day"))
         assertEquals(7,o.getJSONObject("report").getJSONArray("recent").length())
         val top=o.getJSONObject("dbTables").getJSONArray("top")
-        assertEquals(8,top.length());assertEquals("table_12",top.getJSONObject(0).getString("name"));assertEquals(12_000L,top.getJSONObject(0).getLong("chars"))
+        assertEquals(8,top.length());assertEquals("table_12",top.getJSONObject(0).getString("name"));assertEquals(12_005L,top.getJSONObject(0).getLong("chars"))
         assertEquals(5L,top.getJSONObject(0).getLong("dChars"));assertFalse("every table's count stays on the phone",o.getJSONObject("dbTables").has("all"))
         val day=o.getJSONObject("callLogMatch").getJSONObject("day")
         assertEquals("2027-01-19",day.getString("day"));assertEquals(4,day.getInt("noCandidate"))
