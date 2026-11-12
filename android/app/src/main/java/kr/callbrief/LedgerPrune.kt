@@ -20,7 +20,7 @@ import java.util.Base64
  *    vault intake has its id, and no queue row of any scope names it (pending, versions, audit notes).
  *  - `vault2_pending` rows with `completed=1`: [EncryptedRecordingStore.collect] looks for its committed vault receipt
  *    first and returns before it reads this row; [EncryptedRecordingStore.recoverPending] runs only for `completed=0`.
- *    Same age, receipt and queue conditions as above.
+ *    Same age and receipt conditions; no queue row's pending (or audit note) names it.
  *
  * Everything else stays (the immutable receipts, the vault receipts and references, the queue, the documents, every
  * new-content request a version points at). One transaction; running it again changes nothing. Before the first run that
@@ -61,17 +61,20 @@ internal object LedgerPrune {
         }.getOrDefault(0L) }
 
     /** Operation ids any discovery queue row or header still names: pending, versions, and ids in audit notes. */
-    private fun referenced(port:AndroidSqlPort,names:Set<String>):Set<String>? {
-        val out=HashSet<String>()
+    /** [all]: pending, version and audit ids (a request a version points at is read by `localReceipt`); [open]: pending and
+     * audit ids only (a vault intake row is read while its intake is open, never through a version). */
+    private class Named(val all:Set<String>,val open:Set<String>)
+    private fun referenced(port:AndroidSqlPort,names:Set<String>):Named? {
+        val out=HashSet<String>();val open=HashSet<String>()
         fun add(text:String):Boolean {
             val state=try { DiscoveryStateCodec.decode(Base64.getDecoder().decode(text)) } catch(e:Exception) { return false }
-            state.rows.values.forEach { r -> r.pending?.let { out+=it.operationId };r.versions.forEach { v -> out+=v.operationId } }
-            state.audit.forEach { a -> a.substringAfter(':',"").takeIf { it.isNotEmpty() }?.let { out+=it } }
+            state.rows.values.forEach { r -> r.pending?.let { out+=it.operationId;open+=it.operationId };r.versions.forEach { v -> out+=v.operationId } }
+            state.audit.forEach { a -> a.substringAfter(':',"").takeIf { it.isNotEmpty() }?.let { out+=it;open+=it } }
             return true
         }
         if("discovery_queue_rows" in names) for(row in port.query("SELECT payload FROM discovery_queue_rows")) if(!add(row["payload"].toString())) return null
         if("discovery_queue_roots" in names) for(row in port.query("SELECT header FROM discovery_queue_roots")) if(!add(row["header"].toString())) return null
-        return out
+        return Named(out,open)
     }
 
     private fun makeCopy(sealed:File,copy:File,now:Long):Boolean = runCatching {
@@ -111,12 +114,12 @@ internal object LedgerPrune {
             WHERE d.owner_key=? AND r.operation='OBSERVE' AND r.outcome='SAME_CONTENT' AND r.created_at_ms<=?
             AND NOT EXISTS(SELECT 1 FROM source_versions s WHERE s.observation_event_id=d.operation_id)
             ${if(PENDING in names) "AND NOT EXISTS(SELECT 1 FROM $PENDING p WHERE p.event_id=d.operation_id AND p.completed=0)" else ""}""",owner,cutoff)
-            .map { it["id"].toString() }.filter { it !in named }
+            .map { it["id"].toString() }.filter { it !in named.all }
         val pending=if(PENDING !in names) emptyList() else port.query("""SELECT p.event_id AS id FROM $PENDING p
             JOIN vault2_intake_receipts v ON v.event_id=p.event_id AND v.owner_key=p.owner_key AND v.request_digest=p.request_digest
             JOIN receipts r ON r.event_id=p.event_id AND r.recording_id=v.recording_id AND r.source_version=v.source_version
             WHERE p.owner_key=? AND p.completed=1 AND r.created_at_ms<=?""",owner,cutoff)
-            .map { it["id"].toString() }.filter { it !in named }
+            .map { it["id"].toString() }.filter { it !in named.open }
         if(requests.isEmpty() && pending.isEmpty()) return@transaction totalChars(port).let { c -> Result(mapOf(REQUESTS to 0,PENDING to 0),c,c,null,ms(),kept) }
         // The first run that deletes anything copies the sealed file as it is now (nothing of this transaction is in it yet).
         var madeAt=kept

@@ -45,8 +45,8 @@ internal object DbStore {
         val o=jsonOf(stored) ?: JSONObject()
         return JSONObject().put("count",o.optLong("count",0).coerceAtLeast(0)).put("firstMs",num(o.opt("firstMs"))).put("lastMs",num(o.opt("lastMs")))
     }
-    /** The last refusal: stored in the settings or seen by this process and not yet flushed (no IO; any thread). */
-    fun lastFullMs(s:JSONObject):Long = maxOf(jsonOf(s.opt(FULL))?.optLong("lastMs",0) ?: 0L,ProtectedDatabase.lastCapacityFailureMs())
+    /** The last refusal as stored in the settings ([install] writes each one soon after it happens; no IO here). */
+    fun lastFullMs(s:JSONObject):Long = jsonOf(s.opt(FULL))?.optLong("lastMs",0) ?: 0L
     fun fullRecent(lastMs:Long,now:Long):Boolean = lastMs>0 && now-lastMs in 0..FULL_RECENT_MS
 
     private val lock=Any()
