@@ -141,6 +141,8 @@ class UpdateFetchTest:ProtectedTextHostTestBase() {
         assertFalse(File(CallUpdate.file(app).parentFile,"download.tmp").exists())
         assertTrue(CallUpdate.check(app,Store()));assertTrue(CallUpdate.verified(app))
         CallUpdate.file(app).writeBytes(apk.copyOf().also { it[7]=99 }) // same size, other bytes
+        // v3.7: with the switch on, opening the app would start this install itself (OpenUpdate); here the button's path alone.
+        kr.callbrief.SecureSettings(app).update { it.put(PipelineSettingsKeys.AUTO_INSTALL,false) }
         val a=launchMain(Screen.SETTINGS);idle()
         assertFalse(CallUpdate.install(a))
         assertFalse(CallUpdate.file(app).exists());assertNull(CallUpdate.ready(app));assertEquals(1,starts)
