@@ -56,7 +56,7 @@ class SelfCheckNoticesTest:ProtectedTextHostTestBase() {
         val limit=CallRecordStore.DB_LIMIT_BYTES
         assertEquals(listOf(SelfCheckNotices.STORAGE_FULL),codes(fine.copy(dbBytes=limit*81/100)))
         assertEquals(emptyList<String>(),codes(fine.copy(dbBytes=limit*79/100)))
-        assertTrue(SelfCheckNotices.check(fine.copy(dbBytes=limit*86/100)).single().text.contains("85%"))
+        assertFalse("no number (user 11/13)",SelfCheckNotices.check(fine.copy(dbBytes=limit*86/100)).single().text.contains("%"))
     }
 
     @Test fun theLateResultNoticeDoesNotRepeatTheStallOrDisconnectNotice() {

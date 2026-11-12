@@ -204,7 +204,7 @@ class R14TwoTest:ProtectedTextHostTestBase() {
         val now=kst(5,15,0)
         assertTrue(StatusLights.lights(okLights(now).copy(dbPercent=79)).all { it.ok })
         val l=StatusLights.lights(okLights(now).copy(dbPercent=80)).single { !it.ok }
-        assertEquals("status_analyze",l.tag);assertTrue(l.words,l.words.contains("80%"))
+        assertEquals("status_analyze",l.tag);assertTrue(l.words,l.words.startsWith("저장 공간이 거의 찼어요"));assertFalse("no number (user 11/13)",l.words.contains("%"))
     }
 
     // ---- 4.2-5: the card line ----
