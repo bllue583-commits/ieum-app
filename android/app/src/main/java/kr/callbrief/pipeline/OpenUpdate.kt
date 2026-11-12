@@ -24,7 +24,9 @@ internal object OpenUpdate {
         val tried:Boolean,
         val session:Session=Session.NONE,val sessionAgeMs:Long=0,
         /** Android answered the background session with "wants a tap" (its notification is or was there). */
-        val sessionWaitsTap:Boolean=false)
+        val sessionWaitsTap:Boolean=false,
+        /** Review fix: this version was put off ([나중에]), or blocked or closed twice, within the last day ([backedOff]). */
+        val backoff:Boolean=false)
     /** [start]: begin the foreground install now. [cover]: show the "업데이트하는 중" screen. [reason]: a code for the heartbeat. */
     data class Decision(val start:Boolean,val cover:Boolean,val reason:String)
 
@@ -41,6 +43,7 @@ internal object OpenUpdate {
         !i.autoInstall -> Decision(false,false,"autoOff")
         !i.ready && !i.downloading -> Decision(false,false,"nothing")
         i.inCall -> Decision(false,false,"inCall")
+        i.backoff && !i.blocked -> Decision(false,false,"backoff")
         i.declined -> Decision(false,false,"declined")
         i.blocked -> Decision(false,false,"blocked")
         !i.ready -> Decision(false,true,"downloading")
@@ -50,6 +53,22 @@ internal object OpenUpdate {
         i.session!=Session.NONE -> Decision(true,true,"replace")
         else -> Decision(true,true,"start")
     }
+    // ---- review fix: giving way across openings (kept in the update prefs; an app swiped away is opened anew every time) ----
+    /** What is kept about the open app's tries of version [code]: how often the phone blocked it, how often the person closed
+     * the install window, and until when the app does not try by itself. */
+    data class Backoff(val code:Int,val blocked:Int=0,val declined:Int=0,val untilMs:Long=0)
+    const val BACKOFF_MS=24*3_600_000L;const val BACKOFF_AFTER=2
+    const val EV_BLOCKED="blocked";const val EV_DECLINED="declined";const val EV_LATER="later"
+    /** After [event] for version [code] at [now]: [나중에] gives way at once, the second block or the second closed window too.
+     * A new version starts from nothing. */
+    fun backoffAfter(b:Backoff?,code:Int,event:String,now:Long):Backoff {
+        val o=b?.takeIf { it.code==code } ?: Backoff(code)
+        val n=when(event) { EV_BLOCKED -> o.copy(blocked=o.blocked+1);EV_DECLINED -> o.copy(declined=o.declined+1);else -> o }
+        val off=event==EV_LATER || n.blocked>=BACKOFF_AFTER || n.declined>=BACKOFF_AFTER
+        return if(off) n.copy(blocked=0,declined=0,untilMs=now+BACKOFF_MS) else n
+    }
+    /** The app does not try version [code] by itself now (the banner and its button stay). A clock set back ends it. */
+    fun backedOff(b:Backoff?,code:Int,now:Long):Boolean = b!=null && code!=0 && b.code==code && now<b.untilMs && b.untilMs-now<=BACKOFF_MS
     /** The mark left before an install the open app started ([markMs]) is still good at [now]. */
     fun relaunchDue(markMs:Long,now:Long):Boolean = markMs>0 && now>=markMs && now-markMs<=RELAUNCH_MS
     /** An open session that never got an answer: a foreground one after [FOREGROUND_WAIT_MS], a background one after
@@ -85,19 +104,24 @@ internal object OpenUpdate {
     enum class RetryAct { TRY, WAIT, STOP }
     data class RetryStep(val act:RetryAct,val reason:String)
     /** One try every this often (after the last try's answer came). */
-    const val RETRY_EVERY_MS=5_000L
+    const val RETRY_EVERY_MS=8_000L
+    /** Review fix: never more tries than this in one loop (the phone may show its own notice for every blocked one). */
+    const val RETRY_MAX=15
+    /** A try without any answer for this long is given up before the next one. */
+    const val RETRY_ANSWER_MS=30_000L
     /** Tries for at most this long after the app went behind the settings. */
     const val RETRY_FOR_MS=2*60_000L
     /** What the loop does now: stop when the app is in front again (onResume goes on), after [나중에], when a call starts, once
      * a try was taken (not blocked) or after [RETRY_FOR_MS]; wait while a try's answer is still coming (one session at a time)
      * or [RETRY_EVERY_MS] has not passed since the last try; else try. */
-    fun retryStep(startMs:Long,now:Long,lastTryMs:Long,pending:Boolean,front:Boolean,later:Boolean,inCall:Boolean,taken:Boolean):RetryStep = when {
+    fun retryStep(startMs:Long,now:Long,lastTryMs:Long,pending:Boolean,front:Boolean,later:Boolean,inCall:Boolean,taken:Boolean,tries:Int=0):RetryStep = when {
         front -> RetryStep(RetryAct.STOP,"front")
         taken -> RetryStep(RetryAct.STOP,"taken")
         later -> RetryStep(RetryAct.STOP,"later")
         inCall -> RetryStep(RetryAct.STOP,"inCall")
         now-startMs>=RETRY_FOR_MS -> RetryStep(RetryAct.STOP,"timeout")
         pending -> RetryStep(RetryAct.WAIT,"pending")
+        tries>=RETRY_MAX -> RetryStep(RetryAct.STOP,"max")
         lastTryMs>0 && now-lastTryMs<RETRY_EVERY_MS -> RetryStep(RetryAct.WAIT,"interval")
         else -> RetryStep(RetryAct.TRY,"try")
     }
@@ -145,7 +169,7 @@ internal object OpenUpdate {
         kr.callbrief.pipeline.call.CallSession.current().state!=kr.callbrief.pipeline.call.CallSession.State.IDLE ||
             kr.callbrief.pipeline.call.CallCardService.driver.shown || kr.callbrief.pipeline.call.CallCardService.running!=null ||
             kr.callbrief.pipeline.call.CallCardService.inCall(c.applicationContext)
-    }.getOrDefault(false)
+    }.getOrDefault(true) // review fix: when it cannot be told, it counts as a call (replacing the app would cut the card)
 
     /** Samsung phones (One UI): a blocked install is most likely "보안 위험 자동 차단" (Auto Blocker). There is no public way to
      * read that switch, so only the installer's answer (STATUS_FAILURE_BLOCKED, or no answer) leads here. */
@@ -168,6 +192,7 @@ internal object OpenUpdate {
      * does it when Android does not let the app come to the front by itself. Background installs stay quiet. */
     fun afterReplaced(c:Context,now:Long=System.currentTimeMillis()) {
         val app=c.applicationContext
+        BlockRetry.clearProgress(app) // review fix: the old version's "업데이트하는 중" notification does not stay
         if(!relaunchDue(CallUpdate.takeRelaunchMark(app),now)) return
         val open=Intent(app,MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         val opened=runCatching { app.startActivity(open) }.isSuccess

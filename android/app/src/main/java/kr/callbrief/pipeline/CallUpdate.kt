@@ -380,6 +380,9 @@ internal object CallUpdate {
     internal fun installInBackground(c:Context):Boolean {
         if(Build.VERSION.SDK_INT<31) { noteBg(c,BG_API);return false }
         val r=ready(c) ?: run { noteBg(c,BG_NO_FILE);return false }
+        return synchronized(commitLock) { installInBackgroundLocked(c,r) }
+    }
+    private fun installInBackgroundLocked(c:Context,r:Info):Boolean {
         sessionId(c).takeIf { it!=0 }?.let { old ->
             // One at a time: its result is still coming. v3.5 r15-0 (11/6 on the wife's phone): a session left waiting for the tap
             // for over a day (its notification swiped away) is given up and committed again, so Android shows a new one.
@@ -422,15 +425,30 @@ internal object CallUpdate {
         if(sessionId(c)==0) return SessionView(OpenUpdate.Session.NONE,0,false,0)
         val p=prefs(c);val since=p.getLong(SESSION_MS,0)
         return SessionView(if(p.getBoolean(SESSION_BG,true)) OpenUpdate.Session.BACKGROUND else OpenUpdate.Session.FOREGROUND,
-            if(since>0) (now-since).coerceAtLeast(0) else 0,p.getLong(WAIT_SINCE,0)>0,p.getInt(SESSION_CODE,0))
+            // Review fix: a session without a time (an old build's) counts as an old one, never as "fresh" for good.
+            if(since>0) (now-since).coerceAtLeast(0) else OpenUpdate.BACKGROUND_FRESH_MS,p.getLong(WAIT_SINCE,0)>0,p.getInt(SESSION_CODE,0))
     }
     /** What the open app decides now, from the files, the settings and the call state. Reads the disk: off the main thread. */
     internal fun openInput(c:Context):OpenUpdate.Input {
         val app=c.applicationContext;val r=ready(app);val code=r?.versionCode ?: available(app)?.versionCode ?: 0
         val v=sessionView(app)
         return OpenUpdate.Input(r!=null,r==null && fetchState(app).stage==Stage.DOWNLOADING,autoInstall(app),OpenUpdate.inCall(app),
-            OpenUpdate.declined(code),OpenUpdate.blocked(code),OpenUpdate.tried(code),v.kind,v.ageMs,v.answered)
+            OpenUpdate.declined(code),OpenUpdate.blocked(code),OpenUpdate.tried(code),v.kind,v.ageMs,v.answered,
+            OpenUpdate.backedOff(backoff(app),code,clock()))
     }
+    // ---- review fix: the open app gives way across openings ([OpenUpdate.backoffAfter]) ----
+    private const val OB_CODE="ob_code";private const val OB_BLOCKED="ob_blocked";private const val OB_DECLINED="ob_declined";private const val OB_UNTIL="ob_until_ms"
+    internal fun backoff(c:Context):OpenUpdate.Backoff? { val p=prefs(c);val code=p.getInt(OB_CODE,0)
+        return if(code==0) null else OpenUpdate.Backoff(code,p.getInt(OB_BLOCKED,0),p.getInt(OB_DECLINED,0),p.getLong(OB_UNTIL,0)) }
+    /** [event] ([OpenUpdate.EV_BLOCKED], EV_DECLINED, EV_LATER) happened to the open app's try of version [code] (0: the one here). */
+    internal fun noteBackoff(c:Context,code:Int,event:String) { runCatching {
+        val app=c.applicationContext;val v=code.takeIf { it!=0 } ?: ready(app)?.versionCode ?: available(app)?.versionCode ?: return
+        val n=OpenUpdate.backoffAfter(backoff(app),v,event,clock())
+        prefs(app).edit().putInt(OB_CODE,n.code).putInt(OB_BLOCKED,n.blocked).putInt(OB_DECLINED,n.declined).putLong(OB_UNTIL,n.untilMs).commit() } }
+    /** Review fix: one lock for every "look at the open session, give it up, commit a new one" (the open app, the button, the
+     * background install and [BlockRetry] could each see no session while another was still copying the file). Taken inside
+     * [lock] by [check], never the other way round. */
+    private val commitLock=Any()
     /** The open app starts the install of the version that is here (background = false, so Android's window comes at once).
      * Leaves the "opened by the app" mark first, counts it, and gives way to a background session (in [install]). */
     internal fun installFromOpen(a:Activity):Boolean {
@@ -445,10 +463,13 @@ internal object CallUpdate {
     /** [BlockRetry]: one more try of this app's own install while the app is behind the settings. Commits as a background session
      * (a needed tap goes to the usual notification, no window from behind) and returns its id, or 0 when it cannot be tried
      * (nothing here, installs from this app not allowed, the file does not match when [verify]). Gives way to an open session. */
-    internal fun commitRetry(c:Context,verify:Boolean):Int {
+    internal fun commitRetry(c:Context,verify:Boolean,wanted:()->Boolean={ true }):Int {
         val app=c.applicationContext
         if(Build.VERSION.SDK_INT<31 || ready(app)==null || !app.packageManager.canRequestPackageInstalls()) return 0
         if(verify && !verified(app)) return 0
+        return synchronized(commitLock) { if(!wanted()) 0 else commitRetryLocked(app) } // stopped meanwhile: no session left behind
+    }
+    private fun commitRetryLocked(app:Context):Int {
         sessionId(app).takeIf { it!=0 }?.let { old -> runCatching { app.packageManager.packageInstaller.abandonSession(old) };sessionDone(app,old) }
         prefs(app).edit().putLong(RELAUNCH,clock()).commit() // the new version opens again once it is on
         bump(app,PipelineSettingsKeys.UPDATE_BLOCK_RETRIES)
@@ -492,11 +513,13 @@ internal object CallUpdate {
         }
         val id=installer.createSession(params)
         try {
+            // Review fix: kept before the file is copied, so nothing else sees "no session" during the copy.
+            prefs(app).edit().putInt(SESSION,id).putInt(SESSION_CODE,ready(app)?.versionCode ?: 0).putLong(SESSION_MS,clock()).putBoolean(SESSION_BG,background).remove(WAIT_SINCE).commit()
             installer.openSession(id).use { s ->
                 s.openWrite("ieum",0,f.length()).use { out -> f.inputStream().use { it.copyTo(out) };s.fsync(out) }
                 val status=PendingIntent.getBroadcast(app,id,Intent(app,UpdateStatusReceiver::class.java).putExtra(EXTRA_BACKGROUND,background).putExtra(EXTRA_RETRY,retry),
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
-                prefs(app).edit().putInt(SESSION,id).putInt(SESSION_CODE,ready(app)?.versionCode ?: 0).putLong(SESSION_MS,clock()).putBoolean(SESSION_BG,background).remove(WAIT_SINCE).commit()
+                prefs(app).edit().putLong(SESSION_MS,clock()).commit() // its wait for the answer starts now
                 s.commit(status.intentSender)
             }
         } catch(e:Exception) { runCatching { installer.abandonSession(id) };sessionDone(app,id);throw e }
@@ -564,8 +587,10 @@ internal object CallUpdate {
             a.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:${a.packageName}")));return true
         }
         // A background session waiting for a tap (or stuck) gives way to this one, so there is still only one at a time.
-        sessionId(a).takeIf { it!=0 }?.let { old -> runCatching { a.packageManager.packageInstaller.abandonSession(old) };sessionDone(a,old) }
-        commit(a,f,background=false)
+        synchronized(commitLock) {
+            sessionId(a).takeIf { it!=0 }?.let { old -> runCatching { a.packageManager.packageInstaller.abandonSession(old) };sessionDone(a,old) }
+            commit(a,f,background=false)
+        }
         return true
     }
 
@@ -615,7 +640,7 @@ class UpdateStatusReceiver:BroadcastReceiver() {
         val background=intent.getBooleanExtra(CallUpdate.EXTRA_BACKGROUND,false)
         val retry=intent.getBooleanExtra(CallUpdate.EXTRA_RETRY,false)
         // v3.7: a try of [BlockRetry]: blocked again means the loop tries once more later; anything else ends the loop.
-        if(retry) BlockRetry.result(context.applicationContext,status,OpenUpdate.blockedBy(status,intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE),OpenUpdate.samsung()))
+        if(retry) BlockRetry.result(context.applicationContext,id,status,OpenUpdate.blockedBy(status,intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE),OpenUpdate.samsung()))
         val app=context.applicationContext
         val message=intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
         fun later(block:()->Unit) { val pending:PendingResult? =goAsync();Thread { try { runCatching(block) } finally { pending?.finish() } }.start() }
@@ -635,6 +660,7 @@ class UpdateStatusReceiver:BroadcastReceiver() {
                 val code=OpenUpdate.messageCode(message)
                 if(!background) { OpenUpdate.noteBlocked(CallUpdate.ready(app)?.versionCode ?: 0);CallUpdate.clearRelaunchMark(app) }
                 later { CallUpdate.sessionDone(app,id)
+                    if(!background) CallUpdate.noteBackoff(app,0,OpenUpdate.EV_BLOCKED)
                     // Kept as "blocked" with the message's code only, so the screens say "휴대폰이 설치를 막았어요".
                     CallUpdate.saveError(app,CallUpdate.errorText(PackageInstaller.STATUS_FAILURE_BLOCKED,code.ifEmpty { null }))
                     CallUpdate.noteSetting(app,PipelineSettingsKeys.UPDATE_BLOCK_STATUS,status)
@@ -645,7 +671,8 @@ class UpdateStatusReceiver:BroadcastReceiver() {
             }
             CallUpdate.isUserCancel(status) -> {
                 // v3.7: closed after the open app started it: not again while the app stays open (no loop of windows).
-                if(!background) { OpenUpdate.noteDeclined(CallUpdate.ready(app)?.versionCode ?: 0);CallUpdate.clearRelaunchMark(app) }
+                if(!background) { OpenUpdate.noteDeclined(CallUpdate.ready(app)?.versionCode ?: 0);CallUpdate.clearRelaunchMark(app)
+                    later { CallUpdate.noteBackoff(app,0,OpenUpdate.EV_DECLINED) } }
                 CallUpdate.sessionDone(app,id)
             }
             else -> {

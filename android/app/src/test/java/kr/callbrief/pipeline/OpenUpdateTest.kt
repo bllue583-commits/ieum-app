@@ -114,14 +114,14 @@ class OpenUpdateTest {
             OpenUpdate.retryStep(1_000L,now,last,pending,front,later,inCall,taken)
         assertEquals(OpenUpdate.RetryStep(OpenUpdate.RetryAct.TRY,"try"),st(1_000L))
         assertEquals("one session at a time",OpenUpdate.RetryAct.WAIT,st(10_000L,last=2_000L,pending=true).act)
-        assertEquals("interval",st(5_000L,last=1_000L).reason)
-        assertEquals(OpenUpdate.RetryAct.TRY,st(6_000L,last=1_000L).act)
+        assertEquals("interval",st(8_000L,last=1_000L).reason)
+        assertEquals(OpenUpdate.RetryAct.TRY,st(9_000L,last=1_000L).act)
         assertEquals("timeout",st(1_000L+OpenUpdate.RETRY_FOR_MS).reason)
         assertEquals("timeout before waiting","timeout",st(1_000L+OpenUpdate.RETRY_FOR_MS,pending=true).reason)
         assertEquals("back in front: onResume goes on","front",st(2_000L,front=true).reason)
         assertEquals("later",st(2_000L,later=true).reason);assertEquals("inCall",st(2_000L,inCall=true).reason)
         assertEquals("taken",st(2_000L,taken=true).reason)
-        assertEquals(5_000L,OpenUpdate.RETRY_EVERY_MS);assertEquals(120_000L,OpenUpdate.RETRY_FOR_MS)
+        assertEquals(8_000L,OpenUpdate.RETRY_EVERY_MS);assertEquals(120_000L,OpenUpdate.RETRY_FOR_MS)
     }
     @Test fun theRetryBelongsToTheOpeningWithSettingsOpened() {
         OpenUpdate.reset();OpenUpdate.opened()
@@ -172,5 +172,32 @@ class OpenUpdateTest {
         val both=PhoneStatus.build(base.copy(v34=PhoneStatus.v34(org.json.JSONObject().put(PipelineSettingsKeys.UPDATE_BG,"blocked").put(PipelineSettingsKeys.UPDATE_ERROR_CODE,"HTTP_404")))).getJSONObject("update")
         assertEquals("HTTP_404",both.getString("error"))
         assertTrue("on by default",PhoneStatus.v34(org.json.JSONObject()).autoInstall==true)
+    }
+
+    // ---- review fix: giving way across openings ----
+    @Test fun theOpenAppGivesWayForADayAfterLaterOrTwoBlocks() {
+        val now=1_000_000_000L
+        assertEquals(OpenUpdate.Decision(false,false,"backoff"),OpenUpdate.decide(base.copy(backoff=true)))
+        assertEquals("the block of this opening still shows its sheet","blocked",OpenUpdate.decide(base.copy(backoff=true,blocked=true)).reason)
+        assertEquals("inCall",OpenUpdate.decide(base.copy(backoff=true,inCall=true)).reason)
+        // [나중에]: at once, for a day; a new version starts from nothing.
+        val later=OpenUpdate.backoffAfter(null,1051,OpenUpdate.EV_LATER,now)
+        assertTrue(OpenUpdate.backedOff(later,1051,now+1));assertTrue(OpenUpdate.backedOff(later,1051,now+OpenUpdate.BACKOFF_MS-1))
+        assertFalse(OpenUpdate.backedOff(later,1051,now+OpenUpdate.BACKOFF_MS));assertFalse(OpenUpdate.backedOff(later,1052,now+1))
+        assertFalse("a clock set back ends it",OpenUpdate.backedOff(later,1051,now-OpenUpdate.BACKOFF_MS))
+        // Blocked once: the next opening still tries; twice: a day off, and the count starts again after it.
+        val one=OpenUpdate.backoffAfter(null,1051,OpenUpdate.EV_BLOCKED,now)
+        assertFalse(OpenUpdate.backedOff(one,1051,now+1));assertEquals(1,one.blocked)
+        val two=OpenUpdate.backoffAfter(one,1051,OpenUpdate.EV_BLOCKED,now+60_000)
+        assertTrue(OpenUpdate.backedOff(two,1051,now+61_000));assertEquals(0,two.blocked)
+        // The install window closed twice: the same. Another version's counts do not carry over.
+        val closed=OpenUpdate.backoffAfter(OpenUpdate.backoffAfter(null,1051,OpenUpdate.EV_DECLINED,now),1051,OpenUpdate.EV_DECLINED,now)
+        assertTrue(OpenUpdate.backedOff(closed,1051,now+1))
+        assertEquals(1,OpenUpdate.backoffAfter(one,1052,OpenUpdate.EV_BLOCKED,now).blocked)
+        assertFalse(OpenUpdate.backedOff(null,1051,now));assertFalse(OpenUpdate.backedOff(later,0,now+1))
+    }
+    @Test fun theRetryLoopStopsAfterItsMostTries() {
+        assertEquals("max",OpenUpdate.retryStep(1_000L,60_000L,10_000L,false,false,false,false,false,OpenUpdate.RETRY_MAX).reason)
+        assertEquals("try",OpenUpdate.retryStep(1_000L,60_000L,10_000L,false,false,false,false,false,OpenUpdate.RETRY_MAX-1).reason)
     }
 }

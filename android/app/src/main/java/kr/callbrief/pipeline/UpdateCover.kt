@@ -52,6 +52,7 @@ internal class UpdateCover(private val a:MainActivity) {
     fun resume(look:Boolean=true) {
         OpenUpdate.front=true;OpenUpdate.readyListener={ consider() }
         BlockRetry.stop() // back in front: the onResume path goes on, never two tries at once
+        BlockRetry.clearProgress(a)
         OpenUpdate.clearDone(a)
         if(!callbackOn) callbackOn=runCatching { a.packageManager.packageInstaller.registerSessionCallback(progressCallback,main) }.isSuccess
         if(look) consider()
@@ -78,7 +79,8 @@ internal class UpdateCover(private val a:MainActivity) {
                 Triple(d,noAnswer,code)
             }.getOrNull() }
             busy=false
-            if(r==null || !resumed()) return@launch
+            if(r==null) { hide();return@launch } // review fix: no decision, no cover left up
+            if(!resumed()) return@launch
             val (d,noAnswer,code)=r
             when {
                 noAnswer -> { hide();askNoAnswer(code) }
@@ -121,7 +123,7 @@ internal class UpdateCover(private val a:MainActivity) {
         if(cover!=null) return
         val host=a.findViewById<FrameLayout>(android.R.id.content) ?: return
         val side=CallUi.dp(a,28)
-        val box=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;gravity=Gravity.CENTER_HORIZONTAL;setPadding(side,0,side,0) }
+        val box=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;gravity=Gravity.CENTER;setPadding(side,0,side,0) }
         val pb=ProgressBar(a,null,android.R.attr.progressBarStyleHorizontal).apply { isIndeterminate=true;max=100;tag="update_cover_bar" }
         box.addView(pb,LinearLayout.LayoutParams(-1,CallUi.dp(a,8)).apply { bottomMargin=CallUi.dp(a,20) })
         val t=CallUi.text(a,OpenUpdate.UPDATING_WORDS,CallUi.TITLE,true).apply { gravity=Gravity.CENTER;tag="update_cover_title" }
@@ -132,7 +134,8 @@ internal class UpdateCover(private val a:MainActivity) {
         val frame=FrameLayout(a).apply {
             tag="update_cover";setBackgroundColor(CallUi.PAGE);isClickable=true;isFocusable=true // the page below takes no touch
             importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_YES
-            addView(box,FrameLayout.LayoutParams(-1,-2,Gravity.CENTER))
+            // Review fix: scrolls, so [닫고 계속 쓰기] is reachable with very large letters.
+            addView(android.widget.ScrollView(a).apply { isFillViewport=true;addView(box,FrameLayout.LayoutParams(-1,-2)) },FrameLayout.LayoutParams(-1,-1))
         }
         t.accessibilityLiveRegion=View.ACCESSIBILITY_LIVE_REGION_POLITE
         host.addView(frame,FrameLayout.LayoutParams(-1,-1))
@@ -158,10 +161,12 @@ internal class UpdateCover(private val a:MainActivity) {
                     OpenUpdate.noteSettingsOpened()
                     Thread { CallUpdate.bump(a,PipelineSettingsKeys.UPDATE_BLOCK_OPEN) }.start()
                     openSecuritySettings() },
-                secondary="나중에",onSecondary={ OpenUpdate.noteLater() })
-            else CallUi.sheetDialog(a,OpenUpdate.OTHER_BLOCKED_TITLE,OpenUpdate.OTHER_BLOCKED_WORDS,secondary="닫기",onSecondary={ OpenUpdate.noteLater() })
-        sheet?.setOnCancelListener { OpenUpdate.noteLater() } // back or a touch outside: the same as [나중에]
+                secondary="나중에",onSecondary={ later() })
+            else CallUi.sheetDialog(a,OpenUpdate.OTHER_BLOCKED_TITLE,OpenUpdate.OTHER_BLOCKED_WORDS,secondary="닫기",onSecondary={ later() })
+        sheet?.setOnCancelListener { later() } // back or a touch outside: the same as [나중에]
     }
+    /** [나중에]: not again in this opening, and (review fix) not by itself for a day; the banner's button stays. */
+    private fun later() { OpenUpdate.noteLater();Thread { CallUpdate.noteBackoff(a,0,OpenUpdate.EV_LATER) }.start() }
     /** The open app's install got no answer at all for [OpenUpdate.FOREGROUND_WAIT_MS]: once per version on this screen. */
     private fun askNoAnswer(code:Int) {
         if(noAnswerCode==code || sheet?.isShowing==true) return

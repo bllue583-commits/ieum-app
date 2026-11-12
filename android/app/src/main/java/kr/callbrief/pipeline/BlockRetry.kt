@@ -30,7 +30,9 @@ internal object BlockRetry {
     @Volatile private var taken=false
     @Volatile private var verifiedOnce=false
     @Volatile private var moved=false
-    @Volatile internal var clock:()->Long={ System.currentTimeMillis() }
+    @Volatile private var tries=0
+    /** Review fix: the time since boot, so a clock set back does not stretch the two minutes. */
+    @Volatile internal var clock:()->Long={ android.os.SystemClock.elapsedRealtime() }
     /** Where a step runs: the loop's own thread (the APK is copied into the session there). Tests run it in place. */
     @Volatile internal var runOn:(Runnable)->Unit={ worker.execute(it) }
     private val step=Runnable { runOn(Runnable { runCatching { tick() }.onFailure { finish() } }) }
@@ -38,7 +40,7 @@ internal object BlockRetry {
         override fun onCreated(id:Int) {};override fun onBadgingChanged(id:Int) {};override fun onActiveChanged(id:Int,active:Boolean) {}
         override fun onProgressChanged(id:Int,p:Float) {
             val c=app ?: return
-            if(id==0 || id!=pendingId) return
+            if(id==0 || id!=pendingId || p<0.8f) return // review fix: under 0.8 it is only this app writing the file
             if(!moved) { moved=true;Thread { CallUpdate.noteSetting(c,PipelineSettingsKeys.UPDATE_AUTO_BACK,"retry") }.start() }
             showProgress(c,OpenUpdate.percentOf(p))
         }
@@ -51,7 +53,7 @@ internal object BlockRetry {
         if(running) return
         val a=c.applicationContext;app=a
         main.removeCallbacks(step);main=Handler(Looper.getMainLooper())
-        running=true;startMs=clock();lastTryMs=0;pendingId=0;taken=false;verifiedOnce=false;moved=false
+        running=true;startMs=clock();lastTryMs=0;pendingId=0;taken=false;verifiedOnce=false;moved=false;tries=0
         main.post { if(!callbackOn) callbackOn=runCatching { a.packageManager.packageInstaller.registerSessionCallback(progress,main) }.isSuccess }
         main.post(step)
     }
@@ -61,24 +63,32 @@ internal object BlockRetry {
     private fun tick() {
         val c=app ?: return
         if(!running) return
-        val pending=pendingId!=0 && CallUpdate.sessionId(c)==pendingId
-        val s=OpenUpdate.retryStep(startMs,clock(),lastTryMs,pending,OpenUpdate.front,OpenUpdate.laterThisOpen(),OpenUpdate.inCall(c),taken)
+        // Review fix: "pending" is "no answer yet", not "the system still knows the session". A try that moves on is taken; one
+        // without any answer for RETRY_ANSWER_MS is given up before the next.
+        if(pendingId!=0 && clock()-lastTryMs>=OpenUpdate.RETRY_ANSWER_MS) {
+            if(moved) taken=true
+            else { val old=pendingId;pendingId=0;lastTryMs=clock()
+                runCatching { c.packageManager.packageInstaller.abandonSession(old) };CallUpdate.sessionDone(c,old) }
+        }
+        val s=OpenUpdate.retryStep(startMs,clock(),lastTryMs,pendingId!=0,OpenUpdate.front,OpenUpdate.laterThisOpen(),OpenUpdate.inCall(c),taken,tries)
         when(s.act) {
-            OpenUpdate.RetryAct.STOP -> { finish();return }
+            OpenUpdate.RetryAct.STOP -> { if(s.reason=="timeout" || s.reason=="max") clearProgress(c);finish();return }
             OpenUpdate.RetryAct.WAIT -> {}
             OpenUpdate.RetryAct.TRY -> {
-                val id=runCatching { CallUpdate.commitRetry(c,verify=!verifiedOnce) }.getOrDefault(0)
+                val id=runCatching { CallUpdate.commitRetry(c,verify=!verifiedOnce) { running && !OpenUpdate.front } }.getOrDefault(0)
                 verifiedOnce=true
                 if(id==0) { finish();return }
-                pendingId=id;lastTryMs=clock();moved=false
+                pendingId=id;lastTryMs=clock();moved=false;tries++
             }
         }
         if(running) main.postDelayed(step,1_000L)
     }
     /** The answer to a try (UpdateStatusReceiver). Blocked: the next try comes after [OpenUpdate.RETRY_EVERY_MS]. Anything else
      * (it installs, it wants a tap, another failure) ends the loop; a tap goes to the usual notification. */
-    fun result(c:Context,status:Int,blocked:Boolean) {
+    fun result(c:Context,sessionId:Int,status:Int,blocked:Boolean) {
         if(!running) return
+        // Review fix: only the answer to the try that is out now counts (a late answer to an earlier one gave up the new session).
+        if(sessionId!=0 && sessionId!=pendingId) return
         val id=pendingId;pendingId=0;lastTryMs=clock()
         // A failed try's session is given up for sure before the next one (one session at a time).
         if(status!=PackageInstaller.STATUS_PENDING_USER_ACTION && status!=PackageInstaller.STATUS_SUCCESS && id!=0)
@@ -113,5 +123,5 @@ internal object BlockRetry {
     }
     internal fun clearProgress(c:Context) { runCatching { c.getSystemService(NotificationManager::class.java)?.cancel(TAG,ID) } }
     /** For tests. */
-    internal fun resetForTest() { running=false;main.removeCallbacks(step);pendingId=0;taken=false;app=null;clock={ System.currentTimeMillis() };runOn={ worker.execute(it) } }
+    internal fun resetForTest() { running=false;main.removeCallbacks(step);pendingId=0;taken=false;tries=0;app=null;clock={ android.os.SystemClock.elapsedRealtime() };runOn={ worker.execute(it) } }
 }
