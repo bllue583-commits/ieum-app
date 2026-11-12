@@ -75,7 +75,12 @@ internal object PhoneStatus {
         /** r15-4 (M2): `kakao.on`, the settings switch [카카오톡으로 받기] ([PipelineSettingsKeys.MORNING_KAKAO], default on). */
         val kakaoOn:Boolean=true,
         /** v3.7 (user 11/12): `kakao.texts` (messages of the last report) and `kakao.plainRetried` ([KakaoReport.PLAIN_RETRIED]). */
-        val kakaoTexts:Long=0,val kakaoPlainRetried:Long=0)
+        val kakaoTexts:Long=0,val kakaoPlainRetried:Long=0,
+        /** r18 (user 11/13): `kakao.style` ("list", "text", "picture"; null before the first report), `kakao.cards` (list bubbles
+         * of the last report), `kakao.listFallback` (reports that went as texts because the list did not go), `kakao.web` (the
+         * last report had [웹으로 보기]) and `kakao.tags` (the last report's to-dos by tag; numbers only). */
+        val kakaoStyle:String?=null,val kakaoCards:Long=0,val kakaoListFallback:Long=0,val kakaoWeb:Boolean=false,
+        val kakaoTags:Map<String,Int> =emptyMap())
     /** v3.4 (DESIGN_V4 4.1-5, 4.3-4, 4.3-5, 4.3-8): [updateError] = [PipelineSettingsKeys.UPDATE_ERROR_CODE] (a code, heartbeat
      * `update.error`); [recordTime] = [PipelineSettingsKeys.RECORD_TIME] ({bucket: count}, `recordTime.fileVsRecordMin`), through
      * [counts]. v3.7 (DESIGN_V7 3.3): `messages.mailError` left with the mail intake. */
@@ -225,7 +230,10 @@ internal object PhoneStatus {
         o.put("kakao",JSONObject().put("on",v.kakaoOn).put("linked",v.kakaoLinked).put("sent",v.kakaoSent).put("failed",v.kakaoFailed)
             .put("lastSentMs",v.kakaoLastSentMs ?: JSONObject.NULL)
             .put("error",v.kakaoError?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
-            .put("texts",v.kakaoTexts).put("plainRetried",v.kakaoPlainRetried))
+            .put("texts",v.kakaoTexts).put("plainRetried",v.kakaoPlainRetried)
+            .put("style",v.kakaoStyle?.takeIf { it in KAKAO_STYLES } ?: JSONObject.NULL).put("cards",v.kakaoCards)
+            .put("listFallback",v.kakaoListFallback).put("web",v.kakaoWeb)
+            .put("tags",JSONObject().apply { kr.callbrief.pipeline.report.KakaoReport.TAGS.forEach { put(it,(v.kakaoTags[it] ?: 0).coerceAtLeast(0)) } }))
         o.put("report",JSONObject().put("day",v.reportDay?.takeIf { Regex("""\d{4}-\d{2}-\d{2}""").matches(it) } ?: JSONObject.NULL)
             .put("source",v.reportSource?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL))
     }
@@ -402,7 +410,12 @@ internal object PhoneStatus {
         s.optString(PipelineSettingsKeys.REPORT_DAY).takeIf { it.isNotBlank() },
         s.optString(PipelineSettingsKeys.REPORT_SOURCE).takeIf { it.isNotBlank() },
         s.optBoolean(PipelineSettingsKeys.MORNING_KAKAO,true),
-        s.optLong(kr.callbrief.pipeline.report.KakaoReport.LAST_TEXTS,0),s.optLong(kr.callbrief.pipeline.report.KakaoReport.PLAIN_RETRIED,0))
+        s.optLong(kr.callbrief.pipeline.report.KakaoReport.LAST_TEXTS,0),s.optLong(kr.callbrief.pipeline.report.KakaoReport.PLAIN_RETRIED,0),
+        s.optString(kr.callbrief.pipeline.report.KakaoReport.LAST_STYLE).takeIf { it.isNotBlank() },
+        s.optLong(kr.callbrief.pipeline.report.KakaoReport.LAST_CARDS,0),s.optLong(kr.callbrief.pipeline.report.KakaoReport.LIST_FALLBACK,0),
+        s.optBoolean(kr.callbrief.pipeline.report.KakaoReport.LAST_WEB,false),
+        jsonOf(s,kr.callbrief.pipeline.report.KakaoReport.LAST_TAGS)?.let { t -> kr.callbrief.pipeline.report.KakaoReport.TAGS.associateWith { t.optInt(it,0) } } ?: emptyMap())
+    private val KAKAO_STYLES=setOf("list","text","picture")
     private fun jsonOf(s:JSONObject,key:String):JSONObject? = when(val v=s.opt(key)) {
         is JSONObject -> v
         is String -> runCatching { JSONObject(v) }.getOrNull()

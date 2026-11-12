@@ -12,13 +12,17 @@ Usage: python3 tools/report_check.py report/2026-11-07.json [more files]
 import json, os, re, sys
 
 LINE_MAX = 60
-LIMITS = {"yesterday": 8, "today": 8, "inProgress": 3, "check": 3, "late": 5}
+LIMITS = {"yesterday": 8, "today": 10, "inProgress": 3, "check": 3, "late": 5}
 HEAD_KEYS = ("calls", "newChecks", "todayChecks", "issues")
 TOP_KEYS = ("day", "generatedMs", "tidyRev", "head", "yesterday", "today", "inProgress", "check")
 # v3.7 (DESIGN_V7 3.2 M3, M4; tidy.md v8): head.pendingCalls and late[]. Optional, so a v7 report (before the routine moves to
 # v8 on the release day) still passes; when present they are checked like the rest.
 HEAD_OPTIONAL = ("pendingCalls",)
 TOP_OPTIONAL = ("late",)
+# r18 (tidy.md v9, user 11/13): today[].tag, one of five in this order (the KakaoTalk list's thumbnails). Optional, so a v8
+# report (before the routine moves to v9 on the release day) still passes; the phone reads a missing tag as confirm or request.
+TAGS = ("important", "confirm", "request", "regular", "optional")
+ITEM_OPTIONAL = {"today": {"tag": str}}
 ITEM_KEYS = {
     "yesterday": {"who": str, "what": str},
     "today": {"id": str, "what": str, "who": str, "since": str, "status": str, "check": bool},
@@ -163,14 +167,19 @@ def check(report, file_day=None):
                 elif not isinstance(item[k], t):
                     out.append(f"{p}.{k}: {'참/거짓' if t is bool else '문자열'}이 아님")
                     ok = False
+            optional = ITEM_OPTIONAL.get(section, {})
             for k in item:
-                if k not in shape:
+                if k not in shape and k not in optional:
                     out.append(f"{p}.{k}: 모르는 키")
+            if section == "today" and "tag" in item:
+                if item["tag"] not in TAGS:
+                    out.append(f"{p}.tag: 분류 부호가 아님({', '.join(TAGS)})")
+                    ok = False
             for k in REQUIRED_TEXT[section]:
                 if isinstance(item.get(k), str) and not item[k].strip():
                     out.append(f"{p}.{k}: 비어 있음")
             for k, v in item.items():
-                if isinstance(v, str) and k != "id":
+                if isinstance(v, str) and k not in ("id", "tag"):
                     out += text_problems(f"{p}.{k}", v, style=k != "who")
             if section == "today" and isinstance(item.get("id"), str) and has_phone(item["id"]):
                 out.append(f"{p}.id: 전화번호로 보이는 숫자")
@@ -180,6 +189,11 @@ def check(report, file_day=None):
                 n = len(line_of(section, item))
                 if n > LINE_MAX:
                     out.append(f"{p}: 한 줄 {n}자 (최대 {LINE_MAX}자)")
+    today = report.get("today")
+    if isinstance(today, list):
+        ranks = [TAGS.index(t["tag"]) for t in today if isinstance(t, dict) and t.get("tag") in TAGS]
+        if any(a > b for a, b in zip(ranks, ranks[1:])):
+            out.append("today: tag 순서가 아님(" + ", ".join(TAGS) + ")")
     if isinstance(head, dict) and isinstance(report.get("today"), list) and is_int(head.get("todayChecks")) \
             and head["todayChecks"] != len(report["today"]):
         out.append("head.todayChecks: today 줄 수와 다름")

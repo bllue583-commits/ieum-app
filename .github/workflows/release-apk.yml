@@ -90,6 +90,10 @@ jobs:
           IEUM_SIGNING_SEED: ${{ secrets.IEUM_SIGNING_SEED }}
           # v3.5: Kakao native app key; empty = the KakaoTalk morning report hides itself (the build still works).
           IEUM_KAKAO_APP_KEY: ${{ secrets.IEUM_KAKAO_APP_KEY }}
+          # r18: the user's own 5-item KakaoTalk list template and the web view's address (repository variables, not secrets;
+          # empty = Kakao's default list of 3 and no [웹으로 보기]). docs/OPERATIONS.md says how to make both.
+          IEUM_KAKAO_LIST_TEMPLATE_ID: ${{ vars.IEUM_KAKAO_LIST_TEMPLATE_ID }}
+          IEUM_KAKAO_WEB_BASE: ${{ vars.IEUM_KAKAO_WEB_BASE }}
         run: |
           [ -n "$IEUM_INBOX_TOKEN" ] || { echo "::error title=release::IEUM_INBOX_TOKEN secret is not set"; exit 1; }
           [ -n "$IEUM_KAKAO_APP_KEY" ] || echo "::warning title=release::IEUM_KAKAO_APP_KEY is not set: KakaoTalk morning report hidden in this build"

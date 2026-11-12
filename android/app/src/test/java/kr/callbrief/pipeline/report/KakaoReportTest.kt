@@ -64,7 +64,10 @@ class KakaoReportTest:ProtectedTextHostTestBase() {
         KakaoReport.appKey={ kr.callbrief.BuildConfig.KAKAO_APP_KEY };KakaoReport.pause={ kotlinx.coroutines.delay(it) }
         KakaoReport.clock={ System.currentTimeMillis() };ReportFetch.clock={ System.currentTimeMillis() }
         KakaoReport.senderFactory=null;ReportFetch.sourceFactory=null;ReportFetch.scheduler=null;KakaoReport.linker=null;KakaoReport.coverageOf=null
+        KakaoReport.listTemplateId={ kr.callbrief.BuildConfig.KAKAO_LIST_TEMPLATE_ID };KakaoReport.webBase={ kr.callbrief.BuildConfig.KAKAO_WEB_BASE }
+        KakaoReport.tagPng=realTagPng
     }
+    private val realTagPng=KakaoReport.tagPng
     private val plans=mutableListOf<ReportFetch.Plan>()
     private fun link(on:Boolean)=SecureSettings(app).update { it.put(PipelineSettingsKeys.KAKAO_LINKED,on) }
     private fun settings()=SecureSettings(app).snapshot()
@@ -502,7 +505,9 @@ class KakaoReportTest:ProtectedTextHostTestBase() {
     }
     @Test fun byDefaultTheMorningReportGoesAsTextsOnly() = runBlocking {
         SecureSettings(app).update { it.remove(KakaoReport.PICTURE) }
-        assertNull(KakaoReport.send(app,eight(),KakaoReport.SOURCE_ROUTINE))
+        // r18: one to-do only (two or more go as the list bubbles, below).
+        val oneToDo=eight().apply { put("today",JSONArray().put(getJSONArray("today").getJSONObject(0)));getJSONObject("head").put("todayChecks",1) }
+        assertNull(KakaoReport.send(app,oneToDo,KakaoReport.SOURCE_ROUTINE))
         assertEquals("no picture goes up",0,fake.uploads)
         assertTrue(fake.sent.size in 2..3);assertTrue(fake.sent.all { it is KakaoReport.Message.Text })
         assertEquals(KakaoReport.TASKS_LINK,fake.sent.last().link);assertTrue(fake.sent.dropLast(1).all { it.link==KakaoReport.NO_LINK })
@@ -510,5 +515,248 @@ class KakaoReportTest:ProtectedTextHostTestBase() {
         assertEquals(1L,s.getLong(PipelineSettingsKeys.KAKAO_SENT_COUNT));assertEquals(fake.sent.size.toLong(),s.getLong(KakaoReport.LAST_TEXTS))
         val k=PhoneStatus.build(PhoneStatus.Input(1_000L,"v3.7",1052,0,null,5,6,"READY","","",12,v35=PhoneStatus.v35(s))).getJSONObject("kakao")
         assertEquals(fake.sent.size.toLong(),k.getLong("texts"));assertEquals(0L,k.getLong("plainRetried"))
+        assertEquals("text",k.getString("style"));assertEquals(0L,k.getLong("cards"))
+    }
+
+    // ---- r18 (user 11/13): the to-dos as list bubbles with a tag's thumbnail ----
+    private fun tg(what:String,tag:String?,check:Boolean=false,since:String="어제 요청",who:String="△△철강")=
+        t(what,who,since).put("check",check).apply { if(tag!=null) put("tag",tag) }
+    private fun tagged(n:Int,todayChecks:Int=n)=report((1..3).map { y("업체$it 담당자","자재 입고 일정 확인") },
+        (1..n).map { tg("일 $it",KakaoReport.TAGS[(n-it)%5]) },listOf("타설 일정 조정"),listOf("13층/30층 중 어느 쪽인지" to "△△철강"))
+        .apply { getJSONObject("head").put("todayChecks",todayChecks) }
+    /** Records the list bubbles and texts; [failCard] decides a bubble's answer (null = it goes), [uploadFails] the thumbnails. */
+    private class ListSender(var failCard:(KakaoReport.Message.ListCard,Int)->String?={ _,_ -> null },var uploadFails:Boolean=false):KakaoReport.Sender {
+        val sent=mutableListOf<KakaoReport.Message>();val tried=mutableListOf<KakaoReport.Message>();var uploads=0
+        override suspend fun uploadImage(png:ByteArray):String? { uploads++;return if(uploadFails) throw KakaoReport.Failure("UPLOAD_API_Unknown") else "https://k.kakaocdn.net/img/t$uploads.png" }
+        override suspend fun send(message:KakaoReport.Message,imageUrl:String?):String? {
+            tried+=message
+            if(message is KakaoReport.Message.ListCard) { val e=failCard(message,tried.count { it is KakaoReport.Message.ListCard });if(e!=null) return e }
+            sent+=message;return null
+        }
+    }
+    private fun listOn(sender:ListSender):ListSender { SecureSettings(app).update { it.remove(KakaoReport.PICTURE) };KakaoReport.senderFactory={ sender }
+        KakaoReport.tagPng={ _,tag -> tag.toByteArray() };return sender }
+    private fun cards(l:List<KakaoReport.Message>)=l.filterIsInstance<KakaoReport.Message.ListCard>()
+
+    @Test fun theToDosAreSortedByTagAndAMissingTagIsConfirmOrRequest() {
+        val r=KakaoReport.read(report(today=listOf(tg("선택 일","optional"),tg("요청 일",null),tg("확인 일",null,check=true),tg("옛 긴급","urgent"),
+            tg("중요 일","important"),tg("정기 일","regular"),tg("또 중요","important"))),false)
+        assertEquals(listOf("중요 일","또 중요","확인 일","요청 일","옛 긴급","정기 일","선택 일"),r.items.map { it.title })
+        assertEquals(listOf("important","important","confirm","request","request","regular","optional"),r.items.map { it.tag })
+        assertEquals("요청일, then who","어제 요청 · △△철강",r.items[0].desc)
+        assertEquals(listOf("important","confirm","request","regular","optional"),KakaoReport.TAGS)
+        // Ten to-dos are read now (eight before), and the words are masked like every bubble.
+        assertEquals(10,KakaoReport.read(tagged(12),false).items.size)
+        val masked=KakaoReport.read(report(today=listOf(tg("010-1234-5678로 회신","request",who="○○전기 02-123-4567"),tg("서류","request"))),false).items
+        assertFalse(masked.joinToString { it.title+it.desc }.let { phone.containsMatchIn(it) })
+    }
+    @Test fun theSplitTableIsTheDesign() {
+        val custom=mapOf(0 to listOf(),1 to listOf(),2 to listOf(2),3 to listOf(3),4 to listOf(2,2),5 to listOf(5),6 to listOf(3,3),
+            7 to listOf(5,2),8 to listOf(5,3),9 to listOf(5,3),10 to listOf(5,5))
+        val plain=mapOf(0 to listOf(),1 to listOf(),2 to listOf(2),3 to listOf(3),4 to listOf(2,2),5 to listOf(3,2),6 to listOf(3,3),
+            7 to listOf(3,3),8 to listOf(3,3),9 to listOf(3,3),10 to listOf(3,3))
+        custom.forEach { (n,want) -> assertEquals("custom $n",want,KakaoReport.split(n,true)) }
+        plain.forEach { (n,want) -> assertEquals("plain $n",want,KakaoReport.split(n,false)) }
+    }
+    @Test fun theHeadsSayTheDayTheCountAndWhatIsLeftOut() {
+        val plain=KakaoReport.compose(tagged(8),picture=false).list
+        assertEquals(2,plain.size);assertEquals(listOf(3,3),plain.map { it.items.size })
+        assertEquals("11/7(토) 챙길 일 8개",plain[0].header);assertEquals("11/7(토) 챙길 일 이어서 · 외 2개",plain[1].header)
+        assertTrue(plain.all { it.templateId==0L && it.webUrl==null && it.link==KakaoReport.TASKS_LINK })
+        assertEquals("important first",listOf("important","important","confirm"),plain[0].items.map { it.tag })
+        val nine=KakaoReport.compose(tagged(9),picture=false,templateId=77L,webBase="https://example.github.io/ieum-app/report/").list
+        assertEquals(listOf(5,3),nine.map { it.items.size });assertEquals(listOf(77L,0L),nine.map { it.templateId })
+        assertEquals("11/7(토) 챙길 일 이어서 · 외 1개",nine[1].header)
+        val ten=KakaoReport.compose(tagged(10),picture=false,templateId=77L,webBase="https://example.github.io/ieum-app/report/").list
+        assertEquals("11/7(토) 챙길 일 이어서",ten[1].header);assertEquals(listOf(77L,77L),ten.map { it.templateId })
+        // The head counts head.todayChecks (the phone's report counts every open to-do).
+        assertEquals("11/7(토) 챙길 일 30개",KakaoReport.compose(tagged(6,todayChecks=30),picture=false).list[0].header)
+        assertEquals("11/7(토) 챙길 일 이어서 · 외 24개",KakaoReport.compose(tagged(6,todayChecks=30),picture=false).list[1].header)
+        val two=KakaoReport.compose(tagged(2),picture=false).list
+        assertEquals(1,two.size);assertEquals("11/7(토) 챙길 일 2개",two[0].header)
+        assertTrue("one to-do: no list",KakaoReport.compose(one,picture=false).list.isEmpty())
+        assertTrue("none: no list",KakaoReport.compose(report(calls=0),picture=false).list.isEmpty())
+    }
+    @Test fun twoOrMoreToDosGoAsTheListAndTheHeartbeatSaysSo() = runBlocking {
+        val sender=listOn(ListSender())
+        assertNull(KakaoReport.send(app,tagged(8),KakaoReport.SOURCE_ROUTINE))
+        val c=cards(sender.sent)
+        assertEquals("two bubbles and nothing else",2,sender.sent.size);assertEquals(2,c.size)
+        assertTrue("every item has its thumbnail",c.flatMap { it.items }.all { it.imageUrl?.startsWith("https://")==true })
+        val s=settings()
+        assertEquals(day.toString(),s.getString(PipelineSettingsKeys.REPORT_DAY));assertEquals(1L,s.getLong(PipelineSettingsKeys.KAKAO_SENT_COUNT))
+        val k=PhoneStatus.build(PhoneStatus.Input(1_000L,"v3.7",1054,0,null,5,6,"READY","","",12,v35=PhoneStatus.v35(s))).getJSONObject("kakao")
+        assertEquals("list",k.getString("style"));assertEquals(2L,k.getLong("cards"));assertEquals(0L,k.getLong("listFallback"));assertFalse(k.getBoolean("web"))
+        val tags=k.getJSONObject("tags")
+        assertEquals(KakaoReport.TAGS,tags.keys().asSequence().toList())
+        assertEquals(8,KakaoReport.TAGS.sumOf { tags.getInt(it) });assertEquals(2,tags.getInt("important"))
+        assertFalse("numbers and codes only",Regex("[가-힣]").containsMatchIn(k.toString()))
+        // The same day never goes twice.
+        assertEquals(KakaoReport.ALREADY_SENT,KakaoReport.send(app,tagged(8),KakaoReport.SOURCE_ROUTINE));assertEquals(2,sender.sent.size)
+    }
+    @Test fun oneToDoGoesAsTheTexts() = runBlocking {
+        val sender=listOn(ListSender())
+        assertNull(KakaoReport.send(app,one,KakaoReport.SOURCE_ROUTINE))
+        assertTrue(sender.sent.isNotEmpty() && sender.sent.all { it is KakaoReport.Message.Text })
+        assertEquals("text",settings().getString(KakaoReport.LAST_STYLE));assertEquals(0,sender.uploads)
+    }
+    @Test fun aListThatDoesNotGoIsSentAsTheTextsInstead() = runBlocking {
+        val sender=listOn(ListSender(failCard={ _,_ -> "SEND_API_IllegalParams" }))
+        assertNull(KakaoReport.send(app,tagged(8),KakaoReport.SOURCE_ROUTINE))
+        assertTrue("no bubble went",cards(sender.sent).isEmpty())
+        assertEquals("the first bubble tried once (no web button to drop)",1,cards(sender.tried).size)
+        val texts=sender.sent.filterIsInstance<KakaoReport.Message.Text>()
+        assertEquals(KakaoReport.compose(tagged(8),picture=false).chat.map { it.text },texts.map { it.text })
+        val s=settings()
+        assertEquals("text",s.getString(KakaoReport.LAST_STYLE));assertEquals(1L,s.getLong(KakaoReport.LIST_FALLBACK))
+        assertEquals(1L,s.getLong(PipelineSettingsKeys.KAKAO_SENT_COUNT))
+        // The phone's 06:00 report: its one text in the list's place.
+        val open=(1..4).map { OpenItem("i$it","서류 $it 보내기","","open",1,"",null,"업체$it",at530-it*86_400_000L) }
+        KakaoReport.clock={ at530+86_400_000L };sender.sent.clear()
+        assertNull(KakaoReport.send(app,ReportFetch.phoneReport(day.plusDays(1),open),KakaoReport.SOURCE_PHONE))
+        assertEquals(1,sender.sent.size);assertTrue((sender.sent[0] as KakaoReport.Message.Text).text.contains("새벽 정리 없이 폰에서 만든 보고"))
+        assertEquals(2L,settings().getLong(KakaoReport.LIST_FALLBACK))
+    }
+    @Test fun whenTheSecondBubbleFailsOnlyItIsTriedOnceMore() = runBlocking {
+        val sender=listOn(ListSender(failCard={ _,n -> if(n==2) "SEND_API_Unknown" else null }))
+        assertNull(KakaoReport.send(app,tagged(8),KakaoReport.SOURCE_ROUTINE))
+        assertEquals(2,cards(sender.sent).size);assertEquals(3,cards(sender.tried).size)
+        assertTrue("no text on top of the list",sender.sent.none { it is KakaoReport.Message.Text })
+        // It fails twice: an error, and still no text (the first bubble went).
+        KakaoReport.clock={ at530+86_400_000L }
+        val twice=listOn(ListSender(failCard={ _,n -> if(n>=2) "SEND_API_Unknown" else null }))
+        val next=tagged(8).put("day",day.plusDays(1).toString())
+        assertEquals("SEND_API_Unknown",KakaoReport.send(app,next,KakaoReport.SOURCE_ROUTINE))
+        assertEquals(1,cards(twice.sent).size);assertEquals(3,cards(twice.tried).size);assertTrue(twice.sent.none { it is KakaoReport.Message.Text })
+        val s=settings()
+        assertEquals("some went: the day is not sent again",day.plusDays(1).toString(),s.getString(PipelineSettingsKeys.REPORT_DAY))
+        assertEquals(1L,s.getLong(PipelineSettingsKeys.KAKAO_FAILED_COUNT));assertEquals(1L,s.getLong(KakaoReport.LAST_CARDS))
+        assertEquals(0L,s.optLong(KakaoReport.LIST_FALLBACK,0))
+    }
+    @Test fun aDeadTokenStopsTheListAndTakesTheLinkDown() = runBlocking {
+        val sender=listOn(ListSender(failCard={ _,_ -> "TOKEN_INVALID" }))
+        assertEquals("TOKEN_INVALID",KakaoReport.send(app,tagged(8),KakaoReport.SOURCE_ROUTINE))
+        assertTrue("nothing else is tried",sender.sent.isEmpty());assertEquals(1,sender.tried.size)
+        val s=settings()
+        assertFalse(s.getBoolean(PipelineSettingsKeys.KAKAO_LINKED));assertFalse(s.has(PipelineSettingsKeys.REPORT_DAY))
+        assertEquals(0L,s.optLong(KakaoReport.LIST_FALLBACK,0))
+    }
+    @Test fun aThumbnailThatDoesNotGoUpLeavesThePictureOut() = runBlocking {
+        val sender=listOn(ListSender(uploadFails=true))
+        assertNull(KakaoReport.send(app,tagged(8),KakaoReport.SOURCE_ROUTINE))
+        val c=cards(sender.sent)
+        assertEquals(2,c.size);assertTrue(c.flatMap { it.items }.all { it.imageUrl==null })
+        assertFalse("nothing kept",settings().optString(KakaoReport.TAG_IMAGES).contains("https"))
+        // The tag's picture that cannot be read: also no picture, the report still goes.
+        KakaoReport.clock={ at530+86_400_000L }
+        val unread=listOn(ListSender());KakaoReport.tagPng={ _,_ -> throw IllegalStateException("gone") }
+        assertNull(KakaoReport.send(app,tagged(8).put("day",day.plusDays(1).toString()),KakaoReport.SOURCE_ROUTINE))
+        assertEquals(2,cards(unread.sent).size);assertEquals(0,unread.uploads)
+    }
+    @Test fun thumbnailsAreKeptAndGoUpAgainAfterTenDays() = runBlocking {
+        val sender=listOn(ListSender())
+        assertNull(KakaoReport.send(app,tagged(8),KakaoReport.SOURCE_ROUTINE))
+        assertEquals("the five tags of the day, once each",5,sender.uploads)
+        val kept=JSONObject(settings().getString(KakaoReport.TAG_IMAGES))
+        assertEquals(KakaoReport.TAGS.toSet(),kept.keys().asSequence().toSet());assertEquals(at530,kept.getJSONObject("confirm").getLong("atMs"))
+        // Nine days on: the kept ones.
+        KakaoReport.clock={ at530+9*86_400_000L }
+        assertNull(KakaoReport.send(app,tagged(8).put("day",day.plusDays(9).toString()),KakaoReport.SOURCE_ROUTINE))
+        assertEquals(5,sender.uploads)
+        assertEquals(kept.getJSONObject("request").getString("url"),cards(sender.sent).last().items.first { it.tag=="request" }.imageUrl)
+        // Ten days on: up again.
+        KakaoReport.clock={ at530+10*86_400_000L }
+        assertNull(KakaoReport.send(app,tagged(8).put("day",day.plusDays(10).toString()),KakaoReport.SOURCE_ROUTINE))
+        assertEquals(10,sender.uploads)
+        // Only the tags a day needs.
+        KakaoReport.clock={ at530+30*86_400_000L }
+        assertNull(KakaoReport.send(app,report(today=listOf(tg("가","request"),tg("나","request"))).put("day",day.plusDays(30).toString()),KakaoReport.SOURCE_ROUTINE))
+        assertEquals(11,sender.uploads)
+        assertEquals(10L,KakaoReport.TAG_IMAGE_DAYS)
+    }
+    @Test fun theTagPicturesAreThereAndSquare() {
+        KakaoReport.TAGS.forEach { tag ->
+            val png=KakaoReport.tagPng(app,tag)!!
+            assertEquals(tag,400 to 400,KakaoSdkSender.pngSize(png))
+        }
+        assertNull(KakaoReport.tagPng(app,"urgent"))
+    }
+    @Test fun theWebViewCarriesTheMaskedReportInTheFragment() = runBlocking {
+        val base="https://example.github.io/ieum-app/report/"
+        val r=withV8(tagged(8),2,listOf(y("○○전기 010-1234-5678","도면 회신 받음")))
+        val url=KakaoReport.webUrl(base,r,false)!!
+        assertTrue(url.startsWith(base+"#d="));assertTrue(Regex("#d=[A-Za-z0-9_-]+$").containsMatchIn(url))
+        val back=JSONObject(KakaoReport.unpackWeb(url.substringAfter("#d=")))
+        assertEquals(KakaoReport.webData(r,false).toString(),back.toString())
+        assertEquals("2026-11-07",back.getString("day"));assertEquals("11/7(토)",back.getString("label"))
+        assertEquals(8,back.getJSONArray("today").length());assertEquals("important",back.getJSONArray("today").getJSONObject(0).getString("tag"))
+        assertEquals(1,back.getJSONArray("late").length());assertEquals(2,back.getJSONObject("head").getInt("pendingCalls"))
+        assertFalse("masked",phone.containsMatchIn(back.toString()));assertFalse(back.has("cut"))
+        // What the page's own decoder reads (tools/test_report_page.py makes this with Python's zlib).
+        assertEquals("{\"v\":1,\"day\":\"2026-11-07\",\"today\":[{\"what\":\"견적서 보내기\",\"tag\":\"important\"}]}",
+            KakaoReport.unpackWeb("eNqrVipTsjLUUUpJrFSyUjIyMDLTNTTUNTBX0lEqyQcLRlcrlWcklgBlX21a82ZB45uWOQqvN2953bTl1Y4NIGWJ6UC5zNyC_KKSxLwSpdrYWgDQ3iB2"))
+        assertNull("no base, no web view",KakaoReport.webUrl("",r,false))
+        // A long report: the last blocks give up lines, the URL stays short enough and the page says the rest is in the app.
+        // Syllables that do not repeat, so the deflate cannot make them short (5,400 characters before the cut).
+        fun line(i:Int,j:Int)=(0 until 60).joinToString("") { k -> String(Character.toChars(0xAC00+((i*7919+j*1543+k*104729)%11172))) }
+        val long=report((1..8).map { i -> y("업체$i 담당자",line(i,1)) },(1..10).map { i -> tg(line(i,2),"request",who="업체$i") },
+            (1..3).map { line(it,3) },(1..3).map { line(it,4) to "업체$it" }).let { withV8(it,0,(1..5).map { i -> y("업체$i",line(i,5)) }) }
+        val cut=KakaoReport.webUrl(base,long,false)!!
+        assertTrue(cut.length<=KakaoReport.WEB_MAX)
+        val shown=JSONObject(KakaoReport.unpackWeb(cut.substringAfter("#d=")))
+        assertTrue(shown.getBoolean("cut"));assertTrue("late gives way first",shown.getJSONArray("late").length()<5)
+        // On the bubbles: [웹으로 보기] with that address.
+        KakaoReport.webBase={ base }
+        val sender=listOn(ListSender())
+        assertNull(KakaoReport.send(app,tagged(8),KakaoReport.SOURCE_ROUTINE))
+        assertTrue(cards(sender.sent).all { it.webUrl?.startsWith(base+"#d=")==true })
+        assertTrue(settings().getBoolean(KakaoReport.LAST_WEB))
+    }
+    @Test fun aBubbleKakaoDoesNotTakeWithTheWebButtonGoesOnceMoreWithoutIt() = runBlocking {
+        KakaoReport.webBase={ "https://example.github.io/ieum-app/report/" }
+        val sender=listOn(ListSender(failCard={ c,_ -> if(c.webUrl!=null) "SEND_API_IllegalParams" else null }))
+        assertNull(KakaoReport.send(app,tagged(8),KakaoReport.SOURCE_ROUTINE))
+        assertEquals(2,cards(sender.sent).size);assertTrue(cards(sender.sent).all { it.webUrl==null })
+        assertEquals(4,cards(sender.tried).size);assertTrue(sender.sent.none { it is KakaoReport.Message.Text })
+        assertFalse(settings().getBoolean(KakaoReport.LAST_WEB))
+    }
+    @Test fun theOwnTemplateTakesFiveWithItsArguments() = runBlocking {
+        KakaoReport.listTemplateId={ 12345L }
+        // Without the web view the own template is not used (its two buttons are fixed in the console).
+        assertTrue(KakaoReport.compose(tagged(10),picture=false).list.all { it.templateId==0L })
+        KakaoReport.webBase={ "https://example.github.io/ieum-app/report/" }
+        val sender=listOn(ListSender())
+        assertNull(KakaoReport.send(app,tagged(9),KakaoReport.SOURCE_ROUTINE))
+        val c=cards(sender.sent)
+        assertEquals(listOf(5,3),c.map { it.items.size });assertEquals(listOf(12345L,0L),c.map { it.templateId })
+        val args=KakaoReport.customArgs(c[0])
+        assertEquals(listOf("H")+(1..5).flatMap { listOf("T$it","D$it","I$it") }+"WEB",args.keys.toList())
+        assertEquals(c[0].header,args["H"]);assertEquals(c[0].items[4].title,args["T5"]);assertEquals(c[0].items[0].desc,args["D1"])
+        assertTrue(args["I1"]!!.startsWith("https://"))
+        assertTrue(args["WEB"]!!.startsWith("ieum-app/report/#d="))
+        assertEquals("a/b/#d=x",KakaoReport.webPath("https://h.example/a/b/#d=x"));assertEquals("",KakaoReport.webPath("https://h.example"))
+        // Fewer than five in a bubble: the arguments are empty, never "null".
+        assertEquals("",KakaoReport.customArgs(c[1])["T5"]);assertEquals("",KakaoReport.customArgs(c[1].copy(webUrl=null))["WEB"])
+    }
+    @Test fun thePhoneReportTagsAndGoesAsTheListToo() = runBlocking {
+        val open=listOf(OpenItem("a","오늘 마감 서류","2026-11-07","open",1,"",null,"업체A",at530-5*86_400_000L),
+            OpenItem("b","확인할 일","","needs_confirmation",1,"","김과장",null,at530-3*86_400_000L),
+            OpenItem("c","보통 일","","open",1,"",null,"업체C",at530-minute),
+            OpenItem("d","다음 주 일","2026-11-20","open",1,"",null,"업체D",at530-2*minute))
+        val r=ReportFetch.phoneReport(day,open)
+        val tags=(0 until r.getJSONArray("today").length()).associate { r.getJSONArray("today").getJSONObject(it).let { t -> t.getString("what") to t.getString("tag") } }
+        assertEquals(mapOf("오늘 마감 서류" to "important","확인할 일" to "confirm","보통 일" to "request","다음 주 일" to "request"),tags)
+        val many=ReportFetch.phoneReport(day,(1..14).map { OpenItem("i$it","서류 $it","","open",1,"",null,"업체$it",at530-it*minute) })
+        assertEquals(10,many.getJSONArray("today").length());assertEquals(14,many.getJSONObject("head").getInt("todayChecks"))
+        val sender=listOn(ListSender())
+        assertNull(KakaoReport.send(app,r,KakaoReport.SOURCE_PHONE))
+        assertEquals(listOf(2,2),cards(sender.sent).map { it.items.size });assertEquals("important",cards(sender.sent)[0].items[0].tag)
+        assertEquals("phone",settings().getString(PipelineSettingsKeys.REPORT_SOURCE))
+    }
+    @Test fun thePictureSettingKeepsThePictureForTheTidysReport() = runBlocking {
+        // PICTURE=true (setup): the picture and its text, as before; no list.
+        assertNull(KakaoReport.send(app,tagged(8),KakaoReport.SOURCE_ROUTINE))
+        assertTrue(fake.sent[0] is KakaoReport.Message.Feed);assertTrue(fake.sent.none { it is KakaoReport.Message.ListCard })
+        assertEquals("picture",settings().getString(KakaoReport.LAST_STYLE))
     }
 }

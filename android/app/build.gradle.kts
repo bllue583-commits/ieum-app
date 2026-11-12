@@ -28,6 +28,15 @@ android {
         val kakaoKey=(System.getenv("IEUM_KAKAO_APP_KEY") ?: "").trim()
         require(kakaoKey.matches(Regex("[A-Za-z0-9]*"))) { "IEUM_KAKAO_APP_KEY format" }
         buildConfigField("String","KAKAO_APP_KEY","\""+kakaoKey+"\"")
+        // r18 (user 11/13): the user's own 5-item list template from the Kakao console (CI variable IEUM_KAKAO_LIST_TEMPLATE_ID,
+        // empty = Kakao's default list of 3) and the web view's address (IEUM_KAKAO_WEB_BASE, the GitHub Pages docs/report/ page,
+        // empty = no [웹으로 보기]). Neither is a secret; both stay out of the code like the app key.
+        val listTemplate=(System.getenv("IEUM_KAKAO_LIST_TEMPLATE_ID") ?: "").trim()
+        require(listTemplate.matches(Regex("[0-9]{0,18}"))) { "IEUM_KAKAO_LIST_TEMPLATE_ID format" }
+        buildConfigField("long","KAKAO_LIST_TEMPLATE_ID",listTemplate.ifEmpty { "0" }+"L")
+        val webBase=(System.getenv("IEUM_KAKAO_WEB_BASE") ?: "").trim()
+        require(webBase.isEmpty() || webBase.matches(Regex("https://[A-Za-z0-9.-]+/[A-Za-z0-9._~/-]*"))) { "IEUM_KAKAO_WEB_BASE format" }
+        buildConfigField("String","KAKAO_WEB_BASE","\""+webBase+"\"")
         // The login redirect and the message button's scheme: kakao<key>://oauth, kakao<key>://kakaolink.
         manifestPlaceholders["kakaoScheme"]=if(kakaoKey.isEmpty()) "kakaonone" else "kakao$kakaoKey"
         // r15-4 (L1): without a key the login's way back (AuthCodeHandlerActivity) is switched off in the manifest.

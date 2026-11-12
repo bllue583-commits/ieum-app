@@ -190,13 +190,20 @@ object ReportFetch {
     }
     internal fun phoneReport(day:LocalDate,open:List<OpenItem>):JSONObject {
         val first=kr.callbrief.pipeline.HomeScreen.firstLook(open,day)
-        val ranked=(first+TaskActions.ordered(open).filter { it !in first }).take(8)
+        val ranked=(first+TaskActions.ordered(open).filter { it !in first }).take(KakaoReport.TODAY_MAX)
         val today=JSONArray()
-        ranked.forEach { i -> today.put(JSONObject().put("id",i.id).put("what",i.title).put("who",i.company ?: i.counterpart ?: "")
-            .put("since",since(i.createdMs,day)).put("status",if(i.status=="needs_confirmation" || i.tentative) "확인 필요" else "").put("check",false)) }
+        ranked.forEach { i -> val confirm=i.status=="needs_confirmation" || i.tentative
+            today.put(JSONObject().put("id",i.id).put("what",i.title).put("who",i.company ?: i.counterpart ?: "")
+            .put("since",since(i.createdMs,day)).put("status",if(confirm) "확인 필요" else "").put("check",false).put("tag",tag(i,day,confirm))) }
         return JSONObject().put("day",day.toString()).put("generatedMs",clock())
             .put("head",JSONObject().put("calls",0).put("newChecks",0).put("todayChecks",open.size).put("issues",0))
             .put("yesterday",JSONArray()).put("today",today).put("inProgress",JSONArray()).put("check",JSONArray())
+    }
+    /** r18: the phone's own tag (it has no record to read): important when the due day is today or past, confirm for a to-do
+     * to check, else request (the tidy's other tags need the calls). */
+    internal fun tag(i:OpenItem,day:LocalDate,confirm:Boolean):String {
+        val due=runCatching { LocalDate.parse(i.due.take(10)) }.getOrNull()
+        return when { due!=null && !due.isAfter(day) -> "important";confirm -> KakaoReport.TAG_CHECK;else -> KakaoReport.TAG_DEFAULT }
     }
     /** "오늘 요청", "어제 요청", "3일 전 요청" (the report's own words for when it was asked, 1절). */
     internal fun since(createdMs:Long,day:LocalDate):String {

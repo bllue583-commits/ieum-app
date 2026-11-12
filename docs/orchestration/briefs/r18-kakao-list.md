@@ -10,25 +10,24 @@
 | A 머리 | 오늘 날짜(요일) |
 | B 목록 | 챙길 일 중 가장 중요한 top 10, 말풍선 2개(5개씩), 최대 10개 |
 | C 항목 | 제목 = 일 제목, 본문 = 요청일 |
-| D 썸네일 | 분류 썸네일(아래 7종, 이미 만들어 둠) |
+| D 썸네일 | 분류 썸네일(아래 5종, 이미 만들어 둠) |
 | E 버튼 | [웹으로 보기](그 보고의 자세한 HTML) / [앱으로 보기](이음) |
 
-## 분류 7종 (썸네일 = "이 일에 내가 뭘 해야 하나" 한 가지 기준, 위에서부터 먼저 보여 줌)
+## 분류 5종 (사용자 11/13 확정: 긴급과 대기는 뺀다. 썸네일 = "이 일에 내가 뭘 해야 하나" 한 가지 기준, 위에서부터 먼저 보여 줌)
 | 부호(tag) | 글자 | 붙는 기준 | 그림 |
 | --- | --- | --- | --- |
-| `urgent` | 긴급 | 기한(due)이 오늘이거나 지났다, 통화에서 "오늘 중", "급하다", "바로"라고 했다 | `kakao_tag_urgent.png` |
-| `important` | 중요 | 금액, 계약, 안전, 공정(일정)이 걸린 일 | `kakao_tag_important.png` |
+| `important` | 중요 | 금액, 계약, 안전, 공정(일정)이 걸린 일, 그리고 기한(due)이 오늘이거나 지난 일, 통화에서 "오늘 중", "급하다"고 한 일(예전 긴급을 여기로 합침) | `kakao_tag_important.png` |
 | `confirm` | 확인 | 숫자나 대상이 애매해 되물어야 하는 일(status needs_confirmation, certainty tentative) | `kakao_tag_confirm.png` |
-| `request` | 요청 | 사용자가 하기로 한 보통 일. **근거가 없으면 이것(기본값)** | `kakao_tag_request.png` |
-| `waiting` | 대기 | 상대가 하기로 한 일(owner "them"): 사용자는 받았는지만 챙긴다 | `kakao_tag_waiting.png` |
+| `request` | 요청 | 그 밖의 보통 일(상대가 하기로 한 일도 여기). **근거가 없으면 이것(기본값)** | `kakao_tag_request.png` |
 | `regular` | 정기 | 매주, 매월 반복되는 보고, 점검, 정산 | `kakao_tag_regular.png` |
 | `optional` | 선택 | 제안, 개선처럼 하면 좋지만 안 해도 당장 문제없는 일 | `kakao_tag_optional.png` |
 
-- "긴급"은 기한이나 말에 근거가 있을 때만. 전부 긴급이면 아무것도 급해 보이지 않는다.
-- 그림은 `android/app/src/main/res/drawable-nodpi/kakao_tag_*.png`(400×400, 이미 있음, 고치지 말 것).
+- "중요"는 근거(금액, 계약, 안전, 공정, 기한, 통화의 말)가 있을 때만. 전부 중요면 아무것도 중요해 보이지 않는다.
+- 그림은 `android/app/src/main/res/drawable-nodpi/kakao_tag_*.png`(400×400, 이미 있음, 고치지 말 것). `kakao_tag_urgent.png`, `kakao_tag_waiting.png`는 지운다.
+- 대기(owner "them")가 없어졌으므로 state tasks에 `owner`를 더하지 않는다(폰의 tidyState는 건드리지 않는다).
 
 ## 할 일
-1. **새벽 정리 지시문(`docs/routines/tidy.md`, 9-1번 아침 보고서):** `today` 항목에 `"tag"`를 더한다(위 7개 부호 중 하나, 위 표의 기준을 지시문에 그대로 적는다). `today`는 최대 8줄에서 **최대 10줄**로, 순서는 tag 순서(urgent, important, confirm, request, waiting, regular, optional) 먼저, 같은 tag 안에서는 지금 규칙(오늘·어제 요청 먼저, 최근 요청부터). owner가 state에 없으면 tidy가 판단할 재료가 없으니, 폰이 올리는 state tasks에 `owner`("me"|"them", 폰 DB의 체크할 일 주인 — `CallRecordStore.kt` 695줄 근처의 owner 조회와 `tidyState` 조립부를 볼 것)를 더하고 지시문의 state 설명도 맞춘다. 지시문 버전을 올려야 하는지는 `RoutineDocTest`와 `tools/inbox/watchdog.py`(tidyVersion 비교), `version_fields` 규칙을 읽고 정한다(올린다면 9, 관련 시험·문서 전부). `tools/report_check.py`(보고서 검사)가 새 키와 10줄을 받게 고치고 시험도. 옛 폰(1053 이하)이 새 보고서를 받아도 문제없는지(모르는 키 무시, 8개만 읽음) 확인.
+1. **새벽 정리 지시문(`docs/routines/tidy.md`, 9-1번 아침 보고서):** `today` 항목에 `"tag"`를 더한다(위 5개 부호 중 하나, 위 표의 기준을 지시문에 그대로 적는다). `today`는 최대 8줄에서 **최대 10줄**로, 순서는 tag 순서(important, confirm, request, regular, optional) 먼저, 같은 tag 안에서는 지금 규칙(오늘·어제 요청 먼저, 최근 요청부터). (11/13 5종 결정으로 state tasks의 `owner` 추가는 하지 않는다.) 지시문 버전을 올려야 하는지는 `RoutineDocTest`와 `tools/inbox/watchdog.py`(tidyVersion 비교), `version_fields` 규칙을 읽고 정한다(올린다면 9, 관련 시험·문서 전부). `tools/report_check.py`(보고서 검사)가 새 키와 10줄을 받게 고치고 시험도. 옛 폰(1053 이하)이 새 보고서를 받아도 문제없는지(모르는 키 무시, 8개만 읽음) 확인.
 2. **폰 구성(`pipeline/report/KakaoReport.kt`):** 보고서 JSON의 `today`에서 항목 {title=what, desc=요청일(since) + (who가 있으면 " · who"), tag}를 만든다(모든 글은 기존 `clean`·번호 가리기를 거친다). tag가 없거나 모르는 값이면 `check==true` → confirm, 아니면 request. tag 순서로 안정 정렬 후 top N.
    - 메시지 종류 `Message.ListCard(header, items, link, webUrl)` 추가.
    - 머리: 첫 말풍선 `"11/13(금) 챙길 일 n개"`(n은 head.todayChecks), 둘째 `"11/13(금) 챙길 일 이어서"`(보여 주지 못한 것이 있으면 `" · 외 m개"`).
@@ -43,7 +42,7 @@
    - 웹 보기: 보고 내용은 개인 정보라 서버에 올리지 않는다. **정적 보기 페이지 + 내용은 URL 조각(#) 안**으로 한다: `docs/report/index.html`(공개 앱 저장소의 GitHub Pages로 서비스될 파일)을 만들고, 폰이 보고서 JSON(가린 글)을 deflate + base64url로 `#d=`에 넣은 URL을 만든다. 페이지는 조각을 풀어(브라우저 `DecompressionStream`, 없으면 안내 문구) 보고 전체(오늘 챙길 일 전부와 분류, 진행 중, 확인 필요, 어제 정리, 뒤늦게 정리된 통화)를 읽기 좋게 그린다. 외부 스크립트·글꼴·분석 도구를 부르지 않는다(내용이 밖으로 나가면 안 됨). `<meta name="robots" content="noindex">`, `referrer` 정책 no-referrer. 휴대폰 폭 기준, 밝은/어두운 화면 모두.
    - 웹 주소는 `BuildConfig.KAKAO_WEB_BASE`(기본 빈 문자열 = 웹 버튼 없음). 카카오는 등록된 웹 도메인만 받으므로(사용자가 콘솔 [제품 링크 관리] > [웹 도메인]에 등록해야 함), 빈 값이면 [앱으로 보기]만 붙인다. 값이 있는데 카카오가 거부하면 웹 버튼 없이 한 번 더 보낸다. **GitHub Pages를 켜거나 저장소 설정을 바꾸지 말 것**(오케스트레이터가 사용자에게 알린 뒤 한다).
    - URL 길이: 보고서가 길면 조각이 길어진다. 4,000자를 넘으면 뒤 묶음(어제 정리 → 뒤늦게)부터 줄여 넣고 페이지에 "나머지는 이음에서"를 보여 준다.
-5. **하트비트(`PhoneStatus.kt`):** `kakao.style`("list"|"text"|"picture"), `kakao.cards`(리스트 말풍선 수), `kakao.listFallback`(리스트가 안 가서 글로 보낸 누계), `kakao.web`(웹 버튼을 붙였나), 분류별 건수 `kakao.tags{urgent:n,…}`(숫자만).
+5. **하트비트(`PhoneStatus.kt`):** `kakao.style`("list"|"text"|"picture"), `kakao.cards`(리스트 말풍선 수), `kakao.listFallback`(리스트가 안 가서 글로 보낸 누계), `kakao.web`(웹 버튼을 붙였나), 분류별 건수 `kakao.tags{important:n,confirm:n,request:n,regular:n,optional:n}`(숫자만).
 6. **시험:** 구성(정렬, 나누기 표 전부, 머리 문구, 기본값 tag, 1개 이하일 때 글), 전송(리스트 성공, 실패 시 글 대체, 둘째만 실패, 토큰 오류, 썸네일 올리기 실패, 캐시 재사용과 10일 뒤 다시 올림), 웹 URL 왕복(파이썬이나 JVM으로 조각을 풀어 같은 JSON이 나오는지), `RoutineDocTest`·`report_check`·워치독 시험 갱신. 기존 `KakaoReportTest`는 `setup()`에서 그림 보고를 켜 두었으니(`PICTURE=true`) 리스트 시험은 끄고 돌린다.
 7. **문서:** `docs/DESIGN.md` 3.12절(리스트 보고, 분류표, 대체 순서), `docs/OPERATIONS.md`(하트비트 키, 사용자 정의 템플릿 만드는 순서, 웹 도메인 등록 순서), `docs/routines/tidy.md` 머리말 변경 기록. `docs/VERSION`과 `docs/UPDATE_NOTE.txt`는 건드리지 말 것(오케스트레이터가 정한다).
 

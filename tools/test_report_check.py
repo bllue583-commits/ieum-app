@@ -178,6 +178,35 @@ class ReportCheckTest(unittest.TestCase):
         r["late"] = [{"who": "○○전기", "what": "회신", "atMs": 1}]
         self.assertBreaks(r, "late[0].atMs: 모르는 키")
 
+    def test_v9_tags_and_ten_lines(self):
+        """tidy.md v9 (r18): today[].tag is one of five, in their order, and today has 10 lines at most; a v8 report still passes."""
+        r = good()
+        r["today"][0]["tag"] = "important"
+        r["today"][1]["tag"] = "request"
+        self.assertEqual([], rc.check(r))
+        self.assertEqual([], rc.check(good()), "a v8 report without tags still passes")
+        r["today"] = [{"id": f"t_{i}", "what": "서류 보내기", "who": "△△철강", "since": "어제 요청", "status": "", "check": False,
+                       "tag": "request"} for i in range(10)]
+        r["head"]["todayChecks"] = 10
+        self.assertEqual([], rc.check(r))
+        r["today"].append(dict(r["today"][0], id="t_x"))
+        r["head"]["todayChecks"] = 11
+        self.assertBreaks(r, "today: 11줄 (최대 10줄)")
+        bad = good()
+        bad["today"][0]["tag"] = "urgent"
+        self.assertBreaks(bad, "today[0].tag: 분류 부호가 아님")
+        bad["today"][0]["tag"] = "waiting"
+        self.assertBreaks(bad, "today[0].tag: 분류 부호가 아님")
+        bad["today"][0]["tag"] = 1
+        self.assertBreaks(bad, "today[0].tag: 분류 부호가 아님")
+        order = good()
+        order["today"][0]["tag"] = "optional"
+        order["today"][1]["tag"] = "important"
+        self.assertBreaks(order, "today: tag 순서가 아님")
+        self.assertEqual(("important", "confirm", "request", "regular", "optional"), rc.TAGS)
+        got = rc.check(bad)
+        self.assertFalse(any("서류" in g or "견적" in g for g in got), "reasons only")
+
 
 if __name__ == "__main__":
     unittest.main()
