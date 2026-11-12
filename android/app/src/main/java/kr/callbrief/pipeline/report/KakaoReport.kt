@@ -66,9 +66,9 @@ object KakaoReport {
     /** v3.7 (user 11/12, "카톡 안에서 다 보고 싶다"): the report goes as texts only, each read in the chat as it is; a text with
      * this link has no button and a touch leads nowhere. Only the last text carries [BUTTON]. */
     const val NO_LINK=""
-    /** The whole report in at most this many texts; lines are shortened step by step ([CHAT_LINE_STEPS]) until it fits. */
-    const val MAX_TEXTS=8
-    internal val CHAT_LINE_STEPS=intArrayOf(LINE_MAX,60,45,32)
+    /** The report in at most this many texts (user 11/13: three bubbles); see [chat] for what gives way. */
+    const val MAX_TEXTS=3
+    internal val CHAT_LINE_STEPS=intArrayOf(LINE_MAX,60,45)
     const val CHAT_MORE="나머지는 이음에서 볼 수 있어요"
     /** Settings key (no screen): true brings the picture report (v3.5 to v3.6) back. */
     const val PICTURE="kakaoPicture"
@@ -232,11 +232,12 @@ object KakaoReport {
     }
     // ---- v3.7 (user 11/12): the whole report as texts, read inside KakaoTalk ----
     private class Block(val title:String,val items:List<String>)
-    /** The head, then 오늘 챙길 일, 진행 중, 확인 필요, 어제 정리 and 뒤늦게 정리된 통화, every line of each (nothing is left to
-     * "외 n건"), packed into as few texts as hold them: a text is [LIMIT] at most, a block starts with its "[제목]" after an
-     * empty line, and a block that goes on in the next text starts there with "[제목 계속]". More than [MAX_TEXTS]: the lines
-     * are shortened ([CHAT_LINE_STEPS]) and packed again; still more: the first [MAX_TEXTS], the last one ending with
-     * [CHAT_MORE]. Only the last text has the [BUTTON] (to the to-dos); the others have [NO_LINK]. */
+    /** The head, then 오늘 챙길 일, 진행 중, 확인 필요, 어제 정리 and 뒤늦게 정리된 통화, packed into [MAX_TEXTS] texts at most
+     * (user 11/13: three bubbles, no more): a text is [LIMIT] at most, a block starts with its "[제목]" after an empty line,
+     * and a block that goes on in the next text starts there with "[제목 계속]". When it does not fit, first the lines are
+     * shortened ([CHAT_LINE_STEPS]), then the longest block gives up its last line for "외 n건", one line at a time (of two
+     * equally long blocks the later one first, so the to-dos stay longest). Only the last text has the [BUTTON] (to the
+     * to-dos); the others have [NO_LINK]. */
     internal fun chat(r:Report,label:String):List<Message.Text> {
         val head=listOf("[이음 아침 보고] $label",headLine(r),countsLine(r))
         val blocks=listOf(Block("오늘 챙길 일",numbered(r.today)),Block("진행 중",r.inProgress.map { "· $it" }),
@@ -245,6 +246,15 @@ object KakaoReport {
             Block(LATE_TITLE,numbered(r.late))).filter { it.items.isNotEmpty() }
         var packed=emptyList<String>()
         for(cap in CHAT_LINE_STEPS) { packed=pack(head,blocks,cap);if(packed.size<=MAX_TEXTS) break }
+        if(packed.size>MAX_TEXTS) {
+            val keep=IntArray(blocks.size) { blocks[it].items.size }
+            while(packed.size>MAX_TEXTS) {
+                val most=keep.max();if(most<=1) break
+                keep[keep.indexOfLast { it==most }]--
+                packed=pack(head,blocks.mapIndexed { i,b -> if(keep[i]>=b.items.size) b
+                    else Block(b.title,b.items.take(keep[i])+"외 ${b.items.size-keep[i]}건") },CHAT_LINE_STEPS.last())
+            }
+        }
         if(packed.size>MAX_TEXTS) {
             val last=packed[MAX_TEXTS-1].lines().toMutableList()
             while(last.size>1 && length((last+CHAT_MORE).joinToString("\n"))>LIMIT) last.removeAt(last.size-1)
@@ -433,7 +443,8 @@ object KakaoReport {
         val now=clock()
         if(test) {
             save(app) { o ->
-                if(out.sent>0) o.put(TEST_SENT_DAY,today)
+                if(out.sent>0) o.put(TEST_SENT_DAY,today).put(LAST_TEXTS,out.sent)
+                if(out.plainRetried>0) o.put(PLAIN_RETRIED,o.optLong(PLAIN_RETRIED,0)+out.plainRetried)
                 if(out.error?.startsWith(TOKEN_PREFIX)==true) o.put(PipelineSettingsKeys.KAKAO_LINKED,false).put(PipelineSettingsKeys.KAKAO_LAST_ERROR,out.error)
             }
             return@withLock out.error

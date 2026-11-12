@@ -446,37 +446,47 @@ class KakaoReportTest:ProtectedTextHostTestBase() {
     }
 
     // ---- v3.7 (user 11/12): the whole report as texts read inside KakaoTalk ----
-    @Test fun theChatReportCarriesEveryLineInFewTextsAndOnlyTheLastHasTheButton() {
+    @Test fun theChatReportIsThreeTextsAtMostAndOnlyTheLastHasTheButton() {
         val c=KakaoReport.compose(eight(),picture=false)
         assertNull("no picture is drawn",c.feed)
         val chat=c.chat
-        assertTrue("some texts, eight at most: ${chat.size}",chat.size in 2..KakaoReport.MAX_TEXTS)
+        assertTrue("two or three texts: ${chat.size}",chat.size in 2..KakaoReport.MAX_TEXTS);assertEquals(3,KakaoReport.MAX_TEXTS)
         chat.forEach { assertTrue(it.text,KakaoReport.length(it.text)<=KakaoReport.LIMIT) }
         assertTrue(chat[0].text.startsWith("[이음 아침 보고] 11/7(토)\n"))
         // Read in the chat: no link but on the last text, which opens the to-dos.
         assertTrue(chat.dropLast(1).all { it.link==KakaoReport.NO_LINK });assertEquals(KakaoReport.TASKS_LINK,chat.last().link)
         val all=chat.joinToString("\n") { it.text }
-        // Every line of every block is there: nothing is left to "외 n건".
-        assertFalse(all,Regex("외 \\d+건").containsMatchIn(all));assertFalse(all.contains(KakaoReport.CHAT_MORE))
+        assertFalse(all.contains(KakaoReport.CHAT_MORE))
+        // Every block is there under its title, the to-dos before yesterday's calls; what did not fit is counted.
         val r=KakaoReport.read(eight(),false)
-        (r.today+r.yesterday+r.inProgress+r.check).forEach { assertTrue(it,all.contains(it)) }
-        // The to-dos come before yesterday's calls, each block under its title; a block that goes on says so.
+        listOf("[오늘 챙길 일]","[진행 중]","[확인 필요]","[어제 정리]").forEach { assertTrue(it,all.contains(it)) }
         assertTrue(all.indexOf("[오늘 챙길 일]") in 0 until all.indexOf("[어제 정리]"))
+        val numbered=all.lines().count { Regex("^\\d+\\. ").containsMatchIn(it) }
+        val more=all.lines().sumOf { Regex("^외 (\\d+)건$").find(it)?.groupValues?.get(1)?.toInt() ?: 0 }
+        val dots=all.lines().count { it.startsWith("· ") }
+        assertEquals("shown and counted lines are all the lines",r.today.size+r.yesterday.size+r.inProgress.size+r.check.size,numbered+dots+more)
+        assertTrue("at least one line of each block",numbered>=2 && dots>=2)
         chat.drop(1).forEach { assertTrue(it.text,it.text.startsWith("[")) }
         assertFalse("a title is never the last line of a text",chat.any { it.text.lines().last().startsWith("[") })
     }
-    @Test fun aSmallReportIsOneTextWithTheButton() {
+    @Test fun aSmallReportIsOneTextWithTheButtonAndEveryLine() {
         val chat=KakaoReport.compose(report(calls=0),picture=false).chat
         assertEquals(1,chat.size);assertEquals(KakaoReport.TASKS_LINK,chat[0].link)
         assertTrue(chat[0].text,chat[0].text.contains("\n\n[어제 정리]\n어제 업무 통화 없음"))
+        val few=KakaoReport.compose(one,picture=false).chat
+        val all=few.joinToString("\n") { it.text }
+        assertFalse("a report that fits loses nothing",Regex("외 \\d+건").containsMatchIn(all))
+        KakaoReport.read(one,false).let { r -> (r.today+r.yesterday).forEach { assertTrue(it,all.contains(it)) } }
     }
-    @Test fun aReportTooLongForEightTextsShortensItsLinesAndSaysWhereTheRestIs() {
+    @Test fun aVeryLongReportStillFitsThreeTexts() {
         val long=(1..8).map { "아주 긴 일 ".repeat(8)+it }
         val r=KakaoReport.Report(day,40,8,8,long,long,long.take(3),long.take(3),false,0,long.take(5))
         val chat=KakaoReport.chat(r,"11/7(토)")
         assertTrue(chat.size<=KakaoReport.MAX_TEXTS)
         chat.forEach { assertTrue(KakaoReport.length(it.text)<=KakaoReport.LIMIT) }
         assertEquals(KakaoReport.TASKS_LINK,chat.last().link)
+        val all=chat.joinToString("\n") { it.text }
+        listOf("[오늘 챙길 일]","[어제 정리]","[${KakaoReport.LATE_TITLE}]").forEach { assertTrue(it,all.contains(it)) }
     }
     @Test fun aTextWithoutALinkThatDoesNotGoIsSentAgainWithTheAppLink() = runBlocking {
         val seen=mutableListOf<KakaoReport.Message>()
@@ -494,7 +504,7 @@ class KakaoReportTest:ProtectedTextHostTestBase() {
         SecureSettings(app).update { it.remove(KakaoReport.PICTURE) }
         assertNull(KakaoReport.send(app,eight(),KakaoReport.SOURCE_ROUTINE))
         assertEquals("no picture goes up",0,fake.uploads)
-        assertTrue(fake.sent.size in 2..KakaoReport.MAX_TEXTS);assertTrue(fake.sent.all { it is KakaoReport.Message.Text })
+        assertTrue(fake.sent.size in 2..3);assertTrue(fake.sent.all { it is KakaoReport.Message.Text })
         assertEquals(KakaoReport.TASKS_LINK,fake.sent.last().link);assertTrue(fake.sent.dropLast(1).all { it.link==KakaoReport.NO_LINK })
         val s=settings()
         assertEquals(1L,s.getLong(PipelineSettingsKeys.KAKAO_SENT_COUNT));assertEquals(fake.sent.size.toLong(),s.getLong(KakaoReport.LAST_TEXTS))
