@@ -589,7 +589,8 @@ object KakaoReport {
         fun noteStyle(o:JSONObject) {
             if(out.sent>0) o.put(LAST_STYLE,out.style).put(LAST_CARDS,out.cards).put(LAST_WEB,out.web)
                 .put(LAST_TAGS,JSONObject().apply { TAGS.forEach { put(it,tags[it] ?: 0) } }.toString())
-            if(out.listFallback>0) o.put(LIST_FALLBACK,o.optLong(LIST_FALLBACK,0)+out.listFallback)
+            // Review fix: a test send ([지금 보내 보기]) does not add to the running count.
+            if(out.listFallback>0 && !test) o.put(LIST_FALLBACK,o.optLong(LIST_FALLBACK,0)+out.listFallback)
         }
         if(test) {
             save(app) { o ->
@@ -643,7 +644,10 @@ object KakaoReport {
             val url=k?.optString("url").orEmpty();val at=k?.optLong("atMs",0) ?: 0
             if(url.startsWith("https://") && now>=at && now-at<TAG_IMAGE_DAYS*DAY_MS) { out[tag]=url;continue }
             val png=runCatching { tagPng(app,tag) }.getOrNull() ?: continue
+            // Review fix: Kakao's upload may answer with an http:// address (same host over https): taken as https, so the
+            // thumbnail is not left out and uploaded again every morning.
             val up=runCatching { sender.uploadImage(png) }.onFailure { if(it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
+                ?.trim()?.let { if(it.startsWith("http://")) "https://"+it.removePrefix("http://") else it }
             if(!up.isNullOrBlank() && up.startsWith("https://")) { out[tag]=up;kept.put(tag,JSONObject().put("url",up).put("atMs",now)) }
             else Log.w(TAG,"thumbnail not uploaded: $tag")
         }
