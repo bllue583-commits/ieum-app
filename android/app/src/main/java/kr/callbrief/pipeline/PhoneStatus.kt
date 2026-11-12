@@ -68,7 +68,9 @@ internal object PhoneStatus {
      * Every one is numbers, KST days and codes only. */
     data class V37(val latency:JSONObject?=null,val window14:JSONObject?=null,val coverage:JSONObject?=null,
         val coverageRecent:org.json.JSONArray?=null,val use:JSONObject?=null,val dbTables:JSONObject?=null,val matchDay:JSONObject?=null,
-        val trace:org.json.JSONArray?=null)
+        val trace:org.json.JSONArray?=null,
+        /** v3.8 r18 (DESIGN_V7 4.1): `dbPrune` and `dbFull` ([DbStore.pruneHeartbeat], [DbStore.fullHeartbeat]), as stored. */
+        val dbPrune:Any?=null,val dbFull:Any?=null)
     /** v3.5: heartbeat `kakao{on,linked,sent,failed,lastSentMs,error}` and `report{day,source}`; numbers, dates and codes only. */
     data class V35(val kakaoLinked:Boolean=false,val kakaoSent:Long=0,val kakaoFailed:Long=0,val kakaoLastSentMs:Long?=null,
         val kakaoError:String?=null,val reportDay:String?=null,val reportSource:String?=null,
@@ -192,6 +194,8 @@ internal object PhoneStatus {
         o.put("use",v.use?.let(::useJson) ?: JSONObject().put("today",JSONObject.NULL).put("prev",JSONObject.NULL))
         o.put("dbTables",v.dbTables?.let(Telemetry::dbTablesJson) ?: JSONObject.NULL)
         o.put("trace",v.trace?.let(::traceJson) ?: org.json.JSONArray())
+        o.put("dbPrune",DbStore.pruneHeartbeat(v.dbPrune) ?: JSONObject.NULL)
+        o.put("dbFull",DbStore.fullHeartbeat(v.dbFull))
     }
     private val DAY=Regex("""\d{4}-\d{2}-\d{2}""")
     private fun dayOrNull(v:String?)=v?.takeIf { DAY.matches(it) } ?: JSONObject.NULL
@@ -326,6 +330,7 @@ internal object PhoneStatus {
     private fun collect(app:Context,now:Long):Input {
         // v3.7 r17-3: the use counts gathered in memory go to the settings first (this is a background thread).
         UseStats.flush(app,now)
+        DbStore.flush(app) // v3.8 r18: capacity refusals seen by this process
         val s=kr.callbrief.SecureSettings(app).snapshot()
         // Review #10, #11: the queue since 10/1 by the time each row entered it (not the call time), new and old apart.
         val store=StatusLights.read(app,s,now)
@@ -381,7 +386,7 @@ internal object PhoneStatus {
             db.transcriptionWindow(now-14*Telemetry.DAY_MS)?.let { (c,f,p) -> window=Telemetry.window14(c,f,p) }
         } }.onFailure { Log.w(TAG,"stages not read: ${it.javaClass.simpleName}") }
         return V37(latency,window,coverage,Telemetry.coverageRecent(covDays),UseStats.heartbeat(UseStats.stored(s),now),
-            jsonOf(s,PipelineSettingsKeys.DB_TABLES),matchDay,trace)
+            jsonOf(s,PipelineSettingsKeys.DB_TABLES),matchDay,trace,s.opt(DbStore.PRUNE),s.opt(DbStore.FULL))
     }
     /** The v3.4 keys r14-3 writes (read by name; absent until written). */
     internal fun v34(s:JSONObject):V34 = V34(s.optString(PipelineSettingsKeys.UPDATE_ERROR_CODE).takeIf { it.isNotBlank() },

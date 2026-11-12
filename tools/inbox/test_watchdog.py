@@ -801,5 +801,25 @@ class V37RulesTest(unittest.TestCase):
         self.assertEqual([], titles(phone=phone(report={"coverage": self.cov("2027-01-15", 0, 0)})))
 
 
+class V38StoreTest(unittest.TestCase):
+    """v3.8 r18 (DESIGN_V7 4.1 S4): a capacity refusal within a day is an issue; the store rules say the last prune."""
+
+    def test_refusal_within_a_day(self):
+        got = problems(phone=phone(dbFull={"count": 3, "firstMs": NOW - 30 * H, "lastMs": NOW - 2 * H}))
+        self.assertEqual([w.T_DB_REFUSED], [p["title"] for p in got])
+        self.assertIn("3번", got[0]["body"])
+        self.assertEqual([], titles(phone=phone(dbFull={"count": 3, "lastMs": NOW - 25 * H})))
+        self.assertEqual([], titles(phone=phone(dbFull={"count": 0, "firstMs": None, "lastMs": None})))
+        self.assertEqual([], titles(phone=phone(dbFull="x")))
+
+    def test_prune_line(self):
+        pruned = {"day": "2027-01-15", "atMs": NOW - H, "deleted": {"discovery_intake_requests": 1500, "vault2_pending": 400}, "skipped": None}
+        body = problems(phone=phone(dbPercent=72, dbPrune=pruned))[0]["body"]
+        self.assertIn("discovery_intake_requests 1500줄", body)
+        skipped = dict(pruned, deleted={}, skipped="IN_CALL")
+        body = problems(phone=phone(dbFull={"count": 1, "lastMs": NOW - H}, dbPrune=skipped))[0]["body"]
+        self.assertIn("건너뜀(IN_CALL)", body)
+
+
 if __name__ == "__main__":
     unittest.main()

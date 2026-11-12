@@ -218,5 +218,14 @@ CREATE TABLE IF NOT EXISTS local_intakes(event_id TEXT PRIMARY KEY,root_uri TEXT
         }
         return deleted
     }
+    /** v3.8 r18: the finished intake ledger lines nothing reads again, in one transaction ([LedgerPrune]); [busy] is a skip
+     * code decided by the caller (a call now) or null. */
+    internal fun pruneLedger(nowMs:Long=now(),busy:String?=null):LedgerPrune.Result {
+        token.check();val t0=System.nanoTime()
+        val r=LedgerPrune.run(port,OWNER,nowMs,kr.co.callsummary.core.android.ProtectedDatabase.file(context.applicationContext ?: context,DATABASE),
+            LedgerPrune.copyFile(context),busy)
+        // With the sealing of the whole store at the end of the transaction (the cost a run adds to the phone).
+        return r.copy(ms=(System.nanoTime()-t0)/1_000_000L)
+    }
     override fun close() { encrypted.close();port.close() }
 }

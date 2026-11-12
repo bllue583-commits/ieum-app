@@ -12,6 +12,7 @@ import kr.callbrief.pipeline.PipelineSettingsKeys
 class IeumApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        kr.callbrief.pipeline.DbStore.install(this) // v3.8 r18 (S4): a write the full store refuses is counted, not only swallowed
         CallPipelineStartup.init(this)
         kr.callbrief.pipeline.CallUpdate.checkSoon(this)
         // v3.5 (DESIGN_V5 2.1): the Kakao SDK learns the app key once, and the 05:30 morning report stays queued (every

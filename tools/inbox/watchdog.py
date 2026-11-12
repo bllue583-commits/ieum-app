@@ -27,6 +27,9 @@ recordings waiting for the charger by design are not counted in "자막이 밀�
 
 v3.7 (DESIGN_V7 3.3, r17-3): the morning report covered under 80% of yesterday's calls (report.coverage, report.recent) on two
 weekdays in a row, and the sealed store at 70% (dbPercent; the 80% rule stays for "거의 찼어요").
+
+v3.8 r18 (DESIGN_V7 4.1 S4): the sealed store refused a write for its size within the last day (dbFull.lastMs); the store
+rules say what the last ledger prune did (dbPrune).
 """
 import argparse, datetime, json, os, subprocess, sys, time
 
@@ -146,6 +149,9 @@ T_REPORT_COVERAGE = "아침 보고에 빠진 통화가 많아요"
 REPORT_COVERAGE_MIN = 0.8
 T_DB_HIGH = "폰 저장소를 70% 넘게 쓰고 있어요"
 DB_HIGH_PERCENT = 70
+# v3.8 r18 (DESIGN_V7 4.1 S4): the sealed store refused a write for its size (dbFull.lastMs) within the last day.
+T_DB_REFUSED = "폰 저장소가 다 차서 저장이 안 돼요"
+DB_REFUSED_RECENT_MS = 24 * HOUR
 CHARGER_WAIT_MIN = 36 * 60
 PIECES_WASTED_SHARE = 0.2
 
@@ -640,6 +646,19 @@ def with_causes(text, phone, now_ms):
     return text + ("\n\n마지막 하트비트 기준:\n" + "\n".join("- " + x for x in c) if c else "")
 
 
+def prune_words(phone):
+    """One line on the last ledger prune (v3.8 r18, heartbeat dbPrune): rows deleted per table or why it was skipped."""
+    p = sub(phone, "dbPrune")
+    if not p:
+        return ""
+    skipped = w_code(p.get("skipped"))
+    if skipped:
+        return f"마지막 저장소 정리: 건너뜀({skipped}).\n"
+    deleted = p.get("deleted") if isinstance(p.get("deleted"), dict) else {}
+    parts = [f"{w_code(k)} {num(v) or 0}줄" for k, v in deleted.items() if w_code(k)]
+    return f"마지막 저장소 정리: {', '.join(parts) if parts else '지운 줄 없음'}.\n"
+
+
 def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count, version=None, version_ms=None, history=None, tidy_run=None,
              status_commits=None, report_exists=None):
     """phone / last_run: dict or None (file missing); last_run is the hourly routine's self-report (v3.4), tidy_run the tidy's.
@@ -718,7 +737,16 @@ def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count, version=None
             top = [t for t in (sub(phone, "dbTables").get("top") or []) if isinstance(t, dict)][:3]
             add(T_DB_HIGH, f"폰의 보호 저장소를 {int(db)}% 쓰고 있어요 (기준 70%). 100%가 되면 모든 저장이 조용히 실패해요.\n"
                 + ("큰 표: " + ", ".join(f"{w_code(t.get('name'))} {num(t.get('chars')) or 0}자" for t in top) + ".\n" if top else "")
+                + prune_words(phone)
                 + "\n추정 원인: 자막 보존(7일, 60%부터 3일)이 줄이는 것보다 빨리 쌓여요. 저장소 줄이기(v3.8)를 서둘러야 해요.")
+        full = sub(phone, "dbFull")
+        full_last = ms(full, "lastMs")
+        # v3.8 r18 (S4): the phone counts the refusals the callers used to swallow; one within a day is an issue of its own.
+        if full_last and 0 <= now_ms - full_last <= DB_REFUSED_RECENT_MS:
+            add(T_DB_REFUSED, f"폰의 보호 저장소가 {hours(max(0, now_ms - full_last))} 전에 크기 때문에 저장을 거절했어요 (지금까지 {ms(full, 'count')}번). "
+                "그 뒤의 새 통화·자막·결과가 저장되지 않았을 수 있어요.\n"
+                + prune_words(phone)
+                + "\n해야 할 일: 하트비트 dbTables로 큰 표를 확인하고, 정리(dbPrune)가 건너뛰어졌다면 그 사유를 먼저 풀어 주세요.")
         ie, ie_since = w_code(phone.get("lastInboxError")), ms(phone, "lastInboxErrorSinceMs")
         # The phone keeps since when the code has been the same (lastInboxErrorSinceMs), so no state is kept here.
         if ie and ie_since and now_ms - ie_since > INBOX_ERROR_STUCK_MS:

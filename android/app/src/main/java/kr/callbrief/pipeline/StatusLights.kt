@@ -63,7 +63,10 @@ internal object StatusLights {
         val chargeWaiting:Int=0,val chargeWaitOldestMs:Long?=null,
         /** v3.6.1 (DESIGN_V7 K4), filled by [withPhone]: today's (KST) calls whose card window was tried ([CardStats] drawn plus
          * fallback plus unconfirmed) and of them the ones whose window was really drawn. */
-        val cardTodayTried:Int=0,val cardTodayDrawn:Int=0)
+        val cardTodayTried:Int=0,val cardTodayDrawn:Int=0,
+        /** v3.8 r18 (DESIGN_V7 4.1 S4), filled by [withPhone]: when the sealed store last refused a write for its size
+         * ([DbStore.lastFullMs]; 0: never). Within [DbStore.FULL_RECENT_MS] the 통화 정리 line says it is full. */
+        val dbFullMs:Long=0)
 
     const val TRANSCRIBE_LATE_MS=6*3_600_000L
     const val ANALYZE_LATE_MS=3*3_600_000L
@@ -128,6 +131,8 @@ internal object StatusLights {
             // v3.4 (4.2-5): the analysis routine missed its scheduled runs (the phone's second eye beside the watchdog).
             i.routineMissed>=ROUTINE_AMBER && i.routineEndedMs>0 ->
                 "분석이 ${hoursSince(i.routineEndedMs,i.now)}시간 안 돌았어요. 관리하는 분께 알려 주세요."
+            // v3.8 r18 (S4): a write was refused for the store's size; saying it beats the share below.
+            DbStore.fullRecent(i.dbFullMs,i.now) -> DbStore.FULL_WORDS
             i.dbPercent!=null && i.dbPercent>=SelfCheckNotices.STORAGE_SHARE_PERCENT ->
                 "저장 공간을 ${i.dbPercent}% 쓰고 있어요. 관리하는 분께 알려 주세요."
             i.failed>0 -> "정리하지 못한 통화가 ${i.failed}건 있어요. 아래 기다리는 통화 다시 정리하기를 눌러 주세요."
@@ -148,7 +153,7 @@ internal object StatusLights {
             else -> null }
         // Where each fix lives: the folder in 연결 (above), the consent in 정리 (above), the model, the retry and the update in
         // 상태와 도움 (below the lights); the notification switch is in the phone's settings, so that line has no target.
-        val analyzeTarget=if(!i.consent) GROUP_SUMMARY else if(i.routineMissed>=ROUTINE_AMBER || (i.dbPercent ?: 0)>=SelfCheckNotices.STORAGE_SHARE_PERCENT) null else GROUP_STATUS
+        val analyzeTarget=if(!i.consent) GROUP_SUMMARY else if(i.routineMissed>=ROUTINE_AMBER || (i.dbPercent ?: 0)>=SelfCheckNotices.STORAGE_SHARE_PERCENT || DbStore.fullRecent(i.dbFullMs,i.now)) null else GROUP_STATUS
         // The charger wait is fixed outside the app (plug it in): no target.
         val transcribeTarget=if(i.modelState=="UNSUPPORTED" || transcribe==PowerText.lightLong(i.chargeWaiting)) null else GROUP_STATUS
         // v3.4: recordings that are there but still waiting for their text are said in green on the recording line.
@@ -252,7 +257,7 @@ internal object StatusLights {
             cardNoNumber=stats?.optInt(kr.callbrief.pipeline.call.CardStats.NO_NUMBER,0) ?: 0,
             cardNoCard=stats?.optInt(kr.callbrief.pipeline.call.CardStats.NO_CARD,0) ?: 0,
             routineMissed=runCatching { routineMissed(s,i.now) }.getOrDefault(0),routineEndedMs=s.optLong(PipelineSettingsKeys.ROUTINE_ENDED_MS,0),
-            dbPercent=dbPercent,pendingText=RecordingGap.pendingText(s,i.now),
+            dbPercent=dbPercent,pendingText=RecordingGap.pendingText(s,i.now),dbFullMs=runCatching { DbStore.lastFullMs(s) }.getOrDefault(0L),
             noMatchLong=noMatchLong(s,i.now),
             kakao=runCatching { kakaoLink(s) }.getOrDefault(KakaoReport.Link.UNAVAILABLE),
             kakaoOn=s.optBoolean(PipelineSettingsKeys.MORNING_KAKAO,true),kakaoLastSentMs=s.optLong(PipelineSettingsKeys.KAKAO_LAST_SENT_MS,0),

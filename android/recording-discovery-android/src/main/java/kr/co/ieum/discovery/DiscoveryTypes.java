@@ -53,8 +53,13 @@ public final class DiscoveryTypes {
         }
         /** Same settings with a lower size line (the local store may still carry the old 25 MB database check). */
         public Config withMaxBytes(long limit){return limit>=maxBytes?this:new Config(quietMs,leaseMs,recheckMs,limit,pageSize);}
-        /** Files already stored are looked at again at most once a day; the page is large so one inventory covers a big folder. */
-        public static Config conservative(){return new Config(20000,120000,86_400_000L,MAX_AUDIO_BYTES,512);}
+        /** Files already stored are read and hashed again at most once in [RECHECK_MS]; the page is large so one inventory covers
+         * a big folder. v3.8 r18 (DESIGN_V7 4.1): was one day. Each look of an unchanged file wrote a new intake request (about
+         * 2,500 characters), a native receipt and a vault receipt (about 450 more) for every stored recording, every day: 11/13
+         * that was 2,078 requests for 333 recordings and about 6 points of the sealed store a day. A changed name, size or
+         * modified time still makes the file read at once; only the look at a file whose metadata did not change is rarer. */
+        public static final long RECHECK_MS=30L*86_400_000L;
+        public static Config conservative(){return new Config(20000,120000,RECHECK_MS,MAX_AUDIO_BYTES,512);}
     }
     public static final class Metadata {
         public final String documentId, displayName, mimeType;

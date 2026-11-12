@@ -44,6 +44,23 @@ public final class ProtectedDatabase implements AutoCloseable {
     /** How long the last State creation (read, decrypt, restore or first schema) took, or -1 before any. */
     public static long lastStateMs(){return lastStateMs;}
     public static long lastTransactionMs(){return lastTransactionMs;}
+    /** v3.8 r18 (DESIGN_V7 4.1 S4): the store refused a write or an open for its size (TEXT_STORE_CAPACITY_REQUIRES_REVIEW).
+     * Callers often swallow the exception; this count and time do not go away with it (measurement only, no content). */
+    public static final String CAPACITY_CODE="TEXT_STORE_CAPACITY_REQUIRES_REVIEW";
+    private static final java.util.concurrent.atomic.AtomicLong CAPACITY_FAILURES=new java.util.concurrent.atomic.AtomicLong();
+    private static volatile long lastCapacityMs=-1;
+    private static volatile Runnable capacityListener;
+    /** Capacity refusals in this process so far. */
+    public static long capacityFailures(){return CAPACITY_FAILURES.get();}
+    /** Wall time of the last capacity refusal in this process, or -1. */
+    public static long lastCapacityFailureMs(){return lastCapacityMs;}
+    /** Told after each capacity refusal, on the refusing thread while the store is locked: it must only hand the work on. */
+    public static void onCapacityFailure(Runnable listener){capacityListener=listener;}
+    private static void noteCapacity(CoreException e){
+        if(e==null||!CAPACITY_CODE.equals(e.code))return;
+        CAPACITY_FAILURES.incrementAndGet();lastCapacityMs=System.currentTimeMillis();
+        Runnable l=capacityListener;if(l!=null)try{l.run();}catch(RuntimeException ignored){}
+    }
     private static volatile String lastRecovery;
     /** What the last open did with left-over .new/.bak files (r9-1), as codes joined by ':' (PROMOTED_NEW, DROPPED_NEW,
      * PROMOTED_BAK, DROPPED_BAK, FAILED), then forgets it; null when nothing was left over since the last call. No content. */
@@ -166,7 +183,7 @@ public final class ProtectedDatabase implements AutoCloseable {
                     for(String statement:schema.split("\n-- statement-break\n"))db.execSQL(statement);
                     byte[] plain=snapshot(db);try{SecretKey key=keys.existing(alias);if(key==null)key=keys.createForEmptyStore(alias);if(key==null)throw error("TEXT_STORE_KEY_UNAVAILABLE");persist(plain,key);lastPlain=plain.clone();keyProof=sealProof(key);verified=true;sealedNow();}finally{Arrays.fill(plain,(byte)0);}
                 }
-            }catch(Exception e){close();if(e instanceof CoreException)throw e;throw error("TEXT_STORE_AUTHENTICATION_OR_OPEN_FAILED");}
+            }catch(Exception e){close();if(e instanceof CoreException){noteCapacity((CoreException)e);throw e;}throw error("TEXT_STORE_AUTHENTICATION_OR_OPEN_FAILED");}
         }
         byte[] sealProof(SecretKey key)throws Exception{
             Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.ENCRYPT_MODE,key);cipher.updateAAD(aad);
@@ -254,7 +271,7 @@ public final class ProtectedDatabase implements AutoCloseable {
                 }}
                 db.setTransactionSuccessful();if(outer&&plain!=null){if(lastPlain!=null)Arrays.fill(lastPlain,(byte)0);lastPlain=plain.clone();sealedChanges=changesAfter;sealedSchema=schemaAfter;}
                 done.addAll(pendingDone);return result;
-            }catch(CoreException e){throw e;}catch(RuntimeException e){if(durable)held=true;throw e;}
+            }catch(CoreException e){noteCapacity(e);throw e;}catch(RuntimeException e){if(durable)held=true;throw e;}
             finally{try{db.endTransaction();}catch(RuntimeException e){held=true;throw error("TEXT_STORE_COMMIT_REVIEW_REQUIRED");}finally{depth--;pendingDone.clear();if(plain!=null)Arrays.fill(plain,(byte)0);
                 lastTransactionMs=(System.nanoTime()-t0)/1_000_000L;if(lastTransactionMs>=100)android.util.Log.i(TAG,"transaction ms="+lastTransactionMs);}}
         }

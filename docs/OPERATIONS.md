@@ -116,8 +116,10 @@
 | `kakao`, `report` (v3.5) | `kakao{on, linked, sent, failed, lastSentMs, error, texts(마지막 보고가 몇 통이었나, v3.7 빌드 1052), plainRetried(링크 없는 글이 안 가서 앱 링크로 다시 보낸 누계)}`: 스위치 "카카오톡으로 받기", 연결, 다 나간 날 누계, 실패 누계, 마지막으로 다 나간 시각, 오류 코드. `report{day, source}`: 마지막으로 보낸 보고 날짜와 출처(`routine` 새벽 정리 보고서, `phone` 06:00 폰 폴백). **v3.7:** `report.coverage`{day(보고 날짜), yesterdayCalls(녹음 있고 개인 번호 아닌 어제 통화), inReport(보고에 들어간 수, 폰 폴백이면 0), pending(아직 글자로 바꾸거나 분석 중인 수), atMs, source}(마지막 보고, 없으면 null), `report.recent[]`{day, yesterdayCalls, inReport, pending}(최근 7일 보고, 오래된 것부터) | `linked=true`인데 `lastSentMs`가 이틀 아침 연속 오늘이 아니면, 또는 `linked=false`에 `error`가 `TOKEN_*`이면 워치독 이슈. `inReport / yesterdayCalls` < 80%가 평일 이틀 연속이면 워치독 이슈 "아침 보고에 빠진 통화가 많아요" |
 | `use` (v3.7) | {today, prev}: 그날(KST) 사용 횟수 {day, opens(앱을 앞으로), homeSec(홈을 본 초), taskDone([다 됐어요]), notifTap(알림으로 엶), cardExpand(카드 띠 펼침 — 카드 자체 집계 `callCard.today.expanded` 값을 읽음), kakaoOpen(카톡 보고 버튼으로 엶)}. `prev`는 전날(앱을 안 연 날은 0, 첫 집계 전은 null). 내용·시각 없음 | 채점 항목 10(v4.0) |
 | `dbTables` (v3.7) | 봉인 저장소의 표별 크기: {day, atMs, totalRows, totalChars, top[]}, `top`은 글자 수(다음 행 수) 큰 표 8개 {name, rows, chars, dChars(지난 집계 뒤 글자 수 변화, 처음은 null)}. 표 이름만, 내용 없음. 첫 집계 전 null | v3.8 저장소 작업의 재료. `dbPercent` ≥ 70이면 워치독 이슈 본문에 큰 표 3개 |
+| `dbPrune` (v3.8) | 마지막 수집 원장 정리(하루 한 번, 업데이트 뒤 첫 실행): {day, atMs, deleted{표 이름: 지운 행 수}(`discovery_intake_requests` 같은 내용 확인 요청, `vault2_pending` 끝난 금고 접수), charsBefore, charsAfter(전체 글자 수, 건너뛰면 null), skipped(건너뛴 사유: `IN_CALL` 통화 중, `TRANSCRIBING` 자막 작업 중, `QUEUE_UNREADABLE` 수집 줄을 못 읽음, `COPY_FAILED` 사본 실패, `NO_LEDGER` 원장 없음; 정리했으면 null), ms(봉인까지 걸린 시간), copyAtMs(정리 전 사본을 만든 시각, 사본이 없으면 null)}. 첫 정리 전 null | `dbTables`는 정리 뒤 다시 센 값. 워치독 저장소 이슈 본문에 한 줄 |
+| `dbFull` (v3.8) | 봉인 저장소가 크기 때문에 쓰기를 거절한 기록(`TEXT_STORE_CAPACITY_REQUIRES_REVIEW`, 호출부가 삼켜도 셈): {count(누계), firstMs, lastMs}. 거절이 없으면 count 0 | `lastMs`가 24시간 안이면 워치독 이슈, 폰 신호등 "통화 정리" 줄 주황 "저장 공간이 다 찼어요" |
 
-v3.1 이전 앱(11/6 아침 폰은 v3.1, 1040)은 v3.2 이후 키(`transcription`, `update`, `messages`, `recordTime`, `golden`, `guard`)를 보내지 않는다. v3.6 이하 앱은 v3.6.1·v3.7 키(`callCard.drawn` 등, `latency.segments`·`day`, `trace`, `use`, `dbTables`, `report.coverage`)를 보내지 않고, v3.7 앱은 `messages`를 보내지 않는다. 워치독은 키가 없으면 그 규칙을 건너뛴다.
+v3.1 이전 앱(11/6 아침 폰은 v3.1, 1040)은 v3.2 이후 키(`transcription`, `update`, `messages`, `recordTime`, `golden`, `guard`)를 보내지 않는다. v3.6 이하 앱은 v3.6.1·v3.7 키(`callCard.drawn` 등, `latency.segments`·`day`, `trace`, `use`, `dbTables`, `report.coverage`)를 보내지 않고, v3.7 앱은 `messages`를 보내지 않으며 v3.8 키(`dbPrune`, `dbFull`)도 없다. 워치독은 키가 없으면 그 규칙을 건너뛴다.
 
 `callLog` 안:
 
@@ -171,7 +173,8 @@ v3.4(11/6)부터 워치독은 Actions가 아니라 두 예약 작업 안에서 �
 | 자막이 밀려요 | 처음 정리 중(`firstPass.done=false`)이면 남은 자막이 있는데 마지막 자막(`lastTranscribedMs`)이 24시간 넘었을 때만. 아니면 `newQueuedCount`가 있는 하트비트(v2.6~)는 새 녹음의 `newOldestQueuedMs`가, 옛 하트비트는 `oldestQueuedMs`가 6시간 넘음. v3.6부터 충전을 기다리는 녹음(`power.waiting.n`)은 빼고 센다 |
 | 새 버전이 설치되지 않아요 | 폰이 받아 둔 새 버전(`updateAvailableCode` > `versionCode`)이 `updateReadySinceMs`부터 24시간 넘게 그대로 |
 | 폰 저장 공간이 거의 찼어요 | `dbPercent`가 80 넘음 |
-| 폰 저장소를 70% 넘게 쓰고 있어요 (v3.7) | `dbPercent`가 70 이상 80 이하(80 넘으면 위 이슈 하나만). 본문에 `dbTables.top`의 큰 표 3개 |
+| 폰 저장소를 70% 넘게 쓰고 있어요 (v3.7) | `dbPercent`가 70 이상 80 이하(80 넘으면 위 이슈 하나만). 본문에 `dbTables.top`의 큰 표 3개 v3.8부터 `dbPrune`의 마지막 정리 한 줄도 |
+| 폰 저장소가 다 차서 저장이 안 돼요 (v3.8) | 하트비트 `dbFull.lastMs`가 24시간 안(저장소가 크기 때문에 쓰기를 거절함). 본문에 누계와 `dbPrune`의 마지막 정리 한 줄(지운 행 수나 건너뛴 사유) |
 | 우편함 오류가 계속돼요 | 같은 `lastInboxError`가 `lastInboxErrorSinceMs`부터 2시간 넘음 |
 | 통화 카드가 통화 순간에 뜨지 않아요 (v3.6.1, 전 제목 "통화 카드 권한이 꺼져 있어요") | 하트비트 `callCard.today.fallback + unconfirmed`(옛 앱은 `noPermission`)가 하루 3번 이상(잠금이라 알림만 띄운 `locked`는 세지 않음). 본문에 `drawn` 수와 `recent[]`의 최근 원인 코드 |
 | 업데이트 실패 | `lastUpdateError`가 있음(단 `USER_ACTION_REQUIRED`, `INSTALL_SOURCE_NOT_ALLOWED`는 아래 옛 버전 규칙이 말함) |
@@ -195,7 +198,7 @@ v3.4(11/6)부터 워치독은 Actions가 아니라 두 예약 작업 안에서 �
 | 자막 조각이 버려지고 있어요 (v3.6) | `power.today`와 `power.prev` 모두 `killedChunkMs + deadlineMs`가 실행 ms(`battery.ms + plugged.ms`, 없으면 분 × 60,000)의 20% 넘음 |
 | 아침 보고에 빠진 통화가 많아요 (v3.7) | 하트비트 `report.coverage`·`report.recent[]`(와 지난 하트비트)로 본 가장 최근 보고와 그 앞 평일 보고가 모두 `inReport / yesterdayCalls` < 80%(통화 날짜 기준 평일 이틀 연속, 주말은 건너뜀). 가장 최근 보고가 어제 보고보다 오래됐으면 건너뜀 |
 
-위가 `tools/inbox/watchdog.py`의 규칙 전부다(11/12, v3.5 규칙 3개, v3.6 규칙 3개, v3.7 규칙 2개 포함 이슈 제목 33개; v3.6.1에서 카드 규칙 제목이 바뀜).
+위가 `tools/inbox/watchdog.py`의 규칙 전부다(11/13, v3.5 규칙 3개, v3.6 규칙 3개, v3.7 규칙 2개, v3.8 규칙 1개 포함 이슈 제목 34개; v3.6.1에서 카드 규칙 제목이 바뀜).
 
 토큰 이슈가 열리면: 새 토큰을 만들어 앱 저장소 비밀 `IEUM_INBOX_TOKEN`을 바꾸고 배포한다. 만료 뒤에는 폰이 업데이트도 못 받으므로 만료 전에 해야 한다. `IEUM_SIGNING_SEED` 비밀이 없으면 서명 키가 토큰에서 나오므로 토큰을 바꾸면 서명이 바뀌어 업데이트가 막힌다. 먼저 확인한다. 폰이 새 버전을 받고 다음 하트비트를 올리면 이슈는 저절로 닫힌다.
 
@@ -227,6 +230,18 @@ v3.4(11/6)부터 워치독은 Actions가 아니라 두 예약 작업 안에서 �
 | 장부 이름이나 업체가 이상함 | `ledger/ledger.json`의 rev와 updatedMs(내용은 옮기지 않고 앱에서 확인), `ledger/edits/` | 수정 반영 대기, 새벽 정리 전 |
 | CI 실패 | 실행의 "Summarize results" 요약과 `android-test-results` 산출물 | 단위 테스트, lint, 내보내기 검사 |
 | 모든 워크플로가 몇 초 만에 실패(단계 없음) | 실행 주석: "recent account payments have failed or your spending limit needs to be increased" | GitHub Actions 사용량·결제 한도. 사용자가 GitHub 설정 Billing에서 해결해야 하며 그동안 ci와 배포가 멈춘다(워치독은 v3.4부터 루틴 안에서 돌아 영향 없음). 에뮬레이터 시험(약 90분)이 사용량 대부분을 쓴다 |
+
+### 봉인 저장소 정리와 정리 전 사본 (v3.8)
+
+폰은 하루 한 번(`VaultPruneWork`)과 업데이트 5분 뒤 한 번 녹음 수집 원장의 끝난 줄을 지운다(설계 DESIGN_V7 4.1 S3): 같은 내용을 다시 확인한 요청 행과 끝난 금고 접수 행 중, 영수증이 3일 넘고 진행 중·대기·복구 중인 수집이 가리키지 않는 것만. 불변 영수증, 새 내용 요청, 수집 줄은 지우지 않는다. 결과는 하트비트 `dbPrune`. 통화 중이나 자막 작업 중이면 그날은 건너뛰고(`skipped`), 이 빌드의 첫 정리가 끝날 때까지 매시간 등록이 한 번 더 넣는다.
+
+**정리 전 사본.** 처음으로 무언가를 지우기 직전에 봉인 파일을 그대로 한 번 복사한다: `noBackup/protected-databases-prune-copy-v1/callbrief-local-v2.db.sealed`(원본은 `noBackup/protected-databases-v1/callbrief-local-v2.db.sealed`). 사본은 암호문 그대로지만 그 사이 지운 내용(개인 통화 처리로 지운 것 포함)이 남아 있으므로 **7일 뒤 정리가 반드시 지운다**(`dbPrune.copyAtMs`가 null이 되면 지워진 것). 사본은 다시 만들지 않는다.
+
+**되돌리는 법(정리 때문에 녹음이나 기록이 사라졌다고 판단될 때만, 7일 안).** 사본은 **원래 경로로 되돌려야만 열린다** — Keystore 키 이름과 암호 검증값(AAD)이 원래 파일의 정규 경로에서 나오기 때문이다. 다른 폴더·다른 폰·앱을 지웠다 다시 깐 폰에서는 열리지 않는다(앱을 지우면 키도 사라진다).
+1. 이음을 강제 중지한다(설정 → 애플리케이션 → 이음 → 강제 중지). 앱이 도는 동안 파일을 바꾸면 저장소가 "외부 변경"으로 잠긴다.
+2. 앱 개인 폴더에서 사본을 원본 자리에 덮어쓴다: `noBackup/protected-databases-prune-copy-v1/callbrief-local-v2.db.sealed` → `noBackup/protected-databases-v1/callbrief-local-v2.db.sealed`. 같은 폴더의 `.lock`은 두고, `.bak`·`.new`가 있으면 지우지 말고 그대로 둔다(열 때 복구 로직이 판정한다). 이름·폴더를 바꾸지 않는다.
+3. 앱을 연다. 하트비트 `dbRecovery`·`storeOpenError`가 비어 있고 `dbPercent`가 정리 전 값으로 돌아왔는지 본다.
+주의: 정리 뒤부터 되돌릴 때까지 새로 저장된 통화·자막·결과는 사라진다. 다음 날 정리가 같은 줄을 다시 지우므로, 정리 자체가 원인이면 되돌리기 전에 정리를 끈 새 버전을 먼저 배포한다. 출시(release) 빌드는 `adb run-as`가 안 되므로 앱 개인 폴더에 손을 대려면 루팅이나 이 복사만 하는 별도 빌드가 필요하다(지금 앱에는 되돌리기 버튼이 없다).
 
 정기 점검: 달에 한 번 예약 작업 실행 기록 1건을 열어 통화 원문이 남지 않았는지 확인한다.
 

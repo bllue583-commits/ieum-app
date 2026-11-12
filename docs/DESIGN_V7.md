@@ -128,22 +128,29 @@ T5의 근거와 한계: `cpuset=background`·`cpusAllowed=4`에서 4스레드와
 
 ## 4. v3.8 「넘치지 않는 저장소, 잠긴 배포」 + 엔진 측정대
 
-### 4.1 저장소 (r18-1, 빌드 A) — 기한 있는 일: 11/17까지 배포
+### 4.1 저장소 (r18-1, 빌드 A) — 기한 있는 일: 11/17까지 배포 (r18-storage에서 실측으로 다시 씀)
 
-v3.8은 **두 번에 나눠 배포한다**: 빌드 A 저장소 → 평일 하루 판정 → 빌드 B 배포 잠금(4.2). 데이터 이전과 서명·빌드 유형 전환을 한 배포에 쌓지 않는다(6절 1번). 기한의 근거인 "11/25쯤 100%"는 직선으로 이은 값이고, 처음 정리로 한꺼번에 분석된 통화들의 14일 비움이 곧 시작되면 느려질 수 있다(추정) — v3.7의 `dbTables`와 응급 처치 결과를 보고 기한을 다시 잡는다.
+v3.8은 **두 번에 나눠 배포한다**: 빌드 A 저장소 → 평일 하루 판정 → 빌드 B 배포 잠금(4.2). 데이터 이전과 서명·빌드 유형 전환을 한 배포에 쌓지 않는다(6절 1번).
 
-구조(감사): 봉인 DB는 메모리 SQLite를 **쓰기 트랜잭션마다 모든 테이블·모든 행을 JSON 하나로 만들어 AES-GCM으로 파일 전체를 다시 쓴다**(`ProtectedDatabase.java:151, 284-319, 265-273` — 쓰기 한 번에 파일 I/O 세 번). 한도는 평문 16MiB·한 행 1MiB·10만 행이고 `dbPercent`는 파일 길이 비율과 행 수 비율 중 큰 값이다. 100%에 닿으면 `snapshot()`이 예외를 던져 **그 뒤 모든 쓰기가 실패**하고, 호출부의 `runCatching`(앱 전체 470곳)이 이를 삼켜 조용히 멈춘다(추정). 2분 조각마다 `savePart`가 전체를 다시 봉인하므로 DB가 클수록 자막도 느려진다.
+구조(감사): 봉인 DB는 메모리 SQLite를 **쓰기 트랜잭션마다 모든 테이블·모든 행을 JSON 하나로 만들어 AES-GCM으로 파일 전체를 다시 쓴다**(`ProtectedDatabase.java` `transaction`·`snapshot`·`persist`). 한도는 평문 16MiB·한 행 1MiB·10만 행이고, 하트비트 `dbPercent`는 **봉인 파일 길이** ÷ 16MiB와 행 수 ÷ 10만 중 큰 값이다(`StatusLights.read`, `dbPercent`). 파일은 매번 그때의 행으로 새로 쓰이므로 행을 지우면 다음 쓰기에서 파일이 줄어든다. 100%에 닿으면 `snapshot()`이 `TEXT_STORE_CAPACITY_REQUIRES_REVIEW`를 던져 그 뒤 쓰기가 실패하고, 호출부의 `runCatching`이 이를 삼켜 조용히 멈춘다.
+
+**실측이 방향을 바꿨다.** 11/13 00:34 하트비트: `dbPercent` 63(11/12 아침 57, 하루 약 6%p — 이대로면 11/19 전후 100%), `dbOpenMs` 1995. v3.7 `dbTables`(글자 수): `discovery_intake_requests` 2,078행 519만 자(60%), `discovery_queue_rows` 739행 98만(11%), `receipts` 1,944행 44만(5%), `vault2_intake_receipts` 1,944행 43만(5%), `vault2_pending` 465행 41만(5%), **`call_records` 237행 32만(3.6%)**. 자막이 아니라 녹음 수집 원장이 80% 이상이다.
+
+원인(코드 감사, r18-storage 보고서에 표별 수명): 수집 줄(`RecordingDiscovery.processNext`)은 저장된 파일을 **하루마다 다시 읽어 해시를 대고**(`Config.conservative()` `recheckMs` 1일), 내용이 같아도 볼 때마다 새 작업 id로 요청 1행(`discovery_intake_requests`, 약 2,500자: 수집 상태 한 줄을 Base64로 담은 `commit_payload` + 메타데이터 JSON), 원장 영수증 1행(`receipts` OBSERVE/SAME_CONTENT), 금고 영수증 1행(`vault2_intake_receipts`)을 남긴다. 녹음 333개 × 날마다 ≈ 하루 98만 자 ≈ 6%p, 실측 증가와 맞는다. 같은 내용 확인은 버전을 만들지 않으므로 끝난 뒤 그 요청을 읽는 곳이 없다.
 
 | # | 내용 | 위험과 대책 |
 | --- | --- | --- |
-| S1 | **원문 분리.** `call_records.transcript`·`segments_json`과 문자 본문을 기록별 AES-GCM 파일(`noBackup/transcripts-v1/<id>.sealed`, AtomicFile)로. DB에는 sha와 길이만 | 쓰기 순서 "파일 쓰기 → 다시 읽어 검증 → 같은 트랜잭션에서 칼럼 비움", 읽기는 파일 없으면 옛 칼럼(대체 길)을 1개 버전 동안 유지, 단계마다 반복해도 안전. **지우는 길도 같이:** `trim`(:416)과 개인 통화 처리(:793-795)는 "DB 커밋 → 파일 삭제", 남은 고아 파일은 `VaultPrune`이 청소 |
-| S2 | **조각 저장을 DB 밖으로.** `call_transcription_parts`를 녹음별 파일로 — 2분마다 전체 재봉인이 사라짐 | 끝낸 조각 무효화 금지(이어 하기), 옮기는 중 실행 금지(실행 작업 취소 뒤 이전) |
-| S3 | **쌓이기만 하는 원장 줄이기 — 읽는 곳이 없는 것만.** `request_bindings.request_json`(쓰기만 함, `SqlCallRepository.java:113`)은 새 행부터 sha만. **`discovery_intake_requests.commit_payload`·`local_intakes.metadata_json`은 건드리지 않는다** — 재시도 대조(`GeneralLocalStore.kt:125`)와 복구(:146, 170, 189)가 읽으므로 sha만 남기면 진행 중 수집이 멈추고 그 녹음을 잃는다(검토 치명 C2). discovery 계열은 완료 뒤 지울 수 있는 별도 표로 옮기는 안을 v3.7 `dbTables`에서 비중이 30%를 넘을 때만 | 기존 행은 그대로(BEFORE DELETE 트리거) |
-| S4 | **100%를 조용히 넘지 않기.** 쓰기 실패 사유 `TEXT_STORE_CAPACITY_REQUIRES_REVIEW`를 삼키지 말고 계수 → 신호등 "저장 공간이 다 찼어요"(주황)·워치독 | — |
+| S1 | 원문 분리(자막·문자 본문을 기록별 파일로) — **미룸** | 자막 비중 3.6%라 지금 줄일 몫이 작고, 위험(파일·DB 두 곳 쓰기)은 그대로. 수집 원장 정리 뒤 `dbTables`에서 `call_records`가 다시 커지면 연다 |
+| S2 | 조각 저장을 DB 밖으로 — **미룸** | 같은 이유. 2분마다 전체 재봉인 비용은 DB가 작아지면 같이 준다 |
+| S3 | **끝난 수집 원장 줄 치우기**(`LedgerPrune`, `GeneralLocalStore.pruneLedger`): ① 같은 내용 확인의 요청 행 — 원장 영수증이 OBSERVE/SAME_CONTENT, 금고 영수증이 같은 요청 해시로 있음, 영수증이 3일 넘음, 그 작업이 원본 버전을 만들지 않음, 열린 금고 접수(`vault2_pending.completed=0`)가 아님, 수집 줄의 어느 행(모든 범위의 `pending`·`versions`·감사 메모)도 그 id를 가리키지 않음. ② 끝난 금고 접수(`vault2_pending.completed=1`) — 같은 영수증·나이·수집 줄 조건. 하루 한 번(`VaultPruneWork`)과 업데이트 뒤 첫 실행(5분 뒤 한 번, 이 빌드의 첫 정리가 끝날 때까지 매시간 등록이 다시 넣음). **한 트랜잭션**, 다시 돌아도 같음 | 요청 행의 삭제 막이 트리거(`discovery_request_delete`)는 같은 트랜잭션에서 내렸다 원래 SQL로 다시 세운다. 통화 중(`OpenUpdate.inCall`)이나 자막 작업이 도는 동안(11분 안에 쓴 RUNNING 작업)은 건너뜀(`dbPrune.skipped`). 첫 삭제 전 봉인 파일 사본 1개를 7일 보관 뒤 삭제(OPERATIONS 6절에 되돌리는 법; 사본은 원래 경로로 되돌려야만 열림). **지우지 않는 것:** `receipts`·`vault2_intake_receipts`(불변 영수증, 재시도의 중복 막이 — `EncryptedRecordingStore.committed`, 트리거가 삭제 금지), 새 내용 요청(버전이 가리킴 — `localReceipt`가 읽음), `discovery_queue_rows`(살아 있는 수집 상태), `discovery_documents`(파일 목록 캐시), 다른 범위의 수집 줄 |
+| S3b | **원천에서 줄이기:** 저장된 파일 다시 읽기를 하루 → **30일**(`DiscoveryTypes.Config.RECHECK_MS`). 이름·크기·수정 시각이 바뀐 파일은 전처럼 바로 읽는다 | 같은 이름·크기·수정 시각인데 내용만 바뀐 파일을 늦게(최대 30일) 안다 — 통화 녹음기는 끝난 파일을 고쳐 쓰지 않는다(추정). 하루 한 번 모든 녹음 전체를 읽고 해시하던 배터리·I/O도 같이 준다 |
+| S4 | **100%를 조용히 넘지 않기.** `ProtectedDatabase`가 크기 거절(`TEXT_STORE_CAPACITY_REQUIRES_REVIEW`)을 직접 센다(호출부가 삼켜도 남음) → 설정 `dbFull{count, firstMs, lastMs}`(봉인 DB가 아니라 설정에 쓰므로 가득 차도 기록됨) → 하트비트 `dbFull`, 신호등 "통화 정리" 줄 "저장 공간이 다 찼어요"(주황, 마지막 거절 24시간 안), 워치독 "폰 저장소가 다 차서 저장이 안 돼요" | — |
 
-지킬 것(데이터를 잃지 않으려면): `.sealed` 파일 이름·경로를 바꾸지 않는다(Keystore 별칭·AAD가 경로에서 나옴). `.bak`/`.new`는 복구 로직에 맡긴다. `format=1` 유지. 이전 전 `.sealed` 복사본을 7일 보관(사본에는 그 사이 지운 개인 통화 내용이 남으므로 7일 뒤 반드시 삭제; AAD가 경로라 사본은 **원래 경로로 되돌려야만** 열린다 — 복구 절차에 적는다). 이전 전후 테이블별 행 수를 하트비트 `dbMigrate{before, after, moved, failed}`로. device-test에 8MB 합성 DB 이전 시나리오. **한도 상향(A안)은 하지 않는다** — 복원 시간·쓰기 비용이 그대로고 옛 빌드가 못 연다.
+지킬 것(데이터를 잃지 않으려면): `.sealed` 파일 이름·경로를 바꾸지 않는다(Keystore 별칭·AAD가 경로에서 나옴). `.bak`/`.new`는 복구 로직에 맡긴다. `format=1` 유지. 사본은 다른 폴더(`protected-databases-prune-copy-v1/`)에 두어 `.bak`/`.new` 판정에 끼지 않는다. 정리 결과는 하트비트 `dbPrune{day, atMs, deleted{표: 행 수}, charsBefore, charsAfter, skipped, ms, copyAtMs}`, `dbTables`는 정리 뒤에 다시 센다. **한도 상향(A안)은 하지 않는다** — 복원 시간·쓰기 비용이 그대로고 옛 빌드가 못 연다.
 
-확인 기준: `dbPercent` < 30, `dbOpenMs` < 600, 하루 증가 < 0.3%p, `dbMigrate.failed` 0, 통화 상세에서 자막이 전과 같이 보임(화면 시험), 조각 저장 ms가 DB 크기와 무관.
+예상(폰 데이터를 볼 수 없어 11/13 표 기준 추정): 요청 2,078행 중 영수증이 있는 1,944행에서 새 내용 버전(금고 접수 465행이 상한)을 뺀 약 1,480행(370만 자, 43%)과 끝난 금고 접수 약 40만 자(5%)가 배포 3일 안에 지워져 글자 수가 868만 → 약 460만으로 준다. 11/13의 파일/글자 비율 1.22(63% = 10.6MB / 868만 자)로 보면 `dbPercent` **33 안팎 — 이것만으로 30 밑은 어렵다**(남는 큰 몫: 수집 줄 11%, 불변 영수증 10%, 영수증 없는 요청 134행 4%). 배포 전까지 쌓이는 같은 내용 확인도 같은 규칙으로 지워진다. 하루 증가는 다시 읽기 30일로 영수증 몫이 하루 5천 자 수준이 되어 새 통화 몫(추정 하루 2~5만 자, 0.1~0.3%p)이 대부분이다.
+
+확인 기준(배포 뒤 하트비트): `dbPercent` < 30, `dbOpenMs` < 600, 하루 증가 < 0.3%p, `dbPrune.skipped`가 이틀 넘게 이어지지 않음, `dbFull.count` 0, 녹음 유실 0(자막 실패·수집 실패가 늘지 않음, `vault2_refs` 수가 녹음 수를 따라감).
 
 ### 4.2 배포 잠금 (r18-2, 빌드 B, 사용자 할 일 포함 — 순서를 바꾸면 설치가 깨지거나 폰이 고립된다)
 
@@ -316,6 +323,7 @@ v4.0 배포는 버전 규칙대로 v4.0이고, **"완료"는 배포가 아니라
 | r17-3 | `use{opens, homeSec, taskDone, notifTap, cardExpand, kakaoOpen}` 앱이 직접 셈 | `cardExpand`는 따로 세지 않고 카드 자체 집계(`CardStats`의 오늘 `expanded`)를 읽어 씀(`UseStats.cardExpandToday`). 사용 숫자는 메모리에 모아 화면이 뒤로 갈 때와 하트비트 때만 봉인 설정에 씀 | 묶음 지시문이 기존 `expanded`를 그대로 써도 된다고 함(같은 사건을 두 곳에서 세면 어긋남). 누를 때마다 봉인 DB 전체를 다시 쓰지 않음 |
 | r17-3 | 자막 실행마다 **스레드** CPU 시간(`/proc/self/task/*/stat`) | **프로세스 전체** CPU 시간(`/proc/self/stat`의 utime+stime) 차이를 `power.today.cpuMs`·`cpuRuns`에, 배터리 실행의 `CHARGE_COUNTER` 차이를 `batteryUah`에 | 묶음 지시문(r17-3 8번 "가능한 범위")이 프로세스 값으로 정함. 실행 동안 같은 프로세스의 다른 작업(카드·결과 받기)의 CPU도 섞이므로 통화 1건당 CPU는 상한으로 읽는다 |
 | r17-3 | `dbTables`: 테이블별 행 수와 글자 길이 합 상위 8개, 하루 증가분 | `dbTables{day, atMs, totalRows, totalChars, top[{name, rows, chars, dChars}]}`: 증가분은 표마다 **`dChars`**(지난 집계 뒤 글자 수 변화, 처음은 null). 전체 표 수치는 설정에만 두고 하트비트에는 상위 8개만 | 하루 증가분을 표 단위로 보아야 v3.8에서 어느 표를 줄일지 정함 |
+| r18-storage (4.1) | S1 원문 분리·S2 조각 파일 먼저, `discovery_intake_requests`는 건드리지 않음(S3) | S1·S2 미룸. 같은 내용 확인의 요청 행과 끝난 금고 접수만 3일 뒤 지움(`LedgerPrune`, 첫 삭제 전 사본 7일), 저장된 파일 다시 읽기 1일 → 30일, 크기 거절을 `ProtectedDatabase`가 직접 셈(`dbFull`). 영수증·새 내용 요청·수집 줄은 남김 | v3.7 `dbTables` 실측: 자막 3.6%, 수집 원장 80% 이상이고 하루 6%p가 다시 읽기의 같은 내용 확인에서 나옴. 재시도·복구가 읽는 줄(진행 중, 버전이 가리키는 것)은 조건에서 빠지므로 S3의 치명 지적(C2)에 걸리지 않음 |
 
 ## 12. 사용자가 할 일 (이것만)
 

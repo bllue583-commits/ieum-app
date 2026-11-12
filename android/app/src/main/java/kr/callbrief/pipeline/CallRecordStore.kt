@@ -422,7 +422,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     fun trim(now:Long,dbPercent:Int?=null) { port.transaction { trimRows(now,dbPercent);null } }
     /** v3.6.1 (D1): the store's share of its limit, as the lights count it ([StatusLights.dbPercent]: bytes or rows). */
     fun dbPercent():Int? = runCatching {
-        val bytes=(rows("PRAGMA page_count").single().long("page_count") ?: 0)*(rows("PRAGMA page_size").single().long("page_size") ?: 0)
+        // v3.8 r18: pages freed by a delete stay in the memory database until the next load; they are no share of the file.
+        val pages=(rows("PRAGMA page_count").single().long("page_count") ?: 0)-(runCatching { rows("PRAGMA freelist_count").single().long("freelist_count") }.getOrNull() ?: 0)
+        val bytes=pages.coerceAtLeast(0)*(rows("PRAGMA page_size").single().long("page_size") ?: 0)
         val tables=rows("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").mapNotNull { it.str("name") }
         val total=tables.sumOf { t -> rows("SELECT count(*) AS n FROM \"${t.replace("\"","\"\"")}\"").single().long("n") ?: 0L }
         StatusLights.dbPercent(bytes,total)
