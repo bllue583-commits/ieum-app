@@ -122,6 +122,7 @@
 | `messages.mailError` (v3.4, **v3.7에서 지움**) | 메일 오류 코드별 수였다. 메일 기능을 지우면서 `messages` 묶음이 하트비트에서 빠졌다 | |
 | `kakao`, `report` (v3.5) | `kakao{on, linked, sent, failed, lastSentMs, error, texts(마지막 보고가 몇 통이었나, v3.7 빌드 1052), plainRetried(링크 없는 글이 안 가서 앱 링크로 다시 보낸 누계), **r18:** style(마지막 보고가 `list` 리스트 말풍선, `text` 글, `picture` 그림; 보낸 적 없으면 null), cards(마지막 보고의 리스트 말풍선 수), listFallback(리스트가 안 가서 글로 대신 보낸 누계), web(마지막 보고에 [웹으로 보기]가 붙었나), tags{important, confirm, request, regular, optional}(마지막 보고의 챙길 일 분류별 건수, 숫자만)}`: 스위치 "카카오톡으로 받기", 연결, 다 나간 날 누계, 실패 누계, 마지막으로 다 나간 시각, 오류 코드. `report{day, source}`: 마지막으로 보낸 보고 날짜와 출처(`routine` 새벽 정리 보고서, `phone` 06:00 폰 폴백). **v3.7:** `report.coverage`{day(보고 날짜), yesterdayCalls(녹음 있고 개인 번호 아닌 어제 통화), inReport(보고에 들어간 수, 폰 폴백이면 0), pending(아직 글자로 바꾸거나 분석 중인 수), atMs, source}(마지막 보고, 없으면 null), `report.recent[]`{day, yesterdayCalls, inReport, pending}(최근 7일 보고, 오래된 것부터) | `linked=true`인데 `lastSentMs`가 이틀 아침 연속 오늘이 아니면, 또는 `linked=false`에 `error`가 `TOKEN_*`이면 워치독 이슈. `inReport / yesterdayCalls` < 80%가 평일 이틀 연속이면 워치독 이슈 "아침 보고에 빠진 통화가 많아요" |
 | `use` (v3.7) | {today, prev}: 그날(KST) 사용 횟수 {day, opens(앱을 앞으로), homeSec(홈을 본 초), taskDone([다 됐어요]), notifTap(알림으로 엶), cardExpand(카드 띠 펼침 — 카드 자체 집계 `callCard.today.expanded` 값을 읽음), kakaoOpen(카톡 보고 버튼으로 엶)}. `prev`는 전날(앱을 안 연 날은 0, 첫 집계 전은 null). 내용·시각 없음 | 채점 항목 10(v4.0) |
+| `feedback` (v4.0) | {wrong, undone}: 체크할 일의 [틀렸어요]를 누른 수와 그것을 [되돌리기]한 수, v4.0 설치 뒤 누계(숫자만, 어떤 일인지 없음). 틀린 일의 id는 새벽 정리 state의 `wrong[]`(최근 14일)로만 간다. v4.0 전 앱에는 없음 | 채점 항목 4·10의 실사용 보조 지표. 주 1회 집계(7절) |
 | `dbTables` (v3.7) | 봉인 저장소의 표별 크기: {day, atMs, totalRows, totalChars, top[]}, `top`은 글자 수(다음 행 수) 큰 표 8개 {name, rows, chars, dChars(지난 집계 뒤 글자 수 변화, 처음은 null)}. 표 이름만, 내용 없음. 첫 집계 전 null | v3.8 저장소 작업의 재료. `dbPercent` ≥ 70이면 워치독 이슈 본문에 큰 표 3개 |
 | `dbPrune` (v3.8) | 마지막 수집 원장 정리(하루 한 번, 업데이트 뒤 첫 실행): {day, atMs, deleted{표 이름: 지운 행 수}(`discovery_intake_requests` 같은 내용 확인 요청, `vault2_pending` 끝난 금고 접수), charsBefore, charsAfter(전체 글자 수, 건너뛰면 null), skipped(건너뛴 사유: `IN_CALL` 통화 중, `QUEUE_UNREADABLE` 수집 줄을 못 읽음, `COPY_FAILED` 사본 실패(3일 이어지면 사본 없이 정리), `NO_LEDGER` 원장 없음; 정리했으면 null. 건너뛰면 1시간 뒤 다시, 하루 최대 6번), ms(봉인까지 걸린 시간), copyAtMs(정리 전 사본을 만든 시각, 사본이 없으면 null), copy(`made` 이번에 만듦, `kept` 보관 중, `deleted` 7일 지나 지움, `none` 사본 없이 정리함, null 정리 전)}. 같은 날 뒤에 끝난 "지운 줄 0"이나 건너뜀은 그날 앞의 실제 삭제 결과를 덮지 않는다. 첫 정리 전 null | `dbTables`는 정리 뒤 다시 센 값. 워치독 저장소 이슈 본문에 한 줄. **판정 시점:** 첫 정리는 직전 3일치를 남기므로 `dbPercent`가 30 근처로 내려가는 것은 업데이트 3~4일 뒤다 |
 | `dbFull` (v3.8) | 통화 봉인 저장소가 **전체 한도**(16MiB·10만 행) 때문에 쓰기를 거절한 기록(`TEXT_STORE_CAPACITY_REQUIRES_REVIEW`, 호출부가 삼켜도 셈): {count(누계), firstMs, lastMs}. 거절이 없으면 count 0 | `lastMs`가 24시간 안이면 워치독 이슈, 폰 신호등 "통화 정리" 줄 주황 "저장 공간이 다 찼어요" |
@@ -351,3 +352,60 @@ update-smoke는 v3.8부터 새 APK를 release로 만들고(지금 배포본은 d
 정기 점검: 달에 한 번 예약 작업 실행 기록 1건을 열어 통화 원문이 남지 않았는지 확인한다.
 
 관련 파일: `docs/routines/`(지시문, 자가 보고 요약 `self-report.md`), `tools/inbox/`(워치독), `tools/needs_update_smoke.sh`, `tools/update_smoke.sh`, `.github/workflows/`, `docs/DEVELOPMENT.md`(개발 환경).
+
+## 7. v4.0 운영 자립 (r20-5, DESIGN_V7 6)
+
+### 7.1 폰 분실·초기화 때 복원 (코드로 확인한 사실대로, 11/13)
+
+**먼저 알아 둘 것.** 앱은 `android:allowBackup="false"`이고 봉인 저장소(`noBackup/protected-databases-v1/`)와 봉인 설정은 그 폰의 Android Keystore 키로만 열린다. 그래서 폰 안의 이음 데이터는 **어떤 방법으로도 새 폰으로 옮길 수 없다**(Smart Switch·Google 백업에도 안 들어가고, 파일을 복사해도 열리지 않는다). 원본으로 남는 것은 우편함 저장소와 폰의 통화 녹음 파일뿐이다.
+
+| 무엇 | 복원되나 | 어디서 |
+|---|---|---|
+| 업체·사람·진행 중인 일·현장 메모(장부) | **된다.** 새 폰은 `LEDGER_REV`가 0이라 첫 결과 받기에서 우편함 `ledger/ledger.json`을 그대로 적용한다(`CallRecordWork` → `applyLedger`) | 우편함 `ledger/` |
+| 지난 통화 요약·체크할 일 | 녹음 파일이 새 폰의 녹음 폴더에 있으면 **처음 정리가 10월 1일부터 다시 만든다**(자막을 폰에서 다시 만들고 매시간 분석이 다시 요약 — 수백 건이면 여러 날과 구독 한도를 씀). 녹음 파일이 없으면 **잃는다**(요약 결과 파일은 폰이 받은 뒤 우편함에서 지운다) | 폰 녹음 폴더(삼성 통화 녹음은 Smart Switch나 삼성 클라우드로 옮겨야 남는다) |
+| 끝낸 일, 직접 적은 일, [틀렸어요] 표시, 고친 이름·합친 사람 되돌리기, 개인으로 둔 번호 | **잃는다.** 폰 안에만 있다(직접 고친 이름은 `ledger/edits/`로 올라가 장부에 반영된 만큼만 남는다) | 없음 |
+| 카카오톡 연결, 내 정보, 알림 시각, 카드 설정 | **잃는다.** 다시 설정 | 없음 |
+| 음성 인식 모델(574MB) | 동의하면 다시 받는다 | 공개 다운로드 |
+| 하트비트·채점 숫자의 지난 값 | 우편함 `status/`의 지난 파일과 git 기록에 남는다. 폰 안의 누계(`use`, `feedback`, 카드 통계)는 0부터 | 우편함 `status/` |
+
+**절차(관리하는 사람이 한다, 약 30분 + 처음 정리 며칠):**
+1. 새 폰에 이음 APK를 설치한다: 우편함 저장소의 최신 릴리스 자산(`app/version.json`의 `apk`가 가리키는 파일, `sha256`으로 확인)을 받아 설치(출처 허용 필요). 서명이 같으면 이후 업데이트는 저절로 된다.
+2. 녹음 파일을 옮겼다면 먼저 녹음 폴더에 있는지 본다(삼성 "통화 녹음" 폴더).
+3. 앱의 처음 설정을 끝까지 한다(새 설치라 통화 카드 단계가 필수로 나온다). 정리 동의 → 모델 받기 → 처음 정리가 시작된다.
+4. 설정 › 아침 보고에서 카카오톡을 다시 연결한다.
+5. 다음 날 아침 하트비트 `status/phone.json`에서 `appVersion`, `firstPass`, `kakao.linked`를 확인하고, 앱의 업체 탭에 장부의 업체가 들어왔는지 본다(장부 적용은 하트비트 키가 따로 없다).
+6. 잃어버린 폰은 우편함 토큰이 APK 안에 있으므로, 회수하지 못하면 OPERATIONS 5절 "서명 키 교체와 토큰 새 발급"의 토큰 교체를 한다(새 토큰 → 배포 → 옛 토큰 폐기).
+
+시험기에서 이 절차를 실제로 한 번 돌려 보는 것은 아직 하지 않았다(이 묶음에는 기기가 없음). 처음 한 번은 에뮬레이터나 남는 폰으로 1~3번만 해 보면 된다.
+
+### 7.2 [틀렸어요] 주 1회 집계와 지시문 개선 (절차만)
+
+1. 월요일 아침, 지난 7일의 `status/phone.json` git 기록에서 `feedback.wrong`·`feedback.undone`의 증가분과 `use.today.taskDone`의 합을 적는다. 틀림 비율 = (wrong 증가 - undone 증가) / (그 수 + taskDone 합).
+2. 새벽 정리 state의 `wrong[]` id로 장부·`tidy/history/`에서 그 일이 어떤 통화의 어떤 약속이었는지 본다(관리자가 우편함 안에서만, 내용을 다른 곳에 옮기지 않는다).
+3. 같은 종류가 2건 이상이면(예: 상대가 할 일을 내 일로, 인사말을 약속으로) `docs/routines/hourly.md`의 해당 규칙을 고치는 안을 만든다. hourly.md를 바꾸는 것은 자막·분석 묶음과 같은 절차(버전 올림, 정답지로 다시 재기, DESIGN_V7 7절)를 따른다.
+4. 결과를 HANDOFF 4절 판정표의 채점 항목 4 옆에 한 줄로 적는다.
+
+### 7.3 GitHub Actions 분량 (11/13 기준)
+
+| 워크플로 | 언제 도나 | 바꾼 것(v4.0) |
+|---|---|---|
+| `ci` | 모든 `feature/**` push | 그대로(약 5분) |
+| `device-test` | **`feature/lean-calls` push**와 수동 | 전에는 모든 `feature/**` push마다 10~40분 돌았고, 에뮬레이터 시험의 기존 실패 1건으로 작업 브랜치마다 빨간불이었다. 작업 브랜치는 필요할 때 수동(`gh api repos/<owner>/<repo>/actions/workflows/device-test.yml/dispatches -f ref=<브랜치>`) |
+| `inbox-e2e` | 자기 파일 push와 수동 | 매시간 cron을 지웠다. GitHub는 예약 실행을 기본 브랜치(`main`)의 파일로만 하는데 `main`에 이 파일이 없어 cron은 한 번도 돌지 않았다(마지막 실행 11/4, push). 한 번 확인 = 수동 실행 두 번(합성 통화를 넣고, 한 시간쯤 뒤 다시 돌리면 결과를 검사하고 새 것을 넣음). 분석이나 파서를 바꿨을 때만 |
+| `release-apk`, `update-smoke` | `feature/lean-calls`·`main` push | 그대로 |
+| `real-device-test` | 수동(하루 5번 한도) | 그대로 |
+
+저장소가 공개인 동안 Actions 분은 무료다. 비공개로 돌리면(7.4) 무료 분(계정 플랜의 월 한도)에서 빠지므로 `device-test`(분 단위가 가장 큼)는 통합 브랜치에서도 수동으로 돌리는 것을 먼저 검토한다.
+
+### 7.4 저장소 비공개 복귀 (사용자가 한다)
+
+앱 저장소는 11/5부터 Actions 무료 때문에 공개다(비밀은 들어 있지 않다: 토큰·키는 Actions 비밀과 우편함에만 있음, `tools/scan_export.py`와 gitleaks ci가 검사). 비공개로 돌릴 때는:
+1. GitHub 앱 저장소 › Settings › General › Danger Zone › Change visibility › Private. (Claude는 공개·비공개 전환을 하지 않는다.)
+2. Settings › Billing에서 Actions 사용량을 확인한다. 한도를 넘으면 모든 워크플로가 몇 초 만에 실패한다(6절 표 마지막 줄).
+3. 7.3 표대로 무거운 워크플로를 수동으로만 둘지 정한다.
+4. 폰은 우편함 저장소(원래 비공개)만 보므로 앱 동작에는 영향이 없다.
+
+### 7.5 설계도의 원본
+
+설계도의 원본은 이 저장소의 `docs/DESIGN.md`다. Claude Docs의 "이음 설계도 개정안"은 더 이상 고치지 않는 옛 사본이다.
+
