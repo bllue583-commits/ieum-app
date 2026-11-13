@@ -67,6 +67,7 @@ class CleanTest(unittest.TestCase):
     def test_loops(self):
         self.assertEqual(L.loops('그래서 그래서 그래서 그래서 그래서'), 1)
         self.assertEqual(L.loops('오늘 견적서를 보냅니다'), 0)
+        self.assertEqual(L.loops('1조 원'), 0)
 
     def test_silence_hallucination(self):
         segs = [(0, 1000, '네'), (5000, 6000, '감사합니다'), (5000, 6000, '...')]

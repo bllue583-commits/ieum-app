@@ -181,6 +181,8 @@ def loops(text, min_unit=2, min_repeat=4):
     i = 0
     pat = re.compile(r'(.{%d,20}?)\1{%d,}' % (min_unit, min_repeat - 1))
     for m in pat.finditer(t):
+        if m.group(1).isdigit():  # 큰 수의 0 연속(1조 = 1000000000000)은 고리가 아니다
+            continue
         found += 1
         i = m.end()
     return found
