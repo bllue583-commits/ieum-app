@@ -160,12 +160,13 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
                     runCatching { s.transcribingStarts(from-NEAR_MS,to+NEAR_MS) }.getOrDefault(emptyList()),
                     runCatching { SecureSettings(storage).snapshot() }.getOrDefault(org.json.JSONObject()),
                     runCatching { s.personIdsOf(dayCalls.map { it.recordId }) }.getOrDefault(emptyMap()),
-                    runCatching { s.openItems().associateBy { it.id } }.getOrDefault(emptyMap()))
+                    runCatching { s.openItems().associateBy { it.id } }.getOrDefault(emptyMap()),
+                    runCatching { s.wrongIds(0).toSet() }.getOrDefault(emptySet()))
             } }
             if(!live()||target!=day)return@launch
             result.onSuccess { calls=it.calls;logs=it.logs;jobStarts=it.jobs;folder=it.settings.optString("treeUri").isNotBlank()
                 power=runCatching { PowerText.ledger(it.settings) }.getOrDefault(org.json.JSONObject());chargingOnly=PowerText.chargingOnly(it.settings)
-                people=people+it.people;open=it.open;reading=false;pool=null;render() }
+                people=people+it.people;open=it.open;wrong=it.wrong;reading=false;pool=null;render() }
             result.onFailure {
                 reading=false
                 body.removeAllViews();CallUi.band(body,"${CallUi.dayWord(day)}의 통화")
@@ -173,9 +174,11 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
             }
         }
     }
-    private class Read(val calls:List<CallRecord>,val logs:List<LoggedCall>,val jobs:List<Long>,val settings:org.json.JSONObject,val people:Map<String,String>,val open:Map<String,OpenItem>)
+    private class Read(val calls:List<CallRecord>,val logs:List<LoggedCall>,val jobs:List<Long>,val settings:org.json.JSONObject,val people:Map<String,String>,val open:Map<String,OpenItem>,
+                       /** v3.9 r20 review M2: items taken out with [틀렸어요]: marked on a call's page. */ val wrong:Set<String> =emptySet())
     /** The open check items by id, read with the day: a call's detail page puts [다 됐어요] on those still open (v3.3, DESIGN_V4 3.3-4). */
     private var open:Map<String,OpenItem> =emptyMap()
+    private var wrong:Set<String> =emptySet()
     /** The transcript of the detail page is open ([전체 보기] became [접기]); kept while the same call is drawn again. */
     private var transcriptOpen:String?=null
     /** The person each shown call is linked to, by record id: the badge and the name open the person page (v2.8). */
@@ -381,6 +384,7 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
                         onWrong=item?.takeIf(TaskActions::canBeWrong)?.let { i -> { row:View -> TaskActions.wrong(a,i,row) { load() } } },
                         unsure=item?.tentative ?: (made?.tentative==true)).apply {
                         tag="call_task_${t.itemId}"
+                        if(t.itemId in wrong) addView(CallUi.text(a,TaskActions.WRONG_MARK,CallUi.ASIDE,true,CallUi.SUBTLE).apply { tag="task_wrong_mark";setPadding(0,CallUi.dp(a,6),0,0) })
                         ScreenParts.ownerWords(made?.owner).takeIf { it.isNotEmpty() }?.let { w -> addView(CallUi.text(a,w,CallUi.ASIDE,color=CallUi.SUBTLE).apply { tag="task_owner";setPadding(0,CallUi.dp(a,6),0,0) }) }
                         ScreenParts.quoteLine(made?.quote,made?.quoteFuzzy==true).takeIf { it.isNotEmpty() }?.let { q -> addView(CallUi.text(a,q,CallUi.ASIDE,color=CallUi.SUBTLE).apply { tag="task_quote";setPadding(0,CallUi.dp(a,4),0,0) }) }
                     } },inset=16))

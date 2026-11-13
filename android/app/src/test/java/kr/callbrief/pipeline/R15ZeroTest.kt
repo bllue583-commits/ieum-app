@@ -163,7 +163,7 @@ class R15ZeroTest:ProtectedTextHostTestBase() {
             CallFollowupNotice.summaryWords(listOf("done","done","working","hold","late")))
         assertEquals("통화 알림 2개" to "정리 중 2건",CallFollowupNotice.summaryWords(listOf("working","working")))
         // Two notices on the phone: they share the group and a quiet summary comes with them; one left takes it away.
-        // v4.0 r20-1: late notices are no longer posted by default; the bundle is checked with every state shown.
+        // v3.9 r20-1: late notices are no longer posted by default; the bundle is checked with every state shown.
         CallFollowupNotice.shownStates=CallFollowupNotice.ALL_STATES
         shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
         val manager=app.getSystemService(NotificationManager::class.java)

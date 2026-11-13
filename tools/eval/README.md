@@ -5,7 +5,7 @@
 | 무엇 | 도구 | 버린 대안 |
 | --- | --- | --- |
 | 글자 오류율 | `ko_cer.py` = jiwer 4.0.0 + 한국어 숫자 정규화("삼십만 원" = "30만원" = 300000원, "두 장" = 2장) + 문장부호·띄어쓰기 무시 + 짝 부트스트랩 | evaluate(jiwer를 감쌀 뿐), sclite(직접 빌드, 한국어 정규화 없음), g2pk2(방향이 반대이고 "30만원"을 틀리게 읽음) |
-| 약속 추출 정밀도·재현율 | `promise_eval.py` = 같은 사람 + 내용 유사도 0.6 이상 + 숫자 집합 일치로 1:1 짝짓기, 숫자만 다른 것은 따로 셈. v4.0(r20-3)부터 표준 라이브러리만 씀(유사도는 rapidfuzz partial ratio와 같은 정의를 difflib로) | promptfoo(집합 짝짓기는 결국 직접 코드), deepeval(LLM 심판이라 재현성 낮음) |
+| 약속 추출 정밀도·재현율 | `promise_eval.py` = 같은 사람 + 내용 유사도 0.6 이상 + 숫자 집합 일치로 1:1 짝짓기, 숫자만 다른 것은 따로 셈. v3.9(r20-3)부터 표준 라이브러리만 씀(유사도는 rapidfuzz partial ratio와 같은 정의를 difflib로) | promptfoo(집합 짝짓기는 결국 직접 코드), deepeval(LLM 심판이라 재현성 낮음) |
 | 비밀 스캔 | gitleaks 8.28.0 (`gitleaks git <저장소> --redact --log-opts=--all`) — 11/10 전체 이력 0건 | trufflehog(실제 서비스에 접속해 검증) |
 | 소스 보안 | mobsfscan 1.1.0 + semgrep — 11/10 ERROR 1(StrandHogg 2.0, targetSdk 36이라 낮음), 나머지는 오탐·의도 | semgrep 단독 |
 | 복잡도 | detekt 1.23.8, lizard 1.25.1 — 11/10 복잡도 15 넘는 함수 91개 | |
@@ -20,7 +20,7 @@ python3 -I tools/eval/promise_eval.py tools/eval/sample/gold.json tools/eval/sam
 
 자막 정답은 `{"id", "ref", "a", "b"}` 줄(JSONL).
 
-## 약속 정답지 형식 (v4.0 r20-3에서 확정 — 바꾸면 지난 숫자와 비교할 수 없다)
+## 약속 정답지 형식 (v3.9 r20-3에서 확정 — 바꾸면 지난 숫자와 비교할 수 없다)
 
 파일 하나 = 통화들의 JSON 목록. 정답지와 채점 대상(폰 결과를 바꾼 것)이 같은 형식이다.
 

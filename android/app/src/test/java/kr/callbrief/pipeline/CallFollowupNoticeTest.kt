@@ -40,7 +40,7 @@ class CallFollowupNoticeTest:ProtectedTextHostTestBase() {
     private val quote="견적서는 내일까지 메일로 보내드릴게요"
 
     @Before fun setup() {
-        // v4.0 r20-1: these tests check the words and states of every per-call notice, which only "녹음 없음" still posts.
+        // v3.9 r20-1: these tests check the words and states of every per-call notice, which only "녹음 없음" still posts.
         CallFollowupNotice.shownStates=CallFollowupNotice.ALL_STATES
         shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
         ContactCards.shutdown();ContactCards.clearPending()
@@ -203,7 +203,7 @@ class CallFollowupNoticeTest:ProtectedTextHostTestBase() {
         assertTrue(notices().isEmpty());assertTrue(CallFollowupNotice.entries(app).isEmpty())
     }
 
-    // ---- v4.0 r20-1 (DESIGN_V7 6): the per-call notices fold into the evening one; only "녹음 없음" stays ----
+    // ---- v3.9 r20-1 (DESIGN_V7 6): the per-call notices fold into the evening one; only "녹음 없음" stays ----
     @Test fun threeCallsGiveNoNoticeOfTheirOwnTheEveningOneTellsThemAndNoRecordingStays() {
         CallFollowupNotice.shownStates=CallFollowupNotice.SHOWN
         knownCounterpart()

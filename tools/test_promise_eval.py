@@ -1,4 +1,4 @@
-"""v4.0 r20-3 (DESIGN_V7 7, SCORECARD item 4): tools/eval/promise_eval.py scores the inbox's check items against a gold set and
+"""v3.9 r20-3 (DESIGN_V7 7, SCORECARD item 4): tools/eval/promise_eval.py scores the inbox's check items against a gold set and
 writes status/gold-commit.json in the keys tools/inbox/score.py's item_gold reads. Made-up calls only."""
 import importlib.util, io, json, os, pathlib, sys, tempfile, unittest
 from contextlib import redirect_stdout

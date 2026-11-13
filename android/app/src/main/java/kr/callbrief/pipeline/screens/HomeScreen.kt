@@ -56,7 +56,7 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
                                  /** v3.5 r15-0 (user 11/6: numbers by recording): today's business calls with their summary; [calls] is
                                   * today's recordings (call records and recordings still waiting for their text or failed). */
                                  val summarized:Int=0,
-                                 /** v4.0 r20-1: the call card is a required setup step on this phone ([CallCardAsk.cardRequired]). */
+                                 /** v3.9 r20-1: the call card is a required setup step on this phone ([CallCardAsk.cardRequired]). */
                                  val cardRequired:Boolean=false)
     /** [audioMinutesLeft]: how long the recordings still to transcribe are, together. [lowBattery]: not charging and under half
      * the battery, so old recordings wait ([FirstPass.powerOk]). [stalled]: nothing came back for [FirstPass.STALL_MS], so no
@@ -78,7 +78,7 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
         internal fun firstLook(open:List<OpenItem>,today:java.time.LocalDate)=
             TaskActions.ordered(open).filter { it.status=="needs_confirmation" || (it.createdMs>0 && CallRecordStore.kstDay(it.createdMs)==today) }
         /** The memo list's words when today has calls but none is sorted out yet. */
-        /** v4.0 r20-1: no number here (the story's heading above says "녹음 n개 중 정리 m개" once). */
+        /** v3.9 r20-1: no number here (the story's heading above says "녹음 n개 중 정리 m개" once). */
         fun sortingWords(@Suppress("UNUSED_PARAMETER") calls:Int)="오늘 통화를 정리하고 있어요. 끝나면 여기에 메모가 보여요"
 
         // ---- v3.1 (DESIGN_V4 2.5, r12-5) ----
@@ -295,7 +295,7 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
         // or three sentences (the hourly task's story, or the phone's own from today's summaries); a tap opens today's calls.
         val left=s.byCompany.sumOf { it.second }
         val story=s.story
-        // v4.0 r20-1: "녹음 n개 중 정리 m개" is said here only (it was also a number and a pill in 오늘 한눈에), so with today's
+        // v3.9 r20-1: "녹음 n개 중 정리 m개" is said here only (it was also a number and a pill in 오늘 한눈에), so with today's
         // recordings and no story yet the heading stands above the none line too.
         if(story==null) body.addView(CallUi.card(a).apply { tag="home_story"
             if(s.calls>0) addView(CallUi.text(a,TodayStory.countLine(s.calls,s.summarized),CallUi.HEADING,true).apply { tag="home_story_title";fontFeatureSettings="tnum" })
@@ -340,7 +340,7 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
             }).apply { tag="home_memos" })
         }
 
-        // Today at a glance: two big numbers (only the open to-dos in the accent), then when the next report comes. v4.0 r20-1:
+        // Today at a glance: two big numbers (only the open to-dos in the accent), then when the next report comes. v3.9 r20-1:
         // today's recordings are counted once, in the story's heading (no "오늘 녹음" number, no count pill here).
         body.addView(CallUi.section(a,"오늘 한눈에"))
         val today=CallUi.card(a).apply { tag="home_today" }
@@ -416,14 +416,22 @@ internal object CallCardAsk {
     private const val ROLE_ASKED="asked_call_redirection_role"
     private fun prefs(c:android.content.Context)=c.getSharedPreferences("ieum_ui",android.content.Context.MODE_PRIVATE)
     fun overlayAllowed(c:android.content.Context)=runCatching { android.provider.Settings.canDrawOverlays(c) }.getOrDefault(false)
-    /** v4.0 r20-1 (DESIGN_V7 6): whether the call card is a required first-setup step on this phone. Decided once and kept
-     * ([CARD_REQUIRED]): required on a new install (no recording folder and no consent yet when v4.0 first asks), optional as
-     * before on a phone already set up, so an update changes nothing there. */
+    /** v3.9 r20-1 (DESIGN_V7 6): whether the call card is a required first-setup step on this phone. Decided once and kept
+     * ([CARD_REQUIRED]): required on a new install only — no recording folder and no consent in the settings, the app never
+     * updated over an older one (`firstInstallTime == lastUpdateTime`) and no call record in the store — when v3.9 first asks.
+     * A phone already set up stays optional as before, so an update changes nothing there. [s] null (the settings could not be
+     * read) or [hasCalls] failing: not decided this time (optional for now, asked again next time). Off the main thread. */
     const val CARD_REQUIRED="setup_card_required"
-    fun cardRequired(c:android.content.Context,s:org.json.JSONObject):Boolean {
+    /** Test hook: whether this install updated an older one (null: the package manager's install and update times). */
+    @androidx.annotation.VisibleForTesting @Volatile internal var updatedHook:(()->Boolean)?=null
+    fun cardRequired(c:android.content.Context,s:org.json.JSONObject?,
+                     hasCalls:()->Boolean={ kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(c)).cardRows("SELECT 1 FROM call_records LIMIT 1").isNotEmpty() }):Boolean {
         val p=prefs(c)
         if(p.contains(CARD_REQUIRED)) return p.getBoolean(CARD_REQUIRED,false)
-        val fresh=s.optString("treeUri").isBlank() && !s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false)
+        if(s==null) return false
+        val updated=updatedHook?.invoke() ?: runCatching { c.packageManager.getPackageInfo(c.packageName,0).let { it.firstInstallTime!=it.lastUpdateTime } }.getOrNull() ?: return false
+        val calls=runCatching(hasCalls).getOrNull() ?: return false
+        val fresh=s.optString("treeUri").isBlank() && !s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false) && !updated && !calls
         p.edit().putBoolean(CARD_REQUIRED,fresh).apply()
         return fresh
     }

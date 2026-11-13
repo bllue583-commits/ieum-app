@@ -42,7 +42,7 @@ class R14TwoTest:ProtectedTextHostTestBase() {
     private var length:Long?=null
 
     @Before fun setup() {
-        // v4.0 r20-1: these tests check the words and states of every per-call notice, which only "녹음 없음" still posts.
+        // v3.9 r20-1: these tests check the words and states of every per-call notice, which only "녹음 없음" still posts.
         CallFollowupNotice.shownStates=CallFollowupNotice.ALL_STATES
         shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
         ContactCards.shutdown();ContactCards.clearPending()

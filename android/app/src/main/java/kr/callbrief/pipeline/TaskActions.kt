@@ -20,7 +20,7 @@ internal object TaskActions {
     /** The store writes, replaceable in tests (to hold the write back or make it fail). They run on an IO thread. */
     internal var completeIo:(Context,OpenItem)->Unit={ c,item -> kr.callbrief.IeumApplication.store(c).completeItem(item.id,item.revision) }
     internal var undoIo:(Context,OpenItem)->Unit={ c,item -> kr.callbrief.IeumApplication.store(c).undoDone(item.id,item.status,item.revision+1) }
-    /** v4.0 r20-2: [틀렸어요]'s writes, replaceable in tests like the two above. */
+    /** v3.9 r20-2: [틀렸어요]'s writes, replaceable in tests like the two above. */
     internal var wrongIo:(Context,OpenItem)->Unit={ c,item -> kr.callbrief.IeumApplication.store(c).markWrong(item.id,item.revision) }
     internal var undoWrongIo:(Context,OpenItem)->Unit={ c,item -> kr.callbrief.IeumApplication.store(c).undoWrong(item.id,item.status,item.revision+1) }
     internal fun resetIo() {
@@ -30,8 +30,22 @@ internal object TaskActions {
         undoWrongIo={ c,item -> kr.callbrief.IeumApplication.store(c).undoWrong(item.id,item.status,item.revision+1) }
         synchronized(inFlight) { inFlight.clear() }
     }
-    /** v4.0 r20-2 (DESIGN_V7 6): words of the undo bar after [틀렸어요]: apart from "끝낸 일로 옮겼어요", it is not a finished job. */
+    /** v3.9 r20-2 (DESIGN_V7 6): words of the undo bar after [틀렸어요]: apart from "끝낸 일로 옮겼어요", it is not a finished job. */
     const val WRONG_WORDS="틀린 일로 뺐어요"
+    /** v3.9 r20 review M2: the mark of an item taken out with [틀렸어요] where it still shows ("끝낸 일 보기", a call's page). */
+    const val WRONG_MARK="틀린 일로 뺌"
+    /** [되돌리기] on an item taken out with [틀렸어요], later ("끝낸 일 보기"): back to the list it was in, counted as undone. */
+    fun restoreWrong(a:ComponentActivity,item:OpenItem,reload:()->Unit) {
+        if(!synchronized(inFlight) { inFlight.add(item.id) }) return
+        val app=a.applicationContext
+        a.lifecycleScope.launch {
+            val ok=withContext(Dispatchers.IO) { runCatching { kr.callbrief.IeumApplication.store(app).restoreWrong(item.id) }.isSuccess.also { if(it) TaskFeedback.add(app,undone=1) } }
+            synchronized(inFlight) { inFlight.remove(item.id) }
+            if(a.isFinishing||a.isDestroyed) return@launch
+            Toast.makeText(a,if(ok) "체크할 일로 되돌렸어요" else "되돌리지 못했어요.",Toast.LENGTH_SHORT).show()
+            reload()
+        }
+    }
     /** Only what the AI or the morning tidy made can be wrong; an item the user wrote has no [틀렸어요]. */
     fun canBeWrong(item:OpenItem)=item.recordingId!="user:items"
     /** [틀렸어요]: one tap, no reason. Like [complete] (pale row, the "되돌리기" bar, the row leaves the list) but the item becomes

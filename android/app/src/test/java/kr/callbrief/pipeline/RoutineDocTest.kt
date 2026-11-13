@@ -159,7 +159,7 @@ class RoutineDocTest {
             "오늘과 어제 요청한 것(createdMs)과 확인 필요(status가 needs_confirmation)를 먼저","최대 10줄","\"오늘 요청\", \"어제 요청\", \"3일 전 요청\"",
             "흔적이 없으면 빈 문자열 `\"\"`","완료 처리는 하지 않는다","어제 움직임이 있던 것 먼저 최대 3줄","한 줄 60자",
             "가운데 점, 말줄임표, 영어 상태값","\"기한\", \"지남\"","\"까지\"로 끝나는 기한 표현","전화번호는 절대 넣지 않는다",
-            "python3 tools/report_check.py report/YYYY-MM-DD.json","30일 넘게 지난 report 파일은 `git rm` 한다",
+            "python3 tools/report_check.py report/YYYY-MM-DD.json --state tidy/state.json","30일 넘게 지난 report 파일은 `git rm` 한다",
             "10번의 \"tidy\" 커밋에 함께 넣는다").forEach { assertTrue(it,section.contains(it)) }
         assertTrue(prompt.contains("아침 보고서(9-1번), 지운 파일을 한 커밋 \"tidy\"로 push한다"))
         assertTrue(prompt.contains("\" | 확인 필요: 아침 보고서\""))
@@ -214,7 +214,7 @@ class RoutineDocTest {
          * v9: DESIGN_V7 3.3, r17-0, mail removed, same result keys). */
         const val DOC_VERSION=9
         /** The version docs/routines/tidy.md is at (v7: DESIGN_V5 2.2, r15-2, the morning report; v8: DESIGN_V7 3.2, r17-2; v9: r18, today[].tag and 10 lines). */
-        const val TIDY_VERSION=9
+        const val TIDY_VERSION=10
         /** True once ClaudeCallAnalyzer (r13-1's file) carries the doc's version (the orchestrator's integration step). */
         val codeAtDocVersion get()=ClaudeCallAnalyzer.PROMPT_VERSION>=DOC_VERSION
         /** Both routines find the inbox repository the same way. */

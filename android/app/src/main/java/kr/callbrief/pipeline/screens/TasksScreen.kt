@@ -21,7 +21,7 @@ internal object CheckRows {
     /** [personId]: the person of the call that made the item (v2.8): the name in the META line then opens the person page
      * instead of the call (the rest of the row still opens the call). */
     fun row(a:MainActivity,item:OpenItem,status:String=item.status,company:String?=item.company,onDone:((View)->Unit)?=null,personId:String?=null,
-            /** v4.0 r20-2: [틀렸어요] beside [다 됐어요]; never on an item the user wrote ([TaskActions.canBeWrong]). */ onWrong:((View)->Unit)?=null):LinearLayout {
+            /** v3.9 r20-2: [틀렸어요] beside [다 됐어요]; never on an item the user wrote ([TaskActions.canBeWrong]). */ onWrong:((View)->Unit)?=null):LinearLayout {
         val open:(()->Unit)?=item.recordId?.let { id -> { a.openCall(id,item.callMs ?: item.createdMs) } }
         val openWho:(()->Unit)?=personId?.let { id -> { a.openPerson(id) } } ?: open
         val outer=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;setPadding(CallUi.dp(a,16),CallUi.dp(a,14),CallUi.dp(a,16),CallUi.dp(a,14)) }
@@ -167,7 +167,13 @@ internal class TasksScreen(a:MainActivity):AppScreen(a) {
         // Finished in the last 7 days (to look at, not to change), and the user's own items.
         if(done.isNotEmpty()) {
             body.addView(CallUi.gap(a,16))
-            body.addView(fold("끝낸 일 보기 (7일) ›","tasks_done") { done.map { d -> CheckRows.row(a,d,status="").apply { tag="done_${d.id}";alpha=0.6f } } })
+            // v3.9 r20 review M2: what was taken out with [틀렸어요] is here too, marked so, with its own [되돌리기].
+            body.addView(fold("끝낸 일 보기 (7일) ›","tasks_done") { done.map { d -> CheckRows.row(a,d,status="").apply { tag="done_${d.id}"
+                if(d.status==CallRecordStore.WRONG) {
+                    addView(CallUi.text(a,TaskActions.WRONG_MARK,CallUi.ASIDE,true,CallUi.SUBTLE).apply { tag="done_wrong_mark";setPadding(0,CallUi.dp(a,6),0,0) })
+                    addView(CallUi.linkButton(a,"되돌리기") { TaskActions.restoreWrong(a,d) { load() } }.apply { tag="done_wrong_undo";contentDescription="${d.title}, 틀린 일에서 되돌리기" },
+                        LinearLayout.LayoutParams(-2,-2).apply { marginStart=-CallUi.dp(a,6) })
+                } else alpha=0.6f } } })
         }
         body.addView(CallUi.button(a,"+ 직접 적기") { addOwn() }.apply { tag="task_add" },LinearLayout.LayoutParams(-1,-2).apply { topMargin=CallUi.dp(a,16) })
         if(later.isNotEmpty()) drawLater(drawing,later)

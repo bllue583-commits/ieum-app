@@ -216,5 +216,23 @@ class ReportCheckTest(unittest.TestCase):
         self.assertFalse(any("서류" in g or "견적" in g for g in got), "reasons only")
 
 
+    def test_v10_state_wrong_items_stay_out_of_today(self):
+        """tidy.md v10 (v3.9 r20): with --state, a today line that is an item marked [틀렸어요] fails; no state file is no failure."""
+        with tempfile.TemporaryDirectory() as d:
+            report = os.path.join(d, "2026-11-07.json")
+            with open(report, "w", encoding="utf-8") as f:
+                json.dump(good(), f, ensure_ascii=False)
+            state = os.path.join(d, "state.json")
+            with open(state, "w", encoding="utf-8") as f:
+                json.dump({"wrong": [{"id": "t_e5f6a7b8", "title": "안전 점검 서류", "company": None, "createdMs": 1, "wrongMs": 2}]}, f, ensure_ascii=False)
+            reasons = rc.check_file(report, rc.wrong_ids(rc.read_state(state)))
+            self.assertEqual(["today[1].id: 틀린 일로 뺀 일(state wrong)"], reasons)
+            self.assertEqual(1, rc.main([report, "--state", state]))
+            self.assertEqual(0, rc.main([report, "--state", os.path.join(d, "none.json")]))
+            self.assertEqual(0, rc.main([report]))
+            self.assertEqual(2, rc.main([report, "--state"]))
+        self.assertEqual({"a", "b"}, rc.wrong_ids({"wrong": [{"id": "a"}, "b", 3]}))
+        self.assertEqual(set(), rc.wrong_ids({"wrong": None}))
+
 if __name__ == "__main__":
     unittest.main()

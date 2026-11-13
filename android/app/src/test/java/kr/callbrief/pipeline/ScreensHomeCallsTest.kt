@@ -48,7 +48,7 @@ class ScreensHomeCallsTest:ProtectedTextHostTestBase() {
         val a=home(HomeScreen.Snapshot(folder=true,consent=true,model="READY",calls=3,working=0,newTasks=1,due=0,overdue=0,lastAnalyzedMs=0))
         val all=texts(a)
         listOf("오늘 생긴 체크","남은 체크할 일","먼저 볼 체크할 일","녹음 3개 중 정리 0개").forEach { assertTrue(it,all.contains(it)) }
-        // v4.0 r20-1: today's recordings are counted once (the story's heading), not again as a number or a pill.
+        // v3.9 r20-1: today's recordings are counted once (the story's heading), not again as a number or a pill.
         assertEquals(1,all.count { it.contains("녹음 3개 중 정리 0개") });assertTrue(all.none { it.contains("오늘 녹음") });assertNull(tag(a,"home_count_line"))
         assertFalse(all.contains("새 체크"));assertFalse(all.contains("오늘 체크할 일"))
         assertEquals("오늘 통화를 정리하고 있어요. 끝나면 여기에 메모가 보여요",(tag(a,"home_memos_none") as TextView).text.toString())

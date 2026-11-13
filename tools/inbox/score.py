@@ -282,7 +282,9 @@ def item_security(cfg, version, latest, scan):
     ok = (value["buildType"] == cfg["build_type"] and value["seedIndependent"] is True and value["certCheck"] is True
           and value["saltedHash"] is True and value["secretFindings"] is not None
           and value["secretFindings"] <= cfg["max_secret_findings"])
-    missing = [k for k, v in value.items() if v in (None, False) or (k == "buildType" and v != cfg["build_type"])]
+    # 0 == False in Python: `v in (None, False)` listed secretFindings 0 as unmet (the verdict was right, the reason wrong).
+    missing = [k for k, v in value.items() if v is None or v is False or (k == "buildType" and v != cfg["build_type"])
+               or (k == "secretFindings" and isinstance(v, (int, float)) and not isinstance(v, bool) and v > cfg["max_secret_findings"])]
     return result(ok, value, "미충족: " + ", ".join(missing) if missing else "")
 
 

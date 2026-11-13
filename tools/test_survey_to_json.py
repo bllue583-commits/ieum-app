@@ -1,4 +1,4 @@
-"""v4.0 r20-6: the survey page's line becomes status/survey.json with the keys tools/inbox/score.py reads."""
+"""v3.9 r20-6: the survey page's line becomes status/survey.json with the keys tools/inbox/score.py reads."""
 import importlib.util, io, json, os, pathlib, re, tempfile, unittest
 from contextlib import redirect_stderr, redirect_stdout
 

@@ -66,7 +66,7 @@ internal object PhoneStatus {
         /** r18-bench (DESIGN_V7 4.4): `bench` and `samples` ([kr.callbrief.pipeline.bench.BenchState.heartbeat],
          * [kr.callbrief.pipeline.bench.Samples.heartbeat]); left out of the file while never switched on. Numbers and codes only. */
         val bench:JSONObject?=null,val samples:JSONObject?=null,
-        /** v4.0 r20-2 (DESIGN_V7 6): `feedback{wrong, undone}` ([TaskFeedback.heartbeat]), counts only; zeros when null. */
+        /** v3.9 r20-2 (DESIGN_V7 6): `feedback{wrong, undone}` ([TaskFeedback.heartbeat]), counts only; zeros when null. */
         val feedback:JSONObject?=null)
     /** v3.7 r17-3 (DESIGN_V7 3.3, SCORECARD): [latency] goes into `latency` beside the 7-day numbers ({segments{endToText,
      * textToUpload,uploadToApplied}, day{p50Min,p90Min,n,waiting}, over7d}); [window14] into `transcription.window14`

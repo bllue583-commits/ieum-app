@@ -7,7 +7,10 @@ fails (exit code 1) on: a broken format or field, too many lines, a line over 60
 anything that looks like a Korean phone number. It prints the reasons only (field path and rule), never the text itself,
 so the routine's log carries no names or numbers. Standard library only (the inbox repository has nothing else).
 
-Usage: python3 tools/report_check.py report/2026-11-07.json [more files]
+Usage: python3 tools/report_check.py report/2026-11-07.json [more files] [--state tidy/state.json]
+
+v3.9 r20 (tidy.md v10): with --state, a today[] line whose id is in the state's wrong[] (check items the wife marked
+[틀렸어요]; ids or {id, ...} objects) fails too. A missing or unreadable state file is no failure (an old phone sends none).
 """
 import json, os, re, sys
 
@@ -204,7 +207,34 @@ def check(report, file_day=None):
     return out
 
 
-def check_file(path):
+def wrong_ids(state):
+    """The ids in the tidy state's wrong[] (v3.9: objects with an id; plain ids are read too)."""
+    out = set()
+    for w in (state or {}).get("wrong") or [] if isinstance(state, dict) else []:
+        if isinstance(w, dict) and isinstance(w.get("id"), str):
+            out.add(w["id"])
+        elif isinstance(w, str):
+            out.add(w)
+    return out
+
+
+def check_wrong(report, wrong):
+    """today[] lines that are items marked wrong, by line number only."""
+    today = report.get("today") if isinstance(report, dict) else None
+    if not wrong or not isinstance(today, list):
+        return []
+    return [f"today[{i}].id: 틀린 일로 뺀 일(state wrong)" for i, t in enumerate(today) if isinstance(t, dict) and t.get("id") in wrong]
+
+
+def read_state(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def check_file(path, wrong=None):
     name = os.path.basename(path)
     file_day = name[:-5] if name.endswith(".json") and DAY_RE.match(name[:-5]) else None
     try:
@@ -214,17 +244,26 @@ def check_file(path):
         return ["파일을 읽지 못함"]
     except ValueError:
         return ["JSON 형식이 깨짐"]
-    return check(report, file_day)
+    return check(report, file_day) + check_wrong(report, wrong or set())
 
 
 def main(argv=None):
-    paths = sys.argv[1:] if argv is None else argv
+    args = list(sys.argv[1:] if argv is None else argv)
+    wrong = set()
+    if "--state" in args:
+        k = args.index("--state")
+        if k + 1 >= len(args):
+            print("사용법: python3 tools/report_check.py report/YYYY-MM-DD.json [--state tidy/state.json]")
+            return 2
+        wrong = wrong_ids(read_state(args[k + 1]))
+        del args[k:k + 2]
+    paths = args
     if not paths:
         print("사용법: python3 tools/report_check.py report/YYYY-MM-DD.json")
         return 2
     failed = False
     for path in paths:
-        reasons = check_file(path)
+        reasons = check_file(path, wrong)
         name = os.path.basename(path)
         if reasons:
             failed = True

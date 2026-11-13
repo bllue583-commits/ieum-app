@@ -3,8 +3,8 @@ package kr.callbrief.pipeline
 import android.content.Context
 import org.json.JSONObject
 
-/** v4.0 r20-2 (DESIGN_V7 6, SCORECARD items 4 and 10): how often [틀렸어요] was pressed and taken back, as running counts since
- * v4.0 — numbers only (which items are kept in the store as [CallRecordStore.WRONG] and go up to the morning tidy as ids in
+/** v3.9 r20-2 (DESIGN_V7 6, SCORECARD items 4 and 10): how often [틀렸어요] was pressed and taken back, as running counts since
+ * v3.9 — numbers only (which items are kept in the store as [CallRecordStore.WRONG] and go up to the morning tidy as ids in
  * `wrong[]`, never with words). The heartbeat's `feedback{wrong, undone}`. A press is rare, so it is written at once (one sealed
  * write on the IO thread of the press). */
 internal object TaskFeedback {

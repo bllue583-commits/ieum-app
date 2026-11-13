@@ -20,7 +20,7 @@ import kr.callbrief.pipeline.call.CallSession
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** v4.0 r20-1: of the notices below only "이 통화는 녹음이 없어 정리할 수 없어요" is still posted ([SHOWN]); the rest are kept as
+/** v3.9 r20-1: of the notices below only "이 통화는 녹음이 없어 정리할 수 없어요" is still posted ([SHOWN]); the rest are kept as
  * state only and the day's calls are told by the evening report (one notice).
  *
  * One notice per finished work call (design 6.2, r10-2): "김민수 대표와 통화를 정리하고 있어요" as soon as the call ends, the same
@@ -34,7 +34,7 @@ import org.json.JSONObject
  * the call record once known, and the state. Every public function never throws. */
 internal object CallFollowupNotice {
     const val CHANNEL="ieum.calls.followup"
-    /** v4.0 r20-1: the channel's name in the phone's notification settings (was "이음 통화 정리", the same as the evening report's). Same
+    /** v3.9 r20-1: the channel's name in the phone's notification settings (was "이음 통화 정리", the same as the evening report's). Same
      * channel id: a person who switched it off keeps it off. */
     const val CHANNEL_NAME="이음 녹음 없는 통화"
     /** Notification tag of every follow-up notice; the id tells them apart ([idFor]). */
@@ -338,7 +338,7 @@ internal object CallFollowupNotice {
         }
     }
 
-    /** v4.0 r20-1 (DESIGN_V7 6): the states that still get a notice of their own right after the call. Only "녹음 없음": nothing
+    /** v3.9 r20-1 (DESIGN_V7 6): the states that still get a notice of their own right after the call. Only "녹음 없음": nothing
      * else will ever tell that call (no summary, no line in the evening report's sorted calls), and its [메모 남기기] is worth
      * something only now, while the call is fresh. Every other state is followed silently (the entries still drive the
      * no-recording check, the memo binding and the sweep) and told once by the evening report, the call card and KakaoTalk. */
@@ -349,7 +349,7 @@ internal object CallFollowupNotice {
     @androidx.annotation.VisibleForTesting @Volatile internal var shownStates:Set<String> =SHOWN
     internal fun shown(state:String)=state in shownStates
     private fun post(context:Context,e:Entry,record:CallRecord?):Boolean {
-        // v4.0 r20-1: a state without its own notice takes away the one shown before (a phone updated with notices up).
+        // v3.9 r20-1: a state without its own notice takes away the one shown before (a phone updated with notices up).
         if(!shown(e.state)) { cancel(context,e.id);return false }
         if(Build.VERSION.SDK_INT>=33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) return false
         val manager=context.getSystemService(NotificationManager::class.java) ?: return false

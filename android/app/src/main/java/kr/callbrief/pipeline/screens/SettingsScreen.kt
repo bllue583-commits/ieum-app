@@ -79,13 +79,13 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         /** The group the status lights take at the top of the page while one of them is amber (v3.3, DESIGN_V4 3.3-4). */
         const val STATUS_NAME="지금 상태"
         const val MERGE_TAG="merge_undo"
-        /** v4.0 r20-1 (DESIGN_V7 6): the tools for whoever looks after the app, folded at the very bottom (shut by default). */
+        /** v3.9 r20-1 (DESIGN_V7 6): the tools for whoever looks after the app, folded at the very bottom (shut by default). */
         const val ADMIN_NAME="관리"
         const val ADMIN_TOGGLE="admin_toggle"
         const val ADMIN_BODY="admin_body"
         const val ADMIN_OPEN="관리 항목 보기 ›"
         const val ADMIN_CLOSE="관리 항목 접기"
-        /** v4.0 r20-1: the switch of [PipelineSettingsKeys.FOLLOWUP_NOTICE] now only covers the calls without a recording. */
+        /** v3.9 r20-1: the switch of [PipelineSettingsKeys.FOLLOWUP_NOTICE] now only covers the calls without a recording. */
         const val FOLLOWUP_SWITCH="녹음이 없는 통화는 바로 알림"
         const val FOLLOWUP_NOTE="다른 통화는 저녁 통화 정리 알림 하나에 모아서 알려 드려요." }
     private val page:LinearLayout get()=a.column
@@ -285,7 +285,8 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
     private fun refresh(full:Boolean=true) {
         a.lifecycleScope.launch {
             val result=runCatching { withContext(Dispatchers.IO) {
-                val s=runCatching { settings().snapshot() }.getOrDefault(JSONObject())
+                val snap=runCatching { settings().snapshot() }
+                val s=snap.getOrDefault(JSONObject())
                 // One store for the whole refresh (r8-1): the process store, not closed here.
                 val db=runCatching { store() }.getOrNull()
                 val counts=runCatching { db!!.counts() }.getOrDefault(emptyMap())
@@ -299,6 +300,8 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
                 firstPass=firstPassHook?.invoke(a) ?: db?.let { runCatching { HomeScreen.readFirstPass(CallPipelineStartup.storage(a),it,s) }.getOrNull() }
                 gapText=HomeScreen.gapBanner(a)?.text?.takeIf { it.isNotBlank() }
                 installStep=HomeScreen.installStep(a)
+                // v3.9 r20 review L1: decided off the main thread, and not on settings that could not be read.
+                cardRequired=runCatching { CallCardAsk.cardRequired(a,snap.getOrNull()) }.getOrDefault(false)
                 Triple(s,counts,memo)
             } }
             if(!live())return@launch
@@ -427,7 +430,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
                 Toast.makeText(a,if(ok) "관리하는 분께 상태를 보냈어요" else "보내지 못했어요. 인터넷을 확인해 주세요",Toast.LENGTH_SHORT).show()
             }
         })
-        // ---- v4.0 r20-1: 관리, folded at the very bottom ----
+        // ---- v3.9 r20-1: 관리, folded at the very bottom ----
         adminGroup(s,counts,modelState)
         a.putBack(keep)
         val want=focusTag;val group=focusGroup;focusTag=null;focusGroup=null
@@ -542,6 +545,8 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
     @Volatile private var firstPass:HomeScreen.FirstPassView?=null
     @Volatile private var gapText:String?=null
     @Volatile private var installStep=false
+    /** v3.9 r20-1: the call card is a required setup step ([CallCardAsk.cardRequired]), read with the page. */
+    @Volatile private var cardRequired=false
     /** The notification question of the setup step; a refusal is counted so that after two the step opens the notification
      * settings (review #13). */
     private val askNotify=a.registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { ok ->
@@ -568,7 +573,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         val overlayAgain=!overlay && SetupSkip.overlayAsked(a)
         val notify=NotifyAsk.allowed(a);val notifyBlocked=NotifyAsk.blocked(a)
         val battery=a.getSystemService(android.os.PowerManager::class.java)?.isIgnoringBatteryOptimizations(a.packageName)==true
-        val required=CallCardAsk.cardRequired(a,s)
+        val required=cardRequired
         return listOfNotNull(
             Step("folder",s.optString("treeUri").isNotBlank(),"녹음 폴더 연결","통화 녹음 파일이 있는 폴더를 알려 주면 새 통화를 저절로 가져와요. 폴더가 열리면 보통 Recordings › Call을 고르고 아래 [이 폴더 사용]을 눌러 주세요.",
                 "녹음 폴더 고르기") { pickFolder.launch(CallFolder.pickIntent()) },
@@ -586,8 +591,8 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
             Step("battery",battery,"배터리 제한 풀기","휴대폰이 쉬는 동안에도 통화를 정리하려면 한 번 허용해 주세요.","제한 풀기") {
                 runCatching { a.startActivity(android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,android.net.Uri.parse("package:${a.packageName}"))) }
                     .onFailure { a.startActivity(android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } },
-            // v4.0 r20-1 (DESIGN_V7 6): on a new install the call card is a required step (the last one; no [나중에 할게요]). A phone set
-            // up before v4.0 keeps it optional as it was ([CallCardAsk.cardRequired]: decided once, from what was set up then).
+            // v3.9 r20-1 (DESIGN_V7 6): on a new install the call card is a required step (the last one; no [나중에 할게요]). A phone set
+            // up before v3.9 keeps it optional as it was ([CallCardAsk.cardRequired]: decided once, from what was set up then).
             overlayStep(overlay,overlayAgain,required).takeIf { required },
             // Optional: a refusal (or [나중에 할게요]) is an answer, the next step opens (DESIGN_V4 2.5 시험).
             readingStep("sms",granted(sms) || ReadingPermission.asked(a,sms) || SetupSkip.skipped(a,"sms"),sms,"문자",
@@ -597,7 +602,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
                 "새 버전이 나오면 누르지 않아도 저절로 설치돼요. 열리는 화면에서 '이 출처 허용'을 켜 주세요.","설치 허용",optional=true) {
                 CallUpdate.openInstallSourceSettings(a) })
     }
-    /** The call card step: required ([required], a new install from v4.0) it is done only once the card may be drawn; optional
+    /** The call card step: required ([required], a new install from v3.9) it is done only once the card may be drawn; optional
      * (a phone set up before) a [나중에 할게요] answers it too. Back from the list unchanged, the step says where the switch is. */
     private fun overlayStep(overlay:Boolean,again:Boolean,required:Boolean):Step {
         val done=overlay || (!required && SetupSkip.skipped(a,"overlay"))
@@ -738,7 +743,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
     }
 
     /** v3.4 (DESIGN_V4 4.1-1): calls going out show the card without the role; the role is an option that brings the number
-     * sooner, offered until it is held or the person says no ([PipelineSettingsKeys.ROLE_OFFER_SEEN]). v4.0 r20-1: in 관리. */
+     * sooner, offered until it is held or the person says no ([PipelineSettingsKeys.ROLE_OFFER_SEEN]). v3.9 r20-1: in 관리. */
     private fun roleOffer(s:JSONObject) {
         if(!(CallCardAsk.roleAvailable(a) && !CallCardAsk.roleHeld(a) && !s.optBoolean(PipelineSettingsKeys.ROLE_OFFER_SEEN,false))) return
         body.addView(CallUi.divider(a))
@@ -748,9 +753,9 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         body.addView(button("괜찮아요") { save { it.put(PipelineSettingsKeys.ROLE_OFFER_SEEN,true) } }.apply { tag="card_role_skip" })
     }
 
-    /** v4.0 r20-1: whether 관리 is open (this screen's life only: it starts shut every time the app starts). */
+    /** v3.9 r20-1: whether 관리 is open (this screen's life only: it starts shut every time the app starts). */
     internal var adminOpen=false
-    /** v4.0 r20-1 (DESIGN_V7 6): "관리" at the very bottom, shut by default: one link opens it. Inside, unchanged, the tools that
+    /** v3.9 r20-1 (DESIGN_V7 6): "관리" at the very bottom, shut by default: one link opens it. Inside, unchanged, the tools that
      * are for whoever looks after the app: 처리한 통화 with [기다리는 통화 다시 정리하기], [상대 카드 다시 만들기], [합친 사람 되돌리기],
      * the outgoing-call role offer, [골든 측정] and, in test builds, the speed measurement. Opening it draws nothing again. */
     private fun adminGroup(s:JSONObject,counts:Map<String,Int>,modelState:String) {

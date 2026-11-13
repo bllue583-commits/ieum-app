@@ -203,7 +203,7 @@ class FirstSetupHomeTest:ProtectedTextHostTestBase() {
         assertEquals("다음 할 일: 녹음 폴더 연결",text(a,"setup_next_label"))
         val all=texts(tag(a,SettingsScreen.SETUP_TAG))
         assertTrue(all.toString(),all.contains("처음 설정 남은 9단계"))
-        // v4.0 r20-1: a new install (this one) has the call card as its last required step, before the optional ones.
+        // v3.9 r20-1: a new install (this one) has the call card as its last required step, before the optional ones.
         val order=listOf("정리 동의","통화기록 읽기 허용","통화가 끝난 걸 바로 알아차리기","알림 허용","배터리 제한 풀기",
             "통화 화면 위에 이음 카드 보기","문자 읽기 허용 (선택)","새 버전을 저절로 설치하기 (선택)")
         assertEquals(order,all.filter { it in order })

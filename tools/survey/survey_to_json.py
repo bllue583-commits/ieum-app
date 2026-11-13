@@ -1,4 +1,4 @@
-"""v4.0 r20-6 (DESIGN_V7 6, SCORECARD items 6 and 10): the one line the survey page (docs/survey/ieum-survey.html) makes, to the
+"""v3.9 r20-6 (DESIGN_V7 6, SCORECARD items 6 and 10): the one line the survey page (docs/survey/ieum-survey.html) makes, to the
 inbox's status/survey.json, in the keys tools/inbox/score.py reads (`sus`, `veryDisappointed`, `batterySharePct`).
 
 Usage:  python3 -I tools/survey/survey_to_json.py "IEUM-SURVEY 1 | sus=4,2,... | miss=very | battery=6 | tasks=1,1,2,0,1 | date=2026-11-20" [--write status/survey.json]

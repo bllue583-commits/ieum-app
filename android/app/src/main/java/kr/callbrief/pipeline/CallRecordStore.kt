@@ -80,7 +80,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     companion object {
         val KST:ZoneId=ZoneId.of("Asia/Seoul")
         const val TRANSCRIBED="TRANSCRIBED";const val ANALYZED="ANALYZED";const val FAILED="FAILED"
-        /** v4.0 r20-2: a check item the user marked [틀렸어요] (a workflow_items status, apart from done and merged). */
+        /** v3.9 r20-2: a check item the user marked [틀렸어요] (a workflow_items status, apart from done and merged). */
         const val WRONG="wrong"
         const val WAITING_CONSENT="WAITING_CONSENT"
         /** Transcripts of records that got their result are trimmed after this many days: the whole sealed DB must stay under 16 MB. Summaries stay.
@@ -723,8 +723,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         val all=rows("""SELECT i.id,i.title,i.due_text,i.status,i.created_ms,i.evidence_quote,co.id AS cid,co.name AS cname,b.record_id AS made_by,p.name AS pname FROM workflow_items i
             LEFT JOIN task_companies tc ON tc.item_id=i.id LEFT JOIN companies co ON co.id=tc.company_id
             LEFT JOIN call_task_bindings b ON b.item_id=i.id LEFT JOIN call_links l ON l.record_id=b.record_id LEFT JOIN people p ON p.id=l.person_id
-            WHERE (i.status NOT IN ('done','merged','wrong') OR COALESCE(i.done_ms,0)>CAST(? AS INTEGER)) AND i.status!='wrong' AND i.kind='TODO' AND i.created_ms<=CAST(? AS INTEGER) ORDER BY i.created_ms DESC LIMIT 300""",before,before)
-            .map { Open(ClaudeCallRequest.OpenTask(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty(),it.str("status")!!.let { s -> if(s=="done" || s=="merged") "open" else s },it.str("cname"),it.long("created_ms")?.let { ms -> kstDay(ms).toString() },
+            WHERE (i.status NOT IN ('done','merged','wrong') OR COALESCE(i.done_ms,0)>CAST(? AS INTEGER)) AND i.kind='TODO' AND i.created_ms<=CAST(? AS INTEGER) ORDER BY i.created_ms DESC LIMIT 300""",before,before)
+            .map { Open(ClaudeCallRequest.OpenTask(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty(),it.str("status")!!.let { s -> if(s=="done" || s=="merged" || s==WRONG) "open" else s },it.str("cname"),it.long("created_ms")?.let { ms -> kstDay(ms).toString() },
                 person=it.str("pname"),quote=it.str("evidence_quote")),it.str("cid"),it.str("made_by")) }
         val own=if(lean) emptyList() else all.filter { (companyId!=null && it.companyId==companyId) || it.task.id in sameCounterpart }.take(30)
             .map { o -> o.task.copy(owner=o.madeBy?.let { madeOwner(it,o.task.id) }) }
@@ -882,7 +882,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
                         FROM workflow_items i LEFT JOIN call_task_bindings b ON b.item_id=i.id WHERE i.id=? AND i.kind='TODO'""",item).singleOrNull()
                     if(row==null) Applied(t.op,item,t.title,t.due,false) else when {
                         // Finished, or asked for after this call (a late analysis of an old call must not rewrite what came later, B7).
-                        row.str("status") in setOf("done","merged") || (row.long("created_ms") ?: 0)>callMs -> Applied(t.op,item,t.title,t.due,false)
+                        // v3.9 r20-2: an item the user marked [틀렸어요] stays out like a finished one (not only by its history row).
+                        row.str("status") in setOf("done","merged",WRONG) || (row.long("created_ms") ?: 0)>callMs -> Applied(t.op,item,t.title,t.due,false)
                         // An earlier call than the one that last changed it (a first-pass batch answered after a newer call, C5):
                         // what came later stays, and no note either.
                         (row.long("last_call") ?: 0)>callMs -> Applied(t.op,item,t.title,t.due,false,reason="older")
@@ -952,7 +953,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         port.execute("INSERT INTO workflow_item_history VALUES(?,?,?,?)","wf_"+UUID.randomUUID().toString().replace("-",""),item,revision+1,before.toString())
         port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER);null
     }.also { ContactCards.touch(this) { cardKeysOfItem(item) } }
-    /** v4.0 r20-2 (DESIGN_V7 6): the user's [틀렸어요]: the item leaves every list as [WRONG] (not done, not merged), with when
+    /** v3.9 r20-2 (DESIGN_V7 6): the user's [틀렸어요]: the item leaves every list as [WRONG] (not done, not merged), with when
      * ([done_ms]) and the edit recorded, so analysis and the morning tidy never touch it again. No reason, no words. */
     fun markWrong(item:String,revision:Long)=port.transaction {
         val old=rows("SELECT * FROM workflow_items WHERE id=?",item).single()
@@ -969,9 +970,26 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         port.execute("UPDATE workflow_items SET status=?,revision=revision+1,done_ms=NULL WHERE id=?",status,item)
         port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER);null
     }.also { ContactCards.touch(this) { cardKeysOfItem(item) } }
-    /** v4.0 r20-2: ids of the items marked [WRONG] at or after [sinceMs] (the morning tidy's state `wrong[]`), oldest first. */
-    fun wrongIds(sinceMs:Long):List<String> =rows("SELECT id FROM workflow_items WHERE status=? AND kind='TODO' AND COALESCE(done_ms,0)>=CAST(? AS INTEGER) ORDER BY done_ms",WRONG,sinceMs)
-        .mapNotNull { it.str("id") }
+    /** v3.9 r20 review M2: [되돌리기] on an item marked [WRONG], later (from "끝낸 일 보기"): it gets the status it had before the
+     * press back (the history row [markWrong] wrote; "open" when that cannot be read). Still marked as touched by the user. */
+    fun restoreWrong(item:String)=port.transaction {
+        val now=rows("SELECT revision,status FROM workflow_items WHERE id=?",item).single()
+        require(now.str("status")==WRONG) { "ITEM_REVISION_CONFLICT" }
+        val before=rows("SELECT before_json FROM workflow_item_history WHERE item_id=? ORDER BY revision DESC LIMIT 1",item).firstOrNull()?.str("before_json")
+            ?.let { runCatching { JSONObject(it).optString("status") }.getOrNull() }
+            ?.takeIf { it.isNotBlank() && it !in setOf("done","merged",WRONG) } ?: "open"
+        port.execute("UPDATE workflow_items SET status=?,revision=revision+1,done_ms=NULL WHERE id=?",before,item)
+        port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER);null
+    }.also { ContactCards.touch(this) { cardKeysOfItem(item) } }
+    /** v3.9 r20-2: ids of the items marked [WRONG] at or after [sinceMs], oldest first. */
+    fun wrongIds(sinceMs:Long):List<String> =wrongItems(sinceMs).map { it.getString("id") }
+    /** v3.9 r20 review M1: the morning tidy's state `wrong[]`: each item marked [WRONG] at or after [sinceMs], oldest first, as
+     * {id, title, company, createdMs, wrongMs} (the same level as the state's tasks), so the tidy can tell the same job made again. */
+    fun wrongItems(sinceMs:Long):List<JSONObject> =rows("""SELECT i.id,i.title,i.created_ms,i.done_ms,
+        (SELECT co.name FROM task_companies tc JOIN companies co ON co.id=tc.company_id WHERE tc.item_id=i.id) AS cname
+        FROM workflow_items i WHERE i.status=? AND i.kind='TODO' AND COALESCE(i.done_ms,0)>=CAST(? AS INTEGER) ORDER BY i.done_ms""",WRONG,sinceMs)
+        .map { JSONObject().put("id",it.str("id")).put("title",it.str("title")).put("company",it.str("cname") ?: JSONObject.NULL)
+            .put("createdMs",it.long("created_ms") ?: 0).put("wrongMs",it.long("done_ms") ?: 0) }
     // ---- screens (round 3): undo of "다 됐어요", dial numbers, oldest waiting call ---------------------------------------------
     /** Takes a [completeItem] back: the item gets its earlier [status] again (it stays marked as touched by the user, so analysis leaves it alone).
      * [revision] is the revision [completeItem] left it at (its old revision plus one); anything else means it changed since. */
@@ -1023,7 +1041,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     fun doneItems(sinceMs:Long):List<OpenItem> =rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.edition,i.created_ms,
         (SELECT c.counterpart FROM call_records c WHERE c.recording_id=i.recording_id ORDER BY c.created_ms DESC LIMIT 1) AS counterpart,
         (SELECT co.name FROM task_companies tc JOIN companies co ON co.id=tc.company_id WHERE tc.item_id=i.id) AS cname,i.ai_note,i.done_ms
-        FROM workflow_items i WHERE i.status='done' AND i.kind='TODO' AND COALESCE(i.done_ms,0)>=CAST(? AS INTEGER) ORDER BY i.done_ms DESC LIMIT 100""",sinceMs)
+        FROM workflow_items i WHERE i.status IN ('done','wrong') AND i.kind='TODO' AND COALESCE(i.done_ms,0)>=CAST(? AS INTEGER) ORDER BY i.done_ms DESC LIMIT 100""",sinceMs)
         .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),it.str("counterpart"),it.str("cname"),it.long("created_ms") ?: 0,it.str("ai_note")) }
     // ---- personal numbers (design E9) ----------------------------------------------------------------------------
     /** Whether [key] (a counterpart key) is a number found personal: its records are kept on the phone and not sent. */
@@ -1238,9 +1256,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         return JSONObject().put("generatedMs",now).put("firstPassDone",firstPassDone).put("tasks",tasks).put("records",records)
             .put("pending",JSONObject().put("yesterdayCalls",waiting.pending).put("yesterdayMin",waiting.pendingMin))
             .put("recentlyDone",JSONArray(recentlyDone(null))).apply { mergeCandidates?.takeIf { it.length()>0 }?.let { put("mergeCandidates",it) }
-                // v4.0 r20-2 (DESIGN_V7 6): the items the user marked [틀렸어요] in the last 14 days, ids only (tidy.md: left out of
-                // the next report and not made again). Only when there are some, so an old state reads the same.
-                wrongIds(now-TaskFeedback.STATE_DAYS*86_400_000L).takeIf { it.isNotEmpty() }?.let { put("wrong",JSONArray(it)) }
+                // v3.9 r20-2 (DESIGN_V7 6): the items the user marked [틀렸어요] in the last 14 days, with their titles like tasks
+                // (tidy.md v10: left out of the report and not made again). Only when there are some, so an old state reads the same.
+                wrongItems(now-TaskFeedback.STATE_DAYS*86_400_000L).takeIf { it.isNotEmpty() }?.let { put("wrong",JSONArray(it)) }
                 // r12-4: people on one number the migration did not merge by itself, [id, id] pairs (ledger ids where known).
                 personCandidates().takeIf { it.length()>0 }?.let { put("personCandidates",it) } }
     }
@@ -1420,7 +1438,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
             WHERE i.kind='TODO' AND (i.status NOT IN ('done','merged','wrong') OR COALESCE(i.done_ms,i.created_ms)>=CAST(? AS INTEGER))""",now-14*86_400_000L)
         list.firstOrNull { NameKey.sameWords(title,it.str("title").orEmpty()) }?.let { return it.str("id")!! to false }
         if(companyId==null) return null
-        val same=list.filter { it.str("status") !in setOf("done","merged",WRONG) && it.str("cid")==companyId };if(same.isEmpty()) return null
+        // v3.9 r20 review M1: a wrong item of the last 14 days also blocks a near title (the same wrong item in other words).
+        val same=list.filter { it.str("status") !in setOf("done","merged") && it.str("cid")==companyId };if(same.isEmpty()) return null
         val names=(rows("SELECT name FROM companies")+rows("SELECT name FROM people WHERE name!=''")).mapNotNull { it.str("name") }.distinct()
         return same.firstOrNull { NameKey.nearTitle(title,it.str("title").orEmpty(),names) }?.let { it.str("id")!! to true }
     }

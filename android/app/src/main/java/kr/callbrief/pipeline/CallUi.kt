@@ -416,7 +416,7 @@ internal object CallUi {
      * The whole row opens the call it came from when [onOpen] is given. Calm on purpose: no red, no countdown. */
     fun taskRow(a:Context,title:String,requestedMs:Long,company:String?,person:String?=null,status:String="",onDone:((View)->Unit)?=null,
                 onOpen:(()->Unit)?=null,aiNote:String?=null,unsure:Boolean=false,
-                /** v4.0 r20-2: [틀렸어요] beside [다 됐어요] (only with [onDone]). */ onWrong:((View)->Unit)?=null):LinearLayout {
+                /** v3.9 r20-2: [틀렸어요] beside [다 됐어요] (only with [onDone]). */ onWrong:((View)->Unit)?=null):LinearLayout {
         val outer=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;setPadding(dp(a,16),dp(a,14),dp(a,16),dp(a,14)) }
         if(onOpen!=null) outer.apply { isClickable=true;isFocusable=true;background=rowRipple();onTap(this,action=onOpen);contentDescription=null }
         outer.addView(text(a,title,SUMMARY,true).apply { tag="task_title";setPadding(0,0,0,0) })
@@ -445,7 +445,7 @@ internal object CallUi {
         return outer
     }
 
-    /** v4.0 r20-2 (DESIGN_V7 6): what [틀렸어요] says and the words of its undo bar. */
+    /** v3.9 r20-2 (DESIGN_V7 6): what [틀렸어요] says and the words of its undo bar. */
     const val WRONG_LABEL="틀렸어요"
     /** [다 됐어요] of a check row ([row] goes to [onDone]); with [onWrong] a quieter [틀렸어요] sits before it on the same line, one
      * tap and no reason asked. Both at least 48dp tall. */
@@ -464,8 +464,26 @@ internal object CallUi {
             minHeight=dp(a,48);minimumHeight=dp(a,48);minWidth=0;minimumWidth=0;setPadding(dp(a,12),0,dp(a,12),0)
             contentDescription="$title, 틀렸어요. 잘못 뽑힌 일이면 눌러 주세요";onTap(this) { onWrong(row) }
         }
-        return LinearLayout(a).apply { orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;tag="task_buttons"
-            addView(wrong,LinearLayout.LayoutParams(-2,-2).apply { marginEnd=dp(a,8) });addView(done,LinearLayout.LayoutParams(-2,-2)) }
+        return ButtonPair(a).apply { tag="task_buttons";addView(wrong,LinearLayout.LayoutParams(-2,-2));addView(done,LinearLayout.LayoutParams(-2,-2)) }
+    }
+    /** v3.9 r20 review L5: two buttons side by side while both fit whole; otherwise one under the other, both at the end, so
+     * neither is cut at 200% letters on a narrow screen (decided at measure time, like [FitRow]). */
+    class ButtonPair(a:Context):LinearLayout(a) {
+        private val gapPx=dp(a,8)
+        /** True while the two sit side by side (for tests). */
+        var sideBySide=true
+            private set
+        override fun onMeasure(widthSpec:Int,heightSpec:Int) {
+            val shown=(0 until childCount).map(::getChildAt).filter { it.visibility!=View.GONE }
+            val free=MeasureSpec.makeMeasureSpec(0,MeasureSpec.UNSPECIFIED)
+            val need=shown.sumOf { it.measure(free,free);it.measuredWidth }+gapPx*(shown.size-1).coerceAtLeast(0)
+            sideBySide=MeasureSpec.getMode(widthSpec)==MeasureSpec.UNSPECIFIED || need<=MeasureSpec.getSize(widthSpec)-paddingLeft-paddingRight
+            orientation=if(sideBySide) HORIZONTAL else VERTICAL
+            gravity=if(sideBySide) Gravity.CENTER_VERTICAL else Gravity.END
+            shown.forEachIndexed { i,v -> (v.layoutParams as LayoutParams).apply {
+                marginStart=if(sideBySide && i>0) gapPx else 0;topMargin=if(!sideBySide && i>0) gapPx else 0;gravity=if(sideBySide) Gravity.CENTER_VERTICAL else Gravity.END } }
+            super.onMeasure(widthSpec,heightSpec)
+        }
     }
 
     /** The AI's one-line note on an item the user touched (an aside under the row); null when there is none. */

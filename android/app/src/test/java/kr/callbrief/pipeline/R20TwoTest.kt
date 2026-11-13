@@ -19,7 +19,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.SQLiteMode
 
-/** v4.0 r20-2 (DESIGN_V7 6): [틀렸어요] beside [다 됐어요]: one tap, the item leaves the list as "wrong" (not done), undo brings it
+/** v3.9 r20-2 (DESIGN_V7 6): [틀렸어요] beside [다 됐어요]: one tap, the item leaves the list as "wrong" (not done), undo brings it
  * back, only counts go to the heartbeat (`feedback{wrong, undone}`) and only ids to the morning tidy's state (`wrong[]`).
  * The preview's made-up rows only. */
 @RunWith(RobolectricTestRunner::class)
@@ -58,7 +58,8 @@ class R20TwoTest:ProtectedTextHostTestBase() {
         assertTrue(views(tag(a,"snack_bar")).filterIsInstance<TextView>().any { it.text.toString()==TaskActions.WRONG_WORDS })
         settle { feedback().getLong("wrong")==1L }
         assertFalse(CallRecordStore(app).use { it.openItems() }.any { it.id==ai[0].id })
-        assertFalse("not among the finished",CallRecordStore(app).use { it.doneItems(0) }.any { it.id==ai[0].id })
+        // r20 review M2: it shows in "끝낸 일 보기" as a wrong one (to be taken back from there), not as a finished one.
+        assertTrue(CallRecordStore(app).use { it.doneItems(0) }.any { it.id==ai[0].id && it.status==CallRecordStore.WRONG })
         pause(5_500)
         settle { tag(a,"task_${ai[0].id}")==null }
 
@@ -73,9 +74,10 @@ class R20TwoTest:ProtectedTextHostTestBase() {
         assertEquals(2L,feedback().getLong("wrong"))
         assertTrue(CallRecordStore(app).use { it.openItems() }.any { it.id==ai[1].id })
 
-        // The morning tidy's state: the wrong id only (no words), and the item is not among its tasks.
+        // The morning tidy's state: the wrong item with its title (r20 review M1: like the tasks), and not among its tasks.
         val state=CallRecordStore(app).use { it.tidyState(true,System.currentTimeMillis()) }
-        val ids=state.getJSONArray("wrong").let { arr -> (0 until arr.length()).map { arr.getString(it) } }
+        val ids=state.getJSONArray("wrong").let { arr -> (0 until arr.length()).map { arr.getJSONObject(it).getString("id") } }
+        assertEquals(ai[0].title,state.getJSONArray("wrong").getJSONObject(0).getString("title"))
         assertEquals(listOf(ai[0].id),ids)
         val tasks=state.getJSONArray("tasks").let { arr -> (0 until arr.length()).map { arr.getJSONObject(it).getString("id") } }
         assertFalse(ai[0].id in tasks);assertTrue(ai[1].id in tasks)

@@ -119,5 +119,19 @@ class ScoreTest(unittest.TestCase):
         self.assertEqual(score.cron_hours("CRON_TZ=Asia/Seoul 34 3-4,7-9 * * *"), [3, 4, 7, 8, 9])
 
 
+
+class SecurityReasonTest(unittest.TestCase):
+    """r20 review: secretFindings 0 is met (0 == False made the reason list it as unmet; the verdict was right)."""
+    def test_zero_findings_is_not_listed_as_unmet(self):
+        cfg = {"build_type": "release", "max_secret_findings": 0}
+        version = {"buildType": "release", "seedIndependent": True}
+        latest = {"security": {"certCheck": True, "saltedHash": True}}
+        r = score.item_security(cfg, version, latest, {"findings": 0})
+        self.assertTrue(r["pass"]); self.assertEqual("", r["reason"])
+        r = score.item_security(cfg, version, latest, {"findings": 2})
+        self.assertFalse(r["pass"]); self.assertEqual("미충족: secretFindings", r["reason"])
+        r = score.item_security(cfg, {**version, "seedIndependent": False}, latest, None)
+        self.assertFalse(r["pass"]); self.assertEqual("미충족: seedIndependent, secretFindings", r["reason"])
+
 if __name__ == "__main__":
     unittest.main()

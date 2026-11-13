@@ -23,7 +23,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.SQLiteMode
 import org.robolectric.shadows.ShadowToast
 
-/** v4.0 r20-1 (DESIGN_V7 6): the tools for whoever looks after the app folded into "관리" at the bottom of settings, the
+/** v3.9 r20-1 (DESIGN_V7 6): the tools for whoever looks after the app folded into "관리" at the bottom of settings, the
  * per-call switch's new words, and the call card as a required first-setup step on a new install only. Made-up data only. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[35],shadows=[ShadowTextKeys::class,ShadowTextKeys.ExistingApprovedSettings::class,ShadowTextAtomicFile::class])
@@ -78,11 +78,11 @@ class R20OneTest:ProtectedTextHostTestBase() {
     }
 
     @Test fun theCallCardIsRequiredOnANewInstallOnly() {
-        // A new install: no folder, no consent when v4.0 first asks. Decided once and kept, also after the setup moves on.
+        // A new install: no folder, no consent when v3.9 first asks. Decided once and kept, also after the setup moves on.
         ui().edit().clear().commit()
         assertTrue(CallCardAsk.cardRequired(app,JSONObject()))
         assertTrue(CallCardAsk.cardRequired(app,JSONObject().put("treeUri","content://x").put(PipelineSettingsKeys.CONSENT_GRANTED,true)))
-        // A phone set up before v4.0 (the wife's): optional as it was, whatever comes later.
+        // A phone set up before v3.9 (the wife's): optional as it was, whatever comes later.
         ui().edit().clear().commit()
         assertFalse(CallCardAsk.cardRequired(app,JSONObject().put("treeUri","content://x").put(PipelineSettingsKeys.CONSENT_GRANTED,true)))
         assertFalse(CallCardAsk.cardRequired(app,JSONObject()))
@@ -104,7 +104,7 @@ class R20OneTest:ProtectedTextHostTestBase() {
         settle { tag(a,"setup_next_label")!=null }
         assertEquals("다음 할 일: 통화 화면 위에 이음 카드 보기",(tag(a,"setup_next_label") as TextView).text.toString())
         assertNull(tag(a,"setup_later"));assertNull(tag(a,"setup_optional"))
-        // The same phone set up before v4.0: optional, with [나중에 할게요].
+        // The same phone set up before v3.9: optional, with [나중에 할게요].
         ui().edit().putBoolean(CallCardAsk.CARD_REQUIRED,false).commit()
         val b=launchMain(Screen.SETTINGS)
         settle { tag(b,"setup_next_label")!=null }
