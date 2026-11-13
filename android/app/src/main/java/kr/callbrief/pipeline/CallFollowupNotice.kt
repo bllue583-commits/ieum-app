@@ -76,7 +76,7 @@ internal object CallFollowupNotice {
     const val UNREADABLE=-1L
     internal fun resetForTest() { phoneBookName=::callLogName;store={ kr.callbrief.IeumApplication.store(it) };logDuration=::callLogDuration;logWaitMs=1_000L }
 
-    /** What one notice is about. [who]: "김민수 대표"; [hash]: SHA-256 of the phone key; [record]: the call record once known.
+    /** What one notice is about. [who]: "김민수 대표"; [hash]: the phone key's fingerprint ([kr.callbrief.LocalPrivacy.numberHash]: salted from v3.8, plain SHA-256 before); [record]: the call record once known.
      * [dir]: "in" or "out" (v3.4; null in older entries). */
     internal data class Entry(val id:Int,val who:String,val company:String?,val hash:String,val startedMs:Long,val endedMs:Long,
                               val record:String?=null,val state:String=WORKING,
@@ -113,7 +113,7 @@ internal object CallFollowupNotice {
                 ?: card?.company?.name ?: phoneBookName(context,key)?.trim()?.takeIf { it.isNotEmpty() } ?: return
             if(rules.excluded(named,key)) return
             val out=end.direction==CallSession.Direction.OUT
-            var e=Entry(tempId(key,end.endedMs),named,card?.company?.name,PrivacyRules.hash(key),end.startedMs,end.endedMs,dir=if(out) "out" else "in")
+            var e=Entry(tempId(key,end.endedMs),named,card?.company?.name,kr.callbrief.LocalPrivacy.numberHash(s,key),end.startedMs,end.endedMs,dir=if(out) "out" else "in")
             // v3.4 (4.2-4 가): "answered" of a call going out only says it was placed. Only a call the log says was connected
             // gets a notice; one it does not know yet waits ([HOLD]) for the next discovery pass.
             if(out) {
@@ -137,19 +137,22 @@ internal object CallFollowupNotice {
             if(!enabled(settings(context))) return
             val s=db ?: store(context)
             val record=s.record(recordId) ?: return
-            val e=entries.firstOrNull { it.record==recordId } ?: match(entries,record) ?: return
+            val st=settings(context)
+            val e=entries.firstOrNull { it.record==recordId } ?: match(entries,record) { h,k -> kr.callbrief.LocalPrivacy.sameNumber(st,h,k) } ?: return
             finish(context,e,record,s)
         } catch(t:Throwable) { Log.w(LOG,"result not shown: ${t.javaClass.simpleName}") }
     }
 
     /** The notice of [record] among [entries] not yet linked: same number (by hash) or, with no number, the only one, and the call
      * time within [MATCH_MS] of the notice's call. */
-    internal fun match(entries:List<Entry>,record:CallRecord):Entry? {
+    internal fun match(entries:List<Entry>,record:CallRecord,
+                       /** v3.8 r18-lock: the stored fingerprint is this phone key's (salted or, written before the salt, not). */
+                       same:(String,String)->Boolean={ h,k -> h==PrivacyRules.hash(k) }):Entry? {
         if(record.kind!="통화") return null
         val at=record.startedMs ?: return null
         val near=entries.filter { it.record==null && at>=it.startedMs-MATCH_MS && at<=it.endedMs+MATCH_MS }
         val key=PhoneKey.of(record.counterpartKey)
-        return if(key!=null) near.firstOrNull { it.hash==PrivacyRules.hash(key) } else near.singleOrNull()
+        return if(key!=null) near.firstOrNull { same(it.hash,key) } else near.singleOrNull()
     }
 
     private fun finish(context:Context,e:Entry,record:CallRecord,db:CallRecordStore?=null) {
@@ -252,7 +255,7 @@ internal object CallFollowupNotice {
             // A result that came in by another way (the report's own pass, a notice posted after the result).
             val db=runCatching { store(context) }.getOrNull()
             for(e in open) {
-                val record=db?.let { d -> e.record?.let(d::record) ?: runCatching { d.day(CallRecordStore.kstDay(e.startedMs)) }.getOrDefault(emptyList()).firstNotNullOfOrNull { r -> r.takeIf { match(listOf(e),it)!=null } } }
+                val record=db?.let { d -> e.record?.let(d::record) ?: runCatching { d.day(CallRecordStore.kstDay(e.startedMs)) }.getOrDefault(emptyList()).firstNotNullOfOrNull { r -> r.takeIf { match(listOf(e),it) { h,k -> kr.callbrief.LocalPrivacy.sameNumber(s,h,k) }!=null } } }
                 if(record!=null) { finish(context,e,record,db);if(record.state==CallRecordStore.ANALYZED) continue }
                 val current=entries(context).firstOrNull { it.id==e.id } ?: e
                 if(current.state==WORKING && now-e.endedMs>=LATE_MS) {
@@ -399,6 +402,7 @@ internal object CallFollowupNotice {
      * [MATCH_MS] of the call; null when the log has none (yet) or may not be read. */
     private fun callLogDuration(context:Context,e:Entry):Long? {
         if(context.checkSelfPermission(Manifest.permission.READ_CALL_LOG)!=PackageManager.PERMISSION_GRANTED) return UNREADABLE
+        val st=settings(context)
         return runCatching {
             context.contentResolver.query(CallLog.Calls.CONTENT_URI,arrayOf(CallLog.Calls.NUMBER,CallLog.Calls.DATE,CallLog.Calls.DURATION),
                 "${CallLog.Calls.DATE}>=? AND ${CallLog.Calls.DATE}<=?",arrayOf((e.startedMs-MATCH_MS).toString(),(e.endedMs+MATCH_MS).toString()),
@@ -406,7 +410,7 @@ internal object CallFollowupNotice {
                 var found:Long?=null
                 while(c.moveToNext()) {
                     val k=PhoneKey.of(c.getString(0)) ?: continue
-                    if(PrivacyRules.hash(k)==e.hash) { found=c.getLong(2)*1_000L;break }
+                    if(kr.callbrief.LocalPrivacy.sameNumber(st,e.hash,k)) { found=c.getLong(2)*1_000L;break }
                 }
                 found
             }

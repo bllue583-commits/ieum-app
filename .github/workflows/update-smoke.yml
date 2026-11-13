@@ -9,6 +9,10 @@ name: update-smoke
 # "Emulator did not boot (infra)" fails instead, and release-apk only warns. An app failure always stops the release.
 # Needs the secrets IEUM_INBOX_TOKEN (and IEUM_SIGNING_SEED if release-apk uses it; IEUM_SIGNING_SEED_V2 once IEUM_ROTATE=1).
 # Manual run with rotate_test=true: rehearses key rotation (tools/rotate_signing_key.sh) on the emulator.
+# v3.8 r18-lock (DESIGN_V7 4.2): the new APK is the release build type (the previous release is still a debug build until
+# v3.8 build B is out), so every run checks debug -> release over the top with the data kept. With rotate_test=true (or
+# IEUM_ROTATE=1) the lineage is made once (from the release key, like the first rotated release), the old key deleted, and two
+# builds are signed with the new key and that lineage only: the first over the current release, the second over the first.
 on:
   push:
     branches: ['feature/lean-calls', 'main']
@@ -76,38 +80,65 @@ jobs:
         env:
           IEUM_INBOX_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
           IEUM_SIGNING_SEED: ${{ secrets.IEUM_SIGNING_SEED }}
+          ROTATE: ${{ vars.IEUM_ROTATE }}
+          REHEARSE: ${{ inputs.rotate_test }}
+          IEUM_SIGNING_SEED_V2: ${{ vars.IEUM_ROTATE == '1' && secrets.IEUM_SIGNING_SEED_V2 || '' }}
         run: |
           [ -z "$IEUM_SIGNING_SEED" ] || echo "::add-mask::$IEUM_SIGNING_SEED"
+          [ -z "$IEUM_SIGNING_SEED_V2" ] || echo "::add-mask::$IEUM_SIGNING_SEED_V2"
           # Pinned: the certificate must come out byte-identical every build (checked with 50.0.1 and 50.0.2: same fingerprint).
           pip install --quiet 'cryptography==50.0.2'
-          python3 tools/derive_signing_key.py "$RUNNER_TEMP/ieum.p12"
+          # Same keys as release-apk: the new key when IEUM_ROTATE=1, else the release key (a rehearsal re-signs below).
+          if [ "$ROTATE" = "1" ]; then python3 tools/derive_signing_key.py --seed-env IEUM_SIGNING_SEED_V2 "$RUNNER_TEMP/ieum.p12"
+          else python3 tools/derive_signing_key.py "$RUNNER_TEMP/ieum.p12"; fi
           export ANDROID_SDK_ROOT="$ANDROID_HOME" \
             IEUM_ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/28.2.13676358" IEUM_CMAKE_BINARY="$ANDROID_HOME/cmake/3.22.1/bin/cmake" \
             IEUM_SIGNING_KEYSTORE="$RUNNER_TEMP/ieum.p12" IEUM_VERSION_CODE=$((PREV_CODE + 1))
-          python3 run_gradle.py --log smoke-build.log :app:assembleDebug
-          cp android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/new.apk"
-      # Same signing as release-apk: with IEUM_ROTATE=1 the lineage to IEUM_SIGNING_SEED_V2. A manual rotate_test run
-      # rehearses it with a random key that exists only in this run, so no new secret is needed for the rehearsal.
+          # r18-lock: the release build type, as release-apk publishes it.
+          python3 run_gradle.py --log smoke-build.log :app:assembleRelease
+          cp android/app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/new.apk"
+          # The second rotated build (one version code higher), for the "again with the same lineage" install.
+          if [ "$ROTATE" = "1" ] || [ "$REHEARSE" = "true" ]; then
+            IEUM_VERSION_CODE=$((PREV_CODE + 2)) python3 run_gradle.py --log smoke-build-2.log :app:assembleRelease
+            cp android/app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/next.apk"
+          fi
+          rm -f "$RUNNER_TEMP/ieum.p12"
+      # Same signing as release-apk: with IEUM_ROTATE=1 the new key and the mailbox's stored lineage (made here, not stored,
+      # when there is none yet). A manual rotate_test run rehearses the first rotation with a random key that exists only in
+      # this run (no new secret needed): the lineage from the release key, the old key deleted at once, then both builds
+      # signed with the new key and that lineage only. Nothing is written to the mailbox.
       - name: Re-sign with the key lineage (IEUM_ROTATE=1 or rotate_test)
         if: steps.need.outputs.run == 'true' && (vars.IEUM_ROTATE == '1' || inputs.rotate_test)
         env:
+          GH_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
           IEUM_INBOX_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
           IEUM_SIGNING_SEED: ${{ secrets.IEUM_SIGNING_SEED }}
           IEUM_SIGNING_SEED_V2: ${{ vars.IEUM_ROTATE == '1' && secrets.IEUM_SIGNING_SEED_V2 || '' }}
         run: |
           [ -z "$IEUM_SIGNING_SEED" ] || echo "::add-mask::$IEUM_SIGNING_SEED"
+          rehearsal=0
           if [ -z "$IEUM_SIGNING_SEED_V2" ]; then
             [ "${{ vars.IEUM_ROTATE }}" != "1" ] || { echo "::error title=smoke::IEUM_ROTATE is 1 but IEUM_SIGNING_SEED_V2 is not set"; exit 1; }
             IEUM_SIGNING_SEED_V2=$(python3 -c "import secrets; print(secrets.token_hex(32))"); echo "rehearsal: throwaway new key"
-            export IEUM_ROTATE_REHEARSAL=1
+            rehearsal=1
           fi
           echo "::add-mask::$IEUM_SIGNING_SEED_V2"; export IEUM_SIGNING_SEED_V2
           export APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
-          bash tools/rotate_signing_key.sh prepare "$RUNNER_TEMP/rotate"
-          bash tools/rotate_signing_key.sh sign "$RUNNER_TEMP/rotate" "$RUNNER_TEMP/new.apk"
-          prev=$(bash tools/rotate_signing_key.sh fp "$RUNNER_TEMP/previous.apk")
-          bash tools/rotate_signing_key.sh check "$RUNNER_TEMP/rotate" "$RUNNER_TEMP/new.apk" "$prev"
-          rm -f "$RUNNER_TEMP/rotate/"*.p12
+          dir="$RUNNER_TEMP/rotate"; lin="$RUNNER_TEMP/signing-lineage.bin"
+          bash tools/rotate_signing_key.sh newkey "$dir"
+          if [ "$rehearsal" = "0" ] && got=$(gh api "repos/$INBOX/contents/app/signing-lineage.bin" --jq .content 2>/dev/null); then
+            echo "$got" | base64 -d > "$lin"; echo "stored lineage from the mailbox"
+          else
+            bash tools/rotate_signing_key.sh lineage "$dir" "$lin"
+          fi
+          # From here on only the new key and the lineage file (lineage deleted old.p12 already).
+          [ ! -e "$dir/old.p12" ] || { echo "::error title=smoke::the old key is still there"; exit 1; }
+          bash tools/rotate_signing_key.sh sign "$dir" "$lin" "$RUNNER_TEMP/new.apk"
+          bash tools/rotate_signing_key.sh sign "$dir" "$lin" "$RUNNER_TEMP/next.apk"
+          bash tools/rotate_signing_key.sh check "$lin" "$(cat "$dir/new.sha256")" "$RUNNER_TEMP/previous.apk" "$RUNNER_TEMP/version.json"
+          bash tools/rotate_signing_key.sh check "$lin" "$(cat "$dir/new.sha256")" "$RUNNER_TEMP/new.apk"
+          rm -f "$dir/"*.p12
+          echo "IEUM_SMOKE_ROTATED=1" >> "$GITHUB_ENV"
       # The emulator needs about 7.4 GB free for its userdata partition; after the SDK, NDK and the Gradle build the
       # runner had 4.3 GB and the emulator stopped at once ("Not enough space to create userdata partition"), which
       # showed only as "Timeout waiting for emulator to boot". Same clean-up as device-test.
@@ -175,7 +206,7 @@ jobs:
           force-avd-creation: false
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: mkdir -p smoke-results && echo booted > smoke-results/booted && bash tools/update_smoke.sh ${{ runner.temp }}/previous.apk ${{ runner.temp }}/new.apk smoke-results
+          script: mkdir -p smoke-results && echo booted > smoke-results/booted && IEUM_SMOKE_NEXT=${{ runner.temp }}/next.apk bash tools/update_smoke.sh ${{ runner.temp }}/previous.apk ${{ runner.temp }}/new.apk smoke-results
       - name: Check whether the emulator booted
         id: boot1
         if: steps.need.outputs.run == 'true'
@@ -197,7 +228,7 @@ jobs:
           force-avd-creation: false
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: mkdir -p smoke-results && echo booted > smoke-results/booted && bash tools/update_smoke.sh ${{ runner.temp }}/previous.apk ${{ runner.temp }}/new.apk smoke-results
+          script: mkdir -p smoke-results && echo booted > smoke-results/booted && IEUM_SMOKE_NEXT=${{ runner.temp }}/next.apk bash tools/update_smoke.sh ${{ runner.temp }}/previous.apk ${{ runner.temp }}/new.apk smoke-results
       # release-apk reads these two step names: keep them.
       #   "Emulator did not boot (infra)" failed  -> the emulator never came up in two attempts: release-apk only warns.
       #   "Install, update, start" success        -> the app installed over the previous release and started.
@@ -222,4 +253,4 @@ jobs:
           retention-days: 7
           path: |
             smoke-results/
-            evidence/smoke-build.log
+            evidence/smoke-build*.log

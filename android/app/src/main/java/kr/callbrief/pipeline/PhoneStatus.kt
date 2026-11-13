@@ -59,7 +59,10 @@ internal object PhoneStatus {
          * [충전 중에만 글자로 바꾸기]; the heartbeat's `power` block ([PowerText.heartbeat]), always there, numbers and codes only. */
         val powerLedger:JSONObject?=null,val chargingOnly:Boolean=false,
         /** DESIGN_V7 3.3 (v3.7, r17-3): the scorecard's measurement ([V37]). */
-        val v37:V37=V37())
+        val v37:V37=V37(),
+        /** v3.8 r18-lock (DESIGN_V7 4.2): `security{certCheck, certSelf, saltedHash, legacyHashes}` ([UpdateCert.heartbeat],
+         * [kr.callbrief.LocalPrivacy.heartbeat]) and `update.certUnknown` (downloads whose certificate could not be read). */
+        val security:JSONObject?=null,val certUnknown:Long=0)
     /** v3.7 r17-3 (DESIGN_V7 3.3, SCORECARD): [latency] goes into `latency` beside the 7-day numbers ({segments{endToText,
      * textToUpload,uploadToApplied}, day{p50Min,p90Min,n,waiting}, over7d}); [window14] into `transcription.window14`
      * {created,failed,failedPermanent,days}; [coverage] is `report.coverage` ([kr.callbrief.pipeline.report.ReportCoverage.snapshot])
@@ -185,6 +188,8 @@ internal object PhoneStatus {
         putV35(o,i.v35)
         o.put("power",runCatching { PowerText.heartbeat(i.powerLedger,i.chargingOnly,i.nowMs) }.getOrElse { JSONObject.NULL })
         putV37(o,i.v37)
+        o.put("security",i.security ?: JSONObject.NULL)
+        o.optJSONObject("update")?.put("certUnknown",i.certUnknown)
         return o
     }
     /** v3.7 r17-3: the scorecard's blocks. `use` and `report.coverage` always (null inside until known), the rest when known. */
@@ -373,8 +378,12 @@ internal object PhoneStatus {
             v35 = v35(s),
             powerLedger = runCatching { PowerText.ledger(s) }.getOrNull(),
             chargingOnly = PowerText.chargingOnly(s),
-            v37 = runCatching { v37(app,s,now) }.onFailure { Log.w(TAG,"v3.7 numbers not read: ${it.javaClass.simpleName}") }.getOrDefault(V37()))
+            v37 = runCatching { v37(app,s,now) }.onFailure { Log.w(TAG,"v3.7 numbers not read: ${it.javaClass.simpleName}") }.getOrDefault(V37()),
+            security = runCatching { security(s) }.getOrNull(),certUnknown = UpdateCert.unknownCount(s))
     }
+    /** v3.8 r18-lock: the certificate check and the number hash salt, yes/no and counts only (never the salt). */
+    internal fun security(s:JSONObject):JSONObject { val o=UpdateCert.heartbeat(s);val p=kr.callbrief.LocalPrivacy.heartbeat(s)
+        for(k in p.keys()) o.put(k,p.get(k));return o }
     /** v3.7 r17-3: the scorecard's numbers. The day's match reasons and the report days are folded into the settings here (one
      * write when they changed); the stages come from the process store (never on the ring path or a screen draw). */
     private fun v37(app:Context,s:JSONObject,now:Long):V37 {

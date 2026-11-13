@@ -36,6 +36,11 @@ internal object CallPipelineStartup {
                 // v3.7 (DESIGN_V7 3.3): mail is gone; a mail address and app password saved by an older version are deleted.
                 runCatching { MessageIntake.forgetMail(kr.callbrief.SecureSettings(app)) }
                     .onFailure { Log.w(TAG,"old mail settings not cleared: ${it.javaClass.simpleName}") }
+                // v3.8 r18-lock (DESIGN_V7 4.2-5): the device salt for number hashes and the personal list moved into settings,
+                // once (idempotent, one settings write); 4.2-2: the update certificate check reads this app's own APK.
+                runCatching { kr.callbrief.LocalPrivacy.migrate(kr.callbrief.SecureSettings(app)) }
+                    .onFailure { Log.w(TAG,"number hash salt not set up: ${it.javaClass.simpleName}") }
+                runCatching { UpdateCert.selfCheck(app) }
                 ensureWork(app)
             } finally { done() }
         }

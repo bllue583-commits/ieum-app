@@ -26,6 +26,8 @@ jobs:
       ROBOLECTRIC_JAR_URL: https://repo1.maven.org/maven2/org/robolectric/android-all-instrumented/15-robolectric-13954326-i7/android-all-instrumented-15-robolectric-13954326-i7.jar
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # r18-lock: the secret scan reads the whole history
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: '17'}
       - uses: android-actions/setup-android@v3
@@ -40,8 +42,11 @@ jobs:
           key: gradle-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties') }}
       - name: UI rules and tool tests
         run: |
+          # r18-lock: tools/test_rotate_signing_key.py signs throwaway APKs (apksigner of build-tools 35, cryptography as release-apk).
+          pip install --quiet 'cryptography==50.0.2'
           python3 -m unittest discover -s tools -p 'test_*.py' -t tools
           python3 -m unittest discover -s tools/inbox -p 'test_*.py'
+          python3 -m unittest discover -s tools/release -p 'test_*.py'
           python3 tools/check_ui_rules.py
       # Secrets and the like block; a personal home path only warns until the old ones in docs are replaced (design H5).
       - name: Export scan
@@ -58,6 +63,13 @@ jobs:
           print(f"export scan: {len(findings)} finding(s), {len(blocking)} blocking")
           sys.exit(1 if blocking else 0)
           EOF
+      # r18-lock (DESIGN_V7 4.2): gitleaks over the whole history (.gitleaks.toml); any finding fails ci, and so the release.
+      # release-apk puts the count into the mailbox (status/secrets-scan.json) for the scorecard.
+      - name: Secret scan
+        run: |
+          # 1 = findings: fail. 2 = the scan itself could not run (download): a warning, not a reason to hold every release.
+          rc=0; bash tools/secret_scan.sh "$RUNNER_TEMP/secrets-scan.json" || rc=$?
+          [ "$rc" != "1" ]
       # The phone shows the first line of docs/UPDATE_NOTE.txt as the update note: remind, never block (design H4).
       - name: Update note reminder
         env:
@@ -83,7 +95,8 @@ jobs:
           IEUM_SHOTS_DIR: ${{ github.workspace }}/evidence/shots # v3.4 (r14-4): card and home pictures from the host tests
         run: |
           export ANDROID_SDK_ROOT="$ANDROID_HOME"
-          python3 run_gradle.py --log ci-gradle.log :core:test :app:testDebugUnitTest :app:lintDebug
+          # r18-lock: the phone gets the release build type from v3.8: its Kotlin and its vital lint (what assembleRelease runs) here too.
+          python3 run_gradle.py --log ci-gradle.log :core:test :app:testDebugUnitTest :app:lintDebug :app:lintVitalRelease
       - name: Summarize results
         if: always()
         run: |

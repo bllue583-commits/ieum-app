@@ -33,6 +33,26 @@ class PrivacyRulesTest {
         assertFalse(PrivacyRules.validKoreanPhone("20261009"))
         assertFalse(PrivacyRules.validKoreanPhone("12345678"))
     }
+    @Test fun saltedAndOldFingerprintsBothMatch() {
+        // v3.8 r18-lock: a made-up salt; HMAC-SHA256 under it, and the old SHA-256 form for rules written before the salt.
+        val salt = "0f".repeat(32)
+        val salted = PrivacyRules.salted(salt, number)
+        assertEquals(64, salted.length); assertNotEquals(PrivacyRules.hash(number), salted)
+        assertNotEquals(salted, PrivacyRules.salted("1e".repeat(32), number))
+        val both = PrivacyRules(setOf(salted, PrivacyRules.hash("01000002222")),
+            listOf(ExcludedAlias(PrivacyRules.salted(salt, "가상인물"), 4), ExcludedAlias(PrivacyRules.hash("다른인물"), 4)), salt)
+        assertTrue(both.excluded("통화 녹음 010-0000-1111_261009_112233.m4a"))
+        assertTrue(both.excluded("x", "01000002222"))
+        assertTrue(both.excluded("통화 녹음 가상인물_261009_112233.m4a"))
+        assertTrue(both.excluded("통화 녹음 다른인물_261009_112233.m4a"))
+        assertFalse(both.excluded("다른 상대", "01000003333"))
+        // Without the salt only the old form matches.
+        assertFalse(both.copy(salt = null).excluded("x", number))
+        assertTrue(both.copy(salt = null).excluded("x", "01000002222"))
+        assertTrue(PrivacyRules.validSalt(salt)); assertFalse(PrivacyRules.validSalt("ab")); assertFalse(PrivacyRules.validSalt(null))
+        assertFalse(PrivacyRules.validSalt("0F".repeat(32)))
+        assertFailsWith<IllegalArgumentException> { PrivacyRules.salted("xyz", number) }
+    }
     @Test fun explicitPhoneDominatesHarmlessAlias() {
         assertTrue(rules.excluded("안전하다고 쓴 별칭",number))
         assertTrue(rules.excluded("가상인물", "01000002222"))

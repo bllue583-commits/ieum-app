@@ -50,6 +50,39 @@ class VersionFieldsTest(unittest.TestCase):
         self.assertEqual(64, len(data["certSha256"]))
         self.assertEqual(1, v.main(["--root", self.fake_root(tidy_head="")]))
 
+    def test_build_type_seed_independence_and_lineage(self):
+        root = self.fake_root()
+        lin = os.path.join(root, "signing-lineage.bin")
+        with open(lin, "wb") as f:
+            f.write(b"lineage bytes")
+        import hashlib
+        got = v.fields(root, CERT, "release", True, lin)
+        self.assertEqual("release", got["buildType"])
+        self.assertIs(True, got["seedIndependent"])
+        self.assertEqual(hashlib.sha256(b"lineage bytes").hexdigest(), got["lineageSha256"])
+        off = v.fields(root, CERT, "release", False)
+        self.assertIs(False, off["seedIndependent"])
+        self.assertNotIn("lineageSha256", off)
+        with self.assertRaises(ValueError):
+            v.fields(root, CERT, "release", True)  # rotated without its lineage file
+        with self.assertRaises(ValueError):
+            v.fields(root, CERT, "profile")
+        path = os.path.join(root, "version.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"versionCode": 1060}, f)
+        self.assertEqual(0, v.main(["--root", root, "--cert", CERT, "--build-type", "release", "--seed-independent", "false", "--merge", path]))
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual(("release", False), (data["buildType"], data["seedIndependent"]))
+        self.assertEqual(1, v.main(["--root", root, "--seed-independent", "true"]))
+
+    def test_scorecard_reads_these_keys(self):
+        """tools/inbox/score.py item 8 reads buildType and seedIndependent from app/version.json."""
+        with open(os.path.join(ROOT, "tools/inbox/score.py"), encoding="utf-8") as f:
+            score = f.read()
+        for key in ("buildType", "seedIndependent"):
+            self.assertIn(f'(version or {{}}).get("{key}")', score)
+
 
 if __name__ == "__main__":
     unittest.main()

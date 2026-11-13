@@ -259,7 +259,7 @@ internal object CallUpdate {
     /** Whole percent from bytes; -1 while the size is unknown. */
     fun percent(got:Long,total:Long)=if(total<=0) -1 else (got*100/total).toInt().coerceIn(0,100)
     private fun failWords(e:Throwable)=when {
-        e.message=="UPDATE_SHA" || e.message=="UPDATE_SIZE" -> BROKEN_WORDS
+        e.message=="UPDATE_SHA" || e.message=="UPDATE_SIZE" || e.message=="CERT" -> BROKEN_WORDS
         e is java.io.IOException && (e.message ?: "").let { it.contains("ENOSPC") || it.contains("No space",true) } -> SPACE_WORDS
         e is java.io.IOException -> NET_WORDS
         else -> OTHER_WORDS }
@@ -312,6 +312,9 @@ internal object CallUpdate {
             }
             check(info.size<=0 || tmp.length()==info.size){"UPDATE_SIZE"}
             check(sha256(tmp)==info.sha256){"UPDATE_SHA"}
+            // v3.8 r18-lock (DESIGN_V7 4.2-2): signed by this app's key or by a key it is an ancestor of ([UpdateCert]); only a
+            // certain mismatch stops it, an unreadable certificate is let through and counted.
+            check(UpdateCert.allows(UpdateCert.check(c,tmp,count=true))){"CERT"}
             check(tmp.renameTo(f) || run { tmp.copyTo(f,true);tmp.delete() }){"UPDATE_MOVE"}
         } catch(e:Exception) {
             noteCheckError(c,checkErrorCode(e))
@@ -560,10 +563,14 @@ internal object CallUpdate {
                     .setBackoffCriteria(BackoffPolicy.LINEAR,30,TimeUnit.SECONDS).build())
         }.onFailure { stage(c,Stage.FAILED,reason=OTHER_WORDS) }
     }
-    /** The downloaded file is the one version.json named: same size (when known) and SHA-256. */
+    /** The downloaded file is the one version.json named: same size (when known) and SHA-256, and its signer is not unrelated
+     * to this app's ([UpdateCert]). */
     fun verified(c:Context):Boolean {
         val r=ready(c) ?: return false;val f=file(c)
-        return (r.size<=0 || f.length()==r.size) && runCatching { sha256(f) }.getOrNull()==r.sha256
+        if(!((r.size<=0 || f.length()==r.size) && runCatching { sha256(f) }.getOrNull()==r.sha256)) return false
+        // v3.8 r18-lock: also for a file that came another way (an older build's download): a certain mismatch is not installed.
+        if(!UpdateCert.allows(UpdateCert.check(c,f,count=false))) { noteCheckError(c,"CERT");return false }
+        return true
     }
     /** A file that does not match is deleted and its version forgotten, so it is got again. */
     internal fun discard(c:Context) { file(c).delete();prefs(c).edit().remove("code").apply() }

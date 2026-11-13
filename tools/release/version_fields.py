@@ -6,10 +6,16 @@ reading the app repository:
   tidyVersion    the morning tidy prompt's version, the "지시문 버전 n" line at the top of docs/routines/tidy.md
   certSha256     the new APK's signing certificate (SHA-256, lower-case hex without colons), so the next release can
                  compare even when the previous APK cannot be downloaded
+  v3.8 r18-lock (DESIGN_V7 4.2; the scorecard's item 8 reads the first two):
+  buildType      "release" or "debug" (--build-type), the Gradle build type of the published APK
+  seedIndependent  true when the APK is signed with the rotated key and the stored lineage (--seed-independent), so its
+                 signature no longer depends on the mailbox token
+  lineageSha256  SHA-256 of app/signing-lineage.bin used to sign it (--lineage), only for a rotated APK
 
 Usage:
-  python3 tools/release/version_fields.py [--root .] [--apk APK | --cert HEX] [--merge version.json]
-Prints the three fields as one JSON object; with --merge it also writes them into that version.json (other keys kept).
+  python3 tools/release/version_fields.py [--root .] [--apk APK | --cert HEX] [--build-type release]
+      [--seed-independent true|false] [--lineage FILE] [--merge version.json]
+Prints the fields as one JSON object; with --merge it also writes them into that version.json (other keys kept).
 The certificate comes from --cert, or from --apk through tools/rotate_signing_key.sh fp (needs APKSIGNER); when it cannot be
 read it is left out with a warning (the release still goes out). An unreadable prompt or tidy version is an error (exit 1).
 """
@@ -56,11 +62,27 @@ def cert_of(root, apk):
         return ""
 
 
-def fields(root, cert=""):
+def file_sha256(path):
+    import hashlib
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def fields(root, cert="", build_type="", seed_independent=None, lineage=""):
     out = {"promptVersion": prompt_version(root), "tidyVersion": tidy_version(root)}
     c = clean_cert(cert)
     if c:
         out["certSha256"] = c
+    if build_type:
+        if build_type not in ("release", "debug"):
+            raise ValueError(f"build type {build_type!r} is neither release nor debug")
+        out["buildType"] = build_type
+    if seed_independent is not None:
+        out["seedIndependent"] = bool(seed_independent)
+    if lineage:
+        out["lineageSha256"] = file_sha256(lineage)
+    if out.get("seedIndependent") and "lineageSha256" not in out:
+        raise ValueError("seedIndependent without the lineage file it was signed with")
     return out
 
 
@@ -81,10 +103,14 @@ def main(argv=None):
     ap.add_argument("--apk", default="")
     ap.add_argument("--cert", default="")
     ap.add_argument("--merge", default="")
+    ap.add_argument("--build-type", default="")
+    ap.add_argument("--seed-independent", choices=["true", "false"], default=None)
+    ap.add_argument("--lineage", default="")
     a = ap.parse_args(argv)
     cert = a.cert or (cert_of(a.root, a.apk) if a.apk else "")
     try:
-        out = fields(a.root, cert)
+        si = None if a.seed_independent is None else a.seed_independent == "true"
+        out = fields(a.root, cert, a.build_type, si, a.lineage)
     except (OSError, ValueError) as e:
         print(f"version_fields: {e}", file=sys.stderr)
         return 1

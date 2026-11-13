@@ -1,0 +1,10 @@
+# Secret scan (DESIGN_V7 4.2, r18-lock): gitleaks' default rules, plus one exception.
+# The only findings in the whole history are the contract test vectors of commit 98ab599 (docs/contracts/fixtures/device.json
+# and test-keys.json, marked TEST_ONLY_KEYS_PUBLIC_IN_REPOSITORY, removed later). The exception is that one commit only, so
+# the same file names in any later commit are still reported. Add nothing here without saying why.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "C0-C3 contract test vectors (public test-only keys), commit 98ab599 only"
+commits = ["98ab59998c1cbed03f66c4c630f421726b97684e"]

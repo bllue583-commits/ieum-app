@@ -51,6 +51,9 @@ android {
             isMinifyEnabled = false
             isDebuggable = false
             buildConfigField("boolean","SYNTHETIC_TOOLS_ENABLED","false")
+            // v3.8 r18-lock (DESIGN_V7 4.2-3): the very same signing config as debug (the CI key above, or the local debug
+            // key), so the release APK carries the certificate every release so far had and installs over them.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/ieum-whisper/assets"))
