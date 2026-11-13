@@ -24,12 +24,17 @@ internal data class BenchConfig(val on:Boolean=false,val candidates:List<String>
         const val MAX_CALLS=40
         const val DEFAULT_FG_MINUTES=60
         const val SENSE_VOICE_THREADS=2
+        /** The threads a candidate runs with: the config's, else (가)/(나) the plugged-in run's (6, capped by the cores this
+         * process may use, as the app's run is) and (다) [SENSE_VOICE_THREADS]. `{"threads":{"c":6}}` measures (다) once more
+         * with the same count as (나). */
+        fun threadsFor(cfg:BenchConfig,c:String,coresAllowed:Int?):Int = cfg.threads[c]
+            ?: if(c=="c") SENSE_VOICE_THREADS else kr.callbrief.pipeline.PowerPolicy.threads(kr.callbrief.pipeline.TranscriptionPower.THREADS_WIRED,coresAllowed)
         fun parse(o:JSONObject?):BenchConfig {
             o ?: return BenchConfig()
             val cands=o.optJSONArray("candidates")?.let { a -> (0 until a.length()).map { a.optString(it).trim().lowercase() } }
                 ?.filter { it in ORDER }?.distinct()?.takeIf { it.isNotEmpty() } ?: DEFAULT_CANDIDATES
             val th=o.optJSONObject("threads")?.let { t -> ORDER.mapNotNull { k -> t.optInt(k,0).takeIf { it in 1..8 }?.let { k to it } }.toMap() } ?: emptyMap()
-            return BenchConfig(o.optBoolean("on",false),ORDER.filter { it in cands },o.optInt("calls",DEFAULT_CALLS).coerceIn(1,MAX_CALLS),
+            return BenchConfig(isTrue(o),ORDER.filter { it in cands },o.optInt("calls",DEFAULT_CALLS).coerceIn(1,MAX_CALLS),
                 o.optInt("run",1),th,o.optInt("fgMinutes",DEFAULT_FG_MINUTES).coerceIn(0,240))
         }
     }
@@ -37,17 +42,23 @@ internal data class BenchConfig(val on:Boolean=false,val candidates:List<String>
 
 /** r18-bench (item 9, user 11/13): recording samples to the private mailbox's release `bench-samples`, so a bigger recognizer in
  * the workspace can make the reference transcripts. Off unless `samples.on` is true. */
-internal data class SamplesConfig(val on:Boolean=false,val calls:Int=DEFAULT_CALLS,val maxMinutes:Int=DEFAULT_MAX_MINUTES) {
-    fun toJson():JSONObject = JSONObject().put("on",on).put("calls",calls).put("maxMinutes",maxMinutes)
+internal data class SamplesConfig(val on:Boolean=false,val calls:Int=DEFAULT_CALLS,val maxMinutes:Int=DEFAULT_MAX_MINUTES,
+    /** The config names a `samples` block (on or off): with it off, the phone looks at the server until it has seen it empty. */
+    val present:Boolean=false) {
+    fun toJson():JSONObject = JSONObject().put("on",on).put("calls",calls).put("maxMinutes",maxMinutes).put("present",present)
     companion object {
         const val DEFAULT_CALLS=12
         const val DEFAULT_MAX_MINUTES=40
         fun parse(o:JSONObject?):SamplesConfig {
             o ?: return SamplesConfig()
-            return SamplesConfig(o.optBoolean("on",false),o.optInt("calls",DEFAULT_CALLS).coerceIn(1,30),o.optInt("maxMinutes",DEFAULT_MAX_MINUTES).coerceIn(1,120))
+            return SamplesConfig(isTrue(o),o.optInt("calls",DEFAULT_CALLS).coerceIn(1,30),o.optInt("maxMinutes",DEFAULT_MAX_MINUTES).coerceIn(1,120),
+                o.optBoolean("present",true))
         }
     }
 }
+
+/** Only the JSON value true switches on (not "true", 1 or anything else). */
+internal fun isTrue(o:JSONObject)=o.opt("on")==true
 
 internal object BenchConfigs {
     const val PATH="app/config.json"

@@ -50,9 +50,11 @@ internal class BenchModels(private val dir:File,private val http:PipelineModelHt
                 }
                 RandomAccessFile(part(s),"rw").use { out ->
                     if(!append) { out.setLength(0);have=0 }
-                    out.seek(have);val buf=ByteArray(64*1024)
+                    out.seek(have);val buf=ByteArray(64*1024);var blocks=0
                     while(true) {
                         if(stopped()) return Result.RETRY
+                        // Free space looked at again on the way (something else may fill the phone meanwhile).
+                        if(++blocks%SPACE_CHECK_BLOCKS==0 && freeBytes()-(s.bytes-have)<MIN_FREE_BYTES) return Result.NO_SPACE
                         val n=r.body.read(buf);if(n<0) break
                         if(have+n>s.bytes) { part(s).delete();return Result.FAILED }
                         out.write(buf,0,n);have+=n
@@ -76,15 +78,20 @@ internal class BenchModels(private val dir:File,private val http:PipelineModelHt
         /** Below this much free space nothing is fetched (the brief's 2 GB, counted after the file would be written). */
         const val MIN_FREE_BYTES=2L*1024*1024*1024
         const val DIR="bench-models"
+        /** 64 KiB blocks between two looks at the free space (16 MiB). */
+        const val SPACE_CHECK_BLOCKS=256
+        /** Hugging Face files by commit, not by branch: what the pins were checked against cannot move under them. */
+        const val HF_WHISPER="https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1"
+        const val HF_SENSE_VOICE="https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07"
         /** (나): whisper.cpp large-v3-turbo q8_0, the same publisher and file family as the app's q5_0 (huggingface ggerganov/whisper.cpp). */
         val TURBO_Q8=Spec("ggml-large-v3-turbo-q8_0.bin",874188075L,"317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1",
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin")
+            "$HF_WHISPER/ggml-large-v3-turbo-q8_0.bin")
         /** (다): SenseVoice-Small int8 as converted by the sherpa-onnx authors (2024-07-17, the FunAudioLLM original; the 2025-09-09
          * build is a Cantonese fine-tune), and its tokens. */
         val SENSE_VOICE=Spec("sense-voice-int8-2024-07-17.onnx",239233841L,"c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51",
-            "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/model.int8.onnx")
+            "$HF_SENSE_VOICE/model.int8.onnx")
         val SENSE_VOICE_TOKENS=Spec("sense-voice-tokens-2024-07-17.txt",315894L,"f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc",
-            "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/tokens.txt")
+            "$HF_SENSE_VOICE/tokens.txt")
         /** Silero VAD as sherpa-onnx publishes it (release asr-models). */
         val SILERO_VAD=Spec("silero_vad.onnx",643854L,"9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
             "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx")

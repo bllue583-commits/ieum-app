@@ -232,58 +232,179 @@ class BenchTest:ProtectedTextHostTestBase() {
         }
     }
 
+    // ---- review 11/13: crashes, time limit, thresholds, the measure's fairness ----
+    @Test fun aDeathInANativeRunCountsAndTwiceEndsTheCandidate() {
+        val s=BenchState.fresh(1,now);BenchState.setPlan(s,listOf(call("r1",2.0,0.1),call("r2",3.0,0.2)))
+        BenchState.markInFlight(s,"c",0,1)
+        assertEquals("c",BenchState.takeLeftover(s))
+        assertNull(BenchState.disabled(s,"c"));assertNull(BenchState.takeLeftover(s)) // the mark is gone with the count
+        BenchState.markInFlight(s,"c",0,1);BenchState.takeLeftover(s)
+        assertEquals("BENCH_CRASH",BenchState.disabled(s,"c"))
+        assertTrue(BenchState.done(s,"c",0) && BenchState.done(s,"c",1))
+        // A clean end of the piece leaves no mark.
+        BenchState.markInFlight(s,"b",0,0);BenchState.clearInFlight(s);assertNull(BenchState.takeLeftover(s))
+        val hb=BenchState.heartbeat(s,BenchConfig(on=true,candidates=listOf("c")))!!.getJSONObject("cand").getJSONObject("c")
+        assertEquals("BENCH_CRASH",hb.getString("disabled"));assertEquals(2,hb.getInt("crashes"));assertEquals(2,hb.getJSONObject("fail").getInt("BENCH_CRASH"))
+    }
+    @Test fun theSamePieceCutTwiceByTheTimeLimitEndsTheCandidate() {
+        val s=BenchState.fresh(1,now);BenchState.setPlan(s,listOf(call("r1",12.0,0.1)))
+        assertEquals(1,BenchState.noteTimeout(s,"b",0,3));assertNull(BenchState.disabled(s,"b"))
+        assertEquals(1,BenchState.noteTimeout(s,"b",0,4));assertNull(BenchState.disabled(s,"b"))
+        assertEquals(2,BenchState.noteTimeout(s,"b",0,3));assertEquals("BENCH_TIMEOUT",BenchState.disabled(s,"b"))
+    }
+    @Test fun onlyTheJsonTrueSwitchesOn() {
+        assertFalse(BenchConfigs.parse("""{"bench":{"on":"true"},"samples":{"on":1}}""").let { it.first.on || it.second.on })
+        assertTrue(BenchConfigs.parse("""{"bench":{"on":true}}""").first.on)
+        assertFalse(BenchConfigs.parse("{}").second.present);assertTrue(BenchConfigs.parse("""{"samples":{"on":false}}""").second.present)
+    }
+    @Test fun threadsComeFromTheConfigAndShowInTheHeartbeat() {
+        assertEquals(2,BenchConfig.threadsFor(BenchConfig(),"c",8));assertEquals(6,BenchConfig.threadsFor(BenchConfig(),"b",8));assertEquals(4,BenchConfig.threadsFor(BenchConfig(),"b",4))
+        val cfg=BenchConfigs.parse("""{"bench":{"on":true,"threads":{"c":6}}}""").first
+        assertEquals(6,BenchConfig.threadsFor(cfg,"c",8))
+        val s=BenchState.fresh(1,now);BenchState.setPlan(s,listOf(call("r1",2.0,0.1)));BenchState.setRun(s,"c",6)
+        BenchState.addPiece(s,"c",0,0,BenchState.Piece(60_000,1_000,2_000,10,1,0,0,0,0,0,1,false));BenchState.finish(s,"c",0,60_000,null)
+        val c=BenchState.heartbeat(s,cfg)!!.getJSONObject("cand").getJSONObject("c")
+        assertEquals(6,c.getInt("threads"));assertFalse(c.getBoolean("foreground"))
+    }
+    @Test fun aShortAnswerIsNoHallucinationAndCallsWithoutTimesAreLeftOut() {
+        // App text: "네" said at 10-11 s; nothing at 30 s.
+        val ref=BenchSource.Reference(listOf("네","견적서 보내 드릴게요"),listOf(10_000L,40_000L),listOf(11_000L,43_000L))
+        val segs=listOf(CallTranscript.Segment(10_200,10_800,"네."),CallTranscript.Segment(30_000,30_600,"그."),CallTranscript.Segment(40_000,43_000,"견적서 보내드릴게요"))
+        val q=BenchScore.piece(segs,0,120_000,ref,emptyList())
+        assertEquals(1,q.halluc);assertEquals("the hallucinated 그 is one extra letter",1,q.edits);assertTrue(q.refChars>0)
+        // Line times that do not match the lines: no quality numbers at all (not the whole text on the first piece).
+        val bad=BenchSource.Reference(listOf("a","b","c"),null)
+        assertFalse(bad.timed);assertEquals("",bad.textBetween(0,120_000))
+        assertEquals(BenchScore.Q(0,0,0,0,0,0,0),BenchScore.piece(segs,0,120_000,bad,emptyList()))
+        val s=BenchState.fresh(1,now);BenchState.setPlan(s,listOf(call("r1",2.0,0.1)))
+        BenchState.addPiece(s,"c",0,0,BenchState.Piece(120_000,5_000,6_000,0,0,0,0,0,0,0,3,false,timed=false));BenchState.finish(s,"c",0,120_000,null)
+        val c=BenchState.heartbeat(s,BenchConfig(on=true))!!.getJSONObject("cand").getJSONObject("c")
+        assertEquals(1,c.getInt("noTimesCalls"));assertTrue(c.isNull("cerPct"));assertEquals(0.042,c.getDouble("wallRtf"),1e-9)
+    }
+    @Test fun spaceIsLookedAtAgainWhileDownloading() {
+        val data=ByteArray(64*1024*(BenchModels.SPACE_CHECK_BLOCKS+10)) { 1 };val spec=BenchModels.Spec("big.bin",data.size.toLong(),sha(data),"https://example.invalid/big.bin")
+        var free=BenchModels.MIN_FREE_BYTES+data.size*2L;var calls=0
+        val m=BenchModels(File(context.noBackupFilesDir,"bench-space").also { it.deleteRecursively() },Server(data)) { if(++calls>1) free=0;free }
+        assertEquals(BenchModels.Result.NO_SPACE,m.fetch(spec) { false })
+        assertTrue(BenchModels.TURBO_Q8.url.contains("/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/"));assertFalse(BenchModels.SENSE_VOICE.url.contains("/main/"))
+    }
+
     // ---- samples ----
+    /** A fake release on a fake server: the assets it lists are what the sweep goes by. */
     private class Releases:Samples.Releases {
-        val log=ArrayList<String>();val uploaded=LinkedHashMap<String,ByteArray>();var failUploads=0;var next=100L
-        override fun find(tag:String):Samples.Release? { log+="find";return null }
-        override fun create(tag:String):Samples.Release { log+="create:$tag";return Samples.Release(7,emptyList()) }
-        override fun upload(releaseId:Long,name:String,contentType:String,bytes:ByteArray):Long { log+="upload:$name"
-            if(failUploads>0) { failUploads--;throw IOException("SAMPLE_HTTP_502") };uploaded[name]=bytes;return next++ }
-        override fun deleteAsset(id:Long) { log+="deleteAsset:$id" }
-        override fun deleteRelease(id:Long) { log+="deleteRelease:$id" }
+        val log=ArrayList<String>();val assets=ArrayList<Samples.Asset>();var released=false;var failUploads=0;var failDelete=false;var next=100L;var clock=0L
+        override fun find(tag:String):Samples.Release? { log+="find";return if(released) Samples.Release(7) else null }
+        override fun assets(releaseId:Long):List<Samples.Asset> { log+="assets";return assets.toList() }
+        override fun create(tag:String):Samples.Release { log+="create:$tag";released=true;return Samples.Release(7) }
+        override fun upload(releaseId:Long,name:String,contentType:String,file:File):Long { log+="upload:$name"
+            if(failUploads>0) { failUploads--;throw IOException("SAMPLE_HTTP_502") };val id=next++;assets+=Samples.Asset(id,name,clock);uploads[name]=file.readBytes();return id }
+        val uploads=LinkedHashMap<String,ByteArray>()
+        override fun deleteAsset(id:Long) { log+="deleteAsset:$id";if(failDelete) throw IOException("SAMPLE_HTTP_503");assets.removeAll { it.id==id } }
+        override fun deleteRelease(id:Long) { log+="deleteRelease:$id";released=false }
         override fun deleteTag(tag:String) { log+="deleteTag:$tag" }
     }
     private val row=CallRecordStore.BenchRow("rec1",now-day,180_000,"김과장님 견적서는 010-1234-5678로 문자 주세요\n삼십만 원이요","""{"v":1,"s":[3,40],"d":[5,4]}""")
-    @Test fun offSendsNothing() {
-        val r=Releases();var queued=0;var cancelled=0
-        Samples.onHeartbeat(context,SamplesConfig(on=false),now,r,{ queued++ },{ cancelled++ })
-        assertTrue(r.log.isEmpty());assertEquals(0,queued);assertEquals(0,cancelled);assertNull(Samples.heartbeat(SecureSettings(context).snapshot()))
+    private fun tmp()=File(context.cacheDir,"bench-tmp").also { it.mkdirs() }
+    private fun wav()=File(tmp(),"a.wav").also { it.writeBytes(Samples.wavHeader(0)) }
+    private fun up(r:Releases,s:JSONObject,c:BenchCall,at:Long=now):JSONObject {
+        val e=Samples.upload(c,row,wav(),c.durationMs,listOf(0L to 120_000L,120_000L to 60_000L),true,r,at,tmp())
+        Samples.applyUpload(s,e,c.durationMs/60000.0);return e
     }
-    @Test fun aSampleGoesUpUnderARandomNameWithoutNamesOrNumbers() {
+    @Test fun offAndNeverOnSendsNothing() {
+        val r=Releases();var queued=0;var cancelled=0
+        Samples.onHeartbeat(context,SamplesConfig(on=false),now,{ r },{ fail("checked while off");null },{ queued++ },{ cancelled++ })
+        assertTrue(r.log.isEmpty());assertEquals(0,queued);assertEquals(0,cancelled);assertNull(Samples.heartbeat(SecureSettings(context).snapshot()))
+        // On an emulator there is no client at all (nothing is uploaded or deleted from CI's runs).
+        assertNull(GitHubReleases.make(emulator=true))
+    }
+    @Test fun aSampleGoesUpAsAWavUnderARandomNameWithoutNamesOrNumbers() {
         val r=Releases();val s=JSONObject();val c=call("rec1",3.0,1.0)
-        assertTrue(Samples.uploadNext(s,SamplesConfig(on=true),listOf(c),now,r,{ row },{ ByteArray(10) { 1 } },{ _,_ -> listOf(0L to 120_000L,120_000L to 60_000L) to true }))
-        val names=r.uploaded.keys.toList()
-        assertEquals(2,names.size);assertTrue(names[0].matches(Regex("s_[a-z0-9]{8}\\.m4a")));assertEquals(names[0].removeSuffix(".m4a")+".json",names[1])
-        val side=String(r.uploaded.getValue(names[1]))
+        assertEquals(c,Samples.pickNext(s,SamplesConfig(on=true),listOf(c),now))
+        val e=up(r,s,c)
+        val names=r.uploads.keys.toList()
+        assertEquals(2,names.size);assertTrue(names[0].matches(Regex("s_[a-z0-9]{8}\\.wav")));assertEquals(names[0].removeSuffix(".wav")+".json",names[1])
+        assertEquals("RIFF",String(r.uploads.getValue(names[0]).copyOfRange(0,4)))
+        val side=String(r.uploads.getValue(names[1]))
         assertFalse(side.contains("rec1"));assertFalse(side.contains("010-1234"));assertFalse(side.contains("x.m4a"))
-        val j=JSONObject(side);assertEquals(180.0,j.getDouble("durationS"),1e-9);assertEquals(2,j.getJSONArray("pieces").length());assertEquals(43L,j.getJSONArray("lines").getJSONObject(1).getLong("startS"))
-        assertEquals(listOf("find","create:${Samples.TAG}"),r.log.take(2))
+        val j=JSONObject(side);assertEquals("wav",j.getString("format"));assertEquals(16000,j.getInt("sampleRate"));assertEquals(2,j.getJSONArray("pieces").length())
+        assertEquals(43L,j.getJSONArray("lines").getJSONObject(1).getLong("startS"))
+        assertEquals(Samples.hash(c.key),e.getString("key"))
         // The same recording never goes up twice.
-        assertFalse(Samples.uploadNext(s,SamplesConfig(on=true),listOf(c),now,r,{ row },{ ByteArray(10) },{ _,_ -> emptyList<Pair<Long,Long>>() to false }))
+        assertNull(Samples.pickNext(s,SamplesConfig(on=true),listOf(c),now))
         val hb=Samples.heartbeat(JSONObject().put(Samples.KEY,s.toString()).put(Bench.CONFIG_KEY,Bench.stored(BenchConfig(),SamplesConfig(on=true))))!!
         assertEquals(1,hb.getInt("uploaded"));assertEquals(1,hb.getInt("live"));assertEquals(3.0,hb.getDouble("minutes"),1e-9)
+        assertTrue(hb.has("overdue") && hb.has("orphans") && hb.has("revoked") && hb.has("deleteCode"))
+        assertEquals(44,Samples.wavHeader(10).size)
     }
     @Test fun failuresAreRetriedThreeTimesThenLeft() {
-        val r=Releases().also { it.failUploads=10 };val s=JSONObject();val c=call("rec1",3.0,1.0)
-        repeat(Samples.MAX_TRIES) { assertThrows(IOException::class.java) { Samples.uploadNext(s,SamplesConfig(on=true),listOf(c),now,r,{ row },{ ByteArray(4) },{ _,_ -> emptyList<Pair<Long,Long>>() to false }) } }
+        val s=JSONObject();val c=call("rec1",3.0,1.0);val h=Samples.hash(c.key)
+        repeat(Samples.MAX_TRIES) { Samples.applyFailure(s,h,"SAMPLE_HTTP_502") }
         assertEquals(3,s.getInt("failed"));assertEquals("SAMPLE_HTTP_502",s.getString("lastCode"))
-        assertFalse(Samples.uploadNext(s,SamplesConfig(on=true),listOf(c),now,r,{ row },{ ByteArray(4) },{ _,_ -> emptyList<Pair<Long,Long>>() to false }))
+        assertNull(Samples.pickNext(s,SamplesConfig(on=true),listOf(c),now))
+        // A sidecar that fails takes its audio back down.
+        val r=Releases().also { it.released=true }
+        r.failUploads=0
+        val r2=object:Samples.Releases by r { override fun upload(releaseId:Long,name:String,contentType:String,file:File):Long =
+            if(name.endsWith(".json")) throw IOException("SAMPLE_HTTP_502") else r.upload(releaseId,name,contentType,file) }
+        assertThrows(IOException::class.java) { Samples.upload(c,row,wav(),c.durationMs,emptyList(),false,r2,now,tmp()) }
+        assertTrue(r.assets.isEmpty());assertTrue(r.log.any { it.startsWith("deleteAsset:") })
     }
-    @Test fun afterSevenDaysTheyGoAndOffTakesEverything() {
-        val r=Releases()
-        val s=JSONObject().put("releaseId",7).put("live",JSONArray()
-            .put(JSONObject().put("id","s_old").put("assets",JSONArray().put(1).put(2)).put("atMs",now-8*day))
-            .put(JSONObject().put("id","s_new").put("assets",JSONArray().put(3).put(4)).put("atMs",now-day)))
-        Samples.sweep(s,r,now,all=false)
-        assertEquals(listOf("deleteAsset:1","deleteAsset:2"),r.log);assertEquals(1,Samples.live(s).size);assertEquals(1,s.getInt("deleted"))
-        r.log.clear();Samples.sweep(s,r,now,all=true)
-        assertEquals(listOf("deleteAsset:3","deleteAsset:4","deleteRelease:7","deleteTag:${Samples.TAG}"),r.log)
-        assertTrue(Samples.live(s).isEmpty());assertFalse(s.has("releaseId"));assertEquals(2,s.getInt("deleted"))
-        // Through the heartbeat: off with something still up deletes it and stops the work.
-        SecureSettings(context).update { it.put(Samples.KEY,JSONObject().put("releaseId",9).put("live",JSONArray().put(JSONObject().put("id","s_x").put("assets",JSONArray().put(5)).put("atMs",now))).toString()) }
-        val r2=Releases();var cancelled=0
-        Samples.onHeartbeat(context,SamplesConfig(on=false),now,r2,{ fail("queued while off") },{ cancelled++ })
-        assertEquals(listOf("deleteAsset:5","deleteRelease:9","deleteTag:${Samples.TAG}"),r2.log);assertEquals(1,cancelled)
-        assertEquals("bin",Samples.extension("audio/unknown"));assertEquals("m4a",Samples.extension("audio/mp4"));assertEquals("amr",Samples.extension("audio/amr"))
+    @Test fun theServerListDecidesWhatGoesAfterSevenDays() {
+        val r=Releases();val s=JSONObject();r.clock=now-8*day
+        up(r,s,call("old",3.0,8.0),at=now-8*day)
+        r.clock=now-day;up(r,s,call("new",3.0,1.0),at=now-day)
+        val w=Samples.sweep(Samples.live(s),r,now,off=false,eligible=null)
+        Samples.applySweep(s,w,now)
+        assertEquals(2,w.deleted);assertEquals(2,r.assets.size);assertEquals(1,Samples.live(s).size);assertTrue(w.ok)
+        // The phone lost its record (settings wiped, crash before the save): the server's dates still make it go.
+        r.clock=now-10*day;r.assets+=Samples.Asset(900,"s_lost0000.wav",now-10*day)
+        val w2=Samples.sweep(emptyList(),r,now,off=false,eligible=null)
+        assertTrue(r.assets.none { it.id==900L })
+        assertEquals("orphans too, which are younger than 7 days",2,w2.orphans)
+    }
+    @Test fun orphansGoAfterTheGraceAndAFailedDeleteIsShown() {
+        val r=Releases();val s=JSONObject()
+        r.clock=now-day;up(r,s,call("k1",3.0,1.0),at=now-day)
+        // An audio left by a lost answer, an hour old, and one being uploaded right now.
+        r.assets+=Samples.Asset(500,"s_orphan01.wav",now-3_600_000L);r.assets+=Samples.Asset(501,"s_fresh001.wav",now-60_000L)
+        val w=Samples.sweep(Samples.live(s),r,now,off=false,eligible=null);Samples.applySweep(s,w,now)
+        assertEquals(1,w.orphans);assertTrue(r.assets.any { it.id==501L });assertEquals(3,r.assets.size)
+        // A delete that fails is kept as deleteCode; an upload does not clear it, a clean sweep does.
+        r.failDelete=true;r.assets+=Samples.Asset(502,"s_orphan02.wav",now-3_600_000L)
+        Samples.applySweep(s,Samples.sweep(Samples.live(s),r,now,off=false,eligible=null),now)
+        assertEquals("SAMPLE_HTTP_503",s.getString("deleteCode"))
+        r.failDelete=false;Samples.applyUpload(s,JSONObject().put("id","s_x").put("key","k").put("names",JSONArray().put("s_x.wav")),1.0)
+        assertEquals("SAMPLE_HTTP_503",s.getString("deleteCode"))
+        Samples.applySweep(s,Samples.sweep(Samples.live(s),r,now,off=false,eligible=null),now)
+        assertFalse(s.has("deleteCode"))
+        // An asset 8 days old that cannot be deleted is overdue.
+        r.failDelete=true;r.assets+=Samples.Asset(503,"s_old00001.wav",now-8*day)
+        assertTrue(Samples.sweep(Samples.live(s),r,now,off=false,eligible=null).overdue>=1)
+    }
+    @Test fun aCallFoundPersonalAfterItWentUpIsTakenDown() {
+        val r=Releases();val s=JSONObject();r.clock=now-day
+        up(r,s,call("work",3.0,1.0),at=now-day);up(r,s,call("later-personal",3.0,1.0),at=now-day)
+        val keep=setOf(Samples.hash(call("work",3.0,1.0).key))
+        val w=Samples.sweep(Samples.live(s),r,now,off=false,eligible=keep);Samples.applySweep(s,w,now)
+        assertEquals(1,w.revoked);assertEquals(1,s.getInt("revoked"));assertEquals(2,r.assets.size);assertEquals(1,Samples.live(s).size)
+        assertEquals(Samples.hash(call("work",3.0,1.0).key),Samples.live(s).single().getString("key"))
+    }
+    @Test fun offTakesEverythingByTheTagEvenWithoutARecord() {
+        val r=Releases();r.clock=now-day
+        up(r,JSONObject(),call("a",3.0,1.0),at=now-day)
+        // The record is gone (settings wiped): the config still names samples, off.
+        SecureSettings(context).update { it.remove(Samples.KEY) }
+        var cancelled=0
+        Samples.onHeartbeat(context,SamplesConfig(on=false,present=true),now,{ r },{ null },{ fail("queued while off") },{ cancelled++ })
+        assertTrue(r.assets.isEmpty());assertFalse(r.released);assertTrue(r.log.contains("deleteTag:${Samples.TAG}"));assertEquals(1,cancelled)
+        val st=Samples.parse(SecureSettings(context).snapshot().optString(Samples.KEY))
+        assertTrue(st.getBoolean("cleared"))
+        // Seen empty: the next heartbeats ask nothing.
+        r.log.clear();Samples.onHeartbeat(context,SamplesConfig(on=false,present=true),now,{ r },{ null },{ fail("queued") },{ })
+        assertTrue(r.log.isEmpty())
+        // A delete that fails keeps it asking.
+        val r2=Releases().also { it.released=true;it.assets+=Samples.Asset(1,"s_a.wav",now);it.failDelete=true }
+        val w=Samples.sweep(emptyList(),r2,now,off=true,eligible=null)
+        assertFalse(w.cleared);assertEquals("SAMPLE_HTTP_503",w.deleteCode);assertEquals(1,w.overdue)
     }
 }

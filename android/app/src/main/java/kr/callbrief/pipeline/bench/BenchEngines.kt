@@ -18,8 +18,6 @@ internal interface BenchEngine:AutoCloseable {
     fun transcribe(pcm:FloatArray,stopped:()->Boolean):List<CallTranscript.Segment>
     /** Ends a piece under way at once (another job needs the phone). */
     fun cancel() {}
-    /** Speech pieces under a second whose output was one or two letters, in the last [transcribe] (silence hallucinations). */
-    val lastHallucinations:Int get()=0
 }
 
 /** (가) and (나): the app's pinned whisper.cpp runtime (v1.7.6) with [model] — the app's q5_0 for (가), the bench's q8_0 for (나).
@@ -28,13 +26,9 @@ internal interface BenchEngine:AutoCloseable {
 internal class WhisperBenchEngine(context:Context,private val model:File,private val expectedBytes:Long,threads:Int,stopped:()->Boolean):BenchEngine {
     private val engine=AndroidWhisperEngine(context)
     private val session=engine.openVerifiedModel(model,{ model.isFile && model.length()==expectedBytes },threads,stopped)
-    @Volatile private var halluc=0
-    override val lastHallucinations get()=halluc
     override fun transcribe(pcm:FloatArray,stopped:()->Boolean):List<CallTranscript.Segment> {
         val raw=session.transcribe(pcm,"ko",CallTranscriptionRunner.NATIVE_DEADLINE_SECONDS,"",SttDecode.DEFAULT,stopped)
-        val segments=WhisperCallTranscriber.segmentsOf(AndroidWhisperEngine.decodeOutput(raw))
-        halluc=segments.count { KoCer.hallucination(it.endMs-it.startMs,it.text) }
-        return segments
+        return WhisperCallTranscriber.segmentsOf(AndroidWhisperEngine.decodeOutput(raw))
     }
     override fun cancel()=engine.cancel()
     override fun close()=session.close()
@@ -46,8 +40,6 @@ internal class WhisperBenchEngine(context:Context,private val model:File,private
 internal class SenseVoiceBenchEngine(context:Context,model:File,tokens:File,vadModel:File,threads:Int):BenchEngine {
     private val recognizer:com.k2fsa.sherpa.onnx.OfflineRecognizer
     private val vad:com.k2fsa.sherpa.onnx.Vad
-    @Volatile private var halluc=0
-    override val lastHallucinations get()=halluc
     init {
         SherpaRuntime.load(context)
         val cfg=com.k2fsa.sherpa.onnx.OfflineRecognizerConfig(
@@ -68,7 +60,7 @@ internal class SenseVoiceBenchEngine(context:Context,model:File,tokens:File,vadM
         var i=0
         while(i<pcm.size) { val end=minOf(pcm.size,i+VAD_WINDOW);vad.acceptWaveform(pcm.copyOfRange(i,end));drain();i=end }
         vad.flush();drain()
-        val out=ArrayList<CallTranscript.Segment>();var h=0
+        val out=ArrayList<CallTranscript.Segment>()
         for((start,samples) in parts) {
             check(!stopped()) { "BENCH_STOPPED" }
             val stream=recognizer.createStream()
@@ -77,11 +69,9 @@ internal class SenseVoiceBenchEngine(context:Context,model:File,tokens:File,vadM
                 recognizer.decode(stream)
                 val text=recognizer.getResult(stream).text.trim()
                 val startMs=start*1000/PipelineAudioMath.TARGET_RATE;val endMs=startMs+samples.size*1000L/PipelineAudioMath.TARGET_RATE
-                if(KoCer.hallucination(endMs-startMs,text)) h++
                 if(text.isNotEmpty()) out+=CallTranscript.Segment(startMs,endMs,text)
             } finally { stream.release() }
         }
-        halluc=h
         return out
     }
     override fun close() { runCatching { vad.release() };runCatching { recognizer.release() } }

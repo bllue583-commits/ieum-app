@@ -10,7 +10,9 @@ internal object BenchState {
     const val KEY="benchState"
     /** Numbers of one finished piece (or a part of one) of one call for one candidate. */
     data class Piece(val audioMs:Long,val wallMs:Long,val cpuMs:Long?,val refChars:Int,val edits:Int,val numRef:Int,val numHit:Int,
-        val nameRef:Int,val nameHit:Int,val halluc:Int,val segments:Int,val foreground:Boolean)
+        val nameRef:Int,val nameHit:Int,val halluc:Int,val segments:Int,val foreground:Boolean,
+        /** The call has line times; without them the quality numbers are 0 and the call is counted in `noTimesCalls`. */
+        val timed:Boolean=true)
 
     fun parse(text:String?):JSONObject = runCatching { JSONObject(text ?: "") }.getOrNull() ?: JSONObject()
 
@@ -38,6 +40,7 @@ internal object BenchState {
         plus("halluc",p.halluc.toLong());plus("segments",p.segments.toLong());plus("pieces",1)
         if(p.cpuMs!=null) { plus("cpuMs",p.cpuMs);plus("cpuAudioMs",p.audioMs) }
         if(p.foreground) plus("fgAudioMs",p.audioMs)
+        if(!p.timed) e.put("noTimes",true)
         e.put("piece",pieceIndex+1);return s
     }
     /** The call is over for [c]: measured to the end ([code] null) or given up with [code]. [lengthMs] is the call's length. */
@@ -49,6 +52,41 @@ internal object BenchState {
     /** A try that failed but may succeed next time (counted; at [MAX_TRIES] the call is given up). Returns the tries so far. */
     fun tried(s:JSONObject,c:String,index:Int):Int { val e=entry(s,c,index);val n=e.optInt("tries",0)+1;e.put("tries",n);return n }
     const val MAX_TRIES=3
+
+    // ---- review 11/13 (medium 1, 2): crashes and the time limit -------------------------------------------------------
+    /** Written before each native run; [takeLeftover] finds it after a process death. */
+    fun markInFlight(s:JSONObject,c:String,index:Int,piece:Int):JSONObject = s.put("inFlight",JSONObject().put("c",c).put("i",index).put("p",piece))
+    fun clearInFlight(s:JSONObject) { s.remove("inFlight") }
+    /** A mark left from the last run counts as a crash of its candidate; at [MAX_CRASHES] the candidate ends with BENCH_CRASH.
+     * Returns the candidate the mark was for (null: none). */
+    fun takeLeftover(s:JSONObject):String? {
+        val m=s.optJSONObject("inFlight") ?: return null
+        s.remove("inFlight")
+        val c=m.optString("c").takeIf { it in BenchConfig.ORDER } ?: return null
+        val crashes=(s.optJSONObject("crashes") ?: JSONObject().also { s.put("crashes",it) })
+        val n=crashes.optInt(c,0)+1;crashes.put(c,n)
+        if(n>=MAX_CRASHES) disable(s,c,"BENCH_CRASH")
+        return c
+    }
+    const val MAX_CRASHES=2
+    /** The same piece stopped by the time limit twice ends the candidate with BENCH_TIMEOUT. Returns the count for that piece. */
+    fun noteTimeout(s:JSONObject,c:String,index:Int,piece:Int):Int {
+        val t=(s.optJSONObject("timeouts") ?: JSONObject().also { s.put("timeouts",it) })
+        val k="$c|$index|$piece";val n=t.optInt(k,0)+1;t.put(k,n)
+        if(n>=2) disable(s,c,"BENCH_TIMEOUT")
+        return n
+    }
+    /** The candidate is over: every call not done yet ends with [code]. */
+    fun disable(s:JSONObject,c:String,code:String):JSONObject {
+        (s.optJSONObject("disabled") ?: JSONObject().also { s.put("disabled",it) }).put(c,code)
+        plan(s).forEachIndexed { i,o -> if(!done(s,c,i)) finish(s,c,i,o.optLong("ms"),code) }
+        return s
+    }
+    fun disabled(s:JSONObject,c:String):String? = s.optJSONObject("disabled")?.optString(c)?.takeIf { it.isNotEmpty() }
+    /** A pinned file that did not match: how many times now. */
+    fun shaFailed(s:JSONObject,name:String):Int { val m=(s.optJSONObject("shaFails") ?: JSONObject().also { s.put("shaFails",it) });val n=m.optInt(name,0)+1;m.put(name,n);return n }
+    /** The thread count the candidate runs with (for the heartbeat). */
+    fun setRun(s:JSONObject,c:String,threads:Int) { (s.optJSONObject("threads") ?: JSONObject().also { s.put("threads",it) }).put(c,threads) }
 
     fun setStatus(s:JSONObject,state:String,code:String?,now:Long):JSONObject {
         s.put("state",state).put("atMs",now);if(code==null) s.remove("code") else s.put("code",code);return s
@@ -94,6 +132,11 @@ internal object BenchState {
             val failed=entries.filter { it.optBoolean("done") && it.has("code") }
             block.put("failed",failed.size).put("fail",JSONObject().apply { failed.groupingBy { code(it.optString("code")) ?: "OTHER" }.eachCount().forEach { (k,n) -> put(k,n) } })
             block.put("inProgress",entries.count { !it.optBoolean("done") && it.optInt("piece",0)>0 })
+            block.put("noTimesCalls",entries.count { it.optBoolean("noTimes") })
+            block.put("threads",s.optJSONObject("threads")?.optInt(c,0)?.takeIf { it>0 } ?: JSONObject.NULL)
+            block.put("foreground",entries.any { it.optLong("fgAudioMs",0)>0 })
+            block.put("disabled",disabled(s,c)?.let { code(it) } ?: JSONObject.NULL)
+            block.put("crashes",s.optJSONObject("crashes")?.optInt(c,0) ?: 0)
             // Charging the whole time: the battery's drop cannot be read, so the energy is the CPU time (DESIGN_V7 4.4).
             block.put("mAh",JSONObject.NULL).put("energyBasis","cpu")
             block.put("byLen",JSONObject().apply { BenchPick.BUCKETS.forEach { b ->

@@ -1656,9 +1656,10 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     /** One work call the bench may measure: its result said business, its number is not one found personal, and its words
      * and line times are still kept ([trim] clears them 7 days after the result). Calls only (no texts or mail). */
     internal data class BenchRow(val recordingId:String,val startedMs:Long,val durationMs:Long,val transcript:String,val segmentsJson:String)
-    fun benchRows(sinceMs:Long,limit:Int=400):List<BenchRow> =
+    /** [needText] false: also calls whose words were already cleared (the samples check that a sent call is still a work call). */
+    fun benchRows(sinceMs:Long,limit:Int=400,needText:Boolean=true):List<BenchRow> =
         rows("""SELECT c.recording_id,COALESCE(c.started_ms,c.created_ms) AS at_ms,c.duration_ms,c.transcript,c.segments_json,c.analysis_json FROM call_records c
-            WHERE c.recording_id NOT LIKE 'sms:%' AND c.recording_id NOT LIKE 'mail:%' AND c.state='ANALYZED' AND c.transcript!=''
+            WHERE c.recording_id NOT LIKE 'sms:%' AND c.recording_id NOT LIKE 'mail:%' AND c.state='ANALYZED' AND (c.transcript!='' OR ${if(needText) 0 else 1}=1)
             AND COALESCE(c.started_ms,c.created_ms)>=CAST(? AS INTEGER)
             AND NOT EXISTS(SELECT 1 FROM personal_numbers n WHERE n.phone_key=c.counterpart_key)
             ORDER BY at_ms DESC LIMIT $limit""",sinceMs).filter { r ->

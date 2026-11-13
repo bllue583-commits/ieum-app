@@ -246,7 +246,7 @@ v3.4(11/6)부터 워치독은 Actions가 아니라 두 예약 작업 안에서 �
 
 | 키 | 뜻 |
 | --- | --- |
-| `bench.on` | 측정대 켜기. false로 바꾸면 다음 하트비트에 작업을 멈추고 받은 측정용 모델(`bench-models/`, 최대 약 1.1GB)을 지운다. 숫자는 남는다(`state:"OFF"`) |
+| `bench.on` | 측정대 켜기(JSON 참값 `true`만 켜짐, 문자열 "true"는 꺼짐). false로 바꾸면 다음 하트비트에 작업을 멈추고 받은 측정용 모델(`bench-models/`, 최대 약 1.1GB)을 지운다. 숫자는 남는다(`state:"OFF"`) |
 | `bench.candidates` | `a`(지금 q5_0을 같은 틀로 다시 잼, 오래 걸림), `b`(q8_0, 지금 라이브러리, 포그라운드), `c`(SenseVoice int8 + Silero VAD). 순서와 상관없이 c → b → a로 돈다. 기본 `["b","c"]` |
 | `bench.calls` | 잴 통화 수(1~40, 기본 20: 1~5분 최신 18건 + 10분 넘는 최신 2건) |
 | `bench.run` | 숫자를 바꾸면 처음부터 다시 잰다(같은 숫자면 멈춘 곳에서 이어서) |
@@ -272,18 +272,19 @@ v3.4(11/6)부터 워치독은 Actions가 아니라 두 예약 작업 안에서 �
 
 - `state`: `WAITING`(`code`가 이유: `NOT_PLUGGED`, `IN_CALL`, `HOT`, `TRANSCRIBING`, `QUEUE`, `NO_WIFI`, `NO_SPACE`, `MODEL_RETRY`, `MODEL_FAILED`, `NO_CALLS`, `STOPPED`, `MORE`), `DOWNLOADING`, `RUNNING`, `DONE`(모델 지움), `OFF`.
 - `wallRtf` = 처리 벽시계 ÷ 녹음 길이, `cpuRtf` = 프로세스 CPU 시간(엔진의 모든 스레드 합) ÷ 녹음 길이. **5.2 규칙의 "폰 실시간 배수"는 `wallRtf`**(1.0 = 녹음 1분에 1분).
-- `cerPct`는 (가) 지금 엔진의 저장 자막을 기준으로 한 정규화 글자 오류율(은 골든 — 정확도가 아니라 "지금 엔진과 얼마나 같은가"). 조각마다 그 조각 안에서 시작한 자막 줄과 비교한다. `numberPct`·`namePct`는 기준 자막의 숫자 토큰·장부 이름 중 후보 자막에도 있는 비율.
-- `halluc`은 1초 미만 말소리 구간에서 1~2글자가 나온 수. `fgSharePct`는 포그라운드에서 잰 녹음의 비율(b·a).
+- `cerPct`는 (가) 지금 엔진의 저장 자막을 기준으로 한 정규화 글자 오류율(은 골든 — 정확도가 아니라 "지금 엔진과 얼마나 같은가"). 조각마다 그 조각 안에서 시작한 자막 줄과 비교한다. 자막 줄 시각이 줄 수와 맞지 않는 통화는 품질 숫자에서 빼고 `noTimesCalls`로 따로 센다(속도는 셈). `numberPct`·`namePct`는 기준 자막의 숫자 토큰·장부 이름 중 후보 자막에도 있는 비율.
+- `halluc`은 1초 미만 말소리 구간에서 1~2글자가 나왔는데 **그 시각에 기준 자막에 글이 없을 때만** 센 수(실제 "네"는 세지 않음). `fgSharePct`는 포그라운드에서 잰 녹음의 비율(b·a, (다)는 포그라운드로 올리지 않음), `threads`는 그 후보가 쓴 스레드 수, `foreground`는 포그라운드에서 잰 조각이 있었는가. (다)를 (나)와 같은 스레드로 한 번 더 재려면 `{"bench":{"on":true,"run":2,"candidates":["c"],"threads":{"c":6}}}`. `cpuRtf`는 프로세스 전체 CPU(같은 프로세스의 다른 일도 섞임 — 측정 중에는 자막·카드가 돌지 않으므로 작지만 상한으로 읽는다. 엔진 스레드만 따로 재지는 못함: whisper·onnxruntime이 스레드를 스스로 만들고 거둠).
+- `disabled`/`crashes`: 네이티브 실행 중 프로세스가 죽으면(크래시·메모리 부족) 다음 실행이 그 표식을 보고 세며, 2번이면 그 후보를 `BENCH_CRASH`로 끝낸다. 같은 조각이 시스템 10분 한도로 두 번 끊기면 `BENCH_TIMEOUT`, 고정 sha와 다른 모델 파일이 두 번이면 `MODEL_SHA`. 측정대는 앱과 같은 프로세스에서 돈다(별도 `:bench` 프로세스는 WorkManager 다중 프로세스 의존성·매니페스트 서비스·앱 시작 코드 변경이 필요해 하지 않음).
 - 충전 중에만 재므로 `mAh`는 늘 null이고 `energyBasis:"cpu"` — 전력은 `cpuSecPerAudioMin`으로 비교한다(배터리 실행 mAh는 v3.9 배포 뒤 `power` 블록으로).
 - `fail`은 포기한 통화의 부호별 수(`BENCH_C_NO_RUNTIME` = 이 폰 ABI에 sherpa 라이브러리 없음, `BENCH_C_RUNTIME_PIN` = 라이브러리 sha 불일치, `NO_REFERENCE` = 기준 자막이 지워짐, `ANDROID_STT_*` = whisper 실패).
 
 **5.2 규칙으로 읽는 법:** 규칙 1 — `cand.b.wallRtf ≤ 1.0`이고 `fgSharePct`가 높을 것(포그라운드 실측), 그리고 128분 날 전력이 배터리 5% 이하인지는 `cpuSecPerAudioMin × 128`을 v3.7 `power`의 배터리 실행 CPU·`batteryUah` 비율로 환산해 본다(직접 mAh는 이 측정대로 못 잼). 규칙 2 — `cand.c.wallRtf ≤ 0.5`, `cand.c.cerPct ≤ 15`, `cand.c.hallucPerCall ≤ 1`. 길이 구간(`byLen`)에서 10분 넘는 통화가 따로 나빠지지 않는지도 본다. 규칙 3은 금 골든(사람 정답 또는 아래 표본으로 만든 기준 자막)이 있어야 한다.
 
 **측정 표본(9번, 사용자 결정 11/13 — 녹음이 폰 밖으로 나가는 유일한 길):** `samples.on`이면 폰이 측정대와 같은 기준의 업무 통화 녹음(개인 판정·개인 번호·제외 번호 빼고, 최근 7일, 1~5분 먼저, 10분 넘는 것 최대 2건, 합계 `maxMinutes` 이하, 같은 녹음은 한 번만)을 **충전 + 와이파이 + 통화·자막 실행 아님**일 때 하나씩 우편함 릴리스 `bench-samples`(없으면 폰이 만듦, 시험판 표시)의 자산으로 올린다. 커밋이 아니므로 저장소 이력에 남지 않는다.
-- 자산 이름: `s_<무작위 8자>.<원본 확장자>`(m4a 등)와 `s_<같은 id>.json`. 원본 파일 이름(상대 이름·번호가 들어 있음)은 쓰지 않는다.
-- `s_<id>.json`: `durationS`, `lines[{text,startS,endS}]`(폰 자막, 우편함 요청과 같이 번호·계좌·메일 가림), `pieces[{startMs,ms}]`(폰 자막 실행과 같은 조각 경계), `vad`, `engine`, `model`. 이름·번호·경로·통화 시각은 없다(자막 글 안에 말해진 이름은 그대로).
-- **지워지는 때:** 올린 지 7일이 지나면 폰이 하트비트 때 지운다. `samples.on`을 false로 바꾸면 다음 하트비트에 남은 자산·릴리스·태그를 모두 지운다. 작업 공간에서 받은 사본은 다 쓴 뒤 지운다.
-- 하트비트 `samples{on,uploaded,minutes,deleted,failed,live,lastCode}`. `lastCode`가 `SAMPLE_HTTP_403`/`404`면 우편함 토큰에 릴리스 쓰기 권한이 없는 것(폰에서 확인 못 함 — release-apk는 같은 비밀로 릴리스를 만든다). 실패는 녹음당 3번까지 다시 한다.
+- 자산 이름: `s_<무작위 8자>.wav`와 `s_<같은 id>.json`. 녹음은 원본 파일을 그대로 올리지 않고, 앱의 디코더로 푼 PCM을 **16kHz 모노 16비트 WAV**로 다시 만든다(묵음을 지우기 전 전체 길이). 원본 m4a의 태그(상대 이름·번호가 있을 수 있음)와 원본 파일 이름은 따라가지 않는다. 크기는 녹음 1분에 약 1.9MB(기본 `maxMinutes` 40분이면 약 77MB).
+- `s_<id>.json`: `format:"wav"`, `sampleRate`, `channels`, `durationS`, `lines[{text,startS,endS}]`(폰 자막, 우편함 요청과 같이 번호·계좌·메일 가림), `pieces[{startMs,ms}]`(폰 자막 실행과 같은 조각 경계, WAV 시각과 같은 축), `vad`, `engine`, `model`. 이름·번호·경로·통화 시각은 없다(자막 글 안에 말해진 이름은 그대로).
+- **지워지는 때(서버 목록 기준):** 하트비트 때마다 폰이 태그로 릴리스를 찾아 자산 목록을 받고, ① 서버의 `created_at`이 7일 넘은 자산 ② 폰에 기록이 없는 자산(응답이 끊겨 다시 올린 것, 저장 전 프로세스 사망, 반쪽 업로드, 설정 유실 — 30분 유예 뒤) ③ 올린 뒤 개인 판정·개인 번호·제외 번호·통화 삭제로 대상이 아니게 된 통화의 자산(`revoked`)을 폰의 기록과 상관없이 지운다. `samples.on`을 false로 바꾸면 폰의 기록과 상관없이 태그로 릴리스를 찾아 자산·릴리스·태그를 모두 지우고, 서버가 빈 것을 본 뒤에야 묻기를 멈춘다(`cleared`). 설정에 `samples` 블록이 아예 없고 한 번도 켠 적 없는 폰은 아무것도 묻지 않는다. 에뮬레이터(ci)는 올리지도 지우지도 않는다. 작업 공간에서 받은 사본은 다 쓴 뒤 지운다.
+- 하트비트 `samples{on,uploaded,minutes,deleted,failed,live,overdue,orphans,revoked,cleared,lastCode,deleteCode}`. `overdue` = 7일 넘었는데(또는 꺼졌는데) 지우지 못하고 남은 자산 수(0이 아니면 바로 볼 것), `orphans` = 지운 고아 수, `deleteCode` = 마지막 삭제 실패 부호(업로드 성공으로 지워지지 않고, 실패 없는 정리가 한 번 지나가야 지워짐). `lastCode`가 `SAMPLE_HTTP_403`/`404`면 우편함 토큰에 릴리스 쓰기 권한이 없는 것(폰에서 확인 못 함 — release-apk는 같은 비밀로 릴리스를 만든다). 실패는 녹음당 3번까지 다시 한다.
 - 받는 법(작업 공간): `gh release download bench-samples -R <owner>/ieum-inbox -D <임시 폴더>`. 자막·녹음 본문은 숫자만 남기고 결과에 옮기지 않는다.
 
 ## 5. 배포와 업데이트 흐름
