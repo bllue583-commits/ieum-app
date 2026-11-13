@@ -20,14 +20,12 @@ import org.robolectric.annotation.Config
 class NumberSaltTest : ProtectedTextHostTestBase() {
     private val app get()=RuntimeEnvironment.getApplication()
 
-    @Test fun migrationIsOneWriteOnceAndKeepsTheRules() {
-        val settings=SecureSettings(app)
-        settings.update { it.put("personalAliasDisabled",true)
-            .put("exclusions",JSONArray().put(JSONObject().put("type","phone").put("hash",PrivacyRules.hash("01000001111")))) }
-        val before=LocalPrivacy.rules(settings.snapshot())
-        assertFalse(LocalPrivacy.heartbeat(settings.snapshot()).getBoolean("saltedHash"))
-        assertTrue(LocalPrivacy.migrate(settings))
-        val s=settings.snapshot()
+    @Test fun migrationKeepsTheRulesAndIsDoneOnce() {
+        val s=JSONObject().put("personalAliasDisabled",true)
+            .put("exclusions",JSONArray().put(JSONObject().put("type","phone").put("hash",PrivacyRules.hash("01000001111"))))
+        val before=LocalPrivacy.rules(s)
+        assertFalse(LocalPrivacy.heartbeat(s).getBoolean("saltedHash"))
+        assertTrue(LocalPrivacy.migrateState(s))
         val salt=LocalPrivacy.salt(s)!!
         assertEquals(64,salt.length)
         assertEquals(LocalPrivacy.legacyPersonal().toString(),s.getJSONArray(LocalPrivacy.PERSONAL_KEY).toString())
@@ -36,22 +34,29 @@ class NumberSaltTest : ProtectedTextHostTestBase() {
         assertEquals(before.phones,after.phones);assertEquals(before.aliases,after.aliases);assertEquals(salt,after.salt)
         assertTrue(after.excluded("x","01000001111"))
         // Again: nothing changes, the salt is never replaced.
-        assertFalse(LocalPrivacy.migrate(settings))
-        assertEquals(salt,LocalPrivacy.salt(settings.snapshot()))
-        val h=LocalPrivacy.heartbeat(settings.snapshot())
+        assertFalse(LocalPrivacy.migrateState(s));assertEquals(salt,LocalPrivacy.salt(s))
+        val h=LocalPrivacy.heartbeat(s)
         assertTrue(h.getBoolean("saltedHash"));assertEquals("two personal + one exclusion, all unsalted",3,h.getInt("legacyHashes"))
     }
 
-    @Test fun aMoveCutOffHalfwayIsFinishedNextTime() {
+    @Test fun theSettingsEndMigratedAndTheSaltStays() {
+        // The app's own start may run the move at the same time (CallPipelineStartup): only the end state is asserted.
         val settings=SecureSettings(app)
-        // A salt but no list (as if an earlier attempt had written only part): the list is added, the salt kept.
-        settings.update { it.put(LocalPrivacy.SALT_KEY,"5a".repeat(32)) }
-        assertTrue(LocalPrivacy.migrate(settings))
-        val s=settings.snapshot()
+        LocalPrivacy.migrate(settings)
+        val s=settings.snapshot();val salt=LocalPrivacy.salt(s)
+        assertNotNull(salt);assertTrue(LocalPrivacy.migrated(s))
+        assertFalse(LocalPrivacy.migrate(settings))
+        assertEquals(salt,LocalPrivacy.salt(settings.snapshot()))
+    }
+
+    @Test fun aMoveCutOffHalfwayIsFinishedNextTime() {
+        // A salt but no list (as if only part had been written): the list is added, the salt kept.
+        val s=JSONObject().put(LocalPrivacy.SALT_KEY,"5a".repeat(32))
+        assertTrue(LocalPrivacy.migrateState(s))
         assertEquals("5a".repeat(32),LocalPrivacy.salt(s));assertTrue(s.has(LocalPrivacy.PERSONAL_KEY))
         // A bad salt value is replaced (nothing can have been fingerprinted with it).
-        settings.update { it.put(LocalPrivacy.SALT_KEY,"nope").remove(LocalPrivacy.MIGRATED_KEY) }
-        assertTrue(LocalPrivacy.migrate(settings));assertNotNull(LocalPrivacy.salt(settings.snapshot()))
+        s.put(LocalPrivacy.SALT_KEY,"nope").remove(LocalPrivacy.MIGRATED_KEY)
+        assertTrue(LocalPrivacy.migrateState(s));assertNotNull(LocalPrivacy.salt(s))
     }
 
     @Test fun personalListBeforeAndAfterTheMoveIsTheSame() {

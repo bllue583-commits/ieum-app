@@ -49,6 +49,28 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; echo "manual run: smoke test runs"; exit 0; fi
           out=$(bash tools/needs_update_smoke.sh "$GITHUB_REPOSITORY" "$GITHUB_SHA"); echo "$out"
           echo "run=$(echo "$out" | tail -n 1)" >> "$GITHUB_OUTPUT"
+      # r18-lock: the Kakao key hash the rotated key will have, before IEUM_ROTATE is turned on (docs/OPERATIONS.md "서명 키
+      # 교체"): it must be added in developers.kakao.com first. Public value (base64 of the certificate's SHA-1); the seed stays
+      # in the secret. Only on a manual run, only when the secret IEUM_SIGNING_SEED_V2 exists.
+      - name: Kakao key hash of the rotated key (manual run, IEUM_SIGNING_SEED_V2 set)
+        if: github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        env:
+          IEUM_SIGNING_SEED_V2: ${{ secrets.IEUM_SIGNING_SEED_V2 }}
+        run: |
+          [ -n "$IEUM_SIGNING_SEED_V2" ] || { echo "IEUM_SIGNING_SEED_V2 is not set: no rotated key yet"; exit 0; }
+          echo "::add-mask::$IEUM_SIGNING_SEED_V2"
+          pip install --quiet 'cryptography==50.0.2'
+          python3 tools/derive_signing_key.py --seed-env IEUM_SIGNING_SEED_V2 "$RUNNER_TEMP/kh.p12" >/dev/null
+          hash=$(python3 -c "import base64,sys
+          from cryptography.hazmat.primitives import hashes
+          from cryptography.hazmat.primitives.serialization import pkcs12
+          k, c, _ = pkcs12.load_key_and_certificates(open(sys.argv[1], 'rb').read(), b'ieum-signing')
+          print(base64.b64encode(c.fingerprint(hashes.SHA1())).decode())" "$RUNNER_TEMP/kh.p12")
+          rm -f "$RUNNER_TEMP/kh.p12"
+          [ "${#IEUM_SIGNING_SEED_V2}" -ge 32 ] || echo "::warning title=smoke::IEUM_SIGNING_SEED_V2 is shorter than 32 characters: release-apk will refuse it, make a longer one"
+          echo "::notice title=smoke::Kakao key hash of the rotated key: $hash (add it in developers.kakao.com before IEUM_ROTATE=1, keep the old one)"
+          echo "### Kakao key hash of the rotated key: \`$hash\`" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-java@v4
         if: steps.need.outputs.run == 'true'
         with: {distribution: temurin, java-version: '17'}

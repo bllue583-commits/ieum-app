@@ -40,7 +40,8 @@
 # What the user does (docs/OPERATIONS.md "서명 키 교체" has the same steps in Korean, with links):
 #   1. Make a new random value (at least 32 characters) and save it as the repository secret IEUM_SIGNING_SEED_V2.
 #      Keep a private copy: losing it after the rotation means the phone can never update again (reinstall by hand).
-#   2. Set the repository variable IEUM_ROTATE to 1 (Settings > Secrets and variables > Actions > Variables).
+#   2. Run update-smoke by hand: its summary has the rotated key's Kakao key hash. Add it in developers.kakao.com (keep the
+#      old one), then set the repository variable IEUM_ROTATE to 1 (Settings > Secrets and variables > Actions > Variables).
 #   3. The next release-apk run makes the lineage, signs with it, puts app/signing-lineage.bin into the mailbox and
 #      writes seedIndependent=true into app/version.json. Check that the phone installed it (heartbeat versionCode).
 #   4. Only then reissue the mailbox token (with an expiry date), put it into IEUM_INBOX_TOKEN, release, check the phone

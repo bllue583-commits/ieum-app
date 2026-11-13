@@ -162,16 +162,20 @@ v3.8은 **두 번에 나눠 배포한다**: 빌드 A 저장소 → 평일 하루
 
 지금 상태(감사, 전부 열림): 우편함 토큰이 APK에 평문(`build.gradle.kts:22-24`), 서명 시드가 비면 서명 키가 그 토큰에서 파생(`derive_signing_key.py:29-31`), 폰은 APK sha256만 보고 인증서는 비교하지 않음(`CallUpdate.kt:309, 462`), 배포본이 `assembleDebug`(디버깅 가능, `SYNTHETIC_TOOLS=true`), 번호 해시는 소금 없는 SHA-256이고 개인 번호 해시가 공개 저장소 코드에 있음(`LocalPrivacy.kt:14`).
 
-1. (사용자) GitHub 비밀 `IEUM_SIGNING_SEED`에 **지금** 우편함 토큰 값을 복사 — 서명 키가 토큰에서 독립.
-2. (앱) 받은 APK의 서명 인증서를 설치 전에 자기 인증서와 비교(키 계보로 이어진 인증서는 허용), 다르면 설치하지 않고 `update.error=CERT`. 무인 설치는 통화 중·자막 실행 중에는 미루되 최대 24시간.
-3. (배포) `assembleRelease`(debuggable 끔, 합성 도구 끔). **release 빌드 유형에 지금과 같은 keystore 서명 설정을 먼저 넣는다** — 지금은 debug에만 있어(`build.gradle.kts:11-12, 41-45`) 그대로면 서명 없는 APK가 나온다. `lintVitalRelease`가 빌드를 막는지 확인. update-smoke는 "debug 1049 위에 release 덮어 설치" 경로로 필수.
-4. (사용자 + 배포) 토큰 회전: **새 토큰을 `IEUM_INBOX_TOKEN`에 넣고 배포 → 하트비트 versionCode가 그 빌드인지 확인 → 그 뒤에만 옛 토큰 폐기.** 토큰이 APK 안에 있으므로 옛 토큰을 먼저 없애면 폰이 `version.json`도 APK도 못 받아 업데이트 길이 끊긴다(검토 치명 C1). 1번이 끝난 뒤에만.
-5. (앱) 번호 해시에 기기 비밀 소금(봉인 설정의 무작위 32바이트) — 기존 해시가 모두 달라지므로 **폰 안에서 한 번 다시 해시하는 이전**을 같이. 개인 번호 목록은 코드 상수에서 설정으로. `status/calllog.txt`의 개인 판정 줄은 이름·번호 가림.
+**11/13 바뀐 조건:** 사용자는 우편함 토큰 값을 보관하지 않았다(세분화 토큰, 만료 없음, 이 저장소 비밀을 다룰 권한 없음). 그래서 1판의 "`IEUM_SIGNING_SEED`에 토큰 값 복사"는 할 수 없고, 아래 1번을 **"계보 한 번"** 방식으로 바꿨다(r18-lock).
+
+1. (배포 + 사용자) **키 교체, 계보는 한 번만.** 사용자는 비밀 `IEUM_SIGNING_SEED_V2`(무작위 32자 이상)를 만들고 변수 `IEUM_ROTATE=1`을 켠다 — 할 일은 이 둘뿐. 첫 회전 배포에서 CI가 옛 키(지금처럼 토큰에서 파생, CI 안에서만)와 새 키로 `apksigner rotate`를 한 번 해 계보(`signing-lineage.bin`: 인증서와 서명뿐, 비밀 아님)를 만들고, 우편함 `app/signing-lineage.bin`과 그 릴리스의 자산으로 올린다(sha256은 `app/version.json`의 `lineageSha256`). 이후 모든 배포는 **새 키 + 저장된 계보만으로** 서명한다(`tools/rotate_signing_key.sh sign`). 그러니 계보가 저장되고 폰이 그 배포를 설치한 뒤에는 토큰을 새로 발급해도 서명이 끊기지 않는다. 매 배포에서 "계보의 마지막 = 새 키, 첫 인증서 = 직전 배포본의 인증서(첫 회전) 또는 직전 배포본이 가진 바로 그 계보"를 확인하고 아니면 배포를 멈춘다. `IEUM_ROTATE`가 꺼져 있으면 서명은 지금과 같다(같은 keystore, release-apk의 지문 비교 그대로).
+   - **apksigner 확인(build-tools 35, 11/13 실행):** 계보가 있으면 apksigner는 v1·v2 서명에 가장 오래된 키를 요구한다("the oldest signer in the SigningCertificateLineage is missing"). 새 키 하나 + `--lineage`는 v1·v2를 끄고 v3만(`--rotation-min-sdk-version 28`) 쓸 때만 된다. 그래서 회전 APK는 **v3 전용 = Android 9 이상만 설치**된다. Android 8.0~8.1을 지키려면 매 빌드에 옛 키(= 토큰)가 영원히 필요해 이 묶음의 목적과 맞지 않는다. 실사용 폰은 Android 16 한 대라 8.x를 버렸고, 빌드의 `minSdk = 26`은 그대로 둔다(끈 상태의 빌드가 지금과 같게).
+   - 카카오 키 해시는 서명 인증서의 SHA-1이라 회전 뒤 새 값이 생긴다. `IEUM_ROTATE=1` 전에 update-smoke 수동 실행 요약에 나오는 새 해시를 카카오 콘솔에 **추가**한다(옛 것은 남김).
+2. (앱) 받은 APK의 서명 인증서를 설치 전에 자기 인증서와 비교한다(`pipeline/UpdateCert.kt`): 같거나 자기 인증서가 그 APK 계보의 조상이면 허용, 둘 다 읽혔는데 무관하면 설치하지 않고 `update.error=CERT`. **읽기 실패(Android 8, 예외, null, 빈 계보)는 막지 않고 통과시키며 `update.certUnknown`을 센다** — 이 검사가 잘못 막으면 폰이 영영 업데이트를 못 받고, 안드로이드 설치기가 어차피 서명 불일치를 거부하기 때문이다(방어선 하나를 더하는 것). 앱은 시작할 때마다 자기 설치 APK를 같은 방법으로 읽어(`selfCheck`) 하트비트 `security.certCheck`(읽기가 되는지)와 로그(IEUM_CERT)로 남기고, update-smoke가 이 로그로 회전 APK에서 옛 인증서의 판정이 ANCESTOR인지(옛 키 폰이 받아들일지) 확인한다. 무인 설치는 통화 중·자막 실행 중에는 미루되 최대 24시간(기존).
+3. (배포) `assembleRelease`(debuggable 끔, 합성 도구 끔, 축소 안 함). release 빌드 유형에 debug와 **같은 서명 설정 객체**를 넣었다(`signingConfig = signingConfigs.getByName("debug")`). `lintVitalRelease`는 assembleRelease 안에서 돌고 ci에서도 돈다(11/13 로컬 통과). update-smoke는 매번 "지금 배포본(debug) 위에 release 덮어 설치, 데이터 표시 파일이 남는지"를 본다. release에서 달라지는 것: 설정의 "속도 측정 (시험용)"(우편함 없는 빌드에서만 보이므로 아내 폰에는 원래 없음), 시험용 `installForHost`(시험 코드만 씀), 그리고 `adb run-as`(앱 개인 폴더 접근; OPERATIONS 봉인 저장소 되돌리기에 이미 적힘). debug 전용 소스셋·매니페스트 차이는 없다.
+4. (사용자 + 배포) 토큰 회전: **1번의 첫 회전 배포를 폰이 설치한 것을 확인한 뒤에만** 새 토큰(만료일 있는 것)을 `IEUM_INBOX_TOKEN`에 넣고 배포 → 하트비트 versionCode가 그 빌드인지 확인 → 그 뒤에만 옛 토큰 폐기. 토큰이 APK 안에 있으므로 옛 토큰을 먼저 없애면 폰이 `version.json`도 APK도 못 받아 업데이트 길이 끊긴다(검토 치명 C1).
+5. (앱) 번호 해시에 기기 비밀 소금(봉인 설정의 무작위 32바이트, `numberSalt`; HMAC-SHA256). 감사 결과: 폰에 저장된 번호 지문은 개인 목록 2개(코드 상수), 사용자 제외 규칙(`exclusions`, 지금 코드에는 쓰는 곳이 없고 옛 빌드가 남긴 것만), 후속 알림 항목(`h`, 잠깐 쓰고 사라짐)뿐이고 **셋 다 원래 값이 옆에 없어 다시 해시할 수 없다**(`personal_numbers`·`identities`는 원래 번호를 봉인 저장소에 그대로 둔다 — 해시가 아님). 그래서 다시 해시하는 표는 없고, 옛 지문은 옛 방식(SHA-256)과 새 방식(소금) 둘 다로 대조한다(`PrivacyRules`). 새로 쓰는 지문(후속 알림)은 소금으로 쓴다. 개인 목록은 설정 `personalHashes`로 옮긴다(시작할 때 한 번, 한 번의 설정 쓰기라 중간에 끊겨도 안전하고 다시 돌려도 바뀌지 않음, 소금은 절대 바꾸지 않음). 코드 상수는 이 이전의 원본으로만 남기고, 모든 폰이 `security.saltedHash`를 보고하면 다음 판에서 지운다. `status/calllog.txt`의 개인 판정 줄 가림은 이 묶음에 없다(그 파일 본문을 읽지 않는 조건).
 6. (사용자) 저장소 비공개 복귀 + Actions 분량 조정(device-test는 수동·통합 브랜치만, inbox-e2e 하루 2회).
 
-한계를 사실대로: 서버가 없는 구조라 **토큰을 APK에서 없앨 수는 없다.** 할 수 있는 것은 범위를 우편함 하나로 유지하고 주기적으로 바꾸며(4), 토큰을 얻어도 서명·설치로 이어지지 않게 끊는 것(1·2)이다.
+한계를 사실대로: 서버가 없는 구조라 **토큰을 APK에서 없앨 수는 없다.** 할 수 있는 것은 범위를 우편함 하나로 유지하고 주기적으로 바꾸며(4), 토큰을 얻어도 서명·설치로 이어지지 않게 끊는 것(1·2)이다. 1번 뒤에는 토큰으로 서명 키를 만들 수 없지만, 계보가 저장되기 전(첫 회전 배포 전)까지는 여전히 만들 수 있다.
 
-채점용 표시: release-apk가 `app/version.json`에 `buildType`·`seedIndependent`를 쓰고, 폰이 하트비트 `security`에 `certCheck`·`saltedHash`를 쓴다. 비밀 스캔(gitleaks, 11/10 전체 이력 0건)은 ci 단계로 넣고 결과 건수를 우편함 `status/secrets-scan.json`에.
+채점용 표시: release-apk가 `app/version.json`에 `buildType`("release")·`seedIndependent`(회전 서명일 때 true)·`lineageSha256`을 쓰고, 폰이 하트비트 `security`에 `certCheck`·`saltedHash`(와 `certSelf`·`legacyHashes`)를, `update`에 `certUnknown`을 쓴다. 비밀 스캔(gitleaks 8.24.3, `.gitleaks.toml`, 전체 이력)은 ci 단계(발견 1건 이상이면 실패)이고, release-apk가 결과 건수를 우편함 `status/secrets-scan.json`(`findings`)에 쓴다. 11/13 전체 이력 309커밋: 기본 규칙으로 6건, 모두 커밋 98ab599의 계약 시험 벡터(`TEST_ONLY_KEYS_PUBLIC_IN_REPOSITORY`, 지금은 지워진 파일) → 그 커밋 하나만 예외로 두어 0건.
 
 ### 4.3 코드 정리 (r18-3, 동작 변화 없음)
 
@@ -330,12 +334,17 @@ v4.0 배포는 버전 규칙대로 v4.0이고, **"완료"는 배포가 아니라
 | r17-3 | 자막 실행마다 **스레드** CPU 시간(`/proc/self/task/*/stat`) | **프로세스 전체** CPU 시간(`/proc/self/stat`의 utime+stime) 차이를 `power.today.cpuMs`·`cpuRuns`에, 배터리 실행의 `CHARGE_COUNTER` 차이를 `batteryUah`에 | 묶음 지시문(r17-3 8번 "가능한 범위")이 프로세스 값으로 정함. 실행 동안 같은 프로세스의 다른 작업(카드·결과 받기)의 CPU도 섞이므로 통화 1건당 CPU는 상한으로 읽는다 |
 | r17-3 | `dbTables`: 테이블별 행 수와 글자 길이 합 상위 8개, 하루 증가분 | `dbTables{day, atMs, totalRows, totalChars, top[{name, rows, chars, dChars}]}`: 증가분은 표마다 **`dChars`**(지난 집계 뒤 글자 수 변화, 처음은 null). 전체 표 수치는 설정에만 두고 하트비트에는 상위 8개만 | 하루 증가분을 표 단위로 보아야 v3.8에서 어느 표를 줄일지 정함 |
 | r18-storage (4.1) | S1 원문 분리·S2 조각 파일 먼저, `discovery_intake_requests`는 건드리지 않음(S3) | S1·S2 미룸. 같은 내용 확인의 요청 행과 끝난 금고 접수만 3일 뒤 지움(`LedgerPrune`, 첫 삭제 전 사본 7일), 저장된 파일 다시 읽기 1일 → 30일, 크기 거절을 `ProtectedDatabase`가 직접 셈(`dbFull`). 영수증·새 내용 요청·수집 줄은 남김 | v3.7 `dbTables` 실측: 자막 3.6%, 수집 원장 80% 이상이고 하루 6%p가 다시 읽기의 같은 내용 확인에서 나옴. 재시도·복구가 읽는 줄(진행 중, 버전이 가리키는 것)은 조건에서 빠지므로 S3의 치명 지적(C2)에 걸리지 않음 |
+| r18-lock (4.2-1) | 사용자가 `IEUM_SIGNING_SEED`에 지금 토큰 값을 복사 | 계보를 첫 회전 배포에서 한 번 만들어 우편함 `app/signing-lineage.bin`(과 릴리스 자산)에 저장, 이후 새 키 + 저장된 계보만으로 서명. 사용자는 `IEUM_SIGNING_SEED_V2`와 `IEUM_ROTATE=1`만 | 사용자가 토큰 값을 보관하지 않았다(11/13). 옛 키는 CI 안에서 토큰으로 한 번만 만들고 바로 지운다 |
+| r18-lock (4.2-1) | 회전 APK는 v2(Android 8, 옛 키) + v3(Android 9+, 새 키) | **v3 전용**(`--v1/--v2-signing-enabled false`, `--rotation-min-sdk-version 28`), Android 8.x 설치 불가. `minSdk`는 26 그대로 | apksigner 35 실행 확인: 계보가 있으면 v1·v2에 가장 오래된 키가 필요 — 8.x를 지키려면 토큰이 영원히 필요. 실사용 폰은 Android 16 |
+| r18-lock (4.2-2) | 인증서가 다르면 설치하지 않음 | 둘 다 읽혔고 무관할 때만 막음. 못 읽으면 통과 + `update.certUnknown`. 앱 시작마다 자기 APK로 자가 확인(`security.certCheck`, IEUM_CERT 로그) | 잘못 막으면 폰이 영영 업데이트를 못 받음. 안드로이드 설치기가 불일치를 어차피 거부 |
+| r18-lock (4.2-5) | 기존 해시를 폰 안에서 다시 해시 | 다시 해시할 수 있는 표가 없음(감사: 원래 값이 옆에 저장된 지문이 없음) → 옛 지문은 옛·새 방식 둘 다로 대조, 새 지문만 소금. 개인 목록은 설정으로 옮기되 코드 상수는 이전 원본으로 한 판 더 남김 | 원래 값 없이는 소금 지문을 만들 수 없음. 상수를 바로 지우면 이전 전에 개인 통화가 걸러지지 않을 틈이 생김 |
+| r18-lock (4.2) | `status/calllog.txt`의 개인 판정 줄 가림 | 이 묶음에서 하지 않음 | 지시문이 그 파일 본문을 읽지 말라고 함(형식 확인 불가) |
 
 ## 12. 사용자가 할 일 (이것만)
 
 | 언제 | 할 일 | 걸리는 시간 |
 | --- | --- | --- |
-| v3.8 빌드 B 전(11/17까지) | GitHub 비밀 `IEUM_SIGNING_SEED`에 지금 우편함 토큰 값 복사. 새 토큰 발급(옛 토큰은 Claude가 "지워도 된다"고 보고한 뒤 폐기) | 5분 |
+| v3.8 빌드 B 전(11/17까지) | 비밀 `IEUM_SIGNING_SEED_V2`(무작위 32자 이상) 만들기 → update-smoke 수동 실행 요약의 새 카카오 키 해시를 카카오 콘솔에 추가 → 변수 `IEUM_ROTATE=1` 켜기 → 첫 회전 배포와 폰 설치 확인 → 그 뒤에만 새 토큰(만료일 있음) 발급·배포·확인 → 옛 토큰 폐기. 순서와 되돌리는 법은 OPERATIONS "서명 키 교체" | 15분 |
 | v3.8 배포 뒤 | "골든 측정" 화면에서 통화 10건의 기준 자막 중 틀린 곳 고치기(3건은 처음부터 받아쓰기) | 60분 |
 | v4.0 전 | 약속 정답지 판정(불일치 전부, 일치의 20%, 10건 전문 읽기), S26 체크리스트, 아내가 혼자 적는 설문과 5과제 | 70분 |
 

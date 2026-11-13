@@ -104,17 +104,17 @@ class UpdateCertTest:ProtectedTextHostTestBase() {
     }
 
     @Test fun selfCheckGoesToTheHeartbeat() {
+        // Asserted on the returned values: the app's own start runs a self check of its own at the same time.
+        fun beat(r:String)=UpdateCert.heartbeat(JSONObject().put(UpdateCert.SELF,r))
         phone(old,old,listOf(old))
-        assertEquals("SAME",UpdateCert.selfCheck(app))
-        assertEquals(true,UpdateCert.heartbeat(s()).get("certCheck"))
+        val plain=UpdateCert.selfCheck(app);assertEquals("SAME",plain);assertEquals(true,beat(plain).get("certCheck"))
         // After a rotation: installed lineage old -> new, the installed APK carries it.
-        UpdateCert.readHook={ _,f -> if(f==null) UpdateCert.Certs(setOf(new),listOf(old,new)) else UpdateCert.Certs(setOf(new),listOf(old,new)) }
-        assertEquals("ANCESTOR,SAME",UpdateCert.selfCheck(app))
-        assertEquals(true,UpdateCert.heartbeat(s()).get("certCheck"))
+        UpdateCert.readHook={ _,_ -> UpdateCert.Certs(setOf(new),listOf(old,new)) }
+        val rotated=UpdateCert.selfCheck(app);assertEquals("ANCESTOR,SAME",rotated);assertEquals(true,beat(rotated).get("certCheck"))
         UpdateCert.readHook={ _,_ -> null }
-        assertEquals("UNKNOWN",UpdateCert.selfCheck(app))
-        val h=PhoneStatus.security(s())
+        val none=UpdateCert.selfCheck(app);assertEquals("UNKNOWN",none)
+        val h=PhoneStatus.security(JSONObject().put(UpdateCert.SELF,none))
         assertEquals(false,h.get("certCheck"));assertEquals("UNKNOWN",h.get("certSelf"))
-        assertTrue(h.has("saltedHash"));assertTrue(h.has("legacyHashes"))
+        assertEquals(false,h.get("saltedHash"));assertEquals(2,h.getInt("legacyHashes"))
     }
 }

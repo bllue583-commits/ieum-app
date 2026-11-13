@@ -53,16 +53,19 @@ object LocalPrivacy {
      * Safe to run at every start and to be cut off at any point: either the write happened (all of it) or nothing changed.
      * An existing salt is never replaced (fingerprints made with it would stop matching). Returns true when it wrote. */
     fun migrate(settings: kr.callbrief.SecureSettings, random: java.security.SecureRandom = java.security.SecureRandom()): Boolean {
-        fun done(s: JSONObject) = salt(s) != null && s.has(PERSONAL_KEY) && s.optInt(MIGRATED_KEY, 0) >= MIGRATION_VERSION
-        if (done(settings.snapshot())) return false
+        if (migrated(settings.snapshot())) return false
         var wrote = false
-        settings.update { s ->
-            if (done(s)) return@update
-            if (salt(s) == null) s.put(SALT_KEY, ByteArray(32).also(random::nextBytes).joinToString("") { "%02x".format(it) })
-            if (!s.has(PERSONAL_KEY)) s.put(PERSONAL_KEY, legacyPersonal())
-            s.put(MIGRATED_KEY, MIGRATION_VERSION); wrote = true
-        }
+        settings.update { s -> wrote = migrateState(s, random) }
         return wrote
+    }
+    fun migrated(s: JSONObject) = salt(s) != null && s.has(PERSONAL_KEY) && s.optInt(MIGRATED_KEY, 0) >= MIGRATION_VERSION
+    /** The move on one settings object (what [migrate] does inside its one write). True when it changed something. */
+    internal fun migrateState(s: JSONObject, random: java.security.SecureRandom = java.security.SecureRandom()): Boolean {
+        if (migrated(s)) return false
+        if (salt(s) == null) s.put(SALT_KEY, ByteArray(32).also(random::nextBytes).joinToString("") { "%02x".format(it) })
+        if (!s.has(PERSONAL_KEY)) s.put(PERSONAL_KEY, legacyPersonal())
+        s.put(MIGRATED_KEY, MIGRATION_VERSION)
+        return true
     }
     /** Heartbeat `security`: [saltedHash] = the salt is there and the move is done (every fingerprint written from now on is
      * salted); [legacyHashes] = old unsalted fingerprints still matched because their values are not on the phone. Counts only. */
@@ -72,7 +75,7 @@ object LocalPrivacy {
         for (array in listOfNotNull(personal ?: legacyPersonal(), custom)) for (i in 0 until array.length()) {
             if (array.optJSONObject(i)?.optBoolean("salted") != true) legacy++
         }
-        return JSONObject().put("saltedHash", salt(state) != null && personal != null && state.optInt(MIGRATED_KEY, 0) >= MIGRATION_VERSION)
+        return JSONObject().put("saltedHash", migrated(state))
             .put("legacyHashes", legacy)
     }
     fun identity(recording: RecordingRef, state: JSONObject): RecordingIdentity? {
