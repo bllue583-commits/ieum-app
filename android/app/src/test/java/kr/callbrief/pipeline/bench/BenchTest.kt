@@ -154,6 +154,25 @@ class BenchTest:ProtectedTextHostTestBase() {
     }
 
     // ---- what goes up ----
+    @Test fun theHeartbeatSaysWhereARunIsAndWhatEndedIt() {
+        val s=BenchState.fresh(1,now)
+        BenchState.setPlan(s,listOf(call("r1",2.0,0.1),call("r2",3.0,0.2)))
+        var hb=Bench.safe(BenchState.heartbeat(s,BenchConfig(on=true))!!)
+        assertTrue(hb.isNull("stage"));assertTrue(hb.isNull("err"))
+        assertTrue(BenchState.setStage(s,"OPEN_c"));assertFalse(BenchState.setStage(s,"OPEN_c"))
+        // An Error ends the candidate, not the run: every call of (다) is closed with the code, (나) is untouched.
+        BenchState.setError(s,"UnsatisfiedLinkError");BenchState.disable(s,"c","BENCH_ERR_UnsatisfiedLinkError")
+        hb=Bench.safe(BenchState.heartbeat(s,BenchConfig(on=true))!!)
+        assertEquals("OPEN_c",hb.getString("stage"));assertEquals("UnsatisfiedLinkError",hb.getString("err"))
+        val c=hb.getJSONObject("cand").getJSONObject("c")
+        assertEquals(2,c.getInt("failed"));assertEquals(2,c.getJSONObject("fail").getInt("BENCH_ERR_UnsatisfiedLinkError"));assertEquals("BENCH_ERR_UnsatisfiedLinkError",c.getString("disabled"))
+        assertFalse(hb.getJSONObject("cand").has("b"))
+        // A text never gets through as a stage or an error.
+        BenchState.setStage(s,"김 부장 통화");BenchState.setError(s,"/storage/x.m4a")
+        hb=Bench.safe(BenchState.heartbeat(s,BenchConfig(on=true))!!)
+        assertTrue(hb.isNull("stage"));assertTrue(hb.isNull("err"))
+    }
+
     @Test fun theHeartbeatHasNumbersAndCodesOnly() {
         val s=BenchState.fresh(1,now)
         BenchState.setPlan(s,listOf(call("통화 녹음 홍길동_01012345678_251029.m4a",2.0,0.1),call("r2",12.0,0.2)))

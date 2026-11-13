@@ -107,6 +107,7 @@ class BenchWork(context:Context,params:WorkerParameters):Worker(context,params) 
                 BenchState.setPlan(s,calls)
             }
             save(BenchState.setStatus(s,"RUNNING",null,System.currentTimeMillis()))
+            stage(s,"REFS")
             val plan=BenchState.plan(s).map(BenchState::call)
             val refs=source.references(plan.map { it.recordingId }.toSet())
             val names=source.names().map(KoCer::normalize).filter { it.length>=2 }.distinct()
@@ -122,15 +123,20 @@ class BenchWork(context:Context,params:WorkerParameters):Worker(context,params) 
                     try {
                         measure(app,cfg,s,c,index,call,ref,names,models)
                         if(!stopped()) BenchState.finish(s,c,index,call.durationMs,null)
-                    } catch(e:Exception) {
+                    } catch(e:Throwable) {
                         val code=codeOf(e)
+                        // An Error (a library that does not link, no memory left) is not an Exception: it used to end the whole run
+                        // without a word, every hour again, and the candidates after it never began (11/14, (다) on the S26).
+                        if(e !is Exception) { BenchState.setError(s,code);BenchState.disable(s,c,("BENCH_ERR_"+code).take(60));save(s);continue }
                         if(stopped()) {
                             // The same piece cut by the time limit twice: this candidate cannot finish it here (BENCH_TIMEOUT).
                             if(timeLimited()) BenchState.noteTimeout(s,c,index,BenchState.nextPiece(s,c,index))
                             break
                         }
                         // A missing runtime or model will not come back by trying again: the call is given up at once.
-                        if(code.startsWith("BENCH_C_") || code=="NO_MODEL" || BenchState.tried(s,c,index)>=BenchState.MAX_TRIES) BenchState.finish(s,c,index,call.durationMs,code)
+                        // (다)'s runtime that is missing, does not match its pin or never opens will not come back: the candidate ends.
+                        if(code.startsWith("BENCH_C_")) { BenchState.setError(s,code);BenchState.disable(s,c,code) }
+                        else if(code=="NO_MODEL" || BenchState.tried(s,c,index)>=BenchState.MAX_TRIES) { BenchState.setError(s,code);BenchState.finish(s,c,index,call.durationMs,code) }
                     } finally { BenchState.clearInFlight(s) }
                     save(s)
                 }
@@ -142,12 +148,24 @@ class BenchWork(context:Context,params:WorkerParameters):Worker(context,params) 
             if(all) { save(BenchState.setStatus(s,"DONE",null,System.currentTimeMillis()));Bench.cleanupModels(app) }
             else { save(BenchState.setStatus(s,"WAITING","MORE",System.currentTimeMillis()));later(app) }
             return Result.success()
-        } catch(e:Exception) {
+        } catch(e:Throwable) {
+            BenchState.setError(s,codeOf(e))
             save(BenchState.setStatus(s,"WAITING",codeOf(e),System.currentTimeMillis()));later(app,60);return Result.success()
         } finally {
             watcher.stop();runCatching { engine?.close() };engine=null
             if(fgSince>0) { BenchState.addFg(s,day,android.os.SystemClock.elapsedRealtime()-fgSince);fgSince=0;save(s) }
         }
+    }
+
+    private fun stage(s:JSONObject,code:String) { if(BenchState.setStage(s,code)) save(s) }
+    /** (다)'s libraries and models open on a thread of their own: a load that never returns ends the candidate
+     * (BENCH_C_OPEN_TIMEOUT) instead of holding the whole run. */
+    private fun <T> openWithin(ms:Long,make:()->T):T {
+        val task=java.util.concurrent.FutureTask(make)
+        Thread(task,"ieum-bench-open").apply { isDaemon=true }.start()
+        return try { task.get(ms,TimeUnit.MILLISECONDS) }
+        catch(e:java.util.concurrent.TimeoutException) { error("BENCH_C_OPEN_TIMEOUT") }
+        catch(e:java.util.concurrent.ExecutionException) { throw e.cause ?: e }
     }
 
     /** One call for one candidate, piece by piece: the decoder's pieces (as the app's run gets them), the candidate on each,
@@ -161,7 +179,7 @@ class BenchWork(context:Context,params:WorkerParameters):Worker(context,params) 
             BenchState.setRun(s,c,threads)
             val e=when(c) {
                 // (다) never asks for the foreground: it needs no long run, and the notice would only show for nothing.
-                "c" -> SenseVoiceBenchEngine(app,models.file(BenchModels.SENSE_VOICE),models.file(BenchModels.SENSE_VOICE_TOKENS),models.file(BenchModels.SILERO_VAD),threads)
+                "c" -> openWithin(OPEN_LIMIT_MS) { SenseVoiceBenchEngine(app,models.file(BenchModels.SENSE_VOICE),models.file(BenchModels.SENSE_VOICE_TOKENS),models.file(BenchModels.SILERO_VAD),threads) }
                 else -> {
                     val (file,bytes)=if(c=="b") models.file(BenchModels.TURBO_Q8) to BenchModels.TURBO_Q8.bytes
                         else (PipelineModelManager(app).verifiedModelFile() ?: error("NO_MODEL")).let { it to it.length() }
@@ -174,13 +192,16 @@ class BenchWork(context:Context,params:WorkerParameters):Worker(context,params) 
             opened=e;engine=e;e
         }
         try {
+            stage(s,"AUDIO")
             BenchAudio.read(app,call).use { input ->
                 var pending:Triple<Int,Long,FloatArray>?=null
                 fun run(p:Triple<Int,Long,FloatArray>,endMs:Long) {
                     val (i,offset,pcm)=p
                     if(i<from || stopped()) return
                     if(pcm.size<PipelineAudioMath.TARGET_RATE/10) { BenchState.addPiece(s,c,index,i,BenchState.Piece(0,0,0,0,0,0,0,0,0,0,0,false));return }
+                    stage(s,"OPEN_$c")
                     val e=open()
+                    stage(s,"RUN_$c")
                     // The mark of a native run under way: still there at the next start means the process died in it.
                     BenchState.markInFlight(s,c,index,i);save(s)
                     val cpu0=Telemetry.processCpuMs();val t0=android.os.SystemClock.elapsedRealtime()
@@ -223,11 +244,13 @@ class BenchWork(context:Context,params:WorkerParameters):Worker(context,params) 
     companion object {
         const val UNIQUE="ieum.bench"
         const val POLL_MS=2_000L
+        /** How long (다) may take to load its libraries and models before it is given up. */
+        const val OPEN_LIMIT_MS=180_000L
         /** Without a stop reason (before Android 12): a stop this long after the start is taken as the 10-minute limit. */
         const val TIME_LIMIT_NEAR_MS=9*60_000L
         /** The app keeps a call's words 7 days after its result: the plan looks back that far. */
         const val PLAN_DAYS=7L
-        private fun codeOf(e:Exception)=e.message?.takeIf { it.matches(Regex("[A-Z0-9_]{1,60}")) } ?: e.javaClass.simpleName.take(60)
+        private fun codeOf(e:Throwable)=e.message?.takeIf { it.matches(Regex("[A-Z0-9_]{1,60}")) } ?: e.javaClass.simpleName.take(60)
         /** The gate at the start of a run (the store is opened once for the queue). */
         internal fun now(app:Context):String? {
             val b=BatterySnapshot.read(app)

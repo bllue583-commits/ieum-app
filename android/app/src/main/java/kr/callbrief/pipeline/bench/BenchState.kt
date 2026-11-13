@@ -82,6 +82,11 @@ internal object BenchState {
         plan(s).forEachIndexed { i,o -> if(!done(s,c,i)) finish(s,c,i,o.optLong("ms"),code) }
         return s
     }
+    /** Where the run is (a short code: REFS, AUDIO, OPEN_c, RUN_c): the heartbeat shows it, so a run that ends or hangs without
+     * a word can be placed (11/14: (다) never finished a piece on the phone and nothing said why). True when it changed. */
+    fun setStage(s:JSONObject,stage:String):Boolean { if(s.optString("stage")==stage) return false;s.put("stage",stage);return true }
+    /** The last thing that ended a run or a candidate unexpectedly (a class name or a code, no text). */
+    fun setError(s:JSONObject,code:String) { s.put("err",code) }
     fun disabled(s:JSONObject,c:String):String? = s.optJSONObject("disabled")?.optString(c)?.takeIf { it.isNotEmpty() }
     /** A pinned file that did not match: how many times now. */
     fun shaFailed(s:JSONObject,name:String):Int { val m=(s.optJSONObject("shaFails") ?: JSONObject().also { s.put("shaFails",it) });val n=m.optInt(name,0)+1;m.put(name,n);return n }
@@ -122,6 +127,7 @@ internal object BenchState {
         val out=JSONObject().put("on",cfg.on).put("run",s.optInt("run",cfg.run)).put("state",code(s.optString("state")) ?: "OFF")
             .put("code",code(s.optString("code").takeIf { s.has("code") }) ?: JSONObject.NULL).put("atMs",s.optLong("atMs",0))
             .put("planned",plan(s).size).put("candidates",JSONArray(cfg.candidates))
+        out.put("stage",code(s.optString("stage").takeIf { s.has("stage") }) ?: JSONObject.NULL).put("err",code(s.optString("err").takeIf { s.has("err") }) ?: JSONObject.NULL)
         s.optJSONObject("models")?.let { m -> out.put("models",JSONObject().apply { BenchConfig.ORDER.forEach { k -> code(m.optString(k).takeIf { m.has(k) })?.let { put(k,it) } } }) }
         val cands=JSONObject()
         val all=s.optJSONObject("cands") ?: JSONObject()
