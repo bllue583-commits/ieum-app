@@ -16,7 +16,7 @@ import org.robolectric.annotation.Config
  * exclusions, the follow-up notices), so none is re-made; the old form keeps matching next to the salted one.
  * Made-up numbers only. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk=[35],shadows=[ShadowTextKeys::class])
+@Config(sdk=[35],shadows=[ShadowTextKeys::class,ShadowTextKeys.ExistingApprovedSettings::class,ShadowTextAtomicFile::class])
 class NumberSaltTest : ProtectedTextHostTestBase() {
     private val app get()=RuntimeEnvironment.getApplication()
 
