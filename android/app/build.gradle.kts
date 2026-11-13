@@ -55,8 +55,12 @@ android {
     }
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/ieum-whisper/assets"))
     sourceSets.getByName("main").jniLibs.srcDir(layout.buildDirectory.dir("generated/ieum-whisper/jniLibs"))
+    // r18-bench (DESIGN_V7 4.4): sherpa-onnx 2.0.1's arm64-v8a libraries and their pin (tools/fetch_sherpa_onnx.py), for the
+    // engine bench only; kept as published (not stripped again), since the app checks their SHA-256 before it loads them.
+    sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/ieum-sherpa/assets"))
+    sourceSets.getByName("main").jniLibs.srcDir(layout.buildDirectory.dir("generated/ieum-sherpa/jniLibs"))
     packaging {
-        jniLibs { useLegacyPackaging = true; keepDebugSymbols += "**/libieum_whisper.so" }
+        jniLibs { useLegacyPackaging = true; keepDebugSymbols += setOf("**/libieum_whisper.so","**/libonnxruntime.so","**/libsherpa-onnx-jni.so") }
         // Notice files some library jars ship twice; left out so packaging never fails on a duplicate.
         resources { excludes += setOf("META-INF/NOTICE.md","META-INF/LICENSE.md") }
     }
@@ -79,6 +83,9 @@ dependencies {
     implementation("com.kakao.sdk:v2-user:2.24.0")
     implementation("com.kakao.sdk:v2-talk:2.24.0")
     implementation("com.kakao.sdk:v2-share:2.24.0")
+    // r18-bench: the Kotlin API of sherpa-onnx 2.0.1, the classes.jar of the official AAR (Apache-2.0, docs/ASSETS.md). Its native
+    // libraries come from the same AAR at build time (tools/fetch_sherpa_onnx.py); its classes load them only when used.
+    implementation(files("../../third_party/sherpa-onnx-2.0.1/sherpa-onnx-2.0.1-classes.jar"))
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.17")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

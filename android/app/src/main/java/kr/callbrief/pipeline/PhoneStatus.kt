@@ -59,7 +59,10 @@ internal object PhoneStatus {
          * [충전 중에만 글자로 바꾸기]; the heartbeat's `power` block ([PowerText.heartbeat]), always there, numbers and codes only. */
         val powerLedger:JSONObject?=null,val chargingOnly:Boolean=false,
         /** DESIGN_V7 3.3 (v3.7, r17-3): the scorecard's measurement ([V37]). */
-        val v37:V37=V37())
+        val v37:V37=V37(),
+        /** r18-bench (DESIGN_V7 4.4): `bench` and `samples` ([kr.callbrief.pipeline.bench.BenchState.heartbeat],
+         * [kr.callbrief.pipeline.bench.Samples.heartbeat]); left out of the file while never switched on. Numbers and codes only. */
+        val bench:JSONObject?=null,val samples:JSONObject?=null)
     /** v3.7 r17-3 (DESIGN_V7 3.3, SCORECARD): [latency] goes into `latency` beside the 7-day numbers ({segments{endToText,
      * textToUpload,uploadToApplied}, day{p50Min,p90Min,n,waiting}, over7d}); [window14] into `transcription.window14`
      * {created,failed,failedPermanent,days}; [coverage] is `report.coverage` ([kr.callbrief.pipeline.report.ReportCoverage.snapshot])
@@ -185,6 +188,8 @@ internal object PhoneStatus {
         putV35(o,i.v35)
         o.put("power",runCatching { PowerText.heartbeat(i.powerLedger,i.chargingOnly,i.nowMs) }.getOrElse { JSONObject.NULL })
         putV37(o,i.v37)
+        i.bench?.let { o.put("bench",kr.callbrief.pipeline.bench.Bench.safe(it)) }
+        i.samples?.let { o.put("samples",kr.callbrief.pipeline.bench.Bench.safe(it)) }
         return o
     }
     /** v3.7 r17-3: the scorecard's blocks. `use` and `report.coverage` always (null inside until known), the rest when known. */
@@ -327,6 +332,8 @@ internal object PhoneStatus {
             // Names and numbers: the private mailbox only (decided 11/4). Not in "문제 알리기" ([report]).
             CallLogReport.publish(context.applicationContext,store,input.appVersion,now)
         } catch(e:Exception) { Log.w(TAG,"heartbeat not sent: ${e.javaClass.simpleName}") }
+        // r18-bench (DESIGN_V7 4.4): the bench's switch, app/config.json (absent = off: one read, nothing else happens).
+        store?.let { kr.callbrief.pipeline.bench.Bench.onHeartbeat(context.applicationContext,it,now) }
     }
 
     /** The expiry the mailbox replies carried in this process goes to settings, so the next heartbeat has it even after a restart. */
@@ -373,7 +380,8 @@ internal object PhoneStatus {
             v35 = v35(s),
             powerLedger = runCatching { PowerText.ledger(s) }.getOrNull(),
             chargingOnly = PowerText.chargingOnly(s),
-            v37 = runCatching { v37(app,s,now) }.onFailure { Log.w(TAG,"v3.7 numbers not read: ${it.javaClass.simpleName}") }.getOrDefault(V37()))
+            v37 = runCatching { v37(app,s,now) }.onFailure { Log.w(TAG,"v3.7 numbers not read: ${it.javaClass.simpleName}") }.getOrDefault(V37()),
+            bench = kr.callbrief.pipeline.bench.Bench.heartbeat(s),samples = kr.callbrief.pipeline.bench.Samples.heartbeat(s))
     }
     /** v3.7 r17-3: the scorecard's numbers. The day's match reasons and the report days are folded into the settings here (one
      * write when they changed); the stages come from the process store (never on the ring path or a screen draw). */

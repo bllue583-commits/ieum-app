@@ -1652,6 +1652,22 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     }
     // ---- r14-3 end ----
 
+    // ---- r18-bench (DESIGN_V7 4.4): what the engine bench and the samples read. Read only; only numbers leave the phone. ------
+    /** One work call the bench may measure: its result said business, its number is not one found personal, and its words
+     * and line times are still kept ([trim] clears them 7 days after the result). Calls only (no texts or mail). */
+    internal data class BenchRow(val recordingId:String,val startedMs:Long,val durationMs:Long,val transcript:String,val segmentsJson:String)
+    fun benchRows(sinceMs:Long,limit:Int=400):List<BenchRow> =
+        rows("""SELECT c.recording_id,COALESCE(c.started_ms,c.created_ms) AS at_ms,c.duration_ms,c.transcript,c.segments_json,c.analysis_json FROM call_records c
+            WHERE c.recording_id NOT LIKE 'sms:%' AND c.recording_id NOT LIKE 'mail:%' AND c.state='ANALYZED' AND c.transcript!=''
+            AND COALESCE(c.started_ms,c.created_ms)>=CAST(? AS INTEGER)
+            AND NOT EXISTS(SELECT 1 FROM personal_numbers n WHERE n.phone_key=c.counterpart_key)
+            ORDER BY at_ms DESC LIMIT $limit""",sinceMs).filter { r ->
+            // A result that is not there or cannot be read counts as not known to be work: left out.
+            r.str("analysis_json")?.let { j -> runCatching { JSONObject(j).optJSONObject("analysis")?.optBoolean("business",false) }.getOrNull() }==true
+        }.map { r -> BenchRow(r.str("recording_id")!!,r.long("at_ms") ?: 0,r.long("duration_ms") ?: 0,r.str("transcript").orEmpty(),r.str("segments_json").orEmpty()) }
+    /** The ledger's people and company names (the bench's name hits; never sent). */
+    fun benchNames():List<String> = rows("SELECT name FROM people UNION SELECT name FROM companies").mapNotNull { it.str("name")?.trim()?.takeIf { n -> n.isNotEmpty() } }
+
     // ---- v3.7 r17-3 (DESIGN_V7 3.3): measurement reads for the heartbeat. Read only, numbers out. ----------------------------
     private fun hasTable(name:String)=rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",name).isNotEmpty()
     /** Every call (not texts or mail) that ended, or got its result, since [sinceEndMs], with its stages ([Telemetry.Stage]): the recording found

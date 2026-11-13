@@ -597,6 +597,8 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
 
     companion object {
         private const val ONCE="calls-transcription"
+        /** r18-bench: the engine bench gives way while this unique work is queued or running ([kr.callbrief.pipeline.bench.Bench]). */
+        internal const val ONCE_NAME=ONCE
         const val PERIODIC="calls-transcription-hourly"
         /** v3.6: the delayed retry (heat, battery gap) and the charger trigger, each under its own name. */
         const val LATER="calls-transcription-later"

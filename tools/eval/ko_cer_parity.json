@@ -1,0 +1,145 @@
+{
+ "about": "tools/eval/ko_cer.py normalize() and character edits (jiwer 4.0.0) for fixed inputs; KoCer.kt must give the same (KoCerTest, test_ko_cer_parity.py)",
+ "cases": [
+  {
+   "ref": "삼십만 원에 해 주세요.",
+   "hyp": "30만원에 해주세요",
+   "refNorm": "300000원에해주세요",
+   "hypNorm": "300000원에해주세요",
+   "edits": 0
+  },
+  {
+   "ref": "견적서 두 장 보내 드릴게요",
+   "hyp": "견척서 2장 보내드릴게요",
+   "refNorm": "견적서2장보내드릴게요",
+   "hypNorm": "견척서2장보내드릴게요",
+   "edits": 1
+  },
+  {
+   "ref": "3억 5천만 원이요",
+   "hyp": "삼억 오천만 원이요",
+   "refNorm": "350000000원이요",
+   "hypNorm": "350000000원이요",
+   "edits": 0
+  },
+  {
+   "ref": "천이백 개 들어가요",
+   "hyp": "1,200개 들어가요",
+   "refNorm": "1200개들어가요",
+   "hypNorm": "1200개들어가요",
+   "edits": 0
+  },
+  {
+   "ref": "이사 가는 날 사과 가져와",
+   "hyp": "이사가는 날 사과 가져와",
+   "refNorm": "이사가는날사과가져와",
+   "hypNorm": "이사가는날사과가져와",
+   "edits": 0
+  },
+  {
+   "ref": "내일 오전 열 시에 타설합니다",
+   "hyp": "내일 오전 10시에 타설합니다.",
+   "refNorm": "내일오전10시에타설합니다",
+   "hypNorm": "내일오전10시에타설합니다",
+   "edits": 0
+  },
+  {
+   "ref": "단가가 십오 퍼센트 올랐어요",
+   "hyp": "단가가 15% 올랐어요",
+   "refNorm": "단가가15%올랐어요",
+   "hypNorm": "단가가15%올랐어요",
+   "edits": 0
+  },
+  {
+   "ref": "이십 프로 할인",
+   "hyp": "20 % 할인",
+   "refNorm": "20%할인",
+   "hypNorm": "20%할인",
+   "edits": 0
+  },
+  {
+   "ref": "레미콘 다섯 대, 철근 세 통!",
+   "hyp": "레미콘 5대 철근 3통",
+   "refNorm": "레미콘5대철근3통",
+   "hypNorm": "레미콘5대철근3통",
+   "edits": 0
+  },
+  {
+   "ref": "Hello, World! ABC 123",
+   "hyp": "hello world abc 123",
+   "refNorm": "helloworldabc123",
+   "hypNorm": "helloworldabc123",
+   "edits": 0
+  },
+  {
+   "ref": "그.",
+   "hyp": "",
+   "refNorm": "그",
+   "hypNorm": "",
+   "edits": 1
+  },
+  {
+   "ref": "",
+   "hyp": "음",
+   "refNorm": "",
+   "hypNorm": "음",
+   "edits": 1
+  },
+  {
+   "ref": "일 층 이백삼 호",
+   "hyp": "1층 203호",
+   "refNorm": "1층203호",
+   "hypNorm": "1층203호",
+   "edits": 0
+  },
+  {
+   "ref": "오만 원",
+   "hyp": "오 만원",
+   "refNorm": "50000원",
+   "hypNorm": "50000원",
+   "edits": 0
+  },
+  {
+   "ref": "백 미터",
+   "hyp": "100미터",
+   "refNorm": "백미터",
+   "hypNorm": "100미터",
+   "edits": 3
+  },
+  {
+   "ref": "만 원만 주세요",
+   "hyp": "10000원만 주세요",
+   "refNorm": "10000원만주세요",
+   "hypNorm": "10000원만주세요",
+   "edits": 0
+  },
+  {
+   "ref": "ⅷ ① ² _x",
+   "hyp": "x",
+   "refNorm": "ⅷ①²_x",
+   "hypNorm": "x",
+   "edits": 4
+  },
+  {
+   "ref": "네 명이 와요 네",
+   "hyp": "4명이 와요 네",
+   "refNorm": "4명이와요네",
+   "hypNorm": "4명이와요네",
+   "edits": 0
+  },
+  {
+   "ref": "열두 시",
+   "hyp": "12시",
+   "refNorm": "열두시",
+   "hypNorm": "12시",
+   "edits": 2
+  },
+  {
+   "ref": "공일공 일이삼사 오육칠팔",
+   "hyp": "010-1234-5678",
+   "refNorm": "0일이삼사오육칠팔",
+   "hypNorm": "01012345678",
+   "edits": 10
+  }
+ ]
+}

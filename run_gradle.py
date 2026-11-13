@@ -21,6 +21,9 @@ env['PATH'] = str(Path(env['JAVA_HOME']) / 'bin') + os.pathsep + env.get('PATH',
 env['GRADLE_OPTS'] = env.get('GRADLE_OPTS', '') + ' -Duser.home=' + str(root / 'android-user')
 if env.get('IEUM_SKIP_ANDROID_NATIVE') != '1':
     subprocess.run([sys.executable, str(root / 'tools/build_android_whisper.py')], cwd=root, env=env, check=True)
+    # r18-bench: the engine bench's sherpa-onnx libraries (official AAR, arm64-v8a), loaded only while the bench runs.
+    if env.get('IEUM_SKIP_SHERPA') != '1':
+        subprocess.run([sys.executable, str(root / 'tools/fetch_sherpa_onnx.py')], cwd=root, env=env, check=True)
 log = root / 'evidence' / args.log
 log.parent.mkdir(parents=True, exist_ok=True)
 if log.exists():
