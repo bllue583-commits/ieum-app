@@ -57,6 +57,9 @@
 | `tools/watchdog.py`, `tools/report_check.py` | release-apk | 루틴 안 워치독과 아침 보고서 검사기 사본(원본 `tools/inbox/watchdog.py`, `tools/report_check.py`) |
 | `app/signing-lineage.bin` | release-apk(v3.8 r18-lock) | 서명 키 계보(옛 키 → 새 키, 인증서와 서명뿐, 비밀 아님). `IEUM_ROTATE=1`의 첫 배포가 한 번 만들고, 이후 모든 배포가 이것으로 서명한다. 회전 릴리스마다 같은 파일이 자산 `signing-lineage.bin`으로도 붙는다. **지우지 않는다**(5절 "서명 키 교체") |
 | `status/secrets-scan.json` | release-apk(v3.8 r18-lock) | 비밀 스캔 결과 `{findings, tool, scope, commit, atMs, rules}`(gitleaks, 전체 이력, 값은 없음). 채점 8번이 `findings`를 읽는다 |
+
+> **독립 검토(11/13)에서 더해진 주의:** (1) **키 교체를 켠 첫 배포는 폰에서 "설치" 확인을 한 번 눌러야 할 가능성이 크다** — 에뮬레이터(API 34) 리허설에서 옛 키 앱이 교체된 APK를 스스로 설치하려 하자 안드로이드가 설치 확인 화면을 띄웠다(실행 43337382903의 self-install 기록; 키 교체를 끈 경로는 탭 없이 됨). 영영 못 받는 것은 아니고 알림을 한 번 누르면 된다. 켜기 전에 아내에게 알린다. (2) 폰이 실제로 지나갈 경로("옛 키 release 앱이 서명 비교(ANCESTOR)를 거쳐 교체 APK를 직접 설치")는 리허설에 아직 없다 — 켜기 전에 update-smoke에 추가해 한 번 돌린다. (3) 카카오 SDK(2.24.0)는 키 해시를 가장 오래된 인증서로 만들기 때문에 교체 뒤에도 키 해시가 그대로일 것으로 보인다(SDK 바이트코드와 안드로이드 문서로 확인, 카카오톡 앱 로그인 경로는 미확인) — 새 해시 등록은 해롭지 않으니 순서에는 남긴다. (4) 수집 정책 지문(`AutomaticRecordingDiscovery.kt`, `NativeDiscoverySession.kt`의 정책 복사 목록)에는 `personalHashes`·`numberSalt`가 없다. 지금은 대체 목록이 같아 무해하지만, **목록에 키를 더하면 지문이 바뀌어 전체 다시 수집이 일어날 수 있으니**(저장소가 다시 불어난다) 손대려면 그 영향을 먼저 확인한다.
+
 | `app/version.json`, 릴리스 | release-apk | 최신 APK 정보와 파일(최근 3개만 남김). 11/7 21:44부터 versionCode 1049, versionName v3.6, promptVersion "8", tidyVersion "7", certSha256 |
 | `README.md` | release-apk | 빈 저장소에 처음 한 번 만드는 안내 한 줄 |
 
