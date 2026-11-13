@@ -7,6 +7,10 @@ name: release-apk
 # release (tools/needs_update_smoke.sh), also for the update smoke test (update-smoke.yml) on the same commit: an app
 # failure there stops the release; only an emulator that did not boot after one retry (runner problem) just warns.
 # version.json carries the APK size in bytes ("size") so the phone can show download progress.
+# v3.8 r18-lock (DESIGN_V7 4.2): the published APK is the release build type (not debuggable, no synthetic tools), signed with
+# the same key as before; with the repository variable IEUM_ROTATE=1 it is re-signed with the rotated key and the key lineage
+# kept in the mailbox (tools/rotate_signing_key.sh). version.json says which (buildType, seedIndependent, lineageSha256), and a
+# gitleaks scan of the whole history goes to the mailbox as status/secrets-scan.json.
 on:
   push:
     branches: ['feature/lean-calls', 'main']
@@ -43,6 +47,8 @@ jobs:
           done
           echo "ci did not finish in 40 minutes: not releasing"; exit 1
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the secret scan below reads the whole history
       # Only for a commit that changes the manifest, IeumApplication, StartupReceiver, CallSinkImpl or the build settings
       # since the last release: the emulator must have installed it over the previous release and started it (design H1).
       - name: Wait for update-smoke on this commit (start-up or build changes only)
@@ -94,23 +100,38 @@ jobs:
           # empty = Kakao's default list of 3 and no [웹으로 보기]). docs/OPERATIONS.md says how to make both.
           IEUM_KAKAO_LIST_TEMPLATE_ID: ${{ vars.IEUM_KAKAO_LIST_TEMPLATE_ID }}
           IEUM_KAKAO_WEB_BASE: ${{ vars.IEUM_KAKAO_WEB_BASE }}
+          # r18-lock: with IEUM_ROTATE=1 Gradle signs with the new key (re-signed with the lineage below); the old key is not made.
+          ROTATE: ${{ vars.IEUM_ROTATE }}
+          IEUM_SIGNING_SEED_V2: ${{ vars.IEUM_ROTATE == '1' && secrets.IEUM_SIGNING_SEED_V2 || '' }}
         run: |
           [ -n "$IEUM_INBOX_TOKEN" ] || { echo "::error title=release::IEUM_INBOX_TOKEN secret is not set"; exit 1; }
           [ -n "$IEUM_KAKAO_APP_KEY" ] || echo "::warning title=release::IEUM_KAKAO_APP_KEY is not set: KakaoTalk morning report hidden in this build"
           [ -z "$IEUM_SIGNING_SEED" ] || echo "::add-mask::$IEUM_SIGNING_SEED"
+          [ -z "$IEUM_SIGNING_SEED_V2" ] || echo "::add-mask::$IEUM_SIGNING_SEED_V2"
           # Pinned: the certificate must come out byte-identical every build (checked with 50.0.1 and 50.0.2: same fingerprint).
           pip install --quiet 'cryptography==50.0.2'
-          python3 tools/derive_signing_key.py "$RUNNER_TEMP/ieum.p12"
+          if [ "$ROTATE" = "1" ]; then
+            [ -n "$IEUM_SIGNING_SEED_V2" ] || { echo "::error title=release::IEUM_ROTATE is 1 but the secret IEUM_SIGNING_SEED_V2 is not set: not releasing"; exit 1; }
+            python3 tools/derive_signing_key.py --seed-env IEUM_SIGNING_SEED_V2 "$RUNNER_TEMP/ieum.p12"
+          else
+            python3 tools/derive_signing_key.py "$RUNNER_TEMP/ieum.p12"
+          fi
           export ANDROID_SDK_ROOT="$ANDROID_HOME" \
             IEUM_ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/28.2.13676358" IEUM_CMAKE_BINARY="$ANDROID_HOME/cmake/3.22.1/bin/cmake" \
             IEUM_SIGNING_KEYSTORE="$RUNNER_TEMP/ieum.p12" IEUM_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))
-          python3 run_gradle.py --log release-build.log :app:assembleDebug
-          cp android/app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/ieum.apk"
-      # Key rotation (design-gap #37, tools/rotate_signing_key.sh): only when the repository variable IEUM_ROTATE is 1.
+          # r18-lock (DESIGN_V7 4.2-3): the release build type (debuggable off, SYNTHETIC_TOOLS off, no minify), same signing
+          # config as debug; lintVitalRelease runs inside it and stops the release on a fatal lint error.
+          python3 run_gradle.py --log release-build.log :app:assembleRelease
+          cp android/app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/ieum.apk"
+          rm -f "$RUNNER_TEMP/ieum.p12"
+      # Key rotation (DESIGN_V7 4.2, tools/rotate_signing_key.sh): only when the repository variable IEUM_ROTATE is 1.
       # Otherwise this step does nothing and the APK keeps exactly the old key and fingerprint.
-      - name: Re-sign with the key lineage (IEUM_ROTATE=1 only)
+      # The lineage is the mailbox's app/signing-lineage.bin; only when there is none yet (the first rotated release) it is made
+      # from the old key (IEUM_SIGNING_SEED, or the token as every release so far) and goes up with this release.
+      - name: Re-sign with the stored key lineage (IEUM_ROTATE=1 only)
         if: vars.IEUM_ROTATE == '1'
         env:
+          GH_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
           IEUM_INBOX_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
           IEUM_SIGNING_SEED: ${{ secrets.IEUM_SIGNING_SEED }}
           IEUM_SIGNING_SEED_V2: ${{ secrets.IEUM_SIGNING_SEED_V2 }}
@@ -119,8 +140,18 @@ jobs:
           echo "::add-mask::$IEUM_SIGNING_SEED_V2"
           [ -z "$IEUM_SIGNING_SEED" ] || echo "::add-mask::$IEUM_SIGNING_SEED"
           export APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
-          bash tools/rotate_signing_key.sh prepare "$RUNNER_TEMP/rotate"
-          bash tools/rotate_signing_key.sh sign "$RUNNER_TEMP/rotate" "$RUNNER_TEMP/ieum.apk"
+          dir="$RUNNER_TEMP/rotate"; lin="$RUNNER_TEMP/signing-lineage.bin"
+          bash tools/rotate_signing_key.sh newkey "$dir" || { echo "::error title=release::the new key could not be made from IEUM_SIGNING_SEED_V2 (32 characters or more): not releasing"; exit 1; }
+          if got=$(gh api "repos/$INBOX/contents/app/signing-lineage.bin" --jq .content 2>&1); then
+            echo "$got" | base64 -d > "$lin"; echo "LINEAGE_NEW=0" >> "$GITHUB_ENV"; echo "stored lineage: $(bash tools/rotate_signing_key.sh certs "$lin" | tr '\n' ' ')"
+          elif echo "$got" | grep -q "HTTP 404"; then
+            echo "no stored lineage: the first rotated release makes it now (from the old key, once)"
+            bash tools/rotate_signing_key.sh lineage "$dir" "$lin"; echo "LINEAGE_NEW=1" >> "$GITHUB_ENV"
+          else
+            echo "::error title=release::the stored lineage could not be read (not a 404): not releasing ($got)"; exit 1
+          fi
+          bash tools/rotate_signing_key.sh sign "$dir" "$lin" "$RUNNER_TEMP/ieum.apk"
+          rm -f "$dir/new.p12"
       # An update only installs over the old app when both APKs carry the same signing certificate,
       # or, with IEUM_ROTATE=1, when the new APK's lineage starts at the previous release's certificate.
       # v3.5: the key hash developers.kakao.com asks for (platform > Android); public value, base64 of the signer's SHA-1.
@@ -132,6 +163,9 @@ jobs:
           hash=$(echo "$sha1" | xxd -r -p | base64)
           echo "Kakao key hash: $hash"
           echo "### Kakao key hash: \`$hash\`" >> "$GITHUB_STEP_SUMMARY"
+          # r18-lock: a rotated APK is signed by the new key, so this hash is new: it must be added in developers.kakao.com
+          # (keep the old one too) or the KakaoTalk report stops (docs/OPERATIONS.md "서명 키 교체").
+          [ "${{ vars.IEUM_ROTATE }}" != "1" ] || echo "::warning title=release::signed with the rotated key: add the Kakao key hash $hash in developers.kakao.com (platform > Android), keep the old one"
       - name: Compare signing certificate with the previous release
         env:
           GH_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
@@ -142,6 +176,19 @@ jobs:
           fp() { APKSIGNER="$apksigner" bash tools/rotate_signing_key.sh fp "$1"; }
           new=$(fp "$RUNNER_TEMP/ieum.apk")
           [ -n "$new" ] || { echo "::error title=release::could not read the new APK's signing certificate"; exit 1; }
+          if [ "$ROTATE" = "1" ]; then
+            # r18-lock: a rotated APK shows the new certificate, so "unchanged" is not the test. Every time: the lineage must end
+            # at the new key and start at the previous release's certificate (first rotated release), or be the very lineage
+            # the previous release carries. Without the previous APK, version.json decides; knowing nothing stops the release.
+            gh api "repos/$INBOX/contents/app/version.json" --jq .content 2>/dev/null | base64 -d > "$RUNNER_TEMP/prev-version.json" 2>/dev/null || true
+            asset=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['apk'].rsplit('/',1)[-1])" "$RUNNER_TEMP/prev-version.json" 2>/dev/null || true)
+            [ -n "$asset" ] && gh api -H "Accept: application/octet-stream" "repos/$INBOX/releases/assets/$asset" > "$RUNNER_TEMP/previous.apk" 2>/dev/null || rm -f "$RUNNER_TEMP/previous.apk"
+            APKSIGNER="$apksigner" bash tools/rotate_signing_key.sh check "$RUNNER_TEMP/signing-lineage.bin" "$(cat "$RUNNER_TEMP/rotate/new.sha256")" \
+              "$( [ -s "$RUNNER_TEMP/previous.apk" ] && echo "$RUNNER_TEMP/previous.apk" )" "$RUNNER_TEMP/prev-version.json" \
+              || { echo "::error title=release::rotated APK does not chain to the previous release: not publishing"; exit 1; }
+            [ "$new" = "$(cat "$RUNNER_TEMP/rotate/new.sha256")" ] || { echo "::error title=release::rotated APK is not signed by the new key"; exit 1; }
+            exit 0
+          fi
           # v3.1 (DESIGN_V4 2.2-2): version.json carries the published certificate, so the comparison works even when the
           # previous APK cannot be downloaded (1034-1038 were never compared for that reason).
           prev_cert=$(gh api "repos/$INBOX/contents/app/version.json" --jq .content 2>/dev/null | base64 -d 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('certSha256',''))" 2>/dev/null || true)
@@ -155,13 +202,6 @@ jobs:
           fi
           old=$(fp "$RUNNER_TEMP/previous.apk")
           if [ -z "$old" ]; then echo "::warning title=release::previous APK certificate unreadable: not compared"; exit 0; fi
-          if [ "$ROTATE" = "1" ]; then
-            # A rotated APK shows the new certificate, so "unchanged" is not the test: the lineage must be old -> new of
-            # our two seeds and the previous release must carry the old (first rotated release) or the new certificate.
-            APKSIGNER="$apksigner" bash tools/rotate_signing_key.sh check "$RUNNER_TEMP/rotate" "$RUNNER_TEMP/ieum.apk" "$old" \
-              || { echo "::error title=release::rotated APK does not chain to the previous release's certificate ($old): not publishing"; exit 1; }
-            exit 0
-          fi
           if [ "$old" != "$new" ]; then
             echo "::error title=release::signing certificate differs from the previous release (old $old, new $new): not publishing, phones could not update"; exit 1
           fi
@@ -169,6 +209,7 @@ jobs:
       - name: Publish to the inbox repo
         env:
           GH_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
+          ROTATE: ${{ vars.IEUM_ROTATE }}
         run: |
           code=$((1000 + GITHUB_RUN_NUMBER)); tag="v$code"
           sha=$(sha256sum "$RUNNER_TEMP/ieum.apk" | cut -d' ' -f1)
@@ -180,7 +221,9 @@ jobs:
           gh api "repos/$INBOX/contents/README.md" >/dev/null 2>&1 || gh api -X PUT "repos/$INBOX/contents/README.md" -f message="init" \
             -f content="$(printf '# ieum-inbox\n\n이음 앱의 통화 분석 우편함과 업데이트 파일 (자동 관리)\n' | base64 -w0)" >/dev/null
           gh release delete "$tag" --repo "$INBOX" --yes --cleanup-tag 2>/dev/null || true
-          gh release create "$tag" "$RUNNER_TEMP/ieum.apk#ieum.apk" --repo "$INBOX" --title "이음 $tag" --notes "$notes"
+          # r18-lock: a rotated release carries its lineage file too (a second copy beside app/signing-lineage.bin).
+          extra=(); [ "$ROTATE" != "1" ] || extra=("$RUNNER_TEMP/signing-lineage.bin#signing-lineage.bin")
+          gh release create "$tag" "$RUNNER_TEMP/ieum.apk#ieum.apk" "${extra[@]}" --repo "$INBOX" --title "이음 $tag" --notes "$notes"
           asset=$(gh api "repos/$INBOX/releases/tags/$tag" --jq '.assets[] | select(.name=="ieum.apk") | .id')
           size=$(stat -c %s "$RUNNER_TEMP/ieum.apk")
           python3 - "$code" "$asset" "$sha" "$notes" "$size" > version.json <<'EOF'
@@ -192,7 +235,19 @@ jobs:
           print(json.dumps({"versionCode": int(code), "versionName": name, "apk": "releases/assets/" + asset, "sha256": sha, "size": int(size), "notes": notes}, ensure_ascii=False))
           EOF
           # v3.1 (DESIGN_V4 2.2-2): promptVersion, tidyVersion and certSha256 for the watchdog, which never reads this repository.
-          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner" python3 tools/release/version_fields.py --root . --apk "$RUNNER_TEMP/ieum.apk" --merge version.json
+          # r18-lock (DESIGN_V7 4.2; the scorecard's item 8): buildType, seedIndependent, and the lineage file's sha256 when rotated.
+          if [ "$ROTATE" = "1" ]; then rot=(--seed-independent true --lineage "$RUNNER_TEMP/signing-lineage.bin"); else rot=(--seed-independent false); fi
+          APKSIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner" python3 tools/release/version_fields.py --root . --apk "$RUNNER_TEMP/ieum.apk" \
+            --build-type release "${rot[@]}" --merge version.json
+          # r18-lock: the lineage goes up before version.json, so no run ever sees a rotated release without its lineage.
+          if [ "$ROTATE" = "1" ]; then
+            prev_lin=$(gh api "repos/$INBOX/contents/app/signing-lineage.bin" --jq .sha 2>/dev/null || true)
+            if [ -z "$prev_lin" ] || [ "$(git hash-object "$RUNNER_TEMP/signing-lineage.bin")" != "$prev_lin" ]; then
+              gh api -X PUT "repos/$INBOX/contents/app/signing-lineage.bin" -f message="signing lineage for $tag" \
+                -f content="$(base64 -w0 "$RUNNER_TEMP/signing-lineage.bin")" ${prev_lin:+-f sha="$prev_lin"} > /dev/null
+              echo "::notice title=release::key lineage stored in the mailbox (app/signing-lineage.bin)"
+            fi
+          fi
           # v3.4: the scheduled tasks read their instructions and the watchdog from the inbox, so the copies go up with the app
           # (before version.json, so a routine never meets a newer app with older instructions).
           for pair in "docs/routines/hourly.md:routines/hourly.md" "docs/routines/tidy.md:routines/tidy.md" "tools/inbox/watchdog.py:tools/watchdog.py" "tools/report_check.py:tools/report_check.py"; do
@@ -209,3 +264,16 @@ jobs:
             gh release delete "$t" --repo "$INBOX" --yes --cleanup-tag > /dev/null 2>&1 || echo "::warning title=release::old release $t could not be deleted (left for the next run)"
           done
           echo "::notice title=release::$tag published ($sha)"
+      # r18-lock (DESIGN_V7 4.2): gitleaks over the whole history, the count to the mailbox for the scorecard (item 8). After the
+      # release, never in its way: ci (android-ci.yml) already failed on a finding for this commit.
+      - name: Secret scan to the mailbox
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
+        run: |
+          bash tools/secret_scan.sh "$RUNNER_TEMP/secrets-scan.json" || true
+          [ -s "$RUNNER_TEMP/secrets-scan.json" ] || { echo "::warning title=release::secret scan did not run"; exit 0; }
+          prev=$(gh api "repos/$INBOX/contents/status/secrets-scan.json" --jq .sha 2>/dev/null || true)
+          gh api -X PUT "repos/$INBOX/contents/status/secrets-scan.json" -f message="secret scan for $GITHUB_SHA" \
+            -f content="$(base64 -w0 "$RUNNER_TEMP/secrets-scan.json")" ${prev:+-f sha="$prev"} > /dev/null
+          cat "$RUNNER_TEMP/secrets-scan.json"

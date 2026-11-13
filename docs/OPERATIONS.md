@@ -55,6 +55,11 @@
 | `status/verify-log.md` | 통화 목록 검증 | 검증 작업의 기억(숫자만) |
 | `routines/hourly.md`, `routines/tidy.md` | release-apk | 예약 작업이 읽는 지시문 사본(원본 `docs/routines/`, 바뀐 것만 올림) |
 | `tools/watchdog.py`, `tools/report_check.py` | release-apk | 루틴 안 워치독과 아침 보고서 검사기 사본(원본 `tools/inbox/watchdog.py`, `tools/report_check.py`) |
+| `app/signing-lineage.bin` | release-apk(v3.8 r18-lock) | 서명 키 계보(옛 키 → 새 키, 인증서와 서명뿐, 비밀 아님). `IEUM_ROTATE=1`의 첫 배포가 한 번 만들고, 이후 모든 배포가 이것으로 서명한다. 회전 릴리스마다 같은 파일이 자산 `signing-lineage.bin`으로도 붙는다. **지우지 않는다**(5절 "서명 키 교체") |
+| `status/secrets-scan.json` | release-apk(v3.8 r18-lock) | 비밀 스캔 결과 `{findings, tool, scope, commit, atMs, rules}`(gitleaks, 전체 이력, 값은 없음). 채점 8번이 `findings`를 읽는다 |
+
+> **독립 검토(11/13)에서 더해진 주의:** (1) **키 교체를 켠 첫 배포는 폰에서 "설치" 확인을 한 번 눌러야 할 가능성이 크다** — 에뮬레이터(API 34) 리허설에서 옛 키 앱이 교체된 APK를 스스로 설치하려 하자 안드로이드가 설치 확인 화면을 띄웠다(실행 43337382903의 self-install 기록; 키 교체를 끈 경로는 탭 없이 됨). 영영 못 받는 것은 아니고 알림을 한 번 누르면 된다. 켜기 전에 아내에게 알린다. (2) 폰이 실제로 지나갈 경로("옛 키 release 앱이 서명 비교(ANCESTOR)를 거쳐 교체 APK를 직접 설치")는 리허설에 아직 없다 — 켜기 전에 update-smoke에 추가해 한 번 돌린다. (3) 카카오 SDK(2.24.0)는 키 해시를 가장 오래된 인증서로 만들기 때문에 교체 뒤에도 키 해시가 그대로일 것으로 보인다(SDK 바이트코드와 안드로이드 문서로 확인, 카카오톡 앱 로그인 경로는 미확인) — 새 해시 등록은 해롭지 않으니 순서에는 남긴다. (4) 수집 정책 지문(`AutomaticRecordingDiscovery.kt`, `NativeDiscoverySession.kt`의 정책 복사 목록)에는 `personalHashes`·`numberSalt`가 없다. 지금은 대체 목록이 같아 무해하지만, **목록에 키를 더하면 지문이 바뀌어 전체 다시 수집이 일어날 수 있으니**(저장소가 다시 불어난다) 손대려면 그 영향을 먼저 확인한다.
+
 | `app/version.json`, 릴리스 | release-apk | 최신 APK 정보와 파일(최근 3개만 남김). 11/7 21:44부터 versionCode 1049, versionName v3.6, promptVersion "8", tidyVersion "7", certSha256 |
 | `README.md` | release-apk | 빈 저장소에 처음 한 번 만드는 안내 한 줄 |
 
@@ -78,6 +83,8 @@
 | `firstPass` | 처음 정리 진행: `done`, `toTranscribe`, `audioMinutesLeft`, `waitingForSummary`, `batchesToday`, `bound`, `blockedBy`(`none`, `waiting_messages`, `waiting_transcripts`, `backoff`) | 처음 정리 중에만 의미 |
 | `lastInboxError` | 우편함 오류 코드(있을 때만) | INBOX_HTTP_401/403/404면 토큰 만료나 권한 문제 |
 | `lastUpdateError` | 업데이트 설치 오류 코드(있을 때만) | 설치 권한, 저장 공간, 서명 불일치 |
+| `security` (v3.8 r18-lock) | `certCheck`(설치 전 서명 비교가 이 폰에서 인증서를 읽어 낸다), `certSelf`(시작할 때 자기 APK 판정: `SAME`, 회전 뒤 `ANCESTOR,SAME`, 못 읽으면 `UNKNOWN`), `saltedHash`(기기 소금과 개인 목록 이전 끝남), `legacyHashes`(원래 값이 없어 옛 방식으로도 대조하는 지문 수) | `certCheck=false`면 비교가 늘 통과(막지 못함). `update.error=CERT`면 받은 APK가 이 앱 키와 무관해 설치하지 않음(가짜 업데이트이거나 배포 서명 사고) |
+| `update.certUnknown` (v3.8) | 인증서를 읽지 못해 비교 없이 통과시킨 다운로드 수 | 계속 오르면 이 폰에서 비교가 안 됨 |
 | `consent` | 통화 정리 동의가 켜져 있는가 | false면 정리 요청이 올라가지 않음(앱 설정에서 켜기) |
 | `folder` | 녹음 폴더가 골라져 있고 읽기 권한이 살아 있는가 | false면 새 녹음을 못 가져옴(앱에서 폴더 다시 고르기) |
 | `notifyAllowed` | 알림 권한과 앱 알림이 켜져 있는가 | false면 저녁·아침 보고와 자가 진단 알림이 안 보임 |
@@ -201,7 +208,7 @@ v3.4(11/6)부터 워치독은 Actions가 아니라 두 예약 작업 안에서 �
 
 위가 `tools/inbox/watchdog.py`의 규칙 전부다(11/13, v3.5 규칙 3개, v3.6 규칙 3개, v3.7 규칙 2개, v3.8 규칙 1개 포함 이슈 제목 34개; v3.6.1에서 카드 규칙 제목이 바뀜).
 
-토큰 이슈가 열리면: 새 토큰을 만들어 앱 저장소 비밀 `IEUM_INBOX_TOKEN`을 바꾸고 배포한다. 만료 뒤에는 폰이 업데이트도 못 받으므로 만료 전에 해야 한다. `IEUM_SIGNING_SEED` 비밀이 없으면 서명 키가 토큰에서 나오므로 토큰을 바꾸면 서명이 바뀌어 업데이트가 막힌다. 먼저 확인한다. 폰이 새 버전을 받고 다음 하트비트를 올리면 이슈는 저절로 닫힌다.
+토큰 이슈가 열리면: 새 토큰을 만들어 앱 저장소 비밀 `IEUM_INBOX_TOKEN`을 바꾸고 배포한다. 만료 뒤에는 폰이 업데이트도 못 받으므로 만료 전에 해야 한다. **키 교체(5절 "서명 키 교체")를 끝내기 전에는 토큰을 바꾸지 않는다**: 그 전에는 서명 키가 토큰에서 나오므로(`IEUM_SIGNING_SEED`는 비어 있음) 토큰을 바꾸면 서명이 바뀌어 업데이트가 막힌다. 교체가 끝난 뒤(`app/version.json`의 `seedIndependent=true`를 폰이 설치)에는 서명이 토큰과 무관하다. 폰이 새 버전을 받고 다음 하트비트를 올리면 이슈는 저절로 닫힌다.
 
 설치와 확인(배포 때, 개발 세션):
 1. 복사는 release-apk가 한다(`tools/inbox/watchdog.py` → `tools/watchdog.py`, `docs/routines/hourly.md`·`tidy.md` → `routines/`, 바뀐 것만, version.json보다 먼저). 배포 없이 급히 바꿀 때만 손으로 ieum-inbox에 커밋한다.
@@ -282,12 +289,38 @@ v3.4(11/6)부터 워치독은 Actions가 아니라 두 예약 작업 안에서 �
 ## 5. 배포와 업데이트 흐름
 
 1. `feature/lean-calls`(또는 `main`)에 push한다. 앱 작업은 시험 브랜치에서 CI를 통과시킨 뒤 합친다.
-2. `ci`(android-ci.yml, `feature/**`·`main` push 중 `android/**`, `tools/**`, ci·release 워크플로가 바뀐 것): 도구 시험(`tools/`, `tools/inbox/`의 파이썬 시험), 화면 규칙 검사, 내보내기 검사(`tools/scan_export.py`: 비밀 값은 실패, 개인 경로는 경고), 업데이트 문구 알림(앱 코드가 바뀌었는데 `docs/UPDATE_NOTE.txt`가 그대로면 경고), JVM 단위 테스트와 lint.
+2. `ci`(android-ci.yml, `feature/**`·`main` push 중 `android/**`, `tools/**`, ci·release 워크플로가 바뀐 것): 도구 시험(`tools/`, `tools/inbox/`, `tools/release/`의 파이썬 시험; 서명 키 교체 스크립트 시험은 임시 씨앗으로 실제 apksigner를 돌린다), 화면 규칙 검사, 내보내기 검사(`tools/scan_export.py`: 비밀 값은 실패, 개인 경로는 경고), 비밀 스캔(v3.8: `tools/secret_scan.sh`, gitleaks 8.24.3을 체크섬 확인 뒤 전체 이력에 돌림, `.gitleaks.toml`의 예외는 커밋 98ab599의 공개 시험 키 하나; 발견 1건 이상이면 실패, 도구를 못 받으면 경고), 업데이트 문구 알림(앱 코드가 바뀌었는데 `docs/UPDATE_NOTE.txt`가 그대로면 경고), JVM 단위 테스트와 lint(debug lint와 v3.8부터 `lintVitalRelease`).
 3. `update-smoke`(update-smoke.yml): 같은 push에서 함께 돈다. 마지막으로 성공한 배포 이후 AndroidManifest.xml, IeumApplication, StartupReceiver, CallSinkImpl, 빌드 설정(*.gradle.kts, gradle.properties, Gradle wrapper) 중 하나라도 바뀌었으면(`tools/needs_update_smoke.sh`) 에뮬레이터에 직전 릴리스를 깔고 새 APK를 덮어 설치해 시작, 충돌 없음, 예약 작업 다섯 개 이상을 확인하고, 앱이 스스로 새 APK를 설치하는 경로도 본다(지금은 경고만, `IEUM_SELF_INSTALL_STRICT=1`이면 실패). 아니면 바로 끝난다. 에뮬레이터가 켜지지 않으면(러너 문제) 한 번 자동 재시도하고, 두 번 모두 안 켜지면 "Emulator did not boot (infra)" 단계가 실패로 남는다.
-4. `release-apk`: 같은 커밋의 ci 통과를 기다린다(40분). 3의 조건에 해당하면 update-smoke의 "Install, update, start" 단계 통과도 기다린다(70분). 앱 설치·덮어 설치·실행 실패나 시간 초과면 배포하지 않는다. 에뮬레이터가 재시도 뒤에도 켜지지 않은 경우(인프라)만 경고를 남기고 배포한다. 서명 키는 저장소 비밀에서 만들고(`IEUM_SIGNING_SEED`가 있으면 그것, 없으면 `IEUM_INBOX_TOKEN`에서; cryptography 50.0.2 고정), 직전 릴리스 APK와 서명 인증서 지문이 다르면 배포하지 않는다. 직전 APK를 못 받으면 version.json의 `certSha256`과 비교하고, 그것도 없으면 경고만 남긴다(`IEUM_ROTATE=1`이면 키 계보 검사). 통과하면 ieum-inbox에 릴리스 `v<빌드 번호>`(빌드 번호 = 1000 + 실행 번호)를 만들고, 지시문 둘과 워치독을 `routines/`·`tools/`에 바뀐 것만 올린 뒤, `app/version.json`(versionCode, versionName=`docs/VERSION`, apk, sha256, size=APK 바이트 크기, notes=`UPDATE_NOTE.txt` 첫 줄 120자, promptVersion, tidyVersion, certSha256)을 올린다. 오래된 릴리스는 3개만 남긴다(정리 실패는 경고만). 트리거는 `feature/lean-calls`·`main` push 중 `android/**`, `tools/**`, release 워크플로가 바뀐 것과 수동 실행.
+4. `release-apk`: 같은 커밋의 ci 통과를 기다린다(40분). 3의 조건에 해당하면 update-smoke의 "Install, update, start" 단계 통과도 기다린다(70분). 앱 설치·덮어 설치·실행 실패나 시간 초과면 배포하지 않는다. 에뮬레이터가 재시도 뒤에도 켜지지 않은 경우(인프라)만 경고를 남기고 배포한다. v3.8부터 빌드는 `assembleRelease`(디버깅 불가, 합성 도구 꺼짐, 축소 없음, debug와 같은 서명 설정)이다. 서명 키는 저장소 비밀에서 만들고(`IEUM_SIGNING_SEED`가 있으면 그것, 없으면 `IEUM_INBOX_TOKEN`에서; cryptography 50.0.2 고정), 직전 릴리스 APK와 서명 인증서 지문이 다르면 배포하지 않는다. 직전 APK를 못 받으면 version.json의 `certSha256`과 비교하고, 그것도 없으면 경고만 남긴다. `IEUM_ROTATE=1`이면 새 키(`IEUM_SIGNING_SEED_V2`)와 우편함의 계보로 다시 서명하고 계보 사슬을 검사한다(아래 "서명 키 교체"; 직전 배포를 전혀 알 수 없으면 경고가 아니라 배포 중지). 통과하면 ieum-inbox에 릴리스 `v<빌드 번호>`(빌드 번호 = 1000 + 실행 번호)를 만들고, 지시문 둘과 워치독을 `routines/`·`tools/`에 바뀐 것만 올린 뒤, `app/version.json`(versionCode, versionName=`docs/VERSION`, apk, sha256, size=APK 바이트 크기, notes=`UPDATE_NOTE.txt` 첫 줄 120자, promptVersion, tidyVersion, certSha256, v3.8부터 buildType, seedIndependent, 회전 서명이면 lineageSha256)을 올린다. 배포 뒤 비밀 스캔 건수를 `status/secrets-scan.json`에 올린다(실패해도 배포에는 영향 없음). 오래된 릴리스는 3개만 남긴다(정리 실패는 경고만). 트리거는 `feature/lean-calls`·`main` push 중 `android/**`, `tools/**`, release 워크플로가 바뀐 것과 수동 실행.
 5. 폰은 결과 받기 때마다 `app/version.json`을 ETag로 읽고(처음 보는 높은 versionCode면 바로 확인), 6시간 주기와 앱을 열 때도 확인한다. 네트워크 종류와 상관없이 받고, 가능하면 누르지 않고 설치하며(API 31+, 설치 허용), 아니면 notes(= `docs/UPDATE_NOTE.txt` 첫 줄)를 알림 문구로 보여 준다. 이름은 `docs/VERSION`(사용자에게 보이는 변경마다 0.1씩), 빌드 번호는 업데이트 순서에만 쓴다.
 
 수동 배포(release-apk 수동 실행)는 update-smoke 실행이 없으면 경고만 남기고 진행한다.
+
+에뮬레이터(update-smoke, device-test)에서 도는 앱은 v3.8 r18-lock부터 우편함에 쓰지 않는다(`pipeline/EmulatorInbox.kt`: generic·sdk_gphone 지문, goldfish·ranchu·vbox86 하드웨어 등이면 put·replace·delete를 버리고 읽기만 한다). 11/13 01:57·07:01·09:26에 에뮬레이터의 하트비트(빌드 1054~1056)가 `status/phone.json`에 섞였던 것을 막는다. 다만 덮어 설치 시험에서 먼저 까는 **직전 배포본(옛 코드)**은 v3.8 빌드 B가 배포될 때까지 계속 쓸 수 있다. 일부러 우편함에 쓰는 시험(inbox-e2e)은 앱이 아니라 CI 스크립트가 쓰므로 그대로다.
+
+update-smoke는 v3.8부터 새 APK를 release로 만들고(지금 배포본은 debug), 덮어 설치 전 앱 폴더에 표시 파일을 써 두었다가 설치 뒤 root로 읽어 데이터가 남았는지 본다(root가 없으면 첫 설치 시각이 그대로인지로). 앱이 시작할 때 남기는 서명 자가 확인 로그(IEUM_CERT)가 `UNRELATED`면 실패한다. 수동 실행에서 `rotate_test=true`면 이 실행 안에서만 쓰는 임시 새 키로 첫 회전을 그대로 연습한다: 배포 키로 계보를 만들고 옛 키를 지운 뒤, **새 키 + 계보만으로** 두 빌드를 서명해 지금 배포본 위에 첫 빌드, 그 위에 둘째 빌드를 덮어 설치한다(둘째는 root가 있으면 앱이 직접 설치해 설치 전 서명 비교까지 지난다). 회전 APK에서 옛 인증서의 판정이 `ANCESTOR`가 아니면 실패한다. 수동 실행은 `IEUM_SIGNING_SEED_V2`가 있으면 그 새 키의 카카오 키 해시도 요약에 적는다.
+
+### 서명 키 교체와 토큰 새 발급 (v3.8 r18-lock, 사용자가 할 일 — 이 순서대로만)
+
+왜: 지금 서명 키는 우편함 토큰에서 나오고 토큰은 APK 안에 있다. 키를 토큰과 무관한 새 키로 옮기면, APK가 새어도 가짜 업데이트를 서명할 수 없다. 옛 키가 새 키를 보증하는 "계보"를 첫 회전 배포가 한 번 만들어 우편함에 두고, 이후 배포는 새 키와 그 계보만 쓴다. 그래서 그 뒤에는 토큰을 새로 발급해도 된다. 회전 APK는 Android 9 이상에서만 설치된다(Android 8.x 폰은 없음).
+
+1. **비밀 값 만들기.** 앱 저장소 > Settings > Secrets and variables > Actions > Secrets(https://github.com/bllue583-commits/ieum-app/settings/secrets/actions) > New repository secret. 이름 `IEUM_SIGNING_SEED_V2`, 값은 비밀번호 관리자 등으로 만든 **무작위 40자 정도**(32자 미만이면 배포가 거부한다). 값의 사본을 비밀번호 관리자에 따로 보관한다: 회전 뒤 이 값을 잃으면 폰이 다시는 업데이트를 받지 못한다(폰에서 직접 지우고 새로 설치해야 하고, 그러면 폰의 기록이 사라진다).
+2. **새 카카오 키 해시 등록.** Actions > update-smoke(https://github.com/bllue583-commits/ieum-app/actions/workflows/update-smoke.yml) > Run workflow(브랜치 `feature/lean-calls`, rotate_test는 꺼도 됨). 실행 요약의 "Kakao key hash of the rotated key" 값을 카카오 개발자 콘솔(https://developers.kakao.com/console/app) > 이음 앱 > [앱] > [플랫폼] > Android > 키 해시에 **추가**한다(옛 해시는 지우지 않는다). 안 하면 회전 배포 뒤 카톡 아침 보고가 멈출 수 있다(카카오 SDK가 어느 인증서로 해시를 만드는지는 확인 못 함 — 둘 다 등록하면 어느 쪽이든 된다).
+3. **변수 켜기.** 같은 화면의 Variables 탭(https://github.com/bllue583-commits/ieum-app/settings/variables/actions) > New repository variable. 이름 `IEUM_ROTATE`, 값 `1`. 지켜볼 수 있을 때 켠다: 다음 배포부터 회전 서명이다.
+4. **첫 회전 배포 확인.** 다음 release-apk 실행이 성공하고 로그에 "no stored lineage: the first rotated release makes it now", "key lineage stored in the mailbox"가 있는지, 우편함 `app/version.json`에 `"seedIndependent": true`와 `lineageSha256`이, 우편함에 `app/signing-lineage.bin`이 생겼는지 본다.
+5. **폰 설치 확인.** 하트비트 `versionCode`가 그 배포의 번호가 되고 `security.certSelf`가 `ANCESTOR,SAME`이면 폰이 새 키로 넘어갔다. (`update.error`가 `CERT`이거나 버전이 오르지 않으면 여기서 멈추고 알린다.)
+6. **그 뒤에만 토큰 새 발급.** GitHub > Settings > Developer settings > Personal access tokens > Fine-grained tokens(https://github.com/settings/personal-access-tokens/new): 저장소는 `ieum-inbox` 하나, 권한은 지금 토큰과 같게(Contents 읽기·쓰기, Issues 쓰기가 필요하면 그것도), **만료일을 정해서**. 새 토큰을 앱 저장소 비밀 `IEUM_INBOX_TOKEN`에 덮어쓴다. 옛 토큰은 아직 지우지 않는다.
+7. **새 토큰 배포 확인.** 다음 배포(앱 코드 변경이 없으면 release-apk 수동 실행)가 성공하고, 폰 하트비트 `versionCode`가 그 배포 번호가 되는지 본다(그 APK 안에 새 토큰이 들어 있다).
+8. **옛 토큰 폐기.** 7이 확인된 뒤에만 Fine-grained tokens 목록(https://github.com/settings/personal-access-tokens)에서 옛 토큰을 Revoke한다. 예약 작업(매시간·새벽)이 옛 토큰을 쓰고 있다면 그쪽도 새 토큰으로 바꾼다.
+
+되돌리는 법:
+- 3을 켰지만 폰이 아직 회전 배포를 설치하기 전: `IEUM_ROTATE`를 `0`으로 바꾸거나 지운다. 다음 배포는 예전과 같은 키·같은 지문으로 서명된다. `app/signing-lineage.bin`은 남겨 둬도 된다(같은 `IEUM_SIGNING_SEED_V2`로 다시 켜면 그대로 쓰인다).
+- 폰이 회전 배포를 설치한 뒤: **`IEUM_ROTATE`를 끄지 않는다.** 계보는 옛 키로의 되돌림을 허락하지 않으므로 옛 키 배포는 폰에 설치되지 않는다. 고칠 것은 `IEUM_ROTATE=1`인 새 배포로 고친다.
+- `IEUM_SIGNING_SEED_V2`를 바꾸지 않는다. 바꾸면 계보의 끝과 맞지 않아 release-apk가 배포를 멈춘다(폰에는 아무 일도 없음). 원래 값으로 되돌리면 다시 된다.
+
+계보 파일(`app/signing-lineage.bin`)을 잃었을 때:
+- 6(토큰 새 발급) 전: 아무것도 잃지 않았다. 다음 배포가 같은 두 키로 계보를 다시 만들어 저장한다(인증서가 같아 사슬 검사를 지난다).
+- 6 뒤: 옛 키가 없어 계보를 다시 만들 수 없다. 다음 배포는 새 토큰에서 다른 "옛 키"를 만들어 사슬 검사에서 멈춘다(폰은 안전). 우편함 릴리스(최근 3개) 중 회전 릴리스의 자산 `signing-lineage.bin`을 내려받아 `app/signing-lineage.bin`으로 다시 올린다. 릴리스 자산도 모두 없으면 복구할 수 없으므로 이 파일은 지우지 않는다.
 
 ## 6. 문제가 생겼을 때 볼 곳
 

@@ -60,6 +60,9 @@ internal object PhoneStatus {
         val powerLedger:JSONObject?=null,val chargingOnly:Boolean=false,
         /** DESIGN_V7 3.3 (v3.7, r17-3): the scorecard's measurement ([V37]). */
         val v37:V37=V37(),
+        /** v3.8 r18-lock (DESIGN_V7 4.2): `security{certCheck, certSelf, saltedHash, legacyHashes}` ([UpdateCert.heartbeat],
+         * [kr.callbrief.LocalPrivacy.heartbeat]) and `update.certUnknown` (downloads whose certificate could not be read). */
+        val security:JSONObject?=null,val certUnknown:Long=0,
         /** r18-bench (DESIGN_V7 4.4): `bench` and `samples` ([kr.callbrief.pipeline.bench.BenchState.heartbeat],
          * [kr.callbrief.pipeline.bench.Samples.heartbeat]); left out of the file while never switched on. Numbers and codes only. */
         val bench:JSONObject?=null,val samples:JSONObject?=null)
@@ -188,6 +191,8 @@ internal object PhoneStatus {
         putV35(o,i.v35)
         o.put("power",runCatching { PowerText.heartbeat(i.powerLedger,i.chargingOnly,i.nowMs) }.getOrElse { JSONObject.NULL })
         putV37(o,i.v37)
+        o.put("security",i.security ?: JSONObject.NULL)
+        o.optJSONObject("update")?.put("certUnknown",i.certUnknown)
         i.bench?.let { o.put("bench",kr.callbrief.pipeline.bench.Bench.safe(it)) }
         i.samples?.let { o.put("samples",kr.callbrief.pipeline.bench.Bench.safe(it)) }
         return o
@@ -381,8 +386,12 @@ internal object PhoneStatus {
             powerLedger = runCatching { PowerText.ledger(s) }.getOrNull(),
             chargingOnly = PowerText.chargingOnly(s),
             v37 = runCatching { v37(app,s,now) }.onFailure { Log.w(TAG,"v3.7 numbers not read: ${it.javaClass.simpleName}") }.getOrDefault(V37()),
+            security = runCatching { security(s) }.getOrNull(),certUnknown = UpdateCert.unknownCount(s),
             bench = kr.callbrief.pipeline.bench.Bench.heartbeat(s),samples = kr.callbrief.pipeline.bench.Samples.heartbeat(s))
     }
+    /** v3.8 r18-lock: the certificate check and the number hash salt, yes/no and counts only (never the salt). */
+    internal fun security(s:JSONObject):JSONObject { val o=UpdateCert.heartbeat(s);val p=kr.callbrief.LocalPrivacy.heartbeat(s)
+        for(k in p.keys()) o.put(k,p.get(k));return o }
     /** v3.7 r17-3: the scorecard's numbers. The day's match reasons and the report days are folded into the settings here (one
      * write when they changed); the stages come from the process store (never on the ring path or a screen draw). */
     private fun v37(app:Context,s:JSONObject,now:Long):V37 {
