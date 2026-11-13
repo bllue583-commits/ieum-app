@@ -1,0 +1,44 @@
+name: inbox-config
+
+# Copies ops/inbox-config.json to the private mailbox as app/config.json, which is how the engine bench and the
+# measurement samples are switched on and off without touching the phone (docs/OPERATIONS.md). The file holds
+# switches only, never call data. A file the phone would not understand is refused (tools/inbox/config_check.py).
+on:
+  push:
+    branches: ['feature/lean-calls']
+    paths: ['ops/inbox-config.json', '.github/workflows/inbox-config.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: inbox-config
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      INBOX: bllue583-commits/ieum-inbox
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the file
+        run: python3 tools/inbox/config_check.py ops/inbox-config.json
+      - name: Copy to the mailbox
+        env:
+          GH_TOKEN: ${{ secrets.IEUM_INBOX_TOKEN }}
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "::error title=inbox-config::IEUM_INBOX_TOKEN secret is not set"; exit 1; }
+          new="$(base64 -w0 ops/inbox-config.json)"
+          for i in 1 2 3; do
+            sha="$(gh api "repos/$INBOX/contents/app/config.json" --jq .sha 2>/dev/null || true)"
+            old="$(gh api "repos/$INBOX/contents/app/config.json" --jq .content 2>/dev/null | tr -d '\n' || true)"
+            if [ -n "$sha" ] && [ "$old" = "$new" ]; then echo "already the same"; exit 0; fi
+            if gh api -X PUT "repos/$INBOX/contents/app/config.json" \
+                 -f message="app/config.json: $(python3 tools/inbox/config_check.py ops/inbox-config.json)" \
+                 -f content="$new" ${sha:+-f sha="$sha"} >/dev/null; then echo "copied"; exit 0; fi
+            sleep 5
+          done
+          echo "::error title=inbox-config::could not write app/config.json"; exit 1
