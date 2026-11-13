@@ -19,6 +19,7 @@ v2.6(11/5): state의 tasks에 rev, state에 mergeCandidates가 실린다. 6번�
 작업 폴더는 ieum-inbox 저장소의 기본 브랜치다. 읽는 파일:
 - ledger/ledger.json: 장부 {rev, updatedMs, siteMemo, companies[{name, trade, memo}], people[{id, name, company, role, isStaff, aliases[], locked[]}], issues[{id, title, companies[], status, recordKeys[], taskIds[]}], issueSuggestions[], corrections[], tidiedOnce}
 - tidy/state.json: 폰이 밤에 올린 자료 {generatedMs, firstPassDone, tasks[{id, title, due, status, company, createdMs, locked, rev}], records[{key, atMs, kind, counterpartId, company, summary, keyPoints, doneMs}], pending{yesterdayCalls, yesterdayMin}, recentlyDone[], mergeCandidates[](있을 때만), personCandidates[](있을 때만)}. records의 doneMs는 폰이 그 기록의 결과를 적용한 시각(밀리초, 모르면 null)이다. pending은 어제(한국 시각) 통화 중 아직 글자로 바꾸는 중이거나 분석을 기다리는 통화 수(yesterdayCalls)와 그 분(yesterdayMin)이다. 옛 폰의 state에는 doneMs와 pending이 없다(없으면 0으로 본다).
+- state의 `wrong[]`(v4.0, 있을 때만): 아내가 앱에서 [틀렸어요]로 표시한 체크할 일 id(최근 14일, 글 없음). 이 id의 일은 tasks에 없고, 9-1 보고서의 `today`에 넣지 않으며 6번에서 같은 일을 create로 다시 만들지 않는다.
 - tidy/proposal.json: 이번에 쓸 제안(이전 것이 있으면 덮어쓴다)
 - tidy/project.md, tidy/history/YYYY-MM.md, tidy/briefing.md: 이 작업의 기억(9번)
 - report/YYYY-MM-DD.json: 아침 보고서(9-1번이 쓴다, 폰이 05:30에 받아 카카오톡으로 보낸다)

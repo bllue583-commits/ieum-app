@@ -20,7 +20,10 @@ import kr.callbrief.pipeline.call.CallSession
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** One notice per finished work call (design 6.2, r10-2): "김민수 대표와 통화를 정리하고 있어요" as soon as the call ends, the same
+/** v4.0 r20-1: of the notices below only "이 통화는 녹음이 없어 정리할 수 없어요" is still posted ([SHOWN]); the rest are kept as
+ * state only and the day's calls are told by the evening report (one notice).
+ *
+ * One notice per finished work call (design 6.2, r10-2): "김민수 대표와 통화를 정리하고 있어요" as soon as the call ends, the same
  * notice turned into "정리됐어요" with the summary's first sentence and one check-item line when the result comes in, "정리가 늦어지고
  * 있어요" after [LATE_MS] without one, and gone once the evening report has gone out. A [메모 남기기] button takes one line
  * (RemoteInput) and keeps it as the user's own check item, linked to the call.
@@ -31,6 +34,9 @@ import org.json.JSONObject
  * the call record once known, and the state. Every public function never throws. */
 internal object CallFollowupNotice {
     const val CHANNEL="ieum.calls.followup"
+    /** v4.0 r20-1: the channel's name in the phone's notification settings (was "이음 통화 정리", the same as the evening report's). Same
+     * channel id: a person who switched it off keeps it off. */
+    const val CHANNEL_NAME="이음 녹음 없는 통화"
     /** Notification tag of every follow-up notice; the id tells them apart ([idFor]). */
     const val TAG="ieum.calls.followup"
     const val STATE_KEY="callFollowups"
@@ -74,7 +80,7 @@ internal object CallFollowupNotice {
     internal var logWaitMs:Long=1_000L
     const val LOG_TRIES=3
     const val UNREADABLE=-1L
-    internal fun resetForTest() { phoneBookName=::callLogName;store={ kr.callbrief.IeumApplication.store(it) };logDuration=::callLogDuration;logWaitMs=1_000L }
+    internal fun resetForTest() { shownStates=SHOWN;phoneBookName=::callLogName;store={ kr.callbrief.IeumApplication.store(it) };logDuration=::callLogDuration;logWaitMs=1_000L }
 
     /** What one notice is about. [who]: "김민수 대표"; [hash]: the phone key's fingerprint ([kr.callbrief.LocalPrivacy.numberHash]: salted from v3.8, plain SHA-256 before); [record]: the call record once known.
      * [dir]: "in" or "out" (v3.4; null in older entries). */
@@ -332,10 +338,22 @@ internal object CallFollowupNotice {
         }
     }
 
+    /** v4.0 r20-1 (DESIGN_V7 6): the states that still get a notice of their own right after the call. Only "녹음 없음": nothing
+     * else will ever tell that call (no summary, no line in the evening report's sorted calls), and its [메모 남기기] is worth
+     * something only now, while the call is fresh. Every other state is followed silently (the entries still drive the
+     * no-recording check, the memo binding and the sweep) and told once by the evening report, the call card and KakaoTalk. */
+    val SHOWN=setOf(NO_RECORDING)
+    /** Every state's notice, as up to v3.9 (the host tests of the words and the bundle set [shownStates] to this). Kept, not
+     * deleted, until three weeks of `use` say the per-call notices are not missed (DESIGN_V7 6 r20-1). */
+    val ALL_STATES=setOf(WORKING,DONE,LATE,CHARGER,NO_RECORDING)
+    @androidx.annotation.VisibleForTesting @Volatile internal var shownStates:Set<String> =SHOWN
+    internal fun shown(state:String)=state in shownStates
     private fun post(context:Context,e:Entry,record:CallRecord?):Boolean {
+        // v4.0 r20-1: a state without its own notice takes away the one shown before (a phone updated with notices up).
+        if(!shown(e.state)) { cancel(context,e.id);return false }
         if(Build.VERSION.SDK_INT>=33 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) return false
         val manager=context.getSystemService(NotificationManager::class.java) ?: return false
-        manager.createNotificationChannel(NotificationChannel(CHANNEL,"이음 통화 정리",NotificationManager.IMPORTANCE_LOW).apply {
+        manager.createNotificationChannel(NotificationChannel(CHANNEL,CHANNEL_NAME,NotificationManager.IMPORTANCE_LOW).apply {
             setSound(null,null);enableVibration(false);lockscreenVisibility=Notification.VISIBILITY_PRIVATE })
         val w=words(e,record)
         // Done: the call's page; before that the day's calls.

@@ -37,6 +37,8 @@ class RecordingGapTest:ProtectedTextHostTestBase() {
     private val now=LocalDate.of(2026,11,5).atTime(15,0).atZone(CallRecordStore.KST).toInstant().toEpochMilli()
 
     @Before fun setup() {
+        // v4.0 r20-1: these tests check the words and states of every per-call notice, which only "녹음 없음" still posts.
+        CallFollowupNotice.shownStates=CallFollowupNotice.ALL_STATES
         shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
         ContactCards.shutdown();ContactCards.clearPending()
         CallFollowupNotice.phoneBookName={ _,_ -> "박지성" }

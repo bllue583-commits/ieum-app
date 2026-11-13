@@ -142,7 +142,7 @@ class UiRoundThreeTest:ProtectedTextHostTestBase() {
         assertFalse(all,all.contains("녹음 1분을 글자로 바꾸는 데"))
         // v3.3 (DESIGN_V4 3.3-4): with an amber light (the seeded phone has no recording folder) the lights lead the page in
         // their own group; with every light green they stay at the top of 상태와 도움.
-        assertEquals(listOf(SettingsScreen.STATUS_NAME,SettingsScreen.NOW_NAME,"연결","통화 카드","정리",SettingsScreen.MORNING_NAME,"상태와 도움"),views(root).mapNotNull { (it.tag as? String)?.takeIf { t -> t.startsWith("group_") }?.removePrefix("group_") })
+        assertEquals(listOf(SettingsScreen.STATUS_NAME,SettingsScreen.NOW_NAME,"연결","통화 카드","정리",SettingsScreen.MORNING_NAME,"상태와 도움",SettingsScreen.ADMIN_NAME),views(root).mapNotNull { (it.tag as? String)?.takeIf { t -> t.startsWith("group_") }?.removePrefix("group_") })
         assertTrue(views(root).indexOfFirst { it.tag=="settings_status" } < views(root).indexOfFirst { it.tag=="folder_state" })
     }
 

@@ -44,7 +44,7 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
         for(tag in listOf("home_today","home_calls_button","home_tasks_button","home_settings_button","home_attention"))assertNotNull(tag,root.findViewWithTag<View>(tag))
         assertNull(root.findViewWithTag<View>("home_setup"))
         val all=texts(a).joinToString("\n"){it.text.toString()}
-        assertTrue(all,all.contains("오늘 녹음"));assertTrue(all,all.contains("녹음 3개 중 정리 0개"));assertTrue(all.contains("오늘 생긴 체크") && all.contains("남은 체크할 일"));assertTrue(all,all.contains("설정에서 확인할 일이 있어요 ›") && !all.contains("처음 설정"))
+        assertFalse(all,all.contains("오늘 녹음"));assertEquals(all,1,Regex("녹음 3개 중 정리 0개").findAll(all).count());assertTrue(all.contains("오늘 생긴 체크") && all.contains("남은 체크할 일"));assertTrue(all,all.contains("설정에서 확인할 일이 있어요 ›") && !all.contains("처음 설정"))
         assertFalse(all,english.containsMatchIn(all))
         val buttons=views(root).filterIsInstance<Button>().filter{(it.tag as? String)?.startsWith("home_")==true}
         assertTrue(buttons.all{ it.minHeight>=(56*it.resources.displayMetrics.density).toInt() })
@@ -68,9 +68,6 @@ class CallUiSeniorTest:ProtectedTextHostTestBase() {
         listOf(CallRecordStore.TRANSCRIBED,CallRecordStore.WAITING_CONSENT,CallRecordStore.FAILED).forEach {
             val w=CallUi.state(it);assertTrue(w.isNotBlank());assertFalse(w,english.containsMatchIn(w))
         }
-        val today=CallUi.today()
-        assertEquals("오늘까지",CallUi.dueWords(today.toString()));assertEquals("내일까지",CallUi.dueWords(today.plusDays(1).toString()))
-        assertEquals("2일 지남",CallUi.dueWords(today.minusDays(2).toString()));assertEquals("",CallUi.dueWords(""));assertEquals("다음 주",CallUi.dueWords("다음 주"))
         assertEquals("확인 필요",CallUi.taskStatus("needs_confirmation"))
     }
 

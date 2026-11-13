@@ -134,7 +134,8 @@ internal class PersonScreen(a:MainActivity):AppScreen(a) {
         if(c.tasks.isEmpty()) body.addView(CallUi.text(a,"열린 체크할 일이 없어요.",CallUi.BODY,color=CallUi.SUBTLE).apply { tag="person_tasks_none" })
         else body.addView(CallUi.list(a,c.tasks.map { t ->
             // Every item here is this person's: the META line says only when it was asked (never their number).
-            CheckRows.row(a,t.copy(counterpart=null),status=if(t.status=="needs_confirmation") "" else t.status,onDone={ row -> TaskActions.complete(a,t,row) { load() } }).apply { tag="person_task_${t.id}" }
+            CheckRows.row(a,t.copy(counterpart=null),status=if(t.status=="needs_confirmation") "" else t.status,onDone={ row -> TaskActions.complete(a,t,row) { load() } },
+                onWrong={ row -> TaskActions.wrong(a,t,row) { load() } }).apply { tag="person_task_${t.id}" }
         },inset=16).apply { tag="person_tasks" })
         // 4. The threads going on with them or their company.
         body.addView(CallUi.section(a,"진행 중인 일").apply { tag="person_section_issues" })

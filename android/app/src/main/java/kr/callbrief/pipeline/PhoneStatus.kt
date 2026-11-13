@@ -65,7 +65,9 @@ internal object PhoneStatus {
         val security:JSONObject?=null,val certUnknown:Long=0,
         /** r18-bench (DESIGN_V7 4.4): `bench` and `samples` ([kr.callbrief.pipeline.bench.BenchState.heartbeat],
          * [kr.callbrief.pipeline.bench.Samples.heartbeat]); left out of the file while never switched on. Numbers and codes only. */
-        val bench:JSONObject?=null,val samples:JSONObject?=null)
+        val bench:JSONObject?=null,val samples:JSONObject?=null,
+        /** v4.0 r20-2 (DESIGN_V7 6): `feedback{wrong, undone}` ([TaskFeedback.heartbeat]), counts only; zeros when null. */
+        val feedback:JSONObject?=null)
     /** v3.7 r17-3 (DESIGN_V7 3.3, SCORECARD): [latency] goes into `latency` beside the 7-day numbers ({segments{endToText,
      * textToUpload,uploadToApplied}, day{p50Min,p90Min,n,waiting}, over7d}); [window14] into `transcription.window14`
      * {created,failed,failedPermanent,days}; [coverage] is `report.coverage` ([kr.callbrief.pipeline.report.ReportCoverage.snapshot])
@@ -195,6 +197,7 @@ internal object PhoneStatus {
         o.optJSONObject("update")?.put("certUnknown",i.certUnknown)
         i.bench?.let { o.put("bench",kr.callbrief.pipeline.bench.Bench.safe(it)) }
         i.samples?.let { o.put("samples",kr.callbrief.pipeline.bench.Bench.safe(it)) }
+        o.put("feedback",TaskFeedback.heartbeat(i.feedback?.let { JSONObject().put(TaskFeedback.KEY,it) }))
         return o
     }
     /** v3.7 r17-3: the scorecard's blocks. `use` and `report.coverage` always (null inside until known), the rest when known. */
@@ -387,7 +390,8 @@ internal object PhoneStatus {
             chargingOnly = PowerText.chargingOnly(s),
             v37 = runCatching { v37(app,s,now) }.onFailure { Log.w(TAG,"v3.7 numbers not read: ${it.javaClass.simpleName}") }.getOrDefault(V37()),
             security = runCatching { security(s) }.getOrNull(),certUnknown = UpdateCert.unknownCount(s),
-            bench = kr.callbrief.pipeline.bench.Bench.heartbeat(s),samples = kr.callbrief.pipeline.bench.Samples.heartbeat(s))
+            bench = kr.callbrief.pipeline.bench.Bench.heartbeat(s),samples = kr.callbrief.pipeline.bench.Samples.heartbeat(s),
+            feedback = TaskFeedback.heartbeat(s))
     }
     /** v3.8 r18-lock: the certificate check and the number hash salt, yes/no and counts only (never the salt). */
     internal fun security(s:JSONObject):JSONObject { val o=UpdateCert.heartbeat(s);val p=kr.callbrief.LocalPrivacy.heartbeat(s)

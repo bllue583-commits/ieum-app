@@ -55,7 +55,9 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
                                  val story:TodayStory.Shown?=null,
                                  /** v3.5 r15-0 (user 11/6: numbers by recording): today's business calls with their summary; [calls] is
                                   * today's recordings (call records and recordings still waiting for their text or failed). */
-                                 val summarized:Int=0)
+                                 val summarized:Int=0,
+                                 /** v4.0 r20-1: the call card is a required setup step on this phone ([CallCardAsk.cardRequired]). */
+                                 val cardRequired:Boolean=false)
     /** [audioMinutesLeft]: how long the recordings still to transcribe are, together. [lowBattery]: not charging and under half
      * the battery, so old recordings wait ([FirstPass.powerOk]). [stalled]: nothing came back for [FirstPass.STALL_MS], so no
      * new batch goes up (design C7). Either one shows the "잠시 쉬고 있어요" line (#20). */
@@ -76,7 +78,8 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
         internal fun firstLook(open:List<OpenItem>,today:java.time.LocalDate)=
             TaskActions.ordered(open).filter { it.status=="needs_confirmation" || (it.createdMs>0 && CallRecordStore.kstDay(it.createdMs)==today) }
         /** The memo list's words when today has calls but none is sorted out yet. */
-        fun sortingWords(calls:Int)="오늘 녹음 ${calls}개를 정리하고 있어요"
+        /** v4.0 r20-1: no number here (the story's heading above says "녹음 n개 중 정리 m개" once). */
+        fun sortingWords(@Suppress("UNUSED_PARAMETER") calls:Int)="오늘 통화를 정리하고 있어요. 끝나면 여기에 메모가 보여요"
 
         // ---- v3.1 (DESIGN_V4 2.5, r12-5) ----
         /** The voice model's size (the pinned file of [PipelineModelManager]). */
@@ -118,7 +121,7 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
         /** The one line on home (user 11/5 22:19). */
         const val ATTENTION_WORDS="설정에서 확인할 일이 있어요"
         /** The required first-setup steps not done yet (folder, consent, call log, call state, notifications, battery). */
-        internal fun requiredLeft(s:Snapshot)=listOf(s.folder,s.consent,s.callLog,s.phoneState,s.notify,s.battery).count { !it }
+        internal fun requiredLeft(s:Snapshot)=(listOf(s.folder,s.consent,s.callLog,s.phoneState,s.notify,s.battery)+listOfNotNull(s.overlay.takeIf { s.cardRequired })).count { !it }
         /** An update waits for the person: it can be installed, the install waits for a tap, or it failed. Only being checked,
          * being downloaded or being installed is not (nothing to do). */
         internal fun updateNeedsPerson(u:CallUpdate.UpdateState)=when(u.phase) {
@@ -246,7 +249,8 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
             week,byCompany,memos,
             granted(android.Manifest.permission.READ_SMS),granted(android.Manifest.permission.READ_CALL_LOG),granted(android.Manifest.permission.READ_PHONE_STATE),
             null,first,NotifyAsk.blocked(a),mm.partFile.path,people,
-            CallCardAsk.overlayAllowed(a),true /* v3.4 (4.1-1): no role step */,installStep(a),gapBanner(a)?.text?.takeIf { it.isNotBlank() },updateState(a),partBytes,story,TodayStory.summarized(calls))
+            CallCardAsk.overlayAllowed(a),true /* v3.4 (4.1-1): no role step */,installStep(a),gapBanner(a)?.text?.takeIf { it.isNotBlank() },updateState(a),partBytes,story,TodayStory.summarized(calls),
+            cardRequired=CallCardAsk.cardRequired(a,s))
     }
 
     /** While a new version or the voice model is coming, home looks every second whether it now needs the person (the update
@@ -291,8 +295,11 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
         // or three sentences (the hourly task's story, or the phone's own from today's summaries); a tap opens today's calls.
         val left=s.byCompany.sumOf { it.second }
         val story=s.story
+        // v4.0 r20-1: "녹음 n개 중 정리 m개" is said here only (it was also a number and a pill in 오늘 한눈에), so with today's
+        // recordings and no story yet the heading stands above the none line too.
         if(story==null) body.addView(CallUi.card(a).apply { tag="home_story"
-            addView(CallUi.text(a,"오늘은 아직 정리된 통화가 없어요",CallUi.BODY,color=CallUi.SUBTLE).apply { tag="home_story_none" }) })
+            if(s.calls>0) addView(CallUi.text(a,TodayStory.countLine(s.calls,s.summarized),CallUi.HEADING,true).apply { tag="home_story_title";fontFeatureSettings="tnum" })
+            addView(CallUi.text(a,"오늘은 아직 정리된 통화가 없어요",CallUi.BODY,color=CallUi.SUBTLE).apply { tag="home_story_none";if(s.calls>0) setPadding(0,CallUi.dp(a,6),0,0) }) })
         else body.addView(CallUi.card(a,rail=CallUi.ACCENT).apply {
             tag="home_story";isClickable=true;isFocusable=true;foreground=CallUi.rowRipple();minimumHeight=CallUi.dp(a,56)
             val heading=TodayStory.countLine(s.calls,story.calls)
@@ -316,6 +323,7 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
         // The same row as the check tab (G3): only an item from a call opens that call, the rest show no press (r8-5).
         else body.addView(CallUi.list(a,first.map { item ->
             CheckRows.row(a,item,status=if(item.status=="needs_confirmation") "" else item.status,onDone={ row -> TaskActions.complete(a,item,row) { load() } },
+                onWrong={ row -> TaskActions.wrong(a,item,row) { load() } },
                 personId=item.recordId?.let(s.people::get)).apply { tag="home_task_${item.id}" }
         },inset=16).apply { tag="home_tasks" })
 
@@ -332,15 +340,14 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
             }).apply { tag="home_memos" })
         }
 
-        // Today at a glance: three big numbers (only the open to-dos in the accent), then when the next report comes.
+        // Today at a glance: two big numbers (only the open to-dos in the accent), then when the next report comes. v4.0 r20-1:
+        // today's recordings are counted once, in the story's heading (no "오늘 녹음" number, no count pill here).
         body.addView(CallUi.section(a,"오늘 한눈에"))
         val today=CallUi.card(a).apply { tag="home_today" }
-        today.addView(CallUi.stats(a,listOf(Triple("${s.calls}","오늘 녹음",CallUi.INK),Triple("${s.newTasks}","오늘 생긴 체크",CallUi.INK),
-            Triple("$left","남은 체크할 일",CallUi.ACCENT)),listOf("개","개","개")).apply { tag="home_calls" })
+        today.addView(CallUi.stats(a,listOf(Triple("${s.newTasks}","오늘 생긴 체크",CallUi.INK),
+            Triple("$left","남은 체크할 일",CallUi.ACCENT)),listOf("개","개")).apply { tag="home_calls" })
         today.addView(CallUi.divider(a))
         today.addView(CallUi.caption(a,s.nextReport.takeIf{it.isNotBlank()}?.let{"다음 알림 $it"} ?: "마지막 정리 "+CallUi.dateTime(s.lastAnalyzedMs)).apply { tag="home_next_report";setPadding(0,0,0,0) })
-        // v3.5 r15-0: the same count as the story's heading and the evening report.
-        if(s.calls>0) today.addView(CallUi.pill(a,TodayStory.countLine(s.calls,s.summarized),CallUi.SUBTLE).apply { tag="home_count_line" })
         body.addView(today)
 
         // Open to-dos per company: one bar each, the busiest on top.
@@ -409,6 +416,17 @@ internal object CallCardAsk {
     private const val ROLE_ASKED="asked_call_redirection_role"
     private fun prefs(c:android.content.Context)=c.getSharedPreferences("ieum_ui",android.content.Context.MODE_PRIVATE)
     fun overlayAllowed(c:android.content.Context)=runCatching { android.provider.Settings.canDrawOverlays(c) }.getOrDefault(false)
+    /** v4.0 r20-1 (DESIGN_V7 6): whether the call card is a required first-setup step on this phone. Decided once and kept
+     * ([CARD_REQUIRED]): required on a new install (no recording folder and no consent yet when v4.0 first asks), optional as
+     * before on a phone already set up, so an update changes nothing there. */
+    const val CARD_REQUIRED="setup_card_required"
+    fun cardRequired(c:android.content.Context,s:org.json.JSONObject):Boolean {
+        val p=prefs(c)
+        if(p.contains(CARD_REQUIRED)) return p.getBoolean(CARD_REQUIRED,false)
+        val fresh=s.optString("treeUri").isBlank() && !s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false)
+        p.edit().putBoolean(CARD_REQUIRED,fresh).apply()
+        return fresh
+    }
     /** "다른 앱 위에 표시" for this app, else the list of all apps. */
     fun openOverlaySettings(a:android.app.Activity) {
         runCatching { a.startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,android.net.Uri.parse("package:${a.packageName}"))) }

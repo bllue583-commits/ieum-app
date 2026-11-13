@@ -40,6 +40,8 @@ class CallFollowupNoticeTest:ProtectedTextHostTestBase() {
     private val quote="견적서는 내일까지 메일로 보내드릴게요"
 
     @Before fun setup() {
+        // v4.0 r20-1: these tests check the words and states of every per-call notice, which only "녹음 없음" still posts.
+        CallFollowupNotice.shownStates=CallFollowupNotice.ALL_STATES
         shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
         ContactCards.shutdown();ContactCards.clearPending()
         CallFollowupNotice.phoneBookName={ _,_ -> null }
@@ -91,7 +93,7 @@ class CallFollowupNoticeTest:ProtectedTextHostTestBase() {
         assertNull("no name on the lock screen",first.notification.publicVersion.extras.getCharSequence(Notification.EXTRA_TEXT))
         assertEquals("메모 남기기",first.notification.actions.single().title.toString())
         val channel=manager.getNotificationChannel(CallFollowupNotice.CHANNEL)
-        assertEquals("이음 통화 정리",channel.name.toString());assertNull(channel.sound);assertFalse(channel.shouldVibrate())
+        assertEquals(CallFollowupNotice.CHANNEL_NAME,channel.name.toString());assertNull(channel.sound);assertFalse(channel.shouldVibrate())
 
         // The record comes, its result is applied: the same notice says what came of it.
         val id=call("rec1",t0+5_000,"견적서를 내일까지 보내기로 했어요. 단가는 지난번과 같아요.","견적서 보내기")
@@ -199,5 +201,50 @@ class CallFollowupNoticeTest:ProtectedTextHostTestBase() {
         store().keepPersonal(id)
         CallFollowupNotice.onResult(app,id)
         assertTrue(notices().isEmpty());assertTrue(CallFollowupNotice.entries(app).isEmpty())
+    }
+
+    // ---- v4.0 r20-1 (DESIGN_V7 6): the per-call notices fold into the evening one; only "녹음 없음" stays ----
+    @Test fun threeCallsGiveNoNoticeOfTheirOwnTheEveningOneTellsThemAndNoRecordingStays() {
+        CallFollowupNotice.shownStates=CallFollowupNotice.SHOWN
+        knownCounterpart()
+        val hour=3_600_000L
+        val ends=listOf(end,end.copy(startedMs=t0+10*60_000,endedMs=t0+12*60_000),end.copy(startedMs=t0+2*hour,endedMs=t0+2*hour+60_000))
+        ends.forEach { CallFollowupNotice.onCallEnded(app,it) }
+        assertTrue("no notice right after a call",notices().isEmpty())
+        assertEquals(3,CallFollowupNotice.entries(app).size)
+        // Two of them get their recording and their result: still nothing on the phone.
+        val a=call("rec1",t0+5_000,"견적서를 내일까지 보내기로 했어요.","견적서 보내기")
+        val b=call("rec2",t0+10*60_000+5_000,"도면을 다시 받기로 했어요.")
+        CallFollowupNotice.onResult(app,a);CallFollowupNotice.onResult(app,b)
+        assertTrue("done calls are not told one by one",notices().isEmpty())
+        // The third has no recording: that one is told at once, with [메모 남기기] (nothing else will ever tell it).
+        val third=ends[2]
+        CallFollowupNotice.checkNoRecording(app,third.endedMs+3*60_000,third.endedMs+3*60_000) { _,_ -> false }
+        val n=only().notification
+        assertEquals("이 통화는 녹음이 없어 정리할 수 없어요",text(n))
+        assertEquals("메모 남기기",n.actions.single().title.toString())
+        assertEquals(CallFollowupNotice.CHANNEL_NAME,manager.getNotificationChannel(CallFollowupNotice.CHANNEL).name.toString())
+        // Later passes leave it as it is (and tell no other call).
+        CallFollowupNotice.sweep(app,third.endedMs+CallFollowupNotice.LATE_MS-60_000)
+        assertEquals(1,notices().size)
+        // The evening report is the one notice that tells the day's calls.
+        val m=CallDigestText.evening(store(),CallRecordStore.kstDay(t0+5_000))
+        val day=CallRecordStore.kstDay(t0+5_000)
+        assertEquals(listOf(t0+5_000,t0+10*60_000+5_000).count { CallRecordStore.kstDay(it)==day },
+            CallDigestText.evening(store(),day).lines.count { !it.startsWith("외 ") })
+        assertTrue(m.title,m.title.startsWith("녹음 "))
+        // After it went out the no-recording notice goes too.
+        CallFollowupNotice.afterEvening(app,third.endedMs+hour)
+        assertTrue(notices().isEmpty())
+    }
+
+    @Test fun aNoticeLeftUpByTheOldVersionIsTakenAwayAtTheNextChange() {
+        knownCounterpart()
+        CallFollowupNotice.onCallEnded(app,end);assertEquals(1,notices().size)
+        CallFollowupNotice.shownStates=CallFollowupNotice.SHOWN
+        val id=call("rec1",t0+5_000,"견적서를 내일까지 보내기로 했어요.")
+        CallFollowupNotice.onResult(app,id)
+        assertTrue(notices().isEmpty())
+        assertEquals(CallFollowupNotice.DONE,CallFollowupNotice.entries(app).single().state)
     }
 }

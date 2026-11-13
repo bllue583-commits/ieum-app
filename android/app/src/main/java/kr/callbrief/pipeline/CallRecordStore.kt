@@ -80,6 +80,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     companion object {
         val KST:ZoneId=ZoneId.of("Asia/Seoul")
         const val TRANSCRIBED="TRANSCRIBED";const val ANALYZED="ANALYZED";const val FAILED="FAILED"
+        /** v4.0 r20-2: a check item the user marked [틀렸어요] (a workflow_items status, apart from done and merged). */
+        const val WRONG="wrong"
         const val WAITING_CONSENT="WAITING_CONSENT"
         /** Transcripts of records that got their result are trimmed after this many days: the whole sealed DB must stay under 16 MB. Summaries stay.
          * v3.6.1 (D1, DESIGN_V7 2): 14 -> 7 days, and [TRANSCRIPT_KEEP_DAYS_FULL] once the store is [TRANSCRIPT_FULL_PERCENT]% full. */
@@ -625,7 +627,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     fun companyCount():Int=(rows("SELECT COUNT(*) AS n FROM companies").single().long("n") ?: 0).toInt()
     /** All companies, the one called most recently first. */
     fun companies():List<CompanyRow> =rows("""SELECT co.id,co.name,co.trade,
-        (SELECT COUNT(*) FROM task_companies tc JOIN workflow_items i ON i.id=tc.item_id WHERE tc.company_id=co.id AND i.status NOT IN ('done','merged') AND i.kind='TODO') AS open_n,
+        (SELECT COUNT(*) FROM task_companies tc JOIN workflow_items i ON i.id=tc.item_id WHERE tc.company_id=co.id AND i.status NOT IN ('done','merged','wrong') AND i.kind='TODO') AS open_n,
         (SELECT MAX(COALESCE(c.started_ms,c.created_ms)) FROM call_links l JOIN call_records c ON c.record_id=l.record_id WHERE l.company_id=co.id) AS last_ms
         FROM companies co ORDER BY COALESCE(last_ms,0) DESC,co.name""")
         .map { CompanyRow(it.str("id")!!,it.str("name")!!,it.str("trade"),(it.long("open_n") ?: 0).toInt(),it.long("last_ms")) }
@@ -635,7 +637,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         val tasks=rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.edition,i.created_ms,i.ai_note,i.tentative,i.recording_id,
             c.counterpart,c.record_id AS call_id,COALESCE(c.started_ms,c.created_ms) AS call_ms FROM task_companies tc JOIN workflow_items i ON i.id=tc.item_id
             LEFT JOIN call_records c ON c.record_id=(SELECT x.record_id FROM call_records x WHERE x.recording_id=i.recording_id ORDER BY x.created_ms DESC LIMIT 1)
-            WHERE tc.company_id=? AND i.status NOT IN ('done','merged') AND i.kind='TODO' ORDER BY i.created_ms DESC""",id)
+            WHERE tc.company_id=? AND i.status NOT IN ('done','merged','wrong') AND i.kind='TODO' ORDER BY i.created_ms DESC""",id)
             .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),it.str("counterpart"),name,it.long("created_ms") ?: 0,it.str("ai_note"),it.long("tentative")==1L,
                 it.str("recording_id"),it.str("call_id"),it.long("call_ms")) }
         val calls=rows("""SELECT c.record_id,COALESCE(c.started_ms,c.created_ms) AS day_ms,c.summary,p.name AS person,l.person_id FROM call_links l JOIN call_records c ON c.record_id=l.record_id
@@ -721,7 +723,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         val all=rows("""SELECT i.id,i.title,i.due_text,i.status,i.created_ms,i.evidence_quote,co.id AS cid,co.name AS cname,b.record_id AS made_by,p.name AS pname FROM workflow_items i
             LEFT JOIN task_companies tc ON tc.item_id=i.id LEFT JOIN companies co ON co.id=tc.company_id
             LEFT JOIN call_task_bindings b ON b.item_id=i.id LEFT JOIN call_links l ON l.record_id=b.record_id LEFT JOIN people p ON p.id=l.person_id
-            WHERE (i.status NOT IN ('done','merged') OR COALESCE(i.done_ms,0)>CAST(? AS INTEGER)) AND i.kind='TODO' AND i.created_ms<=CAST(? AS INTEGER) ORDER BY i.created_ms DESC LIMIT 300""",before,before)
+            WHERE (i.status NOT IN ('done','merged','wrong') OR COALESCE(i.done_ms,0)>CAST(? AS INTEGER)) AND i.status!='wrong' AND i.kind='TODO' AND i.created_ms<=CAST(? AS INTEGER) ORDER BY i.created_ms DESC LIMIT 300""",before,before)
             .map { Open(ClaudeCallRequest.OpenTask(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty(),it.str("status")!!.let { s -> if(s=="done" || s=="merged") "open" else s },it.str("cname"),it.long("created_ms")?.let { ms -> kstDay(ms).toString() },
                 person=it.str("pname"),quote=it.str("evidence_quote")),it.str("cid"),it.str("made_by")) }
         val own=if(lean) emptyList() else all.filter { (companyId!=null && it.companyId==companyId) || it.task.id in sameCounterpart }.take(30)
@@ -802,7 +804,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         WHERE i.status IN ('done','merged') AND i.kind='TODO' AND COALESCE(i.done_ms,i.created_ms)>=CAST(? AS INTEGER) AND i.created_ms<=CAST(? AS INTEGER)
         ORDER BY CASE WHEN tc.company_id=? THEN 0 ELSE 1 END,COALESCE(i.done_ms,i.created_ms) DESC LIMIT 15""",at-30*86_400_000L,at,companyId ?: "")
         .mapNotNull { it.str("title") }
-    fun openTaskIds():Set<String> =rows("SELECT id FROM workflow_items WHERE status NOT IN ('done','merged') AND kind='TODO'").mapNotNull { it.str("id") }.toSet()
+    fun openTaskIds():Set<String> =rows("SELECT id FROM workflow_items WHERE status NOT IN ('done','merged','wrong') AND kind='TODO'").mapNotNull { it.str("id") }.toSet()
 
     /** Stores the result and applies tasks in one transaction. User-edited and finished items are never changed. */
     fun applyAnalysis(id:String,a:ClaudeCallAnalysis):List<Applied> {
@@ -925,12 +927,12 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     /** Every open check item for the morning report, oldest request first. */
     fun openTodos():List<CallTodoItem> =rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.created_ms,
         (SELECT co.name FROM task_companies tc JOIN companies co ON co.id=tc.company_id WHERE tc.item_id=i.id) AS cname,i.ai_note,i.tentative
-        FROM workflow_items i WHERE i.status NOT IN ('done','merged') AND i.kind='TODO' ORDER BY i.created_ms""")
+        FROM workflow_items i WHERE i.status NOT IN ('done','merged','wrong') AND i.kind='TODO' ORDER BY i.created_ms""")
         .map { CallTodoItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("cname"),it.long("created_ms") ?: 0,it.str("ai_note"),it.long("tentative")==1L) }
     /** Open items (any source) with an ISO due date on or before [today]. */
     fun dueItems(today:LocalDate):List<CallTodoItem> =rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.created_ms,
         (SELECT co.name FROM task_companies tc JOIN companies co ON co.id=tc.company_id WHERE tc.item_id=i.id) AS cname,i.ai_note,i.tentative
-        FROM workflow_items i WHERE i.status NOT IN ('done','merged') AND i.due_text!='' ORDER BY i.due_text,i.created_ms""")
+        FROM workflow_items i WHERE i.status NOT IN ('done','merged','wrong') AND i.due_text!='' ORDER BY i.due_text,i.created_ms""")
         .filter { val d=it.str("due_text")!!.trim();d.matches(ISO_DATE) && d<=today.toString() }
         .map { CallTodoItem(it.str("id")!!,it.str("title")!!,it.str("due_text")!!.trim(),it.str("status")!!,it.long("revision")!!,it.str("cname"),it.long("created_ms") ?: 0,it.str("ai_note"),it.long("tentative")==1L) }
     /** Every open to-do (any source), newest first, with the latest call counterpart of its recording. */
@@ -938,7 +940,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         c.counterpart,c.record_id AS call_id,COALESCE(c.started_ms,c.created_ms) AS call_ms,
         (SELECT co.name FROM task_companies tc JOIN companies co ON co.id=tc.company_id WHERE tc.item_id=i.id) AS cname,i.ai_note,i.tentative
         FROM workflow_items i LEFT JOIN call_records c ON c.record_id=(SELECT x.record_id FROM call_records x WHERE x.recording_id=i.recording_id ORDER BY x.created_ms DESC LIMIT 1)
-        WHERE i.status NOT IN ('done','merged') AND i.kind='TODO' ORDER BY i.created_ms DESC LIMIT 300""")
+        WHERE i.status NOT IN ('done','merged','wrong') AND i.kind='TODO' ORDER BY i.created_ms DESC LIMIT 300""")
         .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),it.str("counterpart"),it.str("cname"),it.long("created_ms") ?: 0,it.str("ai_note"),it.long("tentative")==1L,
             it.str("recording_id"),it.str("call_id"),it.long("call_ms")) }
     /** The user's "완료했어요": marks one item done and records the edit so analysis never touches it again. */
@@ -950,6 +952,26 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         port.execute("INSERT INTO workflow_item_history VALUES(?,?,?,?)","wf_"+UUID.randomUUID().toString().replace("-",""),item,revision+1,before.toString())
         port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER);null
     }.also { ContactCards.touch(this) { cardKeysOfItem(item) } }
+    /** v4.0 r20-2 (DESIGN_V7 6): the user's [틀렸어요]: the item leaves every list as [WRONG] (not done, not merged), with when
+     * ([done_ms]) and the edit recorded, so analysis and the morning tidy never touch it again. No reason, no words. */
+    fun markWrong(item:String,revision:Long)=port.transaction {
+        val old=rows("SELECT * FROM workflow_items WHERE id=?",item).single()
+        require(old.long("revision")==revision && old.str("status") !in setOf("done","merged",WRONG)) { "ITEM_REVISION_CONFLICT" }
+        port.execute("UPDATE workflow_items SET status=?,revision=revision+1,done_ms=? WHERE id=?",WRONG,clock(),item)
+        val before=JSONObject().apply { old.forEach { (k,v)->put(k,v ?: JSONObject.NULL) } }
+        port.execute("INSERT INTO workflow_item_history VALUES(?,?,?,?)","wf_"+UUID.randomUUID().toString().replace("-",""),item,revision+1,before.toString())
+        port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER);null
+    }.also { ContactCards.touch(this) { cardKeysOfItem(item) } }
+    /** Takes a [markWrong] back: the earlier [status] again, still marked as touched by the user. [revision]: the one [markWrong] left. */
+    fun undoWrong(item:String,status:String,revision:Long)=port.transaction {
+        val now=rows("SELECT revision,status FROM workflow_items WHERE id=?",item).single()
+        require(now.long("revision")==revision && now.str("status")==WRONG) { "ITEM_REVISION_CONFLICT" }
+        port.execute("UPDATE workflow_items SET status=?,revision=revision+1,done_ms=NULL WHERE id=?",status,item)
+        port.execute("UPDATE board_state SET revision=revision+1 WHERE owner_key=?",GeneralLocalStore.OWNER);null
+    }.also { ContactCards.touch(this) { cardKeysOfItem(item) } }
+    /** v4.0 r20-2: ids of the items marked [WRONG] at or after [sinceMs] (the morning tidy's state `wrong[]`), oldest first. */
+    fun wrongIds(sinceMs:Long):List<String> =rows("SELECT id FROM workflow_items WHERE status=? AND kind='TODO' AND COALESCE(done_ms,0)>=CAST(? AS INTEGER) ORDER BY done_ms",WRONG,sinceMs)
+        .mapNotNull { it.str("id") }
     // ---- screens (round 3): undo of "다 됐어요", dial numbers, oldest waiting call ---------------------------------------------
     /** Takes a [completeItem] back: the item gets its earlier [status] again (it stays marked as touched by the user, so analysis leaves it alone).
      * [revision] is the revision [completeItem] left it at (its old revision plus one); anything else means it changed since. */
@@ -1196,7 +1218,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.created_ms,i.recording_id,b.last_revision,
             (SELECT COUNT(*) FROM workflow_item_history h WHERE h.item_id=i.id) AS edits,
             (SELECT co.name FROM task_companies tc JOIN companies co ON co.id=tc.company_id WHERE tc.item_id=i.id) AS cname
-            FROM workflow_items i LEFT JOIN call_task_bindings b ON b.item_id=i.id WHERE i.status NOT IN ('done','merged') AND i.kind='TODO' ORDER BY i.created_ms""").forEach { r ->
+            FROM workflow_items i LEFT JOIN call_task_bindings b ON b.item_id=i.id WHERE i.status NOT IN ('done','merged','wrong') AND i.kind='TODO' ORDER BY i.created_ms""").forEach { r ->
             val tidyMade=r.str("recording_id")=="tidy:followups" && r.long("last_revision")==null
             val locked=(r.long("edits") ?: 0)>0 || (!tidyMade && (r.long("last_revision")==null || r.long("last_revision")!=r.long("revision")))
             tasks.put(JSONObject().put("id",r.str("id")).put("title",r.str("title")).put("due",r.str("due_text").orEmpty()).put("status",r.str("status"))
@@ -1216,6 +1238,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         return JSONObject().put("generatedMs",now).put("firstPassDone",firstPassDone).put("tasks",tasks).put("records",records)
             .put("pending",JSONObject().put("yesterdayCalls",waiting.pending).put("yesterdayMin",waiting.pendingMin))
             .put("recentlyDone",JSONArray(recentlyDone(null))).apply { mergeCandidates?.takeIf { it.length()>0 }?.let { put("mergeCandidates",it) }
+                // v4.0 r20-2 (DESIGN_V7 6): the items the user marked [틀렸어요] in the last 14 days, ids only (tidy.md: left out of
+                // the next report and not made again). Only when there are some, so an old state reads the same.
+                wrongIds(now-TaskFeedback.STATE_DAYS*86_400_000L).takeIf { it.isNotEmpty() }?.let { put("wrong",JSONArray(it)) }
                 // r12-4: people on one number the migration did not merge by itself, [id, id] pairs (ledger ids where known).
                 personCandidates().takeIf { it.length()>0 }?.let { put("personCandidates",it) } }
     }
@@ -1227,7 +1252,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         // AI-owned: made by an analysis and not changed since, or a follow-up the tidy made (round 2: those can be tidied too).
         fun owned(id:String)=rows("""SELECT i.revision FROM workflow_items i LEFT JOIN call_task_bindings b ON b.item_id=i.id WHERE i.id=?
             AND (i.revision=b.last_revision OR (b.item_id IS NULL AND i.recording_id='tidy:followups'))
-            AND i.status NOT IN ('done','merged') AND NOT EXISTS(SELECT 1 FROM workflow_item_history h WHERE h.item_id=i.id)""",id).singleOrNull()?.long("revision")
+            AND i.status NOT IN ('done','merged','wrong') AND NOT EXISTS(SELECT 1 FROM workflow_item_history h WHERE h.item_id=i.id)""",id).singleOrNull()?.long("revision")
         fun bump(id:String,rev:Long) { port.execute("UPDATE call_task_bindings SET last_revision=? WHERE item_id=?",rev+1,id) }
         var n=0
         val ops=o.optJSONArray("tasks") ?: JSONArray()
@@ -1259,7 +1284,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
                         else t.optString("due").trim().takeIf { d -> d.isEmpty() || ISO_DATE.matches(d) } ?: continue
                     port.execute("UPDATE workflow_items SET title=?,due_text=?,revision=? WHERE id=?",title,due,rev+1,id) }
                 "merge" -> { val into=t.optString("into")
-                    if(into==id || rows("SELECT 1 FROM workflow_items WHERE id=? AND status NOT IN ('done','merged')",into).isEmpty()) continue
+                    if(into==id || rows("SELECT 1 FROM workflow_items WHERE id=? AND status NOT IN ('done','merged','wrong')",into).isEmpty()) continue
                     // The one kept takes the date when it has none.
                     port.execute("UPDATE workflow_items SET due_text=(SELECT due_text FROM workflow_items WHERE id=?) WHERE id=? AND due_text=''",id,into)
                     port.execute("UPDATE workflow_items SET status='merged',revision=?,done_ms=? WHERE id=?",rev+1,clock(),id) }
@@ -1392,10 +1417,10 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     private fun duplicateOf(title:String,companyId:String?,now:Long):Pair<String,Boolean>? {
         if(NameKey.bare(title).isEmpty()) return null
         val list=rows("""SELECT i.id,i.title,i.status,tc.company_id AS cid FROM workflow_items i LEFT JOIN task_companies tc ON tc.item_id=i.id
-            WHERE i.kind='TODO' AND (i.status NOT IN ('done','merged') OR COALESCE(i.done_ms,i.created_ms)>=CAST(? AS INTEGER))""",now-14*86_400_000L)
+            WHERE i.kind='TODO' AND (i.status NOT IN ('done','merged','wrong') OR COALESCE(i.done_ms,i.created_ms)>=CAST(? AS INTEGER))""",now-14*86_400_000L)
         list.firstOrNull { NameKey.sameWords(title,it.str("title").orEmpty()) }?.let { return it.str("id")!! to false }
         if(companyId==null) return null
-        val same=list.filter { it.str("status") !in setOf("done","merged") && it.str("cid")==companyId };if(same.isEmpty()) return null
+        val same=list.filter { it.str("status") !in setOf("done","merged",WRONG) && it.str("cid")==companyId };if(same.isEmpty()) return null
         val names=(rows("SELECT name FROM companies")+rows("SELECT name FROM people WHERE name!=''")).mapNotNull { it.str("name") }.distinct()
         return same.firstOrNull { NameKey.nearTitle(title,it.str("title").orEmpty(),names) }?.let { it.str("id")!! to true }
     }

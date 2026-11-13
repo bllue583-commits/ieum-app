@@ -415,7 +415,8 @@ internal object CallUi {
      * (or under it, at the end, when the screen is narrow or the letters large); the AI's note at the bottom when there is one.
      * The whole row opens the call it came from when [onOpen] is given. Calm on purpose: no red, no countdown. */
     fun taskRow(a:Context,title:String,requestedMs:Long,company:String?,person:String?=null,status:String="",onDone:((View)->Unit)?=null,
-                onOpen:(()->Unit)?=null,aiNote:String?=null,unsure:Boolean=false):LinearLayout {
+                onOpen:(()->Unit)?=null,aiNote:String?=null,unsure:Boolean=false,
+                /** v4.0 r20-2: [틀렸어요] beside [다 됐어요] (only with [onDone]). */ onWrong:((View)->Unit)?=null):LinearLayout {
         val outer=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;setPadding(dp(a,16),dp(a,14),dp(a,16),dp(a,14)) }
         if(onOpen!=null) outer.apply { isClickable=true;isFocusable=true;background=rowRipple();onTap(this,action=onOpen);contentDescription=null }
         outer.addView(text(a,title,SUMMARY,true).apply { tag="task_title";setPadding(0,0,0,0) })
@@ -431,13 +432,7 @@ internal object CallUi {
         val pill=if(!unsure) state else LinearLayout(a).apply { orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;tag="task_badges"
             addView(unsureBadge(a),LinearLayout.LayoutParams(-2,-2).apply { topMargin=dp(a,6);marginEnd=dp(a,8) })
             state?.let { addView(it) } }
-        val done=onDone?.let { Button(a).apply {
-            text="다 됐어요";isAllCaps=false;stateListAnimator=null;textSize=17f;typeface=font(a,Weight.SEMIBOLD);setTextColor(INK);tag="task_done"
-            maxLines=1;isSingleLine=true;background=ripple(a,sheet(a,CHIP,radius=14))
-            setCompoundDrawablesWithIntrinsicBounds(icon(a,"tick",SUBTLE,20),null,null,null);compoundDrawablePadding=dp(a,6)
-            minHeight=dp(a,48);minimumHeight=dp(a,48);minWidth=0;minimumWidth=0;setPadding(dp(a,12),0,dp(a,14),0)
-            contentDescription="$title, 다 됐어요";onTap(this) { it(outer) }
-        } }
+        val done=onDone?.let { taskButtons(a,title,outer,it,onWrong) }
         val left=if(meta!=null && pill!=null) LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;addView(meta);addView(pill) } else meta ?: pill
         if(done!=null) {
             // The button stays on the badge line only while that line fits whole; otherwise it moves under it, at the end.
@@ -448,6 +443,29 @@ internal object CallUi {
         } else if(left!=null) outer.addView(left,LinearLayout.LayoutParams(-1,-2).apply { topMargin=dp(a,8) })
         aiNoteRow(a,aiNote)?.let { outer.addView(it) }
         return outer
+    }
+
+    /** v4.0 r20-2 (DESIGN_V7 6): what [틀렸어요] says and the words of its undo bar. */
+    const val WRONG_LABEL="틀렸어요"
+    /** [다 됐어요] of a check row ([row] goes to [onDone]); with [onWrong] a quieter [틀렸어요] sits before it on the same line, one
+     * tap and no reason asked. Both at least 48dp tall. */
+    fun taskButtons(a:Context,title:String,row:View,onDone:(View)->Unit,onWrong:((View)->Unit)?=null):View {
+        val done=Button(a).apply {
+            text="다 됐어요";isAllCaps=false;stateListAnimator=null;textSize=17f;typeface=font(a,Weight.SEMIBOLD);setTextColor(INK);tag="task_done"
+            maxLines=1;isSingleLine=true;background=ripple(a,sheet(a,CHIP,radius=14))
+            setCompoundDrawablesWithIntrinsicBounds(icon(a,"tick",SUBTLE,20),null,null,null);compoundDrawablePadding=dp(a,6)
+            minHeight=dp(a,48);minimumHeight=dp(a,48);minWidth=0;minimumWidth=0;setPadding(dp(a,12),0,dp(a,14),0)
+            contentDescription="$title, 다 됐어요";onTap(this) { onDone(row) }
+        }
+        if(onWrong==null) return done
+        val wrong=Button(a).apply {
+            text=WRONG_LABEL;isAllCaps=false;stateListAnimator=null;textSize=17f;typeface=font(a,Weight.MEDIUM);setTextColor(SUBTLE);tag="task_wrong"
+            maxLines=1;isSingleLine=true;background=ripple(a,null,14)
+            minHeight=dp(a,48);minimumHeight=dp(a,48);minWidth=0;minimumWidth=0;setPadding(dp(a,12),0,dp(a,12),0)
+            contentDescription="$title, 틀렸어요. 잘못 뽑힌 일이면 눌러 주세요";onTap(this) { onWrong(row) }
+        }
+        return LinearLayout(a).apply { orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL;tag="task_buttons"
+            addView(wrong,LinearLayout.LayoutParams(-2,-2).apply { marginEnd=dp(a,8) });addView(done,LinearLayout.LayoutParams(-2,-2)) }
     }
 
     /** The AI's one-line note on an item the user touched (an aside under the row); null when there is none. */
@@ -777,13 +795,6 @@ internal object CallUi {
     fun weekday(d:LocalDate)=DateTimeFormatter.ofPattern("E",Locale.KOREAN).format(d)
     /** "좋은 아침이에요" by the hour (Seoul). */
     fun greeting(hour:Int=java.time.ZonedDateTime.now(CallRecordStore.KST).hour)=when(hour) { in 5..11 -> "좋은 아침이에요";in 12..17 -> "좋은 오후예요";else -> "좋은 저녁이에요" }
-    /** "오늘까지", "내일까지", "2일 지남", "11월 3일까지"; free text is shown as written. */
-    fun dueWords(due:String?):String {
-        val d=due?.trim().orEmpty();if(d.isEmpty())return ""
-        val date=runCatching{LocalDate.parse(d)}.getOrNull() ?: return d
-        val days=java.time.temporal.ChronoUnit.DAYS.between(today(),date)
-        return when { days<0 -> "${-days}일 지남";days==0L -> "오늘까지";days==1L -> "내일까지";else -> "${date(date)}까지" }
-    }
     /** A memo line: the first sentence of a summary, so lists never cut text off mid-way; the rest is one tap away. */
     fun firstSentence(summary:String):String {
         val s=summary.trim();val end=Regex("(요|다|음|함)\\.|[.!?](\\s|$)").find(s)?.range?.last ?: return s

@@ -29,7 +29,7 @@ import java.time.LocalDate
 class R15ZeroTest:ProtectedTextHostTestBase() {
     private val app get()=RuntimeEnvironment.getApplication()
     private val hour=3_600_000L
-    @After fun reset() { CallTranscriptionStore.buildCode={ kr.callbrief.BuildConfig.VERSION_CODE };CallUpdate.clock={ System.currentTimeMillis() } }
+    @After fun reset() { CallFollowupNotice.resetForTest();CallTranscriptionStore.buildCode={ kr.callbrief.BuildConfig.VERSION_CODE };CallUpdate.clock={ System.currentTimeMillis() } }
     private fun candidate(id:String)=CallTranscriptionStore.Candidate(CallTranscriptionStore.Key(id,1,"a".repeat(64)),"x.m4a","content://x","audio/mp4",1L,false,true)
     private fun port()=AndroidSqlPort(app,GeneralLocalStore.DATABASE,app.assets.open("call_core_schema.sql"))
     private fun state(s:CallTranscriptionStore,id:String)=s.rows().single { it.first.recordingId==id }.let { it.second to it.third }
@@ -163,6 +163,8 @@ class R15ZeroTest:ProtectedTextHostTestBase() {
             CallFollowupNotice.summaryWords(listOf("done","done","working","hold","late")))
         assertEquals("통화 알림 2개" to "정리 중 2건",CallFollowupNotice.summaryWords(listOf("working","working")))
         // Two notices on the phone: they share the group and a quiet summary comes with them; one left takes it away.
+        // v4.0 r20-1: late notices are no longer posted by default; the bundle is checked with every state shown.
+        CallFollowupNotice.shownStates=CallFollowupNotice.ALL_STATES
         shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
         val manager=app.getSystemService(NotificationManager::class.java)
         val t0=System.currentTimeMillis()-hour

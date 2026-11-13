@@ -203,8 +203,9 @@ class FirstSetupHomeTest:ProtectedTextHostTestBase() {
         assertEquals("다음 할 일: 녹음 폴더 연결",text(a,"setup_next_label"))
         val all=texts(tag(a,SettingsScreen.SETUP_TAG))
         assertTrue(all.toString(),all.contains("처음 설정 남은 9단계"))
-        val order=listOf("정리 동의","통화기록 읽기 허용","통화가 끝난 걸 바로 알아차리기","알림 허용","배터리 제한 풀기","문자 읽기 허용 (선택)",
-            "통화 화면 위에 이음 카드 보기 (선택)","새 버전을 저절로 설치하기 (선택)")
+        // v4.0 r20-1: a new install (this one) has the call card as its last required step, before the optional ones.
+        val order=listOf("정리 동의","통화기록 읽기 허용","통화가 끝난 걸 바로 알아차리기","알림 허용","배터리 제한 풀기",
+            "통화 화면 위에 이음 카드 보기","문자 읽기 허용 (선택)","새 버전을 저절로 설치하기 (선택)")
         assertEquals(order,all.filter { it in order })
         // The reason sits right above the button, in reading size; a required step has no [나중에 할게요].
         val reason=tag(a,"setup_detail") as TextView

@@ -398,7 +398,7 @@ internal object ContactCards {
         }
         val tasks=store.cardRows("""SELECT i.id,i.title,i.status,i.created_ms,i.ai_note,i.tentative,i.due_text,
             CASE WHEN i.id IN (SELECT b.item_id FROM call_task_bindings b JOIN call_records c ON c.record_id=b.record_id WHERE $mine) THEN 0 ELSE 1 END AS far
-            FROM workflow_items i WHERE i.kind='TODO' AND i.status NOT IN ('done','merged') AND (
+            FROM workflow_items i WHERE i.kind='TODO' AND i.status NOT IN ('done','merged','wrong') AND (
               i.id IN (SELECT b.item_id FROM call_task_bindings b JOIN call_records c ON c.record_id=b.record_id WHERE $mine)
               OR i.id IN (SELECT item_id FROM task_companies WHERE company_id=?))
             ORDER BY far,i.created_ms DESC LIMIT $TASKS""",*(mineArgs+mineArgs+listOf(companyId ?: "")).toTypedArray())

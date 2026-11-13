@@ -20,28 +20,46 @@ internal object TaskActions {
     /** The store writes, replaceable in tests (to hold the write back or make it fail). They run on an IO thread. */
     internal var completeIo:(Context,OpenItem)->Unit={ c,item -> kr.callbrief.IeumApplication.store(c).completeItem(item.id,item.revision) }
     internal var undoIo:(Context,OpenItem)->Unit={ c,item -> kr.callbrief.IeumApplication.store(c).undoDone(item.id,item.status,item.revision+1) }
+    /** v4.0 r20-2: [틀렸어요]'s writes, replaceable in tests like the two above. */
+    internal var wrongIo:(Context,OpenItem)->Unit={ c,item -> kr.callbrief.IeumApplication.store(c).markWrong(item.id,item.revision) }
+    internal var undoWrongIo:(Context,OpenItem)->Unit={ c,item -> kr.callbrief.IeumApplication.store(c).undoWrong(item.id,item.status,item.revision+1) }
     internal fun resetIo() {
         completeIo={ c,item -> kr.callbrief.IeumApplication.store(c).completeItem(item.id,item.revision) }
         undoIo={ c,item -> kr.callbrief.IeumApplication.store(c).undoDone(item.id,item.status,item.revision+1) }
+        wrongIo={ c,item -> kr.callbrief.IeumApplication.store(c).markWrong(item.id,item.revision) }
+        undoWrongIo={ c,item -> kr.callbrief.IeumApplication.store(c).undoWrong(item.id,item.status,item.revision+1) }
         synchronized(inFlight) { inFlight.clear() }
     }
+    /** v4.0 r20-2 (DESIGN_V7 6): words of the undo bar after [틀렸어요]: apart from "끝낸 일로 옮겼어요", it is not a finished job. */
+    const val WRONG_WORDS="틀린 일로 뺐어요"
+    /** Only what the AI or the morning tidy made can be wrong; an item the user wrote has no [틀렸어요]. */
+    fun canBeWrong(item:OpenItem)=item.recordingId!="user:items"
+    /** [틀렸어요]: one tap, no reason. Like [complete] (pale row, the "되돌리기" bar, the row leaves the list) but the item becomes
+     * [CallRecordStore.WRONG], and only the counts go up ([TaskFeedback]: `feedback{wrong, undone}`); undo brings it back. */
+    fun wrong(a:ComponentActivity,item:OpenItem,row:View,reload:()->Unit)=mark(a,item,row,reload,WRONG_WORDS,wrongIo,undoWrongIo,
+        onSaved={ app -> TaskFeedback.add(app,wrong=1) },onUndone={ app -> TaskFeedback.add(app,undone=1) })
 
     /** [다 됐어요] (review #4): the moment it is pressed the row and its button go off and pale (0.35) and the "되돌리기" bar comes up;
      * then the store is written. If writing fails the row comes back as it was, the bar goes and a short message says so.
      * Undo brings the to-do back (after the write, when it is still running); otherwise [reload] runs when the bar goes and the
      * row leaves the list. Done is always the user's own tap (the AI only ever marks "확인 필요"). */
-    fun complete(a:ComponentActivity,item:OpenItem,row:View,reload:()->Unit) {
+    fun complete(a:ComponentActivity,item:OpenItem,row:View,reload:()->Unit)=mark(a,item,row,reload,DONE_WORDS,completeIo,undoIo,
+        // v3.7 r17-3: in memory, written when the app goes to the background
+        onSaved={ UseStats.add(UseStats.TASK_DONE) })
+    /** The shared press of [complete] and [wrong]: [write] then, on the bar's [되돌리기], [unwrite]. [onSaved] and [onUndone] run on
+     * an IO thread after a good write. */
+    private fun mark(a:ComponentActivity,item:OpenItem,row:View,reload:()->Unit,words:String,write:(Context,OpenItem)->Unit,unwrite:(Context,OpenItem)->Unit,
+                     onSaved:(Context)->Unit={},onUndone:(Context)->Unit={}) {
         if(!synchronized(inFlight) { inFlight.add(item.id) }) return
         val app=a.applicationContext
         CallUi.enableAll(row,false);row.animate().cancel();row.alpha=0.35f
         val saved=CompletableDeferred<Boolean>()
         var undone=false;var gone=false
-        CallUi.snack(a,DONE_WORDS,onAction={ undone=true;undo(a,item,row,saved,reload) },onGone={ gone=true;if(saved.isCompleted && !a.isFinishing && !a.isDestroyed) reload() })
+        CallUi.snack(a,words,onAction={ undone=true;undo(a,item,row,saved,reload,unwrite,onUndone) },onGone={ gone=true;if(saved.isCompleted && !a.isFinishing && !a.isDestroyed) reload() })
         a.lifecycleScope.launch {
-            val ok=withContext(Dispatchers.IO) { runCatching { completeIo(app,item) }.isSuccess }
+            val ok=withContext(Dispatchers.IO) { runCatching { write(app,item) }.isSuccess.also { if(it) runCatching { onSaved(app) } } }
             synchronized(inFlight) { inFlight.remove(item.id) }
             saved.complete(ok)
-            if(ok) UseStats.add(UseStats.TASK_DONE) // v3.7 r17-3: in memory, written when the app goes to the background
             if(a.isFinishing||a.isDestroyed)return@launch
             if(!ok) {
                 CallUi.hideSnack(a)
@@ -51,13 +69,13 @@ internal object TaskActions {
 
         }
     }
-    private fun undo(a:ComponentActivity,item:OpenItem,row:View,saved:CompletableDeferred<Boolean>,reload:()->Unit) {
+    private fun undo(a:ComponentActivity,item:OpenItem,row:View,saved:CompletableDeferred<Boolean>,reload:()->Unit,unwrite:(Context,OpenItem)->Unit,onUndone:(Context)->Unit) {
         val app=a.applicationContext
         // Back at once on the screen; the store follows when the first write is done.
         CallUi.enableAll(row,true);row.alpha=1f
         a.lifecycleScope.launch {
             if(!saved.await()) return@launch // nothing was written, so nothing to take back
-            val ok=withContext(Dispatchers.IO) { runCatching { undoIo(app,item) }.isSuccess }
+            val ok=withContext(Dispatchers.IO) { runCatching { unwrite(app,item) }.isSuccess.also { if(it) runCatching { onUndone(app) } } }
             if(a.isFinishing||a.isDestroyed)return@launch
             if(!ok) Toast.makeText(a,"되돌리지 못했어요.",Toast.LENGTH_SHORT).show()
             reload()

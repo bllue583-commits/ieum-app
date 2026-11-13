@@ -78,7 +78,16 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         }
         /** The group the status lights take at the top of the page while one of them is amber (v3.3, DESIGN_V4 3.3-4). */
         const val STATUS_NAME="지금 상태"
-        const val MERGE_TAG="merge_undo" }
+        const val MERGE_TAG="merge_undo"
+        /** v4.0 r20-1 (DESIGN_V7 6): the tools for whoever looks after the app, folded at the very bottom (shut by default). */
+        const val ADMIN_NAME="관리"
+        const val ADMIN_TOGGLE="admin_toggle"
+        const val ADMIN_BODY="admin_body"
+        const val ADMIN_OPEN="관리 항목 보기 ›"
+        const val ADMIN_CLOSE="관리 항목 접기"
+        /** v4.0 r20-1: the switch of [PipelineSettingsKeys.FOLLOWUP_NOTICE] now only covers the calls without a recording. */
+        const val FOLLOWUP_SWITCH="녹음이 없는 통화는 바로 알림"
+        const val FOLLOWUP_NOTE="다른 통화는 저녁 통화 정리 알림 하나에 모아서 알려 드려요." }
     private val page:LinearLayout get()=a.column
     /** The sheet the current settings group is written into. */
     private lateinit var body:LinearLayout
@@ -374,7 +383,8 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
 
         sub("알림 시각")
         hourRow("저녁 통화 정리",PipelineSettingsKeys.EVENING_HOUR,s.optInt(PipelineSettingsKeys.EVENING_HOUR,19),15..23)
-        body.addView(CallUi.divider(a));body.addView(switchRow("followup_switch",s.optBoolean(PipelineSettingsKeys.FOLLOWUP_NOTICE,true),PipelineSettingsKeys.FOLLOWUP_NOTICE) { "통화마다 알림" })
+        body.addView(CallUi.divider(a));body.addView(switchRow("followup_switch",s.optBoolean(PipelineSettingsKeys.FOLLOWUP_NOTICE,true),PipelineSettingsKeys.FOLLOWUP_NOTICE) { FOLLOWUP_SWITCH })
+        body.addView(aside(FOLLOWUP_NOTE).apply { tag="followup_note" })
         // Design 3.3 (r7-3): a verified new version installs by itself; off, a notification only.
         body.addView(CallUi.divider(a))
         body.addView(switchRow("auto_install_switch",s.optBoolean(PipelineSettingsKeys.AUTO_INSTALL,true),PipelineSettingsKeys.AUTO_INSTALL) { "새 버전은 자동으로 설치" })
@@ -401,7 +411,6 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
 
         // The voice model once it is ready (or cannot be used here) stays in this group; while it is not, it is in the first one.
         if(!modelNow) { sub("음성 인식 모델");modelRows(modelState) }
-        if(kr.callbrief.BuildConfig.SYNTHETIC_TOOLS_ENABLED&&!CallInboxConfig.enabled&&modelState=="READY") body.addView(act("속도 측정 (시험용)","benchmark","재는 중이에요") { done -> benchmark(done) })
 
         sub("현장 상황 메모")
         val memo=CallUi.text(a,siteMemo ?: "첫 통화들에서 자동으로 채워져요",CallUi.BODY,color=if(siteMemo==null) CallUi.SUBTLE else CallUi.INK).apply { tag="site_memo";visibility=View.GONE }
@@ -409,31 +418,6 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
             LinearLayout.LayoutParams(-2,-2).apply { marginStart=-CallUi.dp(a,6) })
         body.addView(memo)
 
-        sub("처리한 통화")
-        val waiting=(counts[CallRecordStore.TRANSCRIBED] ?: 0)+(counts[CallRecordStore.WAITING_CONSENT] ?: 0)
-        // A recording with no speech in it (EMPTY_TRANSCRIPT) is no failure that a second try fixes: it is not counted here.
-        val allFailed=counts[CallRecordStore.FAILED] ?: 0
-        val failed=watch?.failed ?: allFailed
-        body.addView(CallUi.text(a,"정리된 통화 ${counts[CallRecordStore.ANALYZED] ?: 0}건, 기다리는 통화 ${waiting}건, 정리 못 한 통화 ${failed}건",CallUi.BODY,true).apply { tag="handled_calls" })
-        if(allFailed>failed) body.addView(aside("말소리를 찾지 못한 녹음 ${allFailed-failed}건은 다시 정리해도 같아서 세지 않았어요.").apply { tag="handled_empty" })
-        if(waiting+failed>0) body.addView(act("기다리는 통화 다시 정리하기","reanalyze_all","다시 정리하는 중이에요") { done ->
-            a.lifecycleScope.launch {
-                val n=withContext(Dispatchers.IO) { runCatching { store().requeueAll() }.getOrDefault(0) }
-                CallPipelineStartup.settingsChanged(a)
-                Toast.makeText(a,"${n}건을 다시 정리할게요.",Toast.LENGTH_SHORT).show();done();if(live()) refresh()
-            }
-        })
-
-        // Contact cards (v2.8): worked out again from the store when one looks wrong (the call card reads them in v3.0).
-        body.addView(act("상대 카드 다시 만들기","rebuild_cards","다시 만드는 중이에요") { done ->
-            a.lifecycleScope.launch {
-                val n=withContext(Dispatchers.IO) { runCatching { ContactCards.rebuildAll(store()) }.getOrNull() }
-                done()
-                Toast.makeText(a,if(n!=null) "상대 카드 ${n}장을 다시 만들었어요" else "다시 만들지 못했어요",Toast.LENGTH_SHORT).show()
-            }
-        })
-        // v3.3 (DESIGN_V4 3.3-1): people the phone made one by itself can be made two again.
-        mergeUndo(s)
         // Sends the heartbeat now so whoever looks after the app sees the phone's state (design B5).
         body.addView(CallUi.divider(a))
         body.addView(act("문제 알리기","report_problem","보내는 중이에요") { done ->
@@ -443,7 +427,8 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
                 Toast.makeText(a,if(ok) "관리하는 분께 상태를 보냈어요" else "보내지 못했어요. 인터넷을 확인해 주세요",Toast.LENGTH_SHORT).show()
             }
         })
-        goldenLink()
+        // ---- v4.0 r20-1: 관리, folded at the very bottom ----
+        adminGroup(s,counts,modelState)
         a.putBack(keep)
         val want=focusTag;val group=focusGroup;focusTag=null;focusGroup=null
         if(want!=null) page.post { if(live()) { if(page.findViewWithTag<View>(want)!=null) goTo(want) else group?.let(::goTo) } }
@@ -583,7 +568,8 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         val overlayAgain=!overlay && SetupSkip.overlayAsked(a)
         val notify=NotifyAsk.allowed(a);val notifyBlocked=NotifyAsk.blocked(a)
         val battery=a.getSystemService(android.os.PowerManager::class.java)?.isIgnoringBatteryOptimizations(a.packageName)==true
-        return listOf(
+        val required=CallCardAsk.cardRequired(a,s)
+        return listOfNotNull(
             Step("folder",s.optString("treeUri").isNotBlank(),"녹음 폴더 연결","통화 녹음 파일이 있는 폴더를 알려 주면 새 통화를 저절로 가져와요. 폴더가 열리면 보통 Recordings › Call을 고르고 아래 [이 폴더 사용]을 눌러 주세요.",
                 "녹음 폴더 고르기") { pickFolder.launch(CallFolder.pickIntent()) },
             Step("consent",s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false),"정리 동의","녹음 파일은 휴대폰에 그대로 두고, 글자로 바꾼 통화 내용만 보내 정리해요. 동의하면 음성 인식 모델(574MB)을 바로 받기 시작해요. 아래 정리 묶음에서 언제든 끌 수 있어요.",
@@ -600,17 +586,26 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
             Step("battery",battery,"배터리 제한 풀기","휴대폰이 쉬는 동안에도 통화를 정리하려면 한 번 허용해 주세요.","제한 풀기") {
                 runCatching { a.startActivity(android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,android.net.Uri.parse("package:${a.packageName}"))) }
                     .onFailure { a.startActivity(android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } },
+            // v4.0 r20-1 (DESIGN_V7 6): on a new install the call card is a required step (the last one; no [나중에 할게요]). A phone set
+            // up before v4.0 keeps it optional as it was ([CallCardAsk.cardRequired]: decided once, from what was set up then).
+            overlayStep(overlay,overlayAgain,required).takeIf { required },
             // Optional: a refusal (or [나중에 할게요]) is an answer, the next step opens (DESIGN_V4 2.5 시험).
             readingStep("sms",granted(sms) || ReadingPermission.asked(a,sms) || SetupSkip.skipped(a,"sms"),sms,"문자",
                 "업무 문자도 통화와 함께 정리해요. 문자는 휴대폰 안에서 읽어요.",askSms,optional=true),
-            if(overlayAgain) Step("overlay",SetupSkip.skipped(a,"overlay"),"통화 화면 위에 이음 카드 보기","목록에서 '이음'을 찾아 스위치를 켜 주세요.","다시 열기",optional=true,strong=true) {
-                CallCardAsk.openOverlaySettings(a) }
-            else Step("overlay",overlay || SetupSkip.skipped(a,"overlay"),"통화 화면 위에 이음 카드 보기",
-                "전화가 오면 통화 화면 위에 상대와 지난 통화, 체크할 일을 보여 드려요. 열리는 화면에서 이음을 찾아 허용해 주세요.","카드 보기 허용",optional=true) {
-                SetupSkip.markOverlayAsked(a);CallCardAsk.openOverlaySettings(a) },
+            overlayStep(overlay,overlayAgain,required).takeIf { !required },
             Step("install",!installStep || SetupSkip.skipped(a,"install"),"새 버전을 저절로 설치하기",
                 "새 버전이 나오면 누르지 않아도 저절로 설치돼요. 열리는 화면에서 '이 출처 허용'을 켜 주세요.","설치 허용",optional=true) {
                 CallUpdate.openInstallSourceSettings(a) })
+    }
+    /** The call card step: required ([required], a new install from v4.0) it is done only once the card may be drawn; optional
+     * (a phone set up before) a [나중에 할게요] answers it too. Back from the list unchanged, the step says where the switch is. */
+    private fun overlayStep(overlay:Boolean,again:Boolean,required:Boolean):Step {
+        val done=overlay || (!required && SetupSkip.skipped(a,"overlay"))
+        return if(again) Step("overlay",done,"통화 화면 위에 이음 카드 보기","목록에서 '이음'을 찾아 스위치를 켜 주세요.","다시 열기",optional=!required,strong=true) {
+            CallCardAsk.openOverlaySettings(a) }
+        else Step("overlay",done,"통화 화면 위에 이음 카드 보기",
+            "전화가 오면 통화 화면 위에 상대와 지난 통화, 체크할 일을 보여 드려요. 열리는 화면에서 이음을 찾아 허용해 주세요.","카드 보기 허용",optional=!required) {
+            SetupSkip.markOverlayAsked(a);CallCardAsk.openOverlaySettings(a) }
     }
     /** The consent step: saved off the main thread, then the voice model starts coming (on any connection, user 11/5 18:27). */
     private fun agree() {
@@ -730,14 +725,6 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         body.addView(switchRow("card_incoming_switch",s.optBoolean(PipelineSettingsKeys.CARD_INCOMING,true),PipelineSettingsKeys.CARD_INCOMING) { "전화 올 때" })
         body.addView(CallUi.divider(a))
         body.addView(switchRow("card_outgoing_switch",s.optBoolean(PipelineSettingsKeys.CARD_OUTGOING,true),PipelineSettingsKeys.CARD_OUTGOING) { "전화 걸 때" })
-        // v3.4 (DESIGN_V4 4.1-1): calls going out show the card without the role; the role is an option that brings the number
-        // sooner, offered until it is held or the person says no ([PipelineSettingsKeys.ROLE_OFFER_SEEN]).
-        if(CallCardAsk.roleAvailable(a) && !CallCardAsk.roleHeld(a) && !s.optBoolean(PipelineSettingsKeys.ROLE_OFFER_SEEN,false)) {
-            body.addView(CallUi.text(a,ROLE_OFFER,CallUi.BODY,true).apply { tag="card_role_offer" })
-            body.addView(aside("거는 전화에도 카드는 떠요. 허용하면 번호를 조금 더 빨리 알아요. 전화는 그대로 걸려요.").apply { tag="card_role_state" })
-            body.addView(button("허용하기") { CallCardAsk.askRole(a,askCallRole) }.apply { tag="card_role_allow" })
-            body.addView(button("괜찮아요") { save { it.put(PipelineSettingsKeys.ROLE_OFFER_SEEN,true) } }.apply { tag="card_role_skip" })
-        }
         body.addView(CallUi.divider(a))
         body.addView(switchRow("card_unknown_switch",s.optBoolean(PipelineSettingsKeys.CARD_UNKNOWN,false),PipelineSettingsKeys.CARD_UNKNOWN) { UNKNOWN_SWITCH })
         // v3.3 (DESIGN_V4 3.1-5): what the notice says on a locked phone when the card cannot be drawn over it.
@@ -748,6 +735,66 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         body.addView(button("카드 위치 처음으로") {
             save(redraw=false,done={ Toast.makeText(a,"카드 위치를 처음으로 돌렸어요.",Toast.LENGTH_SHORT).show() }) { it.remove(PipelineSettingsKeys.CARD_POS_Y) }
         }.apply { tag="card_position_reset" })
+    }
+
+    /** v3.4 (DESIGN_V4 4.1-1): calls going out show the card without the role; the role is an option that brings the number
+     * sooner, offered until it is held or the person says no ([PipelineSettingsKeys.ROLE_OFFER_SEEN]). v4.0 r20-1: in 관리. */
+    private fun roleOffer(s:JSONObject) {
+        if(!(CallCardAsk.roleAvailable(a) && !CallCardAsk.roleHeld(a) && !s.optBoolean(PipelineSettingsKeys.ROLE_OFFER_SEEN,false))) return
+        body.addView(CallUi.divider(a))
+        body.addView(CallUi.text(a,ROLE_OFFER,CallUi.BODY,true).apply { tag="card_role_offer" })
+        body.addView(aside("거는 전화에도 카드는 떠요. 허용하면 번호를 조금 더 빨리 알아요. 전화는 그대로 걸려요.").apply { tag="card_role_state" })
+        body.addView(button("허용하기") { CallCardAsk.askRole(a,askCallRole) }.apply { tag="card_role_allow" })
+        body.addView(button("괜찮아요") { save { it.put(PipelineSettingsKeys.ROLE_OFFER_SEEN,true) } }.apply { tag="card_role_skip" })
+    }
+
+    /** v4.0 r20-1: whether 관리 is open (this screen's life only: it starts shut every time the app starts). */
+    internal var adminOpen=false
+    /** v4.0 r20-1 (DESIGN_V7 6): "관리" at the very bottom, shut by default: one link opens it. Inside, unchanged, the tools that
+     * are for whoever looks after the app: 처리한 통화 with [기다리는 통화 다시 정리하기], [상대 카드 다시 만들기], [합친 사람 되돌리기],
+     * the outgoing-call role offer, [골든 측정] and, in test builds, the speed measurement. Opening it draws nothing again. */
+    private fun adminGroup(s:JSONObject,counts:Map<String,Int>,modelState:String) {
+        group(ADMIN_NAME)
+        val sheet=body
+        val inner=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;tag=ADMIN_BODY;visibility=if(adminOpen) View.VISIBLE else View.GONE }
+        lateinit var toggle:Button
+        toggle=CallUi.linkButton(a,if(adminOpen) ADMIN_CLOSE else ADMIN_OPEN) {
+            adminOpen=!adminOpen
+            inner.visibility=if(adminOpen) View.VISIBLE else View.GONE
+            toggle.text=if(adminOpen) ADMIN_CLOSE else ADMIN_OPEN
+        }.apply { tag=ADMIN_TOGGLE;contentDescription="관리 항목, 관리하는 분이 쓰는 기능" }
+        sheet.addView(aside("관리하는 분이 쓰는 기능이에요. 평소에는 열지 않아도 돼요.").apply { tag="admin_note" })
+        sheet.addView(toggle,LinearLayout.LayoutParams(-2,-2).apply { marginStart=-CallUi.dp(a,6) })
+        sheet.addView(inner)
+        body=inner
+        sub("처리한 통화")
+        val waiting=(counts[CallRecordStore.TRANSCRIBED] ?: 0)+(counts[CallRecordStore.WAITING_CONSENT] ?: 0)
+        // A recording with no speech in it (EMPTY_TRANSCRIPT) is no failure that a second try fixes: it is not counted here.
+        val allFailed=counts[CallRecordStore.FAILED] ?: 0
+        val failed=watch?.failed ?: allFailed
+        body.addView(CallUi.text(a,"정리된 통화 ${counts[CallRecordStore.ANALYZED] ?: 0}건, 기다리는 통화 ${waiting}건, 정리 못 한 통화 ${failed}건",CallUi.BODY,true).apply { tag="handled_calls" })
+        if(allFailed>failed) body.addView(aside("말소리를 찾지 못한 녹음 ${allFailed-failed}건은 다시 정리해도 같아서 세지 않았어요.").apply { tag="handled_empty" })
+        if(waiting+failed>0) body.addView(act("기다리는 통화 다시 정리하기","reanalyze_all","다시 정리하는 중이에요") { done ->
+            a.lifecycleScope.launch {
+                val n=withContext(Dispatchers.IO) { runCatching { store().requeueAll() }.getOrDefault(0) }
+                CallPipelineStartup.settingsChanged(a)
+                Toast.makeText(a,"${n}건을 다시 정리할게요.",Toast.LENGTH_SHORT).show();done();if(live()) refresh()
+            }
+        })
+        // Contact cards (v2.8): worked out again from the store when one looks wrong (the call card reads them in v3.0).
+        body.addView(act("상대 카드 다시 만들기","rebuild_cards","다시 만드는 중이에요") { done ->
+            a.lifecycleScope.launch {
+                val n=withContext(Dispatchers.IO) { runCatching { ContactCards.rebuildAll(store()) }.getOrNull() }
+                done()
+                Toast.makeText(a,if(n!=null) "상대 카드 ${n}장을 다시 만들었어요" else "다시 만들지 못했어요",Toast.LENGTH_SHORT).show()
+            }
+        })
+        // v3.3 (DESIGN_V4 3.3-1): people the phone made one by itself can be made two again.
+        mergeUndo(s)
+        roleOffer(s)
+        if(kr.callbrief.BuildConfig.SYNTHETIC_TOOLS_ENABLED&&!CallInboxConfig.enabled&&modelState=="READY") { body.addView(CallUi.divider(a));body.addView(act("속도 측정 (시험용)","benchmark","재는 중이에요") { done -> benchmark(done) }) }
+        goldenLink()
+        body=sheet
     }
 
     /** The lights lead the page in their own group (an amber light). */

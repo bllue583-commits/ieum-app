@@ -378,6 +378,7 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
                     CallUi.taskRow(a,CallUi.shortTitle(item?.title ?: t.title,c.linkedPerson ?: an.counterpartName),0,null,
                         status=if(t.op=="create"||t.op=="update") "" else "needs_confirmation",
                         onDone=item?.let { i -> { row:View -> TaskActions.complete(a,i,row) { load() } } },
+                        onWrong=item?.takeIf(TaskActions::canBeWrong)?.let { i -> { row:View -> TaskActions.wrong(a,i,row) { load() } } },
                         unsure=item?.tentative ?: (made?.tentative==true)).apply {
                         tag="call_task_${t.itemId}"
                         ScreenParts.ownerWords(made?.owner).takeIf { it.isNotEmpty() }?.let { w -> addView(CallUi.text(a,w,CallUi.ASIDE,color=CallUi.SUBTLE).apply { tag="task_owner";setPadding(0,CallUi.dp(a,6),0,0) }) }

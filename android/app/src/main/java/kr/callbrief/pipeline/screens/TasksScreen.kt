@@ -20,7 +20,8 @@ import kotlinx.coroutines.withContext
 internal object CheckRows {
     /** [personId]: the person of the call that made the item (v2.8): the name in the META line then opens the person page
      * instead of the call (the rest of the row still opens the call). */
-    fun row(a:MainActivity,item:OpenItem,status:String=item.status,company:String?=item.company,onDone:((View)->Unit)?=null,personId:String?=null):LinearLayout {
+    fun row(a:MainActivity,item:OpenItem,status:String=item.status,company:String?=item.company,onDone:((View)->Unit)?=null,personId:String?=null,
+            /** v4.0 r20-2: [틀렸어요] beside [다 됐어요]; never on an item the user wrote ([TaskActions.canBeWrong]). */ onWrong:((View)->Unit)?=null):LinearLayout {
         val open:(()->Unit)?=item.recordId?.let { id -> { a.openCall(id,item.callMs ?: item.createdMs) } }
         val openWho:(()->Unit)?=personId?.let { id -> { a.openPerson(id) } } ?: open
         val outer=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;setPadding(CallUi.dp(a,16),CallUi.dp(a,14),CallUi.dp(a,16),CallUi.dp(a,14)) }
@@ -57,13 +58,8 @@ internal object CheckRows {
         // 4. The AI's note.
         CallUi.aiNoteRow(a,item.aiNote)?.let { outer.addView(it) }
         // 5. [다 됐어요] at the end of the row.
-        onDone?.let { act -> outer.addView(Button(a).apply {
-            text="다 됐어요";isAllCaps=false;stateListAnimator=null;textSize=17f;typeface=CallUi.font(a,CallUi.Weight.SEMIBOLD);setTextColor(CallUi.INK);tag="task_done"
-            maxLines=1;isSingleLine=true;background=CallUi.ripple(a,CallUi.sheet(a,CallUi.CHIP,radius=14))
-            setCompoundDrawablesWithIntrinsicBounds(CallUi.icon(a,"tick",CallUi.SUBTLE,20),null,null,null);compoundDrawablePadding=CallUi.dp(a,6)
-            minHeight=CallUi.dp(a,48);minimumHeight=CallUi.dp(a,48);minWidth=0;minimumWidth=0;setPadding(CallUi.dp(a,12),0,CallUi.dp(a,14),0)
-            contentDescription="${item.title}, 다 됐어요";CallUi.onTap(this) { act(outer) }
-        },LinearLayout.LayoutParams(-2,-2).apply { gravity=Gravity.END;topMargin=CallUi.dp(a,10) }) }
+        onDone?.let { act -> outer.addView(CallUi.taskButtons(a,item.title,outer,act,onWrong?.takeIf { TaskActions.canBeWrong(item) }),
+            LinearLayout.LayoutParams(-2,-2).apply { gravity=Gravity.END;topMargin=CallUi.dp(a,10) }) }
         outer.contentDescription=listOfNotNull(company,unsure?.let { CallUi.UNSURE },title,person,asked.takeIf { it.isNotEmpty() }).joinToString(", ")+(if(open!=null) ". 눌러서 통화 보기" else "")
         return outer
     }
@@ -124,7 +120,8 @@ internal class TasksScreen(a:MainActivity):AppScreen(a) {
     /** The person of each item's call, by record id: "김민수 님" opens their page (v2.8). */
     @Volatile private var people:Map<String,String> =emptyMap()
     private fun taskView(item:OpenItem,check:Boolean)=CheckRows.row(a,item,status=if(check) "" else item.status,
-        onDone={ row -> TaskActions.complete(a,item,row) { load() } },personId=item.recordId?.let(people::get)).apply { tag="task_${item.id}" }
+        onDone={ row -> TaskActions.complete(a,item,row) { load() } },personId=item.recordId?.let(people::get),
+        onWrong={ row -> TaskActions.wrong(a,item,row) { load() } }).apply { tag="task_${item.id}" }
     /** A folded line that opens in place: [label] is a quiet link, the rows below it appear when it is tapped. */
     private fun fold(label:String,tag:String,rows:()->List<View>):View {
         val box=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
