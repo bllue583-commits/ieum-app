@@ -391,7 +391,7 @@ update-smoke는 v3.8부터 새 APK를 release로 만들고(지금 배포본은 d
 |---|---|---|
 | `ci` | 모든 `feature/**` push | 그대로(약 5분) |
 | `device-test` | **`feature/lean-calls` push**와 수동 | 전에는 모든 `feature/**` push마다 10~40분 돌았고, 에뮬레이터 시험의 기존 실패 1건으로 작업 브랜치마다 빨간불이었다. 작업 브랜치는 필요할 때 수동(`gh api repos/<owner>/<repo>/actions/workflows/device-test.yml/dispatches -f ref=<브랜치>`) |
-| `inbox-e2e` | 자기 파일 push와 수동 | 매시간 cron을 지웠다. GitHub는 예약 실행을 기본 브랜치(`main`)의 파일로만 하는데 `main`에 이 파일이 없어 cron은 한 번도 돌지 않았다(마지막 실행 11/4, push). 한 번 확인 = 수동 실행 두 번(합성 통화를 넣고, 한 시간쯤 뒤 다시 돌리면 결과를 검사하고 새 것을 넣음). 분석이나 파서를 바꿨을 때만 |
+| `inbox-e2e` | `feature/lean-calls`에서 자기 파일 push와 수동 | 매시간 cron을 지웠다. GitHub는 예약 실행을 기본 브랜치(`main`)의 파일로만 하는데 `main`에 이 파일이 없어 cron은 한 번도 돌지 않았다(마지막 실행 11/4, push). 한 번 확인 = 수동 실행 두 번(합성 통화를 넣고, 한 시간쯤 뒤 다시 돌리면 결과를 검사하고 새 것을 넣음). 분석이나 파서를 바꿨을 때만 |
 | `release-apk`, `update-smoke` | `feature/lean-calls`·`main` push | 그대로 |
 | `real-device-test` | 수동(하루 5번 한도) | 그대로 |
 
