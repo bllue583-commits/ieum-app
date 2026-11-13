@@ -385,7 +385,7 @@ internal class CallRecordAnalysisRunner(
 
 internal object CallInboxConfig {
     fun store():CallInboxStore? = kr.callbrief.BuildConfig.IEUM_INBOX_TOKEN.takeIf { it.isNotBlank() }
-        ?.let { GitHubInboxStore(kr.callbrief.BuildConfig.IEUM_INBOX_REPO,it,client) }
+        ?.let { EmulatorInbox.guard(GitHubInboxStore(kr.callbrief.BuildConfig.IEUM_INBOX_REPO,it,client)) } // r18-lock: no writes from an emulator
     /** GitHubInboxStore's own settings plus [InboxETags]. One client for the process, so the kept ETags serve every pass. */
     private val client by lazy { okhttp3.OkHttpClient.Builder().connectTimeout(20,java.util.concurrent.TimeUnit.SECONDS).readTimeout(40,java.util.concurrent.TimeUnit.SECONDS)
         .addInterceptor(InboxETags).build() }
