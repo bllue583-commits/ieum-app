@@ -122,7 +122,7 @@
 | `messages.mailError` (v3.4, **v3.7에서 지움**) | 메일 오류 코드별 수였다. 메일 기능을 지우면서 `messages` 묶음이 하트비트에서 빠졌다 | |
 | `kakao`, `report` (v3.5) | `kakao{on, linked, sent, failed, lastSentMs, error, texts(마지막 보고가 몇 통이었나, v3.7 빌드 1052), plainRetried(링크 없는 글이 안 가서 앱 링크로 다시 보낸 누계), **r18:** style(마지막 보고가 `list` 리스트 말풍선, `text` 글, `picture` 그림; 보낸 적 없으면 null), cards(마지막 보고의 리스트 말풍선 수), listFallback(리스트가 안 가서 글로 대신 보낸 누계), web(마지막 보고에 [웹으로 보기]가 붙었나), tags{important, confirm, request, regular, optional}(마지막 보고의 챙길 일 분류별 건수, 숫자만)}`: 스위치 "카카오톡으로 받기", 연결, 다 나간 날 누계, 실패 누계, 마지막으로 다 나간 시각, 오류 코드. `report{day, source}`: 마지막으로 보낸 보고 날짜와 출처(`routine` 새벽 정리 보고서, `phone` 06:00 폰 폴백). **v3.7:** `report.coverage`{day(보고 날짜), yesterdayCalls(녹음 있고 개인 번호 아닌 어제 통화), inReport(보고에 들어간 수, 폰 폴백이면 0), pending(아직 글자로 바꾸거나 분석 중인 수), atMs, source}(마지막 보고, 없으면 null), `report.recent[]`{day, yesterdayCalls, inReport, pending}(최근 7일 보고, 오래된 것부터) | `linked=true`인데 `lastSentMs`가 이틀 아침 연속 오늘이 아니면, 또는 `linked=false`에 `error`가 `TOKEN_*`이면 워치독 이슈. `inReport / yesterdayCalls` < 80%가 평일 이틀 연속이면 워치독 이슈 "아침 보고에 빠진 통화가 많아요" |
 | `use` (v3.7) | {today, prev}: 그날(KST) 사용 횟수 {day, opens(앱을 앞으로), homeSec(홈을 본 초), taskDone([다 됐어요]), notifTap(알림으로 엶), cardExpand(카드 띠 펼침 — 카드 자체 집계 `callCard.today.expanded` 값을 읽음), kakaoOpen(카톡 보고 버튼으로 엶)}. `prev`는 전날(앱을 안 연 날은 0, 첫 집계 전은 null). 내용·시각 없음 | 채점 항목 10(v4.0) |
-| `feedback` (v4.0) | {wrong, undone}: 체크할 일의 [틀렸어요]를 누른 수와 그것을 [되돌리기]한 수, v4.0 설치 뒤 누계(숫자만, 어떤 일인지 없음). 틀린 일의 id는 새벽 정리 state의 `wrong[]`(최근 14일)로만 간다. v4.0 전 앱에는 없음 | 채점 항목 4·10의 실사용 보조 지표. 주 1회 집계(7절) |
+| `feedback` (v3.9) | {wrong, undone}: 체크할 일의 [틀렸어요]를 누른 수와 그것을 [되돌리기]한 수, v3.9 설치 뒤 누계(숫자만, 어떤 일인지 없음). `undone`에는 띠에서 바로 되돌린 것과 나중에 "끝낸 일 보기"에서 되돌린 것이 다 든다. 틀린 일 자체는 새벽 정리 state의 `wrong[]`(최근 14일, 제목·업체)로만 간다. v3.9 전 앱에는 없음 | 채점 항목 4·10의 실사용 보조 지표. 주 1회 집계(7절) |
 | `dbTables` (v3.7) | 봉인 저장소의 표별 크기: {day, atMs, totalRows, totalChars, top[]}, `top`은 글자 수(다음 행 수) 큰 표 8개 {name, rows, chars, dChars(지난 집계 뒤 글자 수 변화, 처음은 null)}. 표 이름만, 내용 없음. 첫 집계 전 null | v3.8 저장소 작업의 재료. `dbPercent` ≥ 70이면 워치독 이슈 본문에 큰 표 3개 |
 | `dbPrune` (v3.8) | 마지막 수집 원장 정리(하루 한 번, 업데이트 뒤 첫 실행): {day, atMs, deleted{표 이름: 지운 행 수}(`discovery_intake_requests` 같은 내용 확인 요청, `vault2_pending` 끝난 금고 접수), charsBefore, charsAfter(전체 글자 수, 건너뛰면 null), skipped(건너뛴 사유: `IN_CALL` 통화 중, `QUEUE_UNREADABLE` 수집 줄을 못 읽음, `COPY_FAILED` 사본 실패(3일 이어지면 사본 없이 정리), `NO_LEDGER` 원장 없음; 정리했으면 null. 건너뛰면 1시간 뒤 다시, 하루 최대 6번), ms(봉인까지 걸린 시간), copyAtMs(정리 전 사본을 만든 시각, 사본이 없으면 null), copy(`made` 이번에 만듦, `kept` 보관 중, `deleted` 7일 지나 지움, `none` 사본 없이 정리함, null 정리 전)}. 같은 날 뒤에 끝난 "지운 줄 0"이나 건너뜀은 그날 앞의 실제 삭제 결과를 덮지 않는다. 첫 정리 전 null | `dbTables`는 정리 뒤 다시 센 값. 워치독 저장소 이슈 본문에 한 줄. **판정 시점:** 첫 정리는 직전 3일치를 남기므로 `dbPercent`가 30 근처로 내려가는 것은 업데이트 3~4일 뒤다 |
 | `dbFull` (v3.8) | 통화 봉인 저장소가 **전체 한도**(16MiB·10만 행) 때문에 쓰기를 거절한 기록(`TEXT_STORE_CAPACITY_REQUIRES_REVIEW`, 호출부가 삼켜도 셈): {count(누계), firstMs, lastMs}. 거절이 없으면 count 0 | `lastMs`가 24시간 안이면 워치독 이슈, 폰 신호등 "통화 정리" 줄 주황 "저장 공간이 다 찼어요" |
@@ -353,7 +353,7 @@ update-smoke는 v3.8부터 새 APK를 release로 만들고(지금 배포본은 d
 
 관련 파일: `docs/routines/`(지시문, 자가 보고 요약 `self-report.md`), `tools/inbox/`(워치독), `tools/needs_update_smoke.sh`, `tools/update_smoke.sh`, `.github/workflows/`, `docs/DEVELOPMENT.md`(개발 환경).
 
-## 7. v4.0 운영 자립 (r20-5, DESIGN_V7 6)
+## 7. v3.9 운영 자립 (r20-5, DESIGN_V7 6)
 
 ### 7.1 폰 분실·초기화 때 복원 (코드로 확인한 사실대로, 11/13)
 
@@ -380,14 +380,16 @@ update-smoke는 v3.8부터 새 APK를 release로 만들고(지금 배포본은 d
 
 ### 7.2 [틀렸어요] 주 1회 집계와 지시문 개선 (절차만)
 
+주의: v3.9부터 녹음이 있는 통화는 통화별 알림이 없으므로 `use.notifTap`(알림으로 앱을 엶)이 줄어든다. 이것은 알림이 아쉽지 않다는 근거가 아니다(누를 알림이 없어서 준 것). 알림을 되살릴지는 설문과 `use.opens`·`kakaoOpen`·카드 펼침으로 판단한다.
+
 1. 월요일 아침, 지난 7일의 `status/phone.json` git 기록에서 `feedback.wrong`·`feedback.undone`의 증가분과 `use.today.taskDone`의 합을 적는다. 틀림 비율 = (wrong 증가 - undone 증가) / (그 수 + taskDone 합).
-2. 새벽 정리 state의 `wrong[]` id로 장부·`tidy/history/`에서 그 일이 어떤 통화의 어떤 약속이었는지 본다(관리자가 우편함 안에서만, 내용을 다른 곳에 옮기지 않는다).
+2. 새벽 정리 state의 `wrong[]`(제목·업체가 있음)와 장부·`tidy/history/`에서 그 일이 어떤 통화의 어떤 약속이었는지 본다(관리자가 우편함 안에서만, 내용을 다른 곳에 옮기지 않는다).
 3. 같은 종류가 2건 이상이면(예: 상대가 할 일을 내 일로, 인사말을 약속으로) `docs/routines/hourly.md`의 해당 규칙을 고치는 안을 만든다. hourly.md를 바꾸는 것은 자막·분석 묶음과 같은 절차(버전 올림, 정답지로 다시 재기, DESIGN_V7 7절)를 따른다.
 4. 결과를 HANDOFF 4절 판정표의 채점 항목 4 옆에 한 줄로 적는다.
 
 ### 7.3 GitHub Actions 분량 (11/13 기준)
 
-| 워크플로 | 언제 도나 | 바꾼 것(v4.0) |
+| 워크플로 | 언제 도나 | 바꾼 것(v3.9) |
 |---|---|---|
 | `ci` | 모든 `feature/**` push | 그대로(약 5분) |
 | `device-test` | **`feature/lean-calls` push**와 수동 | 전에는 모든 `feature/**` push마다 10~40분 돌았고, 에뮬레이터 시험의 기존 실패 1건으로 작업 브랜치마다 빨간불이었다. 작업 브랜치는 필요할 때 수동(`gh api repos/<owner>/<repo>/actions/workflows/device-test.yml/dispatches -f ref=<브랜치>`) |

@@ -46,4 +46,10 @@ python3 -I tools/eval/promise_eval.py tools/eval/sample/gold.json tools/eval/sam
 python3 -I tools/eval/promise_eval.py gold.json --results 결과폴더 --write gold-commit.json
 ```
 
+**경계(알고 읽을 것):**
+1. 채점 대상이 0건이면(분석이 아무 약속도 안 냈거나 결과를 못 모음) 정밀도는 0.0으로 나온다(분모 0을 0으로 둠). `tp`·`fp`·`missingCalls`를 같이 볼 것.
+2. 아주 짧은 제목(두세 글자)은 긴 쪽의 같은 길이 창과 비교하므로 유사도가 부풀려진다("견적" 하나가 "견적서 보내기"와 1.0). 정답지의 `what`은 체크할 일 제목처럼 구체적으로 적는다.
+3. 채점 대상의 숫자는 제목(`title`)에서만 뽑는다(인용·기한에서는 안 뽑음). 제목에 숫자를 빼고 쓴 약속은 숫자가 틀린 것으로 셈된다 — 화면에 보이는 것이 제목이라 의도한 규칙이다.
+4. `numberExact`는 내용이 맞은 짝 중 정답지에 숫자가 있는 것이 없으면 `null`이다. 채점기(`score.py` 항목 4)는 null을 "없음"으로 보고 실패 처리한다(정답지는 숫자 40개 이상이 기준이라 정상 측정에서는 생기지 않음).
+
 `--write`가 쓰는 파일이 우편함 `status/gold-commit.json`의 형식이다: `commitRecall`, `commitPrecision`, `numberExact`, `commitCalls`, `commitNumbers`(채점기 `tools/inbox/score.py` 항목 4가 읽는 키, 기준은 `scorecard.json`), 그리고 참고로 `tp`, `fp`, `fn`, `numberMismatch`, `unknownOwner`, `dueExact`, `f1`, `missingCalls`, `goldCalls`, `atMs`, `tool`. 숫자만 들어 있으므로 우편함에 올려도 된다(자막 쪽 `status/gold-transcript.json`은 "골든 측정" 화면이 따로 올린다 — 두 파일은 서로 덮어쓰지 않는다). 시험: `python3 -m unittest tools/test_promise_eval.py`.
