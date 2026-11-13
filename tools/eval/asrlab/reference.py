@@ -14,6 +14,8 @@ import os
 import subprocess
 import sys
 
+import soundfile as sf
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import labscore as L  # noqa: E402
 import run_engines as R  # noqa: E402
@@ -41,7 +43,6 @@ def main():
         wav = os.path.join(out, 'audio', name + '.wav')
         if not os.path.exists(wav):
             subprocess.run(['ffmpeg', '-nostdin', '-loglevel', 'error', '-y', '-i', os.path.join(a.folder, f), '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', wav], check=True)
-        import soundfile as sf
         ms = int(sf.info(wav).frames * 1000 // 16000)
         recs.append(dict(rec=name, wav=wav, utts=[], ms=ms))
     os.makedirs(os.path.join(out, 'sets'), exist_ok=True)
@@ -59,12 +60,20 @@ def main():
         for e in engines:
             run = json.load(open(os.path.join(out, 'runs', 'real', e, r['rec'] + '.json')))
             segs = run['segments']
-            if e in ('q5', 'q8', 'lv3'):
+            if e in ('q5', 'q8', 'lv3', 'lv3fw'):
                 segs = L.transcript_clean(segs)[0]
             texts[e] = L.normalize(' '.join(s['text'] for s in segs))
             open(os.path.join(out, 'runs', 'real', e, r['rec'] + '.txt'), 'w', encoding='utf-8').write('\n'.join(s['text'] for s in segs))
         ref = texts[a.ref]
         row = dict(audio_s=r['ms'] / 1000)
+        # 말소리 수준과 앱 묵음 지우기 하한(0.006) 아래로 떨어지는 말소리 창 비율 — 공개 음성(FLEURS)에서는 이것이 크게 문제였다
+        import numpy as np
+        import prepare
+        x, _ = sf.read(r['wav'], dtype='float32')
+        w = x[:len(x) // 480 * 480].reshape(-1, 480)
+        rms = np.sqrt((w.astype(np.float64) ** 2).mean(axis=1))
+        act = rms >= 0.1 * np.percentile(rms, 95)
+        row.update(level_dbfs=round(prepare.level(x), 1), active_under_floor=round(float(((rms < 0.006) & act).sum() / max(1, act.sum())), 3))
         for e in engines:
             if e != a.ref:
                 row['cer_' + e] = L.edits(ref, texts[e]) / len(ref) if ref else None

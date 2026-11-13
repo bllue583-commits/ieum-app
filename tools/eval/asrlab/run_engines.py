@@ -5,7 +5,9 @@
   q5   whisper.cpp 1.7.6 + large-v3-turbo q5_0, 앱 JNI와 같은 설정(whisper_app_run.cpp) — (가)
   q8   같은 것 + q8_0 — (나)
   sv   SenseVoice-Small int8 2024-07-17 + Silero VAD, sherpa-onnx 2.0.1, 앱 BenchEngines.kt와 같은 설정 — (다)
-  lv3  faster-whisper large-v3(CTranslate2 int8, 빔 5, 조건부 문맥 끔) — 기준 자막 후보 1
+  lv3  Whisper large-v3(turbo 아님) ggml q5_0, whisper.cpp 1.9.5, 그리디·문맥 끔(앱과 같은 whisper_full 설정) — 기준 자막 후보 1
+       (faster-whisper large-v3는 lv3fw. 11/13에는 작업 환경 메모리 한도 6.26 GB를 다른 작업자의 gradle과 나눠 써서
+        f16 3 GB를 올리다 메모리 부족으로 죽었다 — 그래서 lv3를 ggml q5_0으로 바꿨다)
   zip  sherpa-onnx zipformer-korean 2024-06-24(계열이 다른 기준 자막 후보 2, Silero VAD로 나눔)
 
 python3 -I tools/eval/asrlab/run_engines.py --lab /home/claude/asrlab --set A --engine q5 [--recs A00,A01] [--threads 1]"""
@@ -30,7 +32,8 @@ MODELS = {
     'sv': '/home/claude/lab-a/models/sv2024/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17',
     'vad': '/home/claude/lab-a/models/silero_vad.onnx',
     'zip': '/home/claude/lab-a/models/x_sherpa-onnx-zipformer-korean-2024-06-24/sherpa-onnx-zipformer-korean-2024-06-24',
-    'lv3': '/home/claude/asrlab/models/faster-whisper-large-v3',
+    'lv3': '/home/claude/asrlab/models/ggml-large-v3-q5_0.bin',
+    'lv3fw': '/home/claude/asrlab/models/faster-whisper-large-v3',
 }
 
 
@@ -66,7 +69,7 @@ def seg_out(piece, t0, t1, text, extra=None):
     return d
 
 
-def run_whisper_cpp(model, pieces, threads, workdir):
+def run_whisper_cpp(model, pieces, threads, workdir, binary='whisper_app_run'):
     lst = os.path.join(workdir, 'list.tsv')
     out = os.path.join(workdir, 'raw.jsonl')
     # 앱 네이티브는 1600 표본 미만 조각을 거부한다(ANDROID_STT_PCM_SIZE) — 같은 조건으로 뺀다
@@ -74,7 +77,7 @@ def run_whisper_cpp(model, pieces, threads, workdir):
         for p in pieces:
             if p['samples'] >= 1600:
                 f.write('%d\t%s\n' % (p['i'], p['file']))
-    subprocess.run([os.path.join(LAB_DEFAULT, 'bin', 'whisper_app_run'), model, str(threads), lst, out], check=True,
+    subprocess.run([os.path.join(LAB_DEFAULT, 'bin', binary), model, str(threads), lst, out], check=True,
                    stderr=open(os.path.join(workdir, 'stderr.log'), 'a'))
     raw = {}
     for line in open(out, encoding='utf-8', errors='replace'):
@@ -159,7 +162,7 @@ def run_sherpa(kind, pieces, threads):
 
 def run_lv3(pieces, threads):
     from faster_whisper import WhisperModel
-    m = WhisperModel(MODELS['lv3'], device='cpu', compute_type='int8', cpu_threads=threads)
+    m = WhisperModel(MODELS['lv3fw'], device='cpu', compute_type='int8', cpu_threads=threads)
     segs = []
     t = time.time()
     for p in pieces:
@@ -176,7 +179,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--lab', default=LAB_DEFAULT)
     ap.add_argument('--set', required=True)
-    ap.add_argument('--engine', required=True, choices=['q5', 'q8', 'sv', 'lv3', 'zip'])
+    ap.add_argument('--engine', required=True, choices=['q5', 'q8', 'sv', 'lv3', 'lv3fw', 'zip'])
     ap.add_argument('--recs', default='')
     ap.add_argument('--threads', type=int, default=1)
     a = ap.parse_args()
@@ -196,6 +199,10 @@ def main():
             work = os.path.join(out_dir, rec['rec'] + '.work')
             os.makedirs(work, exist_ok=True)
             segs, work_ms = run_whisper_cpp(MODELS[a.engine], pieces, a.threads, work)
+        elif a.engine == 'lv3':
+            work = os.path.join(out_dir, rec['rec'] + '.work')
+            os.makedirs(work, exist_ok=True)
+            segs, work_ms = run_whisper_cpp(MODELS['lv3'], pieces, a.threads, work, binary='whisper_ref_run')
         elif a.engine in ('sv', 'zip'):
             segs, work_ms = run_sherpa(a.engine, pieces, a.threads)
         else:

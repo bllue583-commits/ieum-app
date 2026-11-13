@@ -202,7 +202,7 @@ def phone_convert(src_wav, cond, dst_dir, dl, seed):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('what', choices=['a', 'b', 'e'])
+    ap.add_argument('what', choices=['a', 'a_raw', 'b', 'e'])
     ap.add_argument('--dl', required=True)
     ap.add_argument('--lab', required=True)
     ap.add_argument('--n', type=int, default=30, help='A: 출처마다 문장 수')
@@ -215,6 +215,12 @@ def main():
         recs = build_recordings(items, 10, 0.8, 'A', os.path.join(a.lab, 'audio', 'A'))
         json.dump(recs, open(os.path.join(sets, 'A.json'), 'w'), ensure_ascii=False, indent=1)
         print('A', len(recs), 'recordings', sum(len(r['utts']) for r in recs), 'utts', sum(r['ms'] for r in recs) / 60000, 'min')
+    elif a.what == 'a_raw':
+        # 발견 1 확인용: 수준을 맞추지 않은 원래 음량 그대로(같은 문장, 같은 순서)
+        items = sample_a(a.dl, a.n)
+        recs = build_recordings(items, 10, 0.8, 'R', os.path.join(a.lab, 'audio', 'A_raw'), normalize_level=False)
+        json.dump(recs, open(os.path.join(sets, 'A_raw.json'), 'w'), ensure_ascii=False, indent=1)
+        print('A_raw', len(recs))
     elif a.what == 'b':
         A = json.load(open(os.path.join(sets, 'A.json')))[:a.b_recs]
         for k, cond in enumerate(CONDITIONS):

@@ -14,7 +14,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import labscore as L  # noqa: E402
 
-WHISPER = {'q5', 'q8', 'lv3'}
+WHISPER = {'q5', 'q8', 'lv3', 'lv3fw'}
 
 
 def load_engine(lab, set_name, engine, recs):
