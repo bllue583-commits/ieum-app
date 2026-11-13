@@ -26,10 +26,10 @@ marker() { adb shell su 0 cat "/data/data/$pkg/files/smoke-marker" 2>/dev/null |
 kept() { # $1 = what, $2 = first install time before
   local now; now=$(first_install)
   if [ -n "$2" ] && [ "$now" != "$2" ]; then echo "$1: FIRST INSTALL TIME CHANGED ($2 -> $now): the app was reinstalled, data gone"; return 1; fi
-  if su_ok; then
+  if [ "${has_marker:-0}" = "1" ] && su_ok; then
     [ "$(marker)" = "ieum-smoke" ] || { echo "$1: THE APP'S DATA IS GONE (marker missing)"; return 1; }
     echo "$1: data kept (marker read as root, first install $now)"
-  else echo "$1: data kept (first install time unchanged: $now; no su here to read the marker)"; fi
+  else echo "$1: data kept (first install time unchanged: $now; marker not usable here)"; fi
 }
 # The IEUM_CERT self check of the app that started last: never UNRELATED; when rotated, the old key's verdict is ANCESTOR.
 cert_line() { # $1 = logcat file, $2 = label
@@ -57,7 +57,11 @@ start_and_watch() { # $1 = label, $2 = logcat file
 adb install -r -g "$prev" || { echo "previous APK did not install"; exit 1; }
 # Written by the previous (debuggable) build's own user; read back as root after the update.
 adb shell am start -n "$pkg/.pipeline.MainActivity" >/dev/null 2>&1; sleep 4; adb shell am force-stop "$pkg"
-adb shell run-as "$pkg" sh -c 'mkdir -p files && echo ieum-smoke > files/smoke-marker' || echo "::warning title=update-smoke::marker not written (previous build not debuggable?)"
+# adb shell joins its arguments into one command line: the inner command is quoted once more, or `&&` and `>` would run
+# outside run-as (r18-lock, run 43335800599: the marker was never written that way).
+adb shell "run-as $pkg sh -c 'mkdir -p files && echo ieum-smoke > files/smoke-marker'"
+if [ "$(adb shell "run-as $pkg cat files/smoke-marker" 2>/dev/null | tr -d '\r')" = "ieum-smoke" ]; then has_marker=1
+else has_marker=0; echo "::warning title=update-smoke::marker not written: data checked by the first install time only"; fi
 before=$(first_install); echo "previous release installed: versionCode $(vcode), first install $before"
 adb install -r -g "$new" || { echo "NEW APK DID NOT INSTALL OVER THE PREVIOUS ONE"; exit 1; }
 kept "new over previous" "$before" || fail=1
@@ -118,10 +122,10 @@ self_install() {
   adb shell appops set "$pkg" REQUEST_INSTALL_PACKAGES allow
   adb shell am start -n "$pkg/.pipeline.MainActivity" >/dev/null; sleep 5; adb shell am force-stop "$pkg"
   adb push "$new" /data/local/tmp/ieum.apk >/dev/null || return 1
-  adb shell run-as "$pkg" sh -c 'mkdir -p cache/update && cp /data/local/tmp/ieum.apk cache/update/ieum.apk' || return 1
+  adb shell "run-as $pkg sh -c 'mkdir -p cache/update && cp /data/local/tmp/ieum.apk cache/update/ieum.apk'" || return 1
   local sha size code; sha=$(sha256sum "$new" | cut -d' ' -f1); size=$(stat -c %s "$new"); code=$((before+1))
   printf "<?xml version='1.0' encoding='utf-8' standalone='yes' ?><map><int name=\"code\" value=\"%s\" /><string name=\"sha\">%s</string><long name=\"size\" value=\"%s\" /><string name=\"name\">v-smoke</string></map>" "$code" "$sha" "$size" \
-    | adb shell run-as "$pkg" sh -c 'mkdir -p shared_prefs && cat > shared_prefs/ieum.update.xml' || return 1
+    | adb shell "run-as $pkg sh -c 'mkdir -p shared_prefs && cat > shared_prefs/ieum.update.xml'" || return 1
   adb shell am start -n "$pkg/.pipeline.MainActivity" --ez install_update true >/dev/null
   local now=""; for i in $(seq 1 30); do now=$(vcode); [ -n "$now" ] && [ "$now" -gt "$before" ] && break; sleep 2; done
   echo "self-install: before=$before after=$now" | tee "$out/self-install.txt"
