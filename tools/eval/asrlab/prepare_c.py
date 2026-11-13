@@ -18,6 +18,24 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import prepare  # noqa: E402
 
 
+def vad_filter(recs, min_ratio=0.5):
+    """자막이 말소리가 아닌 영상(화면 글자 자막 등)을 뺀다: Silero VAD 말소리 시간 < 자막 시간 × min_ratio 이면 제외.
+    ASR 결과가 아니라 VAD로만 정한다(시험 엔진에 유리하게 고르지 않으려고)."""
+    import run_engines
+    sv = run_engines.SenseVoice(1)
+    keep = []
+    for r in recs:
+        x, _ = sf.read(r['wav'], dtype='float32')
+        speech = sum(len(s) for _, s in sv.parts(x)) / 16.0
+        cap = sum(u['end_ms'] - u['start_ms'] for u in r['utts'])
+        r['vad_speech_ms'] = int(speech)
+        if speech >= min_ratio * cap:
+            keep.append(r)
+        else:
+            print('C 제외', r['rec'], 'VAD 말소리 %.0f초 / 자막 %.0f초' % (speech / 1000, cap / 1000))
+    return keep
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dl', required=True)
@@ -87,6 +105,7 @@ def main():
         wav = os.path.join(out_dir, 'C%02d.wav' % k)
         prepare.write_wav(wav, x)
         recs.append(dict(rec='C%02d' % k, wav=wav, utts=utts, ms=pos // 16, source='https://www.youtube.com/watch?v=' + vid))
+    recs = vad_filter(recs)
     json.dump(recs, open(os.path.join(a.lab, 'sets', 'C.json'), 'w'), ensure_ascii=False, indent=1)
     print('C', len(recs), 'recordings', sum(len(r['utts']) for r in recs), 'utts', sum(r['ms'] for r in recs) / 60000, 'min', 'candidates', len(cands))
 
