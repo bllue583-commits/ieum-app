@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>이음 사용 설문</title>
+<!-- v4.0 r20-6 (DESIGN_V7 6): a one-page form the wife fills in by herself on her phone, outside the app. It works offline
+     (no network, nothing is sent): at the end it shows one line of numbers to copy and send. tools/survey/survey_to_json.py
+     turns that line into the inbox's status/survey.json. No name, no call content. -->
+<style>
+  :root { --bg:#f6f7f9; --card:#ffffff; --ink:#191f28; --sub:#4e5968; --line:#e5e8eb; --accent:#3182f6; --soft:#e8f3ff; --warn:#b25e09; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#101214; --card:#1b1e22; --ink:#f2f4f6; --sub:#b0b8c1; --line:#2c3036; --accent:#6ea8ff; --soft:#1d2a3d; --warn:#f0a75a; } }
+  :root[data-theme="dark"] { --bg:#101214; --card:#1b1e22; --ink:#f2f4f6; --sub:#b0b8c1; --line:#2c3036; --accent:#6ea8ff; --soft:#1d2a3d; --warn:#f0a75a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:19px/1.6 -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif; }
+  main { max-width:640px; margin:0 auto; padding:20px 16px 64px; }
+  h1 { font-size:28px; margin:8px 0 4px; }
+  h2 { font-size:21px; margin:32px 0 8px; }
+  p { margin:8px 0; }
+  .sub { color:var(--sub); font-size:17px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px; margin:12px 0; }
+  .q { font-weight:600; margin-bottom:10px; }
+  .scale { display:grid; grid-template-columns:repeat(5,1fr); gap:6px; }
+  .scale label, .pick label { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:56px; border:1px solid var(--line);
+    border-radius:12px; cursor:pointer; font-size:17px; text-align:center; padding:4px; }
+  .pick { display:grid; gap:8px; }
+  .pick label { flex-direction:row; justify-content:flex-start; padding:10px 14px; font-size:18px; }
+  input[type=radio] { position:absolute; opacity:0; width:1px; height:1px; }
+  input[type=radio]:checked + span { color:var(--accent); font-weight:700; }
+  label:has(input:checked) { border-color:var(--accent); background:var(--soft); }
+  input[type=radio]:focus-visible + span { outline:2px solid var(--accent); outline-offset:3px; }
+  .ends { display:flex; justify-content:space-between; color:var(--sub); font-size:15px; margin-top:6px; }
+  input[type=number] { font:inherit; width:7em; min-height:52px; padding:8px 12px; border:1px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink); }
+  button { font:inherit; font-weight:700; min-height:56px; width:100%; border:0; border-radius:14px; background:var(--accent); color:#fff; margin-top:16px; cursor:pointer; }
+  #code { font:17px/1.5 ui-monospace, Menlo, monospace; word-break:break-all; background:var(--soft); border-radius:12px; padding:14px; }
+  #missing { color:var(--warn); font-weight:600; }
+  .note { font-size:15px; color:var(--sub); }
+</style>
+</head>
+<body>
+<main>
+  <h1>이음 사용 설문</h1>
+  <p class="sub">이음을 써 보신 그대로 혼자 적어 주세요. 맞는 답이나 기대하는 답은 없어요. 5분쯤 걸려요. 이 화면은 인터넷에 아무것도 보내지 않고, 마지막에 나오는 숫자 한 줄만 복사해서 보내 주시면 돼요.</p>
+
+  <h2>1. 이음을 쓰면서 느낀 것 (10문항)</h2>
+  <p class="sub">각 문장에 얼마나 그렇다고 생각하시는지 하나씩 골라 주세요. 1은 전혀 그렇지 않다, 5는 매우 그렇다예요.</p>
+  <div id="sus"></div>
+
+  <h2>2. 이음이 없어진다면</h2>
+  <div class="card">
+    <div class="q">내일부터 이음을 더 쓸 수 없게 된다면 어떠실 것 같나요?</div>
+    <div class="pick" role="radiogroup" aria-label="이음이 없어진다면">
+      <label><input type="radio" name="miss" value="very"><span>매우 아쉬울 것 같다</span></label>
+      <label><input type="radio" name="miss" value="some"><span>조금 아쉬울 것 같다</span></label>
+      <label><input type="radio" name="miss" value="none"><span>상관없다 (아쉽지 않다)</span></label>
+    </div>
+  </div>
+
+  <h2>3. 밤 9시 배터리 화면</h2>
+  <div class="card">
+    <div class="q">밤 9시쯤 휴대폰 설정 › 배터리 › 배터리 사용량(또는 '사용량 자세히')을 열면 앱마다 %가 나와요. '이음' 옆의 숫자를 적어 주세요.</div>
+    <p><input type="number" id="battery" inputmode="decimal" min="0" max="100" step="0.1" aria-label="이음 배터리 비중 퍼센트"> %</p>
+    <p class="note">목록에 이음이 없으면 0으로 적어 주세요. 밤 9시가 아니어도 되지만, 되도록 그 시각에 봐 주세요.</p>
+  </div>
+
+  <h2>4. 혼자 해 보기 (선택)</h2>
+  <p class="sub">해 보시고 어땠는지 골라 주세요. 하지 않아도 돼요.</p>
+  <div id="tasks"></div>
+
+  <button type="button" id="make">다 적었어요, 숫자 만들기</button>
+  <p id="missing" role="alert"></p>
+  <div id="out" hidden>
+    <h2>보내 주실 숫자</h2>
+    <div id="code" aria-live="polite"></div>
+    <button type="button" id="copy">복사하기</button>
+    <p class="sub" id="copied"></p>
+    <p class="sub">복사한 한 줄을 카카오톡으로 남편에게 보내 주세요. 고마워요.</p>
+  </div>
+
+  <h2>이 설문에 대해</h2>
+  <p class="note">1번의 10문항은 사용성 척도 SUS(System Usability Scale, Brooke 1996)를 이음에 맞게 한국어로 옮긴 것이에요. 검증된 공식 한국어 번역본을 찾지 못해서 번역한 뒤 다시 영어로 옮겨 원문과 뜻을 맞춰 봤어요(번역·역번역). 공식 번역본이 아니고 한 사람의 점수라, 결과는 참고하는 값으로만 써요.</p>
+</main>
+<script>
+// The SUS items in order (odd: positive, even: negative). Kept in the same order as tools/survey/survey_to_json.py.
+const SUS = [
+  "이음을 앞으로도 자주 쓰고 싶다.",
+  "이음은 쓸데없이 복잡하다.",
+  "이음은 쓰기 쉽다.",
+  "이음을 쓰려면 잘 아는 사람의 도움이 필요할 것 같다.",
+  "이음의 여러 기능이 서로 잘 이어져 있다.",
+  "이음에는 앞뒤가 맞지 않는 부분이 너무 많다.",
+  "대부분의 사람은 이음을 금방 배워서 쓸 수 있을 것 같다.",
+  "이음은 쓰기가 아주 번거롭다.",
+  "이음을 쓸 때 자신 있게 쓸 수 있었다.",
+  "이음을 쓰기 전에 배워야 할 것이 많았다."
+];
+const TASKS = [
+  "방금 끝난 통화의 요약 찾기",
+  "요약에 나온 금액을 통화 내용 전체와 맞춰 보기",
+  "체크할 일 하나를 [다 됐어요]로 끝내기",
+  "특정 업체와 지난번에 한 통화 찾기",
+  "통화에 메모 남기기 (체크할 일에 직접 적기)"
+];
+const sus = document.getElementById("sus");
+SUS.forEach((q, i) => {
+  const n = i + 1;
+  const c = document.createElement("div"); c.className = "card";
+  c.innerHTML = `<div class="q" id="q${n}">${n}. ${q}</div><div class="scale" role="radiogroup" aria-labelledby="q${n}">` +
+    [1,2,3,4,5].map(v => `<label><input type="radio" name="s${n}" value="${v}"><span>${v}</span></label>`).join("") +
+    `</div><div class="ends"><span>전혀 그렇지 않다</span><span>매우 그렇다</span></div>`;
+  sus.appendChild(c);
+});
+const tasks = document.getElementById("tasks");
+TASKS.forEach((t, i) => {
+  const n = i + 1;
+  const c = document.createElement("div"); c.className = "card";
+  c.innerHTML = `<div class="q" id="t${n}">${t}</div><div class="pick" role="radiogroup" aria-labelledby="t${n}">` +
+    [["1","쉽게 했다"],["2","했지만 헤맸다"],["3","못 했다"]].map(([v, w]) => `<label><input type="radio" name="t${n}" value="${v}"><span>${w}</span></label>`).join("") + `</div>`;
+  tasks.appendChild(c);
+});
+const picked = name => (document.querySelector(`input[name="${name}"]:checked`) || {}).value;
+document.getElementById("make").addEventListener("click", () => {
+  const answers = SUS.map((_, i) => picked("s" + (i + 1)));
+  const miss = picked("miss");
+  const battery = document.getElementById("battery").value.trim();
+  const left = answers.map((a, i) => a ? null : i + 1).filter(Boolean);
+  const words = [];
+  if (left.length) words.push(`1번의 ${left.join(", ")}번 문항`);
+  if (!miss) words.push("2번");
+  const b = Number(battery);
+  if (battery === "" || !(b >= 0 && b <= 100)) words.push("3번(0에서 100 사이 숫자)");
+  const out = document.getElementById("out");
+  if (words.length) { document.getElementById("missing").textContent = `아직 고르지 않은 곳이 있어요: ${words.join(", ")}`; out.hidden = true; return; }
+  document.getElementById("missing").textContent = "";
+  const t = TASKS.map((_, i) => picked("t" + (i + 1)) || "0");
+  const day = new Date(); const d = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+  document.getElementById("code").textContent = `IEUM-SURVEY 1 | sus=${answers.join(",")} | miss=${miss} | battery=${b} | tasks=${t.join(",")} | date=${d}`;
+  out.hidden = false; out.scrollIntoView({behavior: "smooth"});
+});
+document.getElementById("copy").addEventListener("click", async () => {
+  const text = document.getElementById("code").textContent;
+  let ok = false;
+  try { await navigator.clipboard.writeText(text); ok = true; } catch (e) {
+    const r = document.createRange(); r.selectNodeContents(document.getElementById("code"));
+    const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+    try { ok = document.execCommand("copy"); } catch (e2) { ok = false; }
+  }
+  document.getElementById("copied").textContent = ok ? "복사했어요." : "숫자를 길게 눌러 복사해 주세요.";
+});
+</script>
+</body>
+</html>
