@@ -64,21 +64,21 @@ def main():
     L.append('')
     L.append('### 표 4. 기준 자막 방법(정답이 있는 묶음에서, 모든 엔진이 끝낸 녹음만)')
     L.append('')
-    L.append('| 묶음 | 기준 자막 | 대조 모델 | 기준 자막 오류율 % | 기준 자막 숫자 오류 | 사람이 볼 글자/분(전부) | 숫자 구간만 | 불일치로 잡힌 오류 비율 | 남는 오류(글자 대비 %) 전부 / 숫자만 |')
-    L.append('| --- | --- | --- | --- | --- | --- | --- | --- | --- |')
+    L.append('| 묶음 | 기준 자막 | 대조 모델 | 분 | 기준 자막 오류율 % | 기준 자막 숫자 오류 | 그중 대조 모델이 맞혀 드러난 것 | 불일치 구간/분 (숫자 구간/분) | 볼 글자/분 | 불일치로 잡힌 오류 글자 비율 | 다 고친 뒤 남는 오류 %(전부 볼 때) |')
+    L.append('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |')
     for s, d in S.items():
         for k, v in d['reference'].items():
             if v['ref'] not in ('lv3', 'q5', 'q8'):
                 continue
             if v['check_against'] not in (None, 'sv', 'q5', 'q8', 'lv3'):
                 continue
+            ne = [v['number_errors'][1] - v['number_errors'][0], v['number_errors'][1]]
             if v['check_against'] is None:
-                L.append('| %s | %s | — | %s | %s | — | — | — | — |' % (LABEL[s], ENG[v['ref']], pct(v['cer']), frac([v['number_errors'][1] - v['number_errors'][0], v['number_errors'][1]])))
+                L.append('| %s | %s | — | %.1f | %s | %s | — | — | — | — | %s |' % (LABEL[s], ENG[v['ref']], v['audio_min'], pct(v['cer']), frac([v['number_errors'][0], v['number_errors'][1]]), pct(v['cer'])))
             else:
-                L.append('| %s | %s | %s | %s | %s | %.0f | %.0f | %s%% | %s / %s |' % (LABEL[s], ENG[v['ref']], ENG[v['check_against']], pct(v['cer']),
-                                                                         frac([v['number_errors'][1] - v['number_errors'][0], v['number_errors'][1]]),
-                                                                         v['check_chars_per_min'] or 0, v['check_num_chars_per_min'] or 0, pct(v['flagged_share_of_errors']),
-                                                                         pct(v['residual_err_char_rate']), pct(v['residual_err_char_rate_numonly'])))
+                L.append('| %s | %s | %s | %.1f | %s | %s | %d/%d | %.1f (%.1f) | %.0f | %s%% | %s |' % (LABEL[s], ENG[v['ref']], ENG[v['check_against']], v['audio_min'], pct(v['cer']),
+                         frac([v['number_errors'][0], v['number_errors'][1]]), v['number_errors_caught'][0], v['number_errors_caught'][1],
+                         v['spans_per_min'] or 0, v['number_spans_per_min'] or 0, v['check_chars_per_min'] or 0, pct(v['flagged_share_of_errors']), pct(v['residual_err_char_rate'])))
     L.append('')
     text = '\n'.join(L)
     doc = open(a.doc, encoding='utf-8').read()

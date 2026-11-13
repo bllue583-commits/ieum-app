@@ -22,13 +22,14 @@ FILES = [
     ('Supertone/supertonic-2', 'model', 'onnx/tts.json', 'D', 'OpenRAIL-M'),
     ('Supertone/supertonic-2', 'model', 'onnx/unicode_indexer.json', 'D', 'OpenRAIL-M'),
 ] + [('Supertone/supertonic-2', 'model', 'voice_styles/%s.json' % v, 'D', 'OpenRAIL-M') for v in ('M1', 'M2', 'M3', 'M4', 'F1', 'F2', 'F3', 'F4')] + [
+    ('ggerganov/whisper.cpp', 'model', 'ggml-large-v3-q5_0.bin', '기준 자막(lv3)', 'MIT (OpenAI Whisper large-v3, ggml q5_0)'),
     ('Systran/faster-whisper-large-v3', 'model', 'model.bin', '기준 자막', 'MIT (OpenAI Whisper large-v3 변환)'),
     ('Systran/faster-whisper-large-v3', 'model', 'config.json', '기준 자막', 'MIT'),
     ('Systran/faster-whisper-large-v3', 'model', 'tokenizer.json', '기준 자막', 'MIT'),
     ('Systran/faster-whisper-large-v3', 'model', 'vocabulary.json', '기준 자막', 'MIT'),
     ('Systran/faster-whisper-large-v3', 'model', 'preprocessor_config.json', '기준 자막', 'MIT'),
 ]
-LOCAL = {'Supertone/supertonic-2': 'supertonic-2', 'Systran/faster-whisper-large-v3': '../models/faster-whisper-large-v3'}
+LOCAL = {'ggerganov/whisper.cpp': '../models', 'Supertone/supertonic-2': 'supertonic-2', 'Systran/faster-whisper-large-v3': '../models/faster-whisper-large-v3'}
 
 
 def sha256(p):

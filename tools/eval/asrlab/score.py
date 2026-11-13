@@ -116,18 +116,20 @@ def draft_final(per_a, per_b):
                 calls=calls, calls_with_mismatch=bad)
 
 
-def reference_methods(per, recs, audio_min):
-    """기준 자막 방법별: 기준 자막(lv3 등)의 정답 대비 오류율, 숫자 오류, 다른 모델과의 불일치 구간만 사람이 볼 때의 양과 남는 오류."""
+def reference_methods(per, rec_ms):
+    """기준 자막 방법별(정답이 있는 묶음): 기준 자막의 정답 대비 오류율·숫자 오류, 다른 모델과의 불일치 구간만 사람이 볼 때
+    볼 양(글자/분, 구간/분)과 그래도 남는 오류. 짝마다 두 엔진이 다 끝낸 녹음만 쓴다."""
     out = {}
     cands = [k for k in ('lv3', 'q5', 'q8', 'sv', 'zip') if k in per]
     for ref_eng in cands:
         for other in [None] + [c for c in cands if c != ref_eng]:
             tot_ref = tot_err = flagged = flagged_num = residual = residual_numonly = err_total = 0
-            num_err = num_tot = 0
-            num_err_unflagged = 0
+            num_err = num_tot = num_caught = spans = num_spans = 0
+            ms = 0
             for rec in per[ref_eng]:
                 if other and rec not in per[other]:
                     continue
+                ms += rec_ms[rec]
                 g = per[ref_eng][rec]
                 truth = g['ref_norm']
                 hyp = g['hyp_norm']
@@ -138,7 +140,8 @@ def reference_methods(per, recs, audio_min):
                 num_err += t - h
                 num_tot += t
                 if other:
-                    flag = L.disagree_mask(hyp, per[other][rec]['hyp_norm'])
+                    oth = per[other][rec]['hyp_norm']
+                    flag = L.disagree_mask(hyp, oth)
                     # 앞뒤 2글자 여유(사람은 구간을 본다)
                     wide = [any(flag[max(0, i - 2):i + 3]) for i in range(len(flag))]
                     numflag = [w and any(c.isdigit() for c in hyp[max(0, i - 4):i + 5]) for i, w in enumerate(wide)]
@@ -147,12 +150,24 @@ def reference_methods(per, recs, audio_min):
                     residual += sum(1 for e, w in zip(err, wide) if e and not w)
                     residual_numonly += sum(1 for e, w in zip(err, numflag) if e and not w)
                     err_total += sum(err)
+                    d = L.disagreements(hyp, oth, 0)
+                    spans += len(d)
+                    num_spans += sum(1 for x in d if x[2])
+                    # 기준 자막이 틀린 정답 숫자 중 대조 모델은 맞힌 것(= 불일치로 반드시 드러남; 둘 다 다르게 틀린 것은 빠지므로 하한)
+                    tn = L.number_list(truth)
+                    from collections import Counter
+                    miss = Counter(tn) - Counter(L.number_list(hyp))
+                    oc = Counter(L.number_list(oth))
+                    num_caught += sum(min(n, oc.get(k, 0)) for k, n in miss.items())
+            minutes = ms / 60000
             key = ref_eng + ('+' + other if other else '')
-            r = dict(ref=ref_eng, check_against=other, cer=tot_err / tot_ref if tot_ref else None, number_errors=[num_err, num_tot])
+            r = dict(ref=ref_eng, check_against=other, audio_min=minutes, cer=tot_err / tot_ref if tot_ref else None, number_errors=[num_err, num_tot])
             if other:
-                r.update(check_chars_per_min=flagged / audio_min if audio_min else None, check_num_chars_per_min=flagged_num / audio_min if audio_min else None,
+                r.update(check_chars_per_min=flagged / minutes if minutes else None, check_num_chars_per_min=flagged_num / minutes if minutes else None,
+                         spans_per_min=spans / minutes if minutes else None, number_spans_per_min=num_spans / minutes if minutes else None,
                          residual_err_char_rate=residual / tot_ref if tot_ref else None, residual_err_char_rate_numonly=residual_numonly / tot_ref if tot_ref else None,
-                         flagged_share_of_errors=1 - residual / err_total if err_total else None)
+                         flagged_share_of_errors=1 - residual / err_total if err_total else None,
+                         number_errors_caught=[num_caught, num_err])
             out[key] = r
     return out
 
@@ -198,7 +213,7 @@ def main():
     audio_min = None
     if common:
         audio_min = sum(r['ms'] for r in recs if r['rec'] in common) / 60000
-    refm = reference_methods({e: {k: v for k, v in per[e].items() if k in common} for e in per}, recs, audio_min) if common else {}
+    refm = reference_methods(per, {r['rec']: r['ms'] for r in recs}) if recs and recs[0]['utts'] else {}
     out = dict(set=a.set, engines=res, paired=pairs, draft_final=df, reference=refm, common_recs=sorted(common or []))
     os.makedirs(os.path.join(a.lab, 'scores'), exist_ok=True)
     json.dump(out, open(os.path.join(a.lab, 'scores', a.set + '.json'), 'w'), ensure_ascii=False, indent=1)

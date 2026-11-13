@@ -162,6 +162,15 @@
   "sha256": "e056fc2bee393edc8bff761eb28f33fb461e8dad828c3b05348a010ac1b7bb79"
  },
  {
+  "repo": "ggerganov/whisper.cpp",
+  "type": "model",
+  "file": "ggml-large-v3-q5_0.bin",
+  "sets": "기준 자막(lv3)",
+  "license": "MIT (OpenAI Whisper large-v3, ggml q5_0)",
+  "bytes": 1081140203,
+  "sha256": "d75795ecff3f83b5faa89d1900604ad8c780abd5739fae406de19f23ecd98ad1"
+ },
+ {
   "repo": "Systran/faster-whisper-large-v3",
   "type": "model",
   "file": "model.bin",
