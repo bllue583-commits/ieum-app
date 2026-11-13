@@ -85,10 +85,24 @@ def score_engine(recs, runs, engine, with_original=False):
     res = dict(engine=engine, recs=len(per_rec), utts=len(st), ref_chars=n, edits=e, cer=e / n if n else None, ci=[lo, hi],
                numbers=[num_hit, num_tot], names=[name_hit, name_tot], cleaned=removed, loops=loops, silence_halluc=halluc,
                halluc_per_call=halluc / len(per_rec) if per_rec else None, short_halluc=short_total, audio_min=audio / 60000, rtf=work / audio if audio else None)
+    if with_original:
+        # 출처별(zeroth / fleurs_ko): 손으로 고친 정답과 원래 공개 정답 둘 다
+        by = {}
+        for src in ('zeroth', 'fleurs_ko'):
+            ids_s = [i for i in ids if i.startswith(src + '_')]
+            if not ids_s:
+                continue
+            a_ = [utt_stats[i] for i in ids_s]
+            o_ = [orig_stats[i] for i in ids_s if i in orig_stats]
+            by[src] = dict(utts=len(ids_s), cer=sum(x[0] for x in a_) / sum(x[1] for x in a_), ci=list(L.bootstrap_ci(a_)),
+                           cer_original=sum(x[0] for x in o_) / sum(x[1] for x in o_) if o_ else None, ci_original=list(L.bootstrap_ci(o_)) if o_ else None)
+        res_by_source = by
     if with_original and orig_stats:
         so = [orig_stats[i] for i in sorted(orig_stats)]
         res['cer_original_ref'] = sum(x[0] for x in so) / sum(x[1] for x in so)
         res['ci_original_ref'] = list(L.bootstrap_ci(so))
+    if with_original:
+        res['by_source'] = res_by_source
     return res, dict(zip(ids, st)), per_rec
 
 
@@ -125,12 +139,16 @@ def reference_methods(per, rec_ms):
     out = {}
     cands = [k for k in ('lv3', 'q5', 'q8', 'sv', 'zip') if k in per]
     for ref_eng in cands:
-        for other in [None] + [c for c in cands if c != ref_eng]:
+        others = [None] + [c for c in cands if c != ref_eng]
+        if ref_eng == 'lv3' and 'q5' in per and 'sv' in per:
+            others.append(('q5', 'sv'))  # 3자 대조: 기준 자막과 (가)·(다) 어느 쪽이든 다른 곳
+        for other in others:
             tot_ref = tot_err = flagged = flagged_num = residual = residual_numonly = err_total = 0
             num_err = num_tot = num_caught = spans = num_spans = 0
             ms = 0
             for rec in per[ref_eng]:
-                if other and rec not in per[other]:
+                group = list(other) if isinstance(other, tuple) else ([other] if other else [])
+                if any(rec not in per[o] for o in group):
                     continue
                 ms += rec_ms[rec]
                 g = per[ref_eng][rec]
@@ -143,8 +161,9 @@ def reference_methods(per, rec_ms):
                 num_err += t - h
                 num_tot += t
                 if other:
-                    oth = per[other][rec]['hyp_norm']
-                    flag = L.disagree_mask(hyp, oth)
+                    oths = [per[o][rec]['hyp_norm'] for o in group]
+                    oth = oths[0]
+                    flag = [any(f) for f in zip(*[L.disagree_mask(hyp, o) for o in oths])] if hyp else []
                     # 앞뒤 2글자 여유(사람은 구간을 본다)
                     wide = [any(flag[max(0, i - 2):i + 3]) for i in range(len(flag))]
                     numflag = [w and any(c.isdigit() for c in hyp[max(0, i - 4):i + 5]) for i, w in enumerate(wide)]
@@ -153,18 +172,21 @@ def reference_methods(per, rec_ms):
                     residual += sum(1 for e, w in zip(err, wide) if e and not w)
                     residual_numonly += sum(1 for e, w in zip(err, numflag) if e and not w)
                     err_total += sum(err)
-                    d = L.disagreements(hyp, oth, 0)
-                    spans += len(d)
-                    num_spans += sum(1 for x in d if x[2])
+                    # 구간 수: 표시된 글자의 연속 덩어리(3자 대조에서도 겹친 곳은 한 번)
+                    runs = [i for i in range(len(wide)) if wide[i] and (i == 0 or not wide[i - 1])]
+                    spans += len(runs)
+                    num_spans += sum(1 for i in range(len(numflag)) if numflag[i] and (i == 0 or not numflag[i - 1]))
                     # 기준 자막이 틀린 정답 숫자 중 대조 모델은 맞힌 것(= 불일치로 반드시 드러남; 둘 다 다르게 틀린 것은 빠지므로 하한)
                     tn = L.number_list(truth)
                     from collections import Counter
                     miss = Counter(tn) - Counter(L.number_list(hyp))
-                    oc = Counter(L.number_list(oth))
+                    oc = Counter()
+                    for o in oths:
+                        oc |= Counter(L.number_list(o))
                     num_caught += sum(min(n, oc.get(k, 0)) for k, n in miss.items())
             minutes = ms / 60000
-            key = ref_eng + ('+' + other if other else '')
-            r = dict(ref=ref_eng, check_against=other, audio_min=minutes, cer=tot_err / tot_ref if tot_ref else None, number_errors=[num_err, num_tot])
+            key = ref_eng + ('+' + '+'.join(group) if other else '')
+            r = dict(ref=ref_eng, check_against='+'.join(group) if other else None, audio_min=minutes, cer=tot_err / tot_ref if tot_ref else None, number_errors=[num_err, num_tot])
             if other:
                 r.update(check_chars_per_min=flagged / minutes if minutes else None, check_num_chars_per_min=flagged_num / minutes if minutes else None,
                          spans_per_min=spans / minutes if minutes else None, number_spans_per_min=num_spans / minutes if minutes else None,

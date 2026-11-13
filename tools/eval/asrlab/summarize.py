@@ -8,7 +8,7 @@ import re
 ORDER = ['A', 'B_nb_ulaw', 'B_wb_opus12', 'B_nb_pink20', 'B_wb_babble10', 'C', 'D_clean', 'D_nb', 'E']
 LABEL = {'A': 'A 낭독', 'B_nb_ulaw': 'B 좁은 대역 μ-law+AAC', 'B_wb_opus12': 'B 넓은 대역 Opus 12k+AAC', 'B_nb_pink20': 'B 좁은 대역+분홍 잡음 SNR 20',
          'B_wb_babble10': 'B 넓은 대역+잡담 잡음 SNR 10', 'C': 'C 즉흥(YODAS)', 'D_clean': 'D 숫자·이름(TTS 원음)', 'D_nb': 'D 숫자·이름(TTS, 좁은 대역)', 'E': 'E 긴 통화(좁은 대역)'}
-ENG = {'q5': '(가) q5_0', 'q8': '(나) q8_0', 'sv': '(다) SenseVoice', 'lv3': 'large-v3', 'zip': 'zipformer'}
+ENG = {'q5+sv': '(가)+(다) 둘 다', 'q5': '(가) q5_0', 'q8': '(나) q8_0', 'sv': '(다) SenseVoice', 'lv3': 'large-v3', 'zip': 'zipformer'}
 
 
 def pct(x):
@@ -79,7 +79,7 @@ def main():
         for k, v in d['reference'].items():
             if v['ref'] not in ('lv3', 'q5', 'q8'):
                 continue
-            if v['check_against'] not in (None, 'sv', 'q5', 'q8', 'lv3'):
+            if v['check_against'] not in (None, 'sv', 'q5', 'q8', 'lv3', 'q5+sv'):
                 continue
             ne = [v['number_errors'][1] - v['number_errors'][0], v['number_errors'][1]]
             if v['check_against'] is None:
