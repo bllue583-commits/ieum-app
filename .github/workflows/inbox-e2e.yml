@@ -5,12 +5,12 @@ name: inbox-e2e
 #   check (the next manual run):        validate results/selftest-*.json with the phone's parser + filter, then remove it
 # So one check is two manual runs about an hour apart (put, then the hourly analysis answers, then check-and-put again).
 on:
-  # v4.0 r20-5: a push runs it on the integration branch only. It writes a synthetic job into the inbox, so a work branch
+  # v3.9 r20-5: a push runs it on the integration branch only. It writes a synthetic job into the inbox, so a work branch
   # that only edits this file must not set it off (the r20 work branch did once; that run was cancelled before the put).
   push:
     branches: ['feature/lean-calls']
     paths: ['.github/workflows/inbox-e2e.yml', 'android/app/src/test/java/kr/callbrief/pipeline/InboxSelfTest.kt']
-  # v4.0 r20-5: no schedule. GitHub runs a schedule only from the default branch (main), which does not have this file, so the
+  # v3.9 r20-5: no schedule. GitHub runs a schedule only from the default branch (main), which does not have this file, so the
   # hourly cron that stood here never ran (last run 11/4, by a push). Each run also puts a synthetic call through the hourly
   # analysis, out of the same subscription limit as the wife's calls. Run it by hand after a change to the analysis or the parser.
   workflow_dispatch:

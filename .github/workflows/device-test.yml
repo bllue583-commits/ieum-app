@@ -14,7 +14,7 @@ name: device-test
 # (today's code only, about 13 minutes with the small model): t6's 30-minute call takes most of the rest of the 90 minutes.
 # The comparison of the silence-floor and prompt variants is a manual run: golden=compare, only=tg_goldenSet (about 45
 # minutes). The full run skips it (the large model on the emulator is far too slow).
-# v4.0 r20-5 (Actions budget, OPERATIONS 5): a push runs it on the integration branch only (feature/lean-calls). Work branches
+# v3.9 r20-5 (Actions budget, OPERATIONS 5): a push runs it on the integration branch only (feature/lean-calls). Work branches
 # run it by hand: gh api repos/<owner>/<repo>/actions/workflows/device-test.yml/dispatches -f ref=<branch>.
 on:
   push:
