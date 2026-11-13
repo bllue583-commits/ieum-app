@@ -1,2 +1,2 @@
-{"bench": {"on": true, "candidates": ["b", "c"], "calls": 20, "run": 1},
+{"bench": {"on": true, "candidates": ["b"], "calls": 20, "run": 2, "fgMinutes": 180},
  "samples": {"on": true, "calls": 12, "maxMinutes": 40}}
