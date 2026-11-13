@@ -191,6 +191,20 @@ v3.8은 **두 번에 나눠 배포한다**: 빌드 A 저장소 → 평일 하루
 
 정규화가 필요한 이유(도구 시험 실측): "삼십만 원"과 "30만원"을 다르게 세면 엔진 순위가 뒤집힌다(표본에서 정규화 전 17.5% 대 10.2%, 정규화 뒤 0% 대 1.5%).
 
+#### 4.4-1 실제로 만든 것 (r18-bench, `feature/r18-bench`)
+
+| 무엇 | 만든 것 | 코드 |
+| --- | --- | --- |
+| 켜는 법 | 하트비트(매시간) 때 우편함 `app/config.json`을 읽는다. 파일이 없거나(404) 읽을 수 없는 내용이면 꺼짐, 네트워크 오류면 그 시간에는 아무것도 바꾸지 않음. **꺼져 있고 한 번도 켜진 적 없으면 읽기 한 번 말고는 아무 일도 없다**(설정 쓰기·작업 예약·라이브러리 로드·모델 받기 없음, 하트비트에 `bench`·`samples` 키도 없음). 같은 값을 봉인 설정 `benchConfig`에 넣으면(디버그 빌드에서) 그것이 "별도 설정 키". 화면 항목은 늘리지 않았다(기존 "속도 측정 (시험용)"은 그대로) | `bench/BenchWork.kt`의 `Bench.onHeartbeat`, `PhoneStatus.publish` 한 줄 |
+| 후보 | (가) 앱의 q5_0 그대로(선택, 기본 후보 아님) (나) **지금 라이브러리(whisper.cpp 1.7.6, armv8.2+dotprod+fp16) + q8_0 + 포그라운드** (다) SenseVoice-Small int8 2024-07-17(sherpa-onnx 2.0.1 공식 AAR의 arm64 `.so`, 언어 ko, 역정규화 켬, 스레드 2) + Silero VAD(조각 안을 말소리 구간 최대 20초로 나눔). 순서는 (다) → (나) → (가) | `bench/BenchEngines.kt` |
+| 재는 때 | 충전 중·통화 아님·발열 moderate 미만·자막 대기열 0·앱의 자막 작업(`calls-transcription`)이 대기·실행 중 아님. 2초마다 다시 보고 하나라도 깨지면 그 조각을 버리고(엔진 취소) 멈춘다. 끝난 조각은 숫자로 남아 다음 실행이 그 다음 조각부터. WorkManager 작업 `ieum.bench`(충전 제약), 멈추면 10분 뒤 다시 | `BenchGate`, `BenchWork.Watcher` |
+| 고르는 것 | 최근 7일(앱이 결과 뒤 7일 자막을 지니므로) 업무 통화: 결과 business=true, 개인 번호 아님, 제외 번호·보관·폴더 해제 아님, 녹음이 금고에 있고 자막이 남아 있는 것. 1~5분 최신 18건 + 10분 넘는 최신 2건(설정 `calls`) | `BenchPick.bench`, `CallRecordStore.benchRows` |
+| 재는 값 | 조각마다: 벽시계 ms, 프로세스 CPU ms(`/proc/self/stat`, 엔진의 모든 스레드 합), 녹음 ms, (가)의 저장 자막 중 그 조각 안에서 시작한 줄을 기준으로 한 정규화 글자 오류(`KoCer` = `ko_cer.py` 규칙, `tools/eval/ko_cer_parity.json`으로 파이썬과 교차), 숫자 토큰 적중, 장부 이름 적중, 묵음 환각(1초 미만 구간의 1~2글자). 후보 자막은 앱처럼 `TranscriptClean`을 거친 뒤 잰다. 충전 중이라 mAh는 잴 수 없어 `mAh:null, energyBasis:"cpu"`로 올림 | `KoCer.kt`, `BenchState.kt` |
+| 모델 받기 | 켜졌을 때만, 충전 + 와이파이(비종량), 남는 공간이 받은 뒤에도 2GB 이상일 때만. 크기·sha256 확인, `.part` 이어받기, 측정이 끝나거나 꺼지면 `noBackupFiles/bench-models/` 전체 삭제(앱의 `pipeline-stt/` q5_0은 건드리지 않음) | `BenchModels.kt` |
+| 측정 표본(9번, 사용자 11/13) | `samples.on`일 때만 업무 통화 녹음을 우편함 릴리스 `bench-samples`의 자산 `s_<무작위 8자>.<확장자>`와 `s_<id>.json`(길이, 번호 가린 자막 줄과 줄 시각, 조각 경계, 엔진·모델 이름)으로 하나씩. 충전 + 와이파이 + 통화·자막 실행 아님. 7일 지난 자산은 하트비트 때 지우고, `on:false`면 자산·릴리스·태그 전부 지움. 실패는 녹음당 3번까지 | `bench/Samples.kt` |
+
+**하지 못한 것(사실대로):** (나)의 whisper.cpp 1.9.x 재빌드와 i8mm(`armv8.6-a+i8mm`) 빌드는 하지 않았다 — 지금 엔진의 JNI(`ieum_whisper.cpp`)·CPU 검사(`missingArmFeatures`)·런타임 고정(`runtime-pin.json`)을 함께 바꿔야 하고, 같은 프로세스에 두 번째 whisper 런타임을 싣는 일이라 이 묶음에서 위험이 크다. 그래서 (나)는 "지금 라이브러리 + q8_0 + 포그라운드"이고, 결과가 5.2 규칙 1에 모자라도 i8mm·새 버전이 메울 몫은 따로 재야 한다. 폰에서의 실제 속도, Exynos 2600에서 onnxruntime·sherpa가 도는지, 포그라운드가 허락되는지, 우편함 토큰으로 릴리스를 만들 수 있는지는 **확인 못 함**(실기기·실 우편함에서만). 사람 정답(금 골든)은 화면을 새로 만들지 않았고, 폰은 `status/gold-transcript.json`을 올리지 않는다(지금 `GoldenMeasureActivity`는 하트비트 `golden`에 점수만 올림) — 측정 표본으로 작업 공간에서 기준 자막을 만들어 그 파일을 채우는 것이 다음 단계다.
+
 ## 5. v3.9 「오늘 통화는 오늘 정리」
 
 ### 5.1 토론 판정 (찬성·반대 Opus 작업자, 둘 다 내려받아 실측)
@@ -330,6 +344,11 @@ v4.0 배포는 버전 규칙대로 v4.0이고, **"완료"는 배포가 아니라
 | r17-3 | 자막 실행마다 **스레드** CPU 시간(`/proc/self/task/*/stat`) | **프로세스 전체** CPU 시간(`/proc/self/stat`의 utime+stime) 차이를 `power.today.cpuMs`·`cpuRuns`에, 배터리 실행의 `CHARGE_COUNTER` 차이를 `batteryUah`에 | 묶음 지시문(r17-3 8번 "가능한 범위")이 프로세스 값으로 정함. 실행 동안 같은 프로세스의 다른 작업(카드·결과 받기)의 CPU도 섞이므로 통화 1건당 CPU는 상한으로 읽는다 |
 | r17-3 | `dbTables`: 테이블별 행 수와 글자 길이 합 상위 8개, 하루 증가분 | `dbTables{day, atMs, totalRows, totalChars, top[{name, rows, chars, dChars}]}`: 증가분은 표마다 **`dChars`**(지난 집계 뒤 글자 수 변화, 처음은 null). 전체 표 수치는 설정에만 두고 하트비트에는 상위 8개만 | 하루 증가분을 표 단위로 보아야 v3.8에서 어느 표를 줄일지 정함 |
 | r18-storage (4.1) | S1 원문 분리·S2 조각 파일 먼저, `discovery_intake_requests`는 건드리지 않음(S3) | S1·S2 미룸. 같은 내용 확인의 요청 행과 끝난 금고 접수만 3일 뒤 지움(`LedgerPrune`, 첫 삭제 전 사본 7일), 저장된 파일 다시 읽기 1일 → 30일, 크기 거절을 `ProtectedDatabase`가 직접 셈(`dbFull`). 영수증·새 내용 요청·수집 줄은 남김 | v3.7 `dbTables` 실측: 자막 3.6%, 수집 원장 80% 이상이고 하루 6%p가 다시 읽기의 같은 내용 확인에서 나옴. 재시도·복구가 읽는 줄(진행 중, 버전이 가리키는 것)은 조건에서 빠지므로 S3의 치명 지적(C2)에 걸리지 않음 |
+| r18-bench (4.4) | (나) = turbo q8_0 + whisper.cpp 1.9.x + i8mm + 포그라운드 | (나) = **지금 1.7.6 라이브러리** + q8_0 + 포그라운드(기존 최소 알림 "충전하는 동안 통화를 글자로 바꾸고 있어요"를 그대로 씀, 하루 60분 한도 `fgMinutes`) | 재빌드는 JNI·CPU 검사·런타임 고정을 함께 바꾸는 일이라 이 묶음에서 위험(지시문 1번이 허락한 축소). i8mm·새 버전은 하지 못한 것 |
+| r18-bench (4.4) | SenseVoice 라이선스를 설정 › 정보에 표기 | 설정에는 "정보" 절이 없고 기능 동결이라 화면은 그대로. 출처 표기는 APK 자산 `local-stt/THIRD_PARTY_NOTICES.txt`와 `THIRD_PARTY_NOTICES.md`에 | 아내 화면에 아무것도 늘리지 않는다는 지시와 충돌. 모델은 측정이 켜졌을 때만 폰에 받아짐 |
+| r18-bench (4.4) | 조각당 mAh | 측정은 충전 중에만 돌아 배터리 감소를 읽을 수 없으므로 `mAh:null`, 대신 녹음 1분당 CPU 초(`cpuSecPerAudioMin`)와 `energyBasis:"cpu"` | 지시문 5번의 "못 재면 CPU 시간으로 대신하고 그렇게 표시" |
+| r18-bench (4.4) | 파일을 "못 읽으면 꺼짐" | 404·내용 오류는 꺼짐, **네트워크 오류는 그 시간 그대로** | 일시 오류로 꺼짐 처리하면 받은 874MB 모델과 올린 표본을 지워 버린다 |
+| r18-bench (4.4) | SenseVoice-Small int8 | 2024-07-17 판(FunAudioLLM 원본 변환). 2025-09-09 판은 광둥어 미세조정(WSYue)이라 뺌 | 같은 저장소 README |
 
 ## 12. 사용자가 할 일 (이것만)
 

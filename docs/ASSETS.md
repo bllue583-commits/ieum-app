@@ -8,6 +8,14 @@
 | code34 v2 validation APK | 38417366 | `440629f74494459c33bc9b2b349845291add6e7ff9a9cda74cfae752ad746b1e` | Mac 원본의 deliverables 및 위 백업. Git 제외; 기존 서명 identity 유지 |
 | ggml-tiny-q5_1.bin | 32152673 | `818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7` | [Whisper 공식 모델 저장소](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin), Android 공개 시험 |
 | whisper.cpp-v1.7.6.tar.gz | 7307730 | `166140e9a6d8a36f787a2bd77f8f44dd64874f12dd8359ff7c1f4f9acb86202e` | [upstream v1.7.6](https://github.com/ggml-org/whisper.cpp/tree/v1.7.6), third_party에 고정 포함 |
+| sherpa-onnx-2.0.1.aar | 49441341 | `a8d09d1d32f3eb8520482c6d3d43fae674681c5b050385967c70a3c2c9bf0ee7` | [k2-fsa/sherpa-onnx 릴리스 v2.0.1](https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.1/sherpa-onnx-2.0.1.aar)(2026-10-26, Apache-2.0; sha256은 릴리스 API의 digest와 같음). 빌드 때 `tools/fetch_sherpa_onnx.py`가 받아 arm64-v8a 두 파일만 꺼냄. Git 제외 |
+| └ classes.jar | 245045 | `0ee4991c56c19ef5a8a573b01891193d7298ffe7ebcc68f42b944361d8869d93` | 위 AAR 안의 Kotlin API. `third_party/sherpa-onnx-2.0.1/`에 고정 포함(앱이 이것으로 컴파일) |
+| └ jni/arm64-v8a/libsherpa-onnx-jni.so | 4609320 | `5db8f89f12b2c900a98c9e01e00c475c59db35e9437a62e36e27839ec48b5575` | APK에 실림(측정대가 켜졌을 때만 로드, 로드 전 sha 확인) |
+| └ jni/arm64-v8a/libonnxruntime.so | 22249560 | `33847ad43bffe204699fd4a27f7f3603452a8cdaf2f9a44983a0bc31ffcf2da1` | APK에 실림(onnxruntime, MIT). C·C++ API `.so` 두 개는 JNI가 쓰지 않아 뺌(readelf NEEDED) |
+| SenseVoice-Small int8 `model.int8.onnx` (2024-07-17) | 239233841 | `c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51` | [huggingface csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17](https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main/model.int8.onnx)(LFS sha256; 같은 내용이 sherpa-onnx `asr-models` 릴리스 tar.bz2 `7d1efa21…347e`에 있음). FunASR 모델 라이선스(출처 표기). 측정대가 켜졌을 때만 폰이 받음 |
+| SenseVoice `tokens.txt` (2024-07-17) | 315894 | `f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc` | 같은 저장소 `tokens.txt`(git blob `2cfc92fc…1dc`가 tar.bz2 안의 파일과 같음) |
+| silero_vad.onnx | 643854 | `9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6` | [sherpa-onnx 릴리스 asr-models](https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx)(Silero VAD, MIT). 측정대가 켜졌을 때만 |
+| ggml-large-v3-turbo-q8_0.bin | 874188075 | `317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1` | [Whisper 공식 모델 저장소](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin)(LFS sha256). 측정대 후보 (나), 켜졌을 때만 |
 | Robolectric android-all-instrumented-15-robolectric-13954326-i7.jar | 200643142 | `06c4c8602d6db7486266a982bc55834ed6dfebd62a0b88daca204139ecf142cb` | [Maven Central](https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/15-robolectric-13954326-i7/android-all-instrumented-15-robolectric-13954326-i7.jar), 기존 offline host 시험 |
 
 모델을 개인 로컬 자산 디렉터리에 준비하고 `IEUM_ANDROID_WHISPER_MODEL`로 지정합니다. `tools/build_android_whisper.py`는 NDK r28c와 위 tar/model을 검증하고 arm64-v8a/x86_64의 JNI·runtime-pin·공개 WAV를 `android/app/build/` 아래 생성합니다. 생성된 JNI는 빌드 경로 등 환경에 따라 기존 바이너리 SHA와 달라질 수 있으며 APK byte 재현을 약속하지 않습니다. 생성 runtime-pin과 자체 JNI/model SHA의 일치가 필요합니다.
@@ -27,3 +35,7 @@ P3302/P3303는 `IEUM_LOCAL_STT_PIN_FILE`로 코드33의 기존 준비된 whisper
 ## 실사용 모델
 
 이 표의 `ggml-tiny-q5_1.bin`은 공개 시험용이다. 아내 폰이 쓰는 모델은 large-v3-turbo q5_0(약 574MB)이고 앱이 처음 실행 때 받아 SHA-256을 확인한다(자세한 것은 [DESIGN.md](DESIGN.md) 3.2절). 엔진·양자화 후보의 측정 계획은 [DESIGN_V7.md](DESIGN_V7.md) 4절.
+
+## 엔진 측정대 자산 (r18-bench, DESIGN_V7 4.4)
+
+위 표의 sherpa-onnx·SenseVoice·Silero·q8_0 줄. 주소·크기·sha256은 11/13 공식 릴리스(GitHub 릴리스 API digest, Hugging Face LFS sha256)에서 확인했고 `/home/claude/lab-a`에 11/10 받아 둔 파일과 같았다. 앱 쪽 고정값은 `BenchModels.kt`(모델)와 `tools/fetch_sherpa_onnx.py`(AAR·`.so`)에 있다. `.so`는 arm64-v8a만 실린다(x86_64 에뮬레이터에서는 측정대 (다)가 `BENCH_C_NO_RUNTIME`). 빌드가 `.so`를 다시 strip하지 않게 `keepDebugSymbols`에 넣었다(앱이 로드 전에 sha256을 확인하므로). 로컬 빌드에서는 `IEUM_SHERPA_AAR=<받아 둔 AAR>`로 내려받기를 건너뛸 수 있고, `IEUM_SKIP_SHERPA=1`이면 싣지 않는다.

@@ -228,6 +228,57 @@ v3.4(11/6)부터 워치독은 Actions가 아니라 두 예약 작업 안에서 �
 6. 저장한 뒤 템플릿 설정 화면의 [메시지 템플릿 정보]에 나오는 템플릿 ID를 저장소 변수 `IEUM_KAKAO_LIST_TEMPLATE_ID`에 넣는다.
 7. 인자 이름은 영문, 숫자, `_`만 된다. 폰이 보내는 값: `H` 머리, `T1`~`T5` 제목, `D1`~`D5` 요청일과 업체, `I1`~`I5` 분류 그림 URL(올리기 실패면 빈 값), `WEB` 웹 보기 주소의 도메인 뒤 경로와 `#d=` 조각(예 `ieum-app/report/#d=` 뒤에 조각). 확인하지 못한 것: 인자 값에 `#` 조각이 그대로 살아 링크가 되는지, 빈 이미지 인자가 어떻게 보이는지, 콘솔의 정확한 버튼 문구. 첫 아침에 말풍선을 눌러 보고, 안 되면 템플릿 ID를 비우면 기본 리스트(3개씩)로 돌아간다.
 
+### 엔진 측정대와 측정 표본 (r18-bench, DESIGN_V7 4.4 — 관리자가 우편함에서 켬, 아내 화면에는 아무것도 안 보임)
+
+**켜는 법:** 우편함(ieum-inbox) 기본 브랜치에 `app/config.json`을 둔다. 폰은 하트비트(매시간 틱) 때 이 파일을 한 번 읽는다. 파일이 없거나(404) JSON이 깨졌거나 블록이 없으면 **꺼짐**(기본). 네트워크 오류면 그 시간에는 아무것도 바꾸지 않는다. 켜고 끄는 데 폰을 만질 일은 없다.
+
+```json
+{"bench":{"on":true,"candidates":["b","c"],"calls":20,"run":1},
+ "samples":{"on":true,"calls":12,"maxMinutes":40}}
+```
+
+| 키 | 뜻 |
+| --- | --- |
+| `bench.on` | 측정대 켜기. false로 바꾸면 다음 하트비트에 작업을 멈추고 받은 측정용 모델(`bench-models/`, 최대 약 1.1GB)을 지운다. 숫자는 남는다(`state:"OFF"`) |
+| `bench.candidates` | `a`(지금 q5_0을 같은 틀로 다시 잼, 오래 걸림), `b`(q8_0, 지금 라이브러리, 포그라운드), `c`(SenseVoice int8 + Silero VAD). 순서와 상관없이 c → b → a로 돈다. 기본 `["b","c"]` |
+| `bench.calls` | 잴 통화 수(1~40, 기본 20: 1~5분 최신 18건 + 10분 넘는 최신 2건) |
+| `bench.run` | 숫자를 바꾸면 처음부터 다시 잰다(같은 숫자면 멈춘 곳에서 이어서) |
+| `bench.threads` | 선택. `{"b":6,"c":2}`처럼 후보별 스레드(기본 b·a는 충전 중 자막 실행과 같은 6, c는 2) |
+| `bench.fgMinutes` | 선택. b·a가 포그라운드로 도는 하루 분(기본 60, 앱 자막 실행과 시스템 한도를 나눠 쓰므로 작게) |
+| `samples.on` | 측정 표본 올리기 켜기(아래). false로 바꾸면 다음 하트비트에 올린 자산·릴리스·태그를 모두 지운다 |
+| `samples.calls`, `samples.maxMinutes` | 켜져 있는 동안 올릴 녹음 수(1~30)와 합계 분(1~120) 상한 |
+
+**도는 때:** 측정은 충전 중, 통화 아님, 발열 moderate 미만, 자막 대기열 0, 앱의 자막 작업이 대기·실행 중 아닐 때만. 2초마다 다시 보고 하나라도 깨지면 그 조각을 버리고 멈춘다(끝난 조각은 남음, 10분 뒤 다시). 모델은 켜졌을 때만, 충전 + 와이파이 + 받은 뒤에도 2GB 넘게 남을 때만 받는다(SenseVoice 약 240MB, q8_0 874MB, 이어받기). 하룻밤에 다 못 해도 된다.
+
+**하트비트 `bench`** (`status/phone.json`, 한 번도 켜진 적 없으면 키가 없음. 숫자·부호만):
+
+```json
+"bench":{"on":true,"run":1,"state":"RUNNING","code":null,"atMs":0,"planned":20,"candidates":["c","b"],
+ "models":{"c":"READY","b":"DOWNLOADING"},
+ "cand":{"c":{"calls":12,"audioMin":41.5,"wallRtf":0.05,"cpuRtf":0.09,"cpuSecPerAudioMin":5.4,
+   "cerPct":12.3,"refChars":9876,"numberPct":91.0,"numbers":120,"namePct":88.0,"names":25,
+   "halluc":3,"hallucPerCall":0.25,"fgSharePct":0,"failed":0,"fail":{},"inProgress":1,
+   "mAh":null,"energyBasis":"cpu",
+   "byLen":{"m1to3":{"calls":8,"audioMin":16.0,"wallRtf":0.05,"cpuRtf":0.09,"cerPct":11.0,"hallucPerCall":0.3},"m10plus":{}}},
+  "b":{}}}
+```
+
+- `state`: `WAITING`(`code`가 이유: `NOT_PLUGGED`, `IN_CALL`, `HOT`, `TRANSCRIBING`, `QUEUE`, `NO_WIFI`, `NO_SPACE`, `MODEL_RETRY`, `MODEL_FAILED`, `NO_CALLS`, `STOPPED`, `MORE`), `DOWNLOADING`, `RUNNING`, `DONE`(모델 지움), `OFF`.
+- `wallRtf` = 처리 벽시계 ÷ 녹음 길이, `cpuRtf` = 프로세스 CPU 시간(엔진의 모든 스레드 합) ÷ 녹음 길이. **5.2 규칙의 "폰 실시간 배수"는 `wallRtf`**(1.0 = 녹음 1분에 1분).
+- `cerPct`는 (가) 지금 엔진의 저장 자막을 기준으로 한 정규화 글자 오류율(은 골든 — 정확도가 아니라 "지금 엔진과 얼마나 같은가"). 조각마다 그 조각 안에서 시작한 자막 줄과 비교한다. `numberPct`·`namePct`는 기준 자막의 숫자 토큰·장부 이름 중 후보 자막에도 있는 비율.
+- `halluc`은 1초 미만 말소리 구간에서 1~2글자가 나온 수. `fgSharePct`는 포그라운드에서 잰 녹음의 비율(b·a).
+- 충전 중에만 재므로 `mAh`는 늘 null이고 `energyBasis:"cpu"` — 전력은 `cpuSecPerAudioMin`으로 비교한다(배터리 실행 mAh는 v3.9 배포 뒤 `power` 블록으로).
+- `fail`은 포기한 통화의 부호별 수(`BENCH_C_NO_RUNTIME` = 이 폰 ABI에 sherpa 라이브러리 없음, `BENCH_C_RUNTIME_PIN` = 라이브러리 sha 불일치, `NO_REFERENCE` = 기준 자막이 지워짐, `ANDROID_STT_*` = whisper 실패).
+
+**5.2 규칙으로 읽는 법:** 규칙 1 — `cand.b.wallRtf ≤ 1.0`이고 `fgSharePct`가 높을 것(포그라운드 실측), 그리고 128분 날 전력이 배터리 5% 이하인지는 `cpuSecPerAudioMin × 128`을 v3.7 `power`의 배터리 실행 CPU·`batteryUah` 비율로 환산해 본다(직접 mAh는 이 측정대로 못 잼). 규칙 2 — `cand.c.wallRtf ≤ 0.5`, `cand.c.cerPct ≤ 15`, `cand.c.hallucPerCall ≤ 1`. 길이 구간(`byLen`)에서 10분 넘는 통화가 따로 나빠지지 않는지도 본다. 규칙 3은 금 골든(사람 정답 또는 아래 표본으로 만든 기준 자막)이 있어야 한다.
+
+**측정 표본(9번, 사용자 결정 11/13 — 녹음이 폰 밖으로 나가는 유일한 길):** `samples.on`이면 폰이 측정대와 같은 기준의 업무 통화 녹음(개인 판정·개인 번호·제외 번호 빼고, 최근 7일, 1~5분 먼저, 10분 넘는 것 최대 2건, 합계 `maxMinutes` 이하, 같은 녹음은 한 번만)을 **충전 + 와이파이 + 통화·자막 실행 아님**일 때 하나씩 우편함 릴리스 `bench-samples`(없으면 폰이 만듦, 시험판 표시)의 자산으로 올린다. 커밋이 아니므로 저장소 이력에 남지 않는다.
+- 자산 이름: `s_<무작위 8자>.<원본 확장자>`(m4a 등)와 `s_<같은 id>.json`. 원본 파일 이름(상대 이름·번호가 들어 있음)은 쓰지 않는다.
+- `s_<id>.json`: `durationS`, `lines[{text,startS,endS}]`(폰 자막, 우편함 요청과 같이 번호·계좌·메일 가림), `pieces[{startMs,ms}]`(폰 자막 실행과 같은 조각 경계), `vad`, `engine`, `model`. 이름·번호·경로·통화 시각은 없다(자막 글 안에 말해진 이름은 그대로).
+- **지워지는 때:** 올린 지 7일이 지나면 폰이 하트비트 때 지운다. `samples.on`을 false로 바꾸면 다음 하트비트에 남은 자산·릴리스·태그를 모두 지운다. 작업 공간에서 받은 사본은 다 쓴 뒤 지운다.
+- 하트비트 `samples{on,uploaded,minutes,deleted,failed,live,lastCode}`. `lastCode`가 `SAMPLE_HTTP_403`/`404`면 우편함 토큰에 릴리스 쓰기 권한이 없는 것(폰에서 확인 못 함 — release-apk는 같은 비밀로 릴리스를 만든다). 실패는 녹음당 3번까지 다시 한다.
+- 받는 법(작업 공간): `gh release download bench-samples -R <owner>/ieum-inbox -D <임시 폴더>`. 자막·녹음 본문은 숫자만 남기고 결과에 옮기지 않는다.
+
 ## 5. 배포와 업데이트 흐름
 
 1. `feature/lean-calls`(또는 `main`)에 push한다. 앱 작업은 시험 브랜치에서 CI를 통과시킨 뒤 합친다.
