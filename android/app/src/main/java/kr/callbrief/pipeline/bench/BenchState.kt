@@ -91,7 +91,11 @@ internal object BenchState {
     /** A pinned file that did not match: how many times now. */
     fun shaFailed(s:JSONObject,name:String):Int { val m=(s.optJSONObject("shaFails") ?: JSONObject().also { s.put("shaFails",it) });val n=m.optInt(name,0)+1;m.put(name,n);return n }
     /** The thread count the candidate runs with (for the heartbeat). */
-    fun setRun(s:JSONObject,c:String,threads:Int) { (s.optJSONObject("threads") ?: JSONObject().also { s.put("threads",it) }).put(c,threads) }
+    fun setRun(s:JSONObject,c:String,threads:Int,cpus:Int?=null,cpuset:String?=null) {
+        (s.optJSONObject("threads") ?: JSONObject().also { s.put("threads",it) }).put(c,threads)
+        cpus?.let { (s.optJSONObject("cpus") ?: JSONObject().also { o -> s.put("cpus",o) }).put(c,it) }
+        cpuset?.let { (s.optJSONObject("cpusets") ?: JSONObject().also { o -> s.put("cpusets",o) }).put(c,it) }
+    }
 
     fun setStatus(s:JSONObject,state:String,code:String?,now:Long):JSONObject {
         s.put("state",state).put("atMs",now);if(code==null) s.remove("code") else s.put("code",code);return s
@@ -140,6 +144,8 @@ internal object BenchState {
             block.put("inProgress",entries.count { !it.optBoolean("done") && it.optInt("piece",0)>0 })
             block.put("noTimesCalls",entries.count { it.optBoolean("noTimes") })
             block.put("threads",s.optJSONObject("threads")?.optInt(c,0)?.takeIf { it>0 } ?: JSONObject.NULL)
+            block.put("cpus",s.optJSONObject("cpus")?.optInt(c,0)?.takeIf { it>0 } ?: JSONObject.NULL)
+            block.put("cpuset",code(s.optJSONObject("cpusets")?.optString(c)?.takeIf { it.isNotEmpty() }) ?: JSONObject.NULL)
             block.put("foreground",entries.any { it.optLong("fgAudioMs",0)>0 })
             block.put("disabled",disabled(s,c)?.let { code(it) } ?: JSONObject.NULL)
             block.put("crashes",s.optJSONObject("crashes")?.optInt(c,0) ?: 0)

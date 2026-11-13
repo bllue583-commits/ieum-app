@@ -84,7 +84,9 @@ internal object PowerText {
         o.put("stopReasons",d?.optJSONObject("stopReasons")?.let(PhoneStatus::counts) ?: JSONObject())
         // v3.7 T5 (r17-1): the plugged-in run in the foreground, and the day's piece median per way (ms for a 2-minute piece).
         val f=d?.optJSONObject("fg")
-        o.put("fg",JSONObject().put("runs",n(f,"runs")).put("min",n(f,"min")).put("refused",n(f,"refused")).put("timeout",n(f,"timeout")))
+        o.put("fg",JSONObject().put("runs",n(f,"runs")).put("min",n(f,"min")).put("refused",n(f,"refused")).put("timeout",n(f,"timeout"))
+            .put("cpus",(f?.opt("cpus") as? Number) ?: JSONObject.NULL).put("threads",(f?.opt("threads") as? Number) ?: JSONObject.NULL)
+            .put("cpuset",f?.optString("cpuset")?.let(PhoneStatus::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL))
         val pr=d?.optJSONObject("pieceRates")
         fun med(k:String)=PowerStats.median(pr?.optJSONArray(k))?.let { Math.round(it*PipelineAudioMath.MAX_CHUNK_MS) } ?: JSONObject.NULL
         o.put("pieceMedianMs",JSONObject().put("fg",med("fg")).put("bg",med("bg"))

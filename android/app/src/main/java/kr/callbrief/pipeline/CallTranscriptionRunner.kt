@@ -445,7 +445,7 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
             return Result.success()
         }
         val run=decision as PowerPolicy.Decision.Run
-        val threads=PowerPolicy.threads(run.threads,cores)
+        var threads=PowerPolicy.threads(run.threads,cores)
         val severe={ BatterySnapshot.read(storage).thermal>=PowerManager.THERMAL_STATUS_SEVERE }
         val began=android.os.SystemClock.elapsedRealtime()
         // v3.7 r17-3 (DESIGN_V7 3.3): the run's process CPU time, start to end (/proc/self/stat).
@@ -466,7 +466,14 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
         val fgSetting=ForegroundPolicy.setting(settings.snapshot().optString(PipelineSettingsKeys.TRANSCRIBE_FOREGROUND))
         savePower(settings) { PowerStats.noteFgSetting(it,fgSetting,ForegroundPolicy.onToday(fgSetting,now)) }
         if(ForegroundPolicy.wanted(fgSetting,run.mode,now,PowerStats.fgUsedMs(power(settings),now),PowerStats.fgRefusedToday(power(settings),now))) {
-            if(TranscriptionForeground.start(this)) fgSince=android.os.SystemClock.elapsedRealtime()
+            if(TranscriptionForeground.start(this)) {
+                fgSince=android.os.SystemClock.elapsedRealtime()
+                // The cores the process may use change once it is in the foreground: the count read at the start of the run was
+                // the background's (4 on the S26), so a foreground run still decoded with 4 threads (11/14).
+                val (cpus,cpuset)=CpuSet.settled()
+                threads=PowerPolicy.threads(run.threads,cpus ?: cores)
+                savePower(settings) { PowerStats.noteFgCpu(it,System.currentTimeMillis(),cpus,cpuset,threads) }
+            }
             else savePower(settings) { PowerStats.noteFg(it,System.currentTimeMillis(),"refused") }
         }
         val events=object:CallTranscriptionRunner.Events {

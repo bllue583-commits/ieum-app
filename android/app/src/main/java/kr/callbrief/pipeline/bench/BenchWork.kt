@@ -175,17 +175,19 @@ class BenchWork(context:Context,params:WorkerParameters):Worker(context,params) 
         val from=BenchState.nextPiece(s,c,index)
         var opened:BenchEngine?=null
         fun open():BenchEngine = opened ?: run {
-            val threads=BenchConfig.threadsFor(cfg,c,CpuSet.readAllowed())
-            BenchState.setRun(s,c,threads)
+            // (나) and (가) in the foreground like the app's plugged-in run, within the bench's own daily allowance (counted over
+            // the whole run, from the moment it went in). Asked before the thread count is read: the cores the process may
+            // use change when it leaves the background (11/14: read before, the count was the background's 4).
+            if(c!="c" && fgSince==0L && BenchState.fgUsed(s,day)<cfg.fgMinutes*60_000L && TranscriptionForeground.start(this)) fgSince=android.os.SystemClock.elapsedRealtime()
+            val (cpus,cpuset)=if(fgSince>0) CpuSet.settled() else CpuSet.readAllowed() to CpuSet.readCode()
+            val threads=BenchConfig.threadsFor(cfg,c,cpus)
+            BenchState.setRun(s,c,threads,cpus,cpuset)
             val e=when(c) {
                 // (다) never asks for the foreground: it needs no long run, and the notice would only show for nothing.
                 "c" -> openWithin(OPEN_LIMIT_MS) { SenseVoiceBenchEngine(app,models.file(BenchModels.SENSE_VOICE),models.file(BenchModels.SENSE_VOICE_TOKENS),models.file(BenchModels.SILERO_VAD),threads) }
                 else -> {
                     val (file,bytes)=if(c=="b") models.file(BenchModels.TURBO_Q8) to BenchModels.TURBO_Q8.bytes
                         else (PipelineModelManager(app).verifiedModelFile() ?: error("NO_MODEL")).let { it to it.length() }
-                    // (나) and (가) in the foreground like the app's plugged-in run, within the bench's own daily allowance
-                    // (counted over the whole run, from the moment it went in).
-                    if(fgSince==0L && BenchState.fgUsed(s,day)<cfg.fgMinutes*60_000L && TranscriptionForeground.start(this)) fgSince=android.os.SystemClock.elapsedRealtime()
                     WhisperBenchEngine(app,file,bytes,threads,::stopped)
                 }
             }

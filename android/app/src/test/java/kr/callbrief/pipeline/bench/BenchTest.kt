@@ -167,6 +167,11 @@ class BenchTest:ProtectedTextHostTestBase() {
         val c=hb.getJSONObject("cand").getJSONObject("c")
         assertEquals(2,c.getInt("failed"));assertEquals(2,c.getJSONObject("fail").getInt("BENCH_ERR_UnsatisfiedLinkError"));assertEquals("BENCH_ERR_UnsatisfiedLinkError",c.getString("disabled"))
         assertFalse(hb.getJSONObject("cand").has("b"))
+        // The cores and the cpuset the candidate ran with (read after it went into the foreground).
+        BenchState.setRun(s,"b",6,8,"foreground")
+        BenchState.addPiece(s,"b",0,0,BenchState.Piece(120_000,90_000,400_000,200,4,4,4,2,2,0,8,true))
+        val b=Bench.safe(BenchState.heartbeat(s,BenchConfig(on=true))!!).getJSONObject("cand").getJSONObject("b")
+        assertEquals(6,b.getInt("threads"));assertEquals(8,b.getInt("cpus"));assertEquals("foreground",b.getString("cpuset"))
         // A text never gets through as a stage or an error.
         BenchState.setStage(s,"김 부장 통화");BenchState.setError(s,"/storage/x.m4a")
         hb=Bench.safe(BenchState.heartbeat(s,BenchConfig(on=true))!!)

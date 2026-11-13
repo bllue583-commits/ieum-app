@@ -246,6 +246,13 @@ internal object ForegroundPolicy {
 
 /** P7 (DESIGN_V6 2.3, 1.3): which cores this process may use, read from /proc (the same as sched_getaffinity for this thread). */
 internal object CpuSet {
+    /** Waits (at most [waitMs]) until the process has left the background cpuset after it asked for the foreground, then
+     * returns (cores allowed, cpuset code). Never throws. */
+    fun settled(waitMs:Long=3_000L,step:Long=250L,code:()->String?=::readCode,allowed:()->Int?=::readAllowed,sleep:(Long)->Unit={ Thread.sleep(it) }):Pair<Int?,String?> {
+        var waited=0L
+        while(waited<waitMs && code()=="background") { runCatching { sleep(step) };waited+=step }
+        return allowed() to code()
+    }
     /** "0-3,6" -> 5; null when it cannot be read. */
     fun count(list:String?):Int? {
         if(list.isNullOrBlank()) return null
@@ -392,6 +399,14 @@ internal object PowerStats {
             "timeout" -> { inc(f,"runs");inc(f,"timeout");inc(f,"ms",ms.coerceAtLeast(0));f.put("limitHit",true) }
         }
         f.put("min",f.optLong("ms",0)/60_000)
+        return o
+    }
+    /** The cores this process may use and its cpuset once a run is in the foreground (read a moment after the request: the
+     * system moves the process on its own time). 11/14: the foreground made a 2-minute piece only 16% faster and the thread
+     * count stayed at the background's 4 — this says whether the foreground lifts the limit on this phone at all. */
+    fun noteFgCpu(old:JSONObject?,now:Long,cpus:Int?,cpuset:String?,threads:Int?=null):JSONObject {
+        val o=copy(old);val f=sub(today(o,PowerPolicy.day(now)),"fg")
+        cpus?.let { f.put("cpus",it) };cpuset?.let { f.put("cpuset",it) };threads?.let { f.put("threads",it) }
         return o
     }
     /** Foreground ms used today (KST). */

@@ -295,4 +295,24 @@ class R17OneTest:ProtectedTextHostTestBase() {
         val service=Regex("""<service android:name="androidx\.work\.impl\.foreground\.SystemForegroundService"[^>]*>""").find(xml)!!.value
         assertTrue(service.contains("""android:foregroundServiceType="dataSync|mediaProcessing""""));assertTrue(service.contains("""tools:node="merge""""))
     }
+
+    @Test fun aForegroundRunCountsItsCoresAfterItLeftTheBackground() {
+        // The cpuset is read again until the process has left the background (the system moves it on its own time).
+        var reads=0;val slept=ArrayList<Long>()
+        val moved=CpuSet.settled(code={ if(reads++<2) "background" else "foreground" },allowed={ 8 },sleep={ slept+=it })
+        assertEquals(8 to "foreground",moved);assertEquals(listOf(250L,250L),slept)
+        // A phone that never moves it: the wait ends and the background's numbers are what the run gets.
+        slept.clear()
+        val stuck=CpuSet.settled(waitMs=1_000L,code={ "background" },allowed={ 4 },sleep={ slept+=it })
+        assertEquals(4 to "background",stuck);assertEquals(4,slept.size)
+        // The run's thread count follows the cores it has now (6 while plugged in, never more than the cores).
+        assertEquals(6,PowerPolicy.threads(6,8));assertEquals(4,PowerPolicy.threads(6,4))
+        // Heartbeat: today.fg{cpus, cpuset, threads}; a text never gets through as the cpuset.
+        val t=kst(10,2)
+        var l=PowerStats.noteFgCpu(PowerStats.noteFg(null,t,"run",60_000),t,8,"foreground",6)
+        var fg=PowerText.heartbeat(l,false,t+60_000).getJSONObject("today").getJSONObject("fg")
+        assertEquals(8,fg.getInt("cpus"));assertEquals("foreground",fg.getString("cpuset"));assertEquals(6,fg.getInt("threads"));assertEquals(1,fg.getInt("runs"))
+        fg=PowerText.heartbeat(PowerStats.noteFg(null,t,"run",60_000),false,t+60_000).getJSONObject("today").getJSONObject("fg")
+        assertTrue(fg.isNull("cpus"));assertTrue(fg.isNull("cpuset"));assertTrue(fg.isNull("threads"))
+    }
 }
