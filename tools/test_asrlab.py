@@ -1,11 +1,11 @@
-"""r19 자막 실험실의 순수 로직 시험: python3 -m unittest discover -s tools -p 'test_*.py' (jiwer·rapidfuzz·numpy 필요)."""
+"""r19 자막 실험실의 순수 로직 시험: python3 -m unittest discover -s tools -p 'test_*.py' (jiwer·rapidfuzz·numpy 없으면 건너뜀)."""
 import os
 import sys
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, 'asrlab'))
-sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, 'eval', 'asrlab'))
+sys.path.insert(0, os.path.join(HERE, 'eval'))
 
 try:
     import numpy as np

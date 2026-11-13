@@ -77,7 +77,7 @@ def run_whisper_cpp(model, pieces, threads, workdir):
     subprocess.run([os.path.join(LAB_DEFAULT, 'bin', 'whisper_app_run'), model, str(threads), lst, out], check=True,
                    stderr=open(os.path.join(workdir, 'stderr.log'), 'a'))
     raw = {}
-    for line in open(out):
+    for line in open(out, encoding='utf-8', errors='replace'):
         r = json.loads(line)
         raw[int(r['id'])] = r
     segs = []

@@ -1,0 +1,209 @@
+[
+ {
+  "repo": "TeamUNIVA/ko_asr_benchmarks",
+  "type": "dataset",
+  "file": "data/zeroth/test-00000-of-00001.parquet",
+  "sets": "A,B,E",
+  "license": "CC BY 4.0 (원자료 Zeroth-Korean OpenSLR 40, CC BY 4.0)",
+  "bytes": 122238645,
+  "sha256": "c2e66d3a770bbe733a596abfe3760c9b52f27df71218d363c623351f7a60439e"
+ },
+ {
+  "repo": "TeamUNIVA/ko_asr_benchmarks",
+  "type": "dataset",
+  "file": "data/fleurs_ko/test-00000-of-00001.parquet",
+  "sets": "A,B,E",
+  "license": "CC BY 4.0 (원자료 Google FLEURS ko_kr, CC BY 4.0)",
+  "bytes": 117739086,
+  "sha256": "3e4a9ee8abd2233f7b37db530f824ec0e5c13fae829346a9f28201782e30f045"
+ },
+ {
+  "repo": "espnet/yodas",
+  "type": "dataset",
+  "file": "data/ko000/text/00000000.txt",
+  "sets": "C",
+  "license": "CC BY 3.0 (CC BY 유튜브 영상)",
+  "bytes": 981832,
+  "sha256": "c0f7cbf16f2163c9d851d9d2efc4d9550c5e5710e29d527e4131018a9aa5734f"
+ },
+ {
+  "repo": "espnet/yodas",
+  "type": "dataset",
+  "file": "data/ko000/audio/00000000.tar.gz",
+  "sets": "C",
+  "license": "CC BY 3.0",
+  "bytes": 1015535974,
+  "sha256": "50a72f7f5e62d7f0b5ed9328160a31ee88011c9ed816c027614840435c88fed7"
+ },
+ {
+  "repo": "Supertone/supertonic-2",
+  "type": "model",
+  "file": "onnx/text_encoder.onnx",
+  "sets": "D",
+  "license": "BigScience OpenRAIL-M (가중치), 추론 코드 MIT",
+  "bytes": 27431318,
+  "sha256": "dd5f535ed629f7df86071043e15f541ce1b2ab7f1bdbce4c7892b307bca79fa3"
+ },
+ {
+  "repo": "Supertone/supertonic-2",
+  "type": "model",
+  "file": "onnx/duration_predictor.onnx",
+  "sets": "D",
+  "license": "OpenRAIL-M",
+  "bytes": 1521526,
+  "sha256": "6d556b3691165c364be91dc0bd894656b5949f5acd2750d8ec2f954010845011"
+ },
+ {
+  "repo": "Supertone/supertonic-2",
+  "type": "model",
+  "file": "onnx/vector_estimator.onnx",
+  "sets": "D",
+  "license": "OpenRAIL-M",
+  "bytes": 132471364,
+  "sha256": "105e9d66fd8756876b210a6b4aa03fc393b1eaca3a8dadcc8d9a3bc785c86a35"
+ },
+ {
+  "repo": "Supertone/supertonic-2",
+  "type": "model",
+  "file": "onnx/vocoder.onnx",
+  "sets": "D",
+  "license": "OpenRAIL-M",
+  "bytes": 101405066,
+  "sha256": "19bd51f47a186069c752403518a40f7ea4c647455056d2511f7249691ecddf7c"
+ },
+ {
+  "repo": "Supertone/supertonic-2",
+  "type": "model",
+  "file": "onnx/tts.json",
+  "sets": "D",
+  "license": "OpenRAIL-M",
+  "bytes": 8699,
+  "sha256": "ee531d9af9b80438a2ed703e22155ee6c83b12595ab22fd3bb6de94c7502fe96"
+ },
+ {
+  "repo": "Supertone/supertonic-2",
+  "type": "model",
+  "file": "onnx/unicode_indexer.json",
+  "sets": "D",
+  "license": "OpenRAIL-M",
+  "bytes": 262196,
+  "sha256": "b7662a73a0703f43b97c0f2e089f8e8325e26f5d841aca393b5a54c509c92df1"
+ },
+ {
+  "repo": "Supertone/supertonic-2",
+  "type": "model",
+  "file": "voice_styles/M1.json",
+  "sets": "D",
+  "license": "OpenRAIL-M",
+  "bytes": 420510,
+  "sha256": "a04c823cbda6dd1c7de131ec68fea83bbb70d7f29d61623304eb871e3b83b5a1"
+ },
+ {
+  "repo": "Supertone/supertonic-2",
+  "type": "model",
+  "file": "voice_styles/M2.json",
+  "sets": "D",
+  "license": "OpenRAIL-M",
+  "bytes": 420285,
+  "sha256": "7ddd07bf873a3fd67d09ef4e8293b486beb658158b47e371166198e4c6926072"
+ },
+ {
+  "repo": "Supertone/supertonic-2",
+  "type": "model",
+  "file": "voice_styles/M3.json",
+  "sets": "D",
+  "license": "OpenRAIL-M",
+  "bytes": 420005,
+  "sha256": "e8e77a56459e4dc8cdfeb88e6f778dc9a0adf22e1184414f4b0e82a5d1edbe72"
+ },
+ {
+  "repo": "Supertone/supertonic-2",
+  "type": "model",
+  "file": "voice_styles/M4.json",
+  "sets": "D",
+  "license": "OpenRAIL-M",
+  "bytes": 419957,
+  "sha256": "95322725e4d25d9ed4e7dcccbf0f3726b0e9a2471d876b7942373218dbd30174"
+ },
+ {
+  "repo": "Supertone/supertonic-2",
+  "type": "model",
+  "file": "voice_styles/F1.json",
+  "sets": "D",
+  "license": "OpenRAIL-M",
+  "bytes": 420050,
+  "sha256": "6106950ebeb8a5da29ea22075f605db659cd07dbc288a68292543d9129aa250f"
+ },
+ {
+  "repo": "Supertone/supertonic-2",
+  "type": "model",
+  "file": "voice_styles/F2.json",
+  "sets": "D",
+  "license": "OpenRAIL-M",
+  "bytes": 420293,
+  "sha256": "8b97feb16d79ac0447136796708feac5f83dbabe92a5be1168212653c38729ae"
+ },
+ {
+  "repo": "Supertone/supertonic-2",
+  "type": "model",
+  "file": "voice_styles/F3.json",
+  "sets": "D",
+  "license": "OpenRAIL-M",
+  "bytes": 419887,
+  "sha256": "7eda5bccb4e6eb7f228fa182462d5fcf982d77628234603599027f0734d70c29"
+ },
+ {
+  "repo": "Supertone/supertonic-2",
+  "type": "model",
+  "file": "voice_styles/F4.json",
+  "sets": "D",
+  "license": "OpenRAIL-M",
+  "bytes": 419642,
+  "sha256": "e056fc2bee393edc8bff761eb28f33fb461e8dad828c3b05348a010ac1b7bb79"
+ },
+ {
+  "repo": "Systran/faster-whisper-large-v3",
+  "type": "model",
+  "file": "model.bin",
+  "sets": "기준 자막",
+  "license": "MIT (OpenAI Whisper large-v3 변환)",
+  "bytes": 3087284237,
+  "sha256": "69f74147e3334731bc3a76048724833325d2ec74642fb52620eda87352e3d4f1"
+ },
+ {
+  "repo": "Systran/faster-whisper-large-v3",
+  "type": "model",
+  "file": "config.json",
+  "sets": "기준 자막",
+  "license": "MIT",
+  "bytes": 2394,
+  "sha256": "a9306624f5ec14270a014b647e5c316b6e03a662c369758d1b90697a7b0655b9"
+ },
+ {
+  "repo": "Systran/faster-whisper-large-v3",
+  "type": "model",
+  "file": "tokenizer.json",
+  "sets": "기준 자막",
+  "license": "MIT",
+  "bytes": 2480617,
+  "sha256": "6d8cbd7cd0d8d5815e478dac67b85a26bbe77c1f5e0c6d76d1ce2abc0e5f21ca"
+ },
+ {
+  "repo": "Systran/faster-whisper-large-v3",
+  "type": "model",
+  "file": "vocabulary.json",
+  "sets": "기준 자막",
+  "license": "MIT",
+  "bytes": 1068114,
+  "sha256": "c69260f2ab26d659b7c398f9a2b2b48ed0df16c3b47d7326782fd9cba71690c1"
+ },
+ {
+  "repo": "Systran/faster-whisper-large-v3",
+  "type": "model",
+  "file": "preprocessor_config.json",
+  "sets": "기준 자막",
+  "license": "MIT",
+  "bytes": 340,
+  "sha256": "7ccc62c6f2765af1f3b46c00c9b5894426835a05021c8b9c01eecb6dfb542711"
+ }
+]
