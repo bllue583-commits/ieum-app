@@ -203,6 +203,8 @@ v3.8은 **두 번에 나눠 배포한다**: 빌드 A 저장소 → 평일 하루
 | 모델 받기 | 켜졌을 때만, 충전 + 와이파이(비종량), 남는 공간이 받은 뒤에도 2GB 이상일 때만. 크기·sha256 확인, `.part` 이어받기, 측정이 끝나거나 꺼지면 `noBackupFiles/bench-models/` 전체 삭제(앱의 `pipeline-stt/` q5_0은 건드리지 않음) | `BenchModels.kt` |
 | 측정 표본(9번, 사용자 11/13) | `samples.on`일 때만 업무 통화 녹음을 우편함 릴리스 `bench-samples`의 자산 `s_<무작위 8자>.<확장자>`와 `s_<id>.json`(길이, 번호 가린 자막 줄과 줄 시각, 조각 경계, 엔진·모델 이름)으로 하나씩. 충전 + 와이파이 + 통화·자막 실행 아님. 7일 지난 자산은 하트비트 때 지우고, `on:false`면 자산·릴리스·태그 전부 지움. 실패는 녹음당 3번까지 | `bench/Samples.kt` |
 
+**크기와 확인:** APK에 `libonnxruntime.so`(22.2MB)·`libsherpa-onnx-jni.so`(4.6MB)가 arm64-v8a에만 실려 APK가 압축 기준 약 10.9MB(설치 후 네이티브 약 26.9MB, 지시문의 "31MB"는 쓰지 않는 C·C++ API `.so`를 포함한 값) 커진다. 로컬 디버그 APK에서 두 `.so`의 sha256이 원본과 같음(다시 strip되지 않음)을 확인했다. 호스트 시험 974개 통과(새 `BenchTest` 16개 포함), lint 통과, ci success; device-test는 기존 whisper 시험 8개 중 7개 통과·`tg_goldenSet` 1개 실패로 `feature/lean-calls`의 직전 실행과 같다(이 묶음 이전부터의 실패).
+
 **하지 못한 것(사실대로):** (나)의 whisper.cpp 1.9.x 재빌드와 i8mm(`armv8.6-a+i8mm`) 빌드는 하지 않았다 — 지금 엔진의 JNI(`ieum_whisper.cpp`)·CPU 검사(`missingArmFeatures`)·런타임 고정(`runtime-pin.json`)을 함께 바꿔야 하고, 같은 프로세스에 두 번째 whisper 런타임을 싣는 일이라 이 묶음에서 위험이 크다. 그래서 (나)는 "지금 라이브러리 + q8_0 + 포그라운드"이고, 결과가 5.2 규칙 1에 모자라도 i8mm·새 버전이 메울 몫은 따로 재야 한다. 폰에서의 실제 속도, Exynos 2600에서 onnxruntime·sherpa가 도는지, 포그라운드가 허락되는지, 우편함 토큰으로 릴리스를 만들 수 있는지는 **확인 못 함**(실기기·실 우편함에서만). 사람 정답(금 골든)은 화면을 새로 만들지 않았고, 폰은 `status/gold-transcript.json`을 올리지 않는다(지금 `GoldenMeasureActivity`는 하트비트 `golden`에 점수만 올림) — 측정 표본으로 작업 공간에서 기준 자막을 만들어 그 파일을 채우는 것이 다음 단계다.
 
 ## 5. v3.9 「오늘 통화는 오늘 정리」
