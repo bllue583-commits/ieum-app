@@ -32,16 +32,25 @@ def main():
     L = []
     L.append('### 표 1. 묶음×엔진 정규화 글자 오류율(%, 95% 구간), 숫자·이름(통화 단위 KoCer 규칙), 정리·환각')
     L.append('')
-    L.append('| 묶음 | 엔진 | 녹음/문장 | 분 | 오류율 % [95% 구간] | 숫자 일치 | 이름·업체 일치 | 앱 정리로 지운 조각 | 반복 고리 | 묵음 환각(통화당) | 실시간 배수(이 기계) |')
-    L.append('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |')
+    L.append('| 묶음 | 엔진 | 녹음/문장 | 분 | 오류율 % [95% 구간] | 숫자 일치 | 이름·업체 일치 | 앱 정리로 지운 조각 | 반복 고리 | 묵음 환각(통화당) | 1초 미만 1~2글자 | 실시간 배수(이 기계) |')
+    L.append('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |')
     for s, d in S.items():
         for e in ('q5', 'q8', 'sv', 'lv3', 'zip'):
             r = d['engines'].get(e)
             if not r:
                 continue
-            L.append('| %s | %s | %d/%d | %.1f | %s [%s, %s] | %s | %s | %d | %d | %d (%.2f) | %.2f |' % (
+            L.append('| %s | %s | %d/%d | %.1f | %s [%s, %s] | %s | %s | %d | %d | %d (%.2f) | %d | %.2f |' % (
                 LABEL[s], ENG[e], r['recs'], r['utts'], r['audio_min'], pct(r['cer']), pct(r['ci'][0]), pct(r['ci'][1]), frac(r['numbers']),
-                frac(r['names']), r['cleaned'], r['loops'], r['silence_halluc'], r['halluc_per_call'] or 0, r['rtf'] or 0))
+                frac(r['names']), r['cleaned'], r['loops'], r['silence_halluc'], r['halluc_per_call'] or 0, r.get('short_halluc', 0), r['rtf'] or 0))
+    L.append('')
+    L.append('### 표 1b. 5.2 규칙 2의 "은 골든" 방식: (가)의 자막을 정답으로 놓은 정규화 글자 오류율(%) — 같은 녹음만')
+    L.append('')
+    L.append('| 묶음 | 엔진 | 녹음 | (가) 대비 오류율 % |')
+    L.append('| --- | --- | --- | --- |')
+    for s, d in S.items():
+        for e, v in d.get('silver', {}).items():
+            if e in ('sv', 'q8', 'lv3'):
+                L.append('| %s | %s | %d | %s |' % (LABEL[s], ENG[e], v['recs'], pct(v['cer_vs_base'])))
     L.append('')
     L.append('### 표 2. (가) 대비 짝 비교(같은 문장만): 오류 수의 비 = 엔진/(가), 95% 구간, p(엔진이 (가)보다 낫지 않음)')
     L.append('')

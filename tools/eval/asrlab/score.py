@@ -39,7 +39,7 @@ def score_engine(recs, runs, engine, with_original=False):
     utt_stats = {}
     orig_stats = {}
     num_hit = num_tot = name_hit = name_tot = 0
-    removed = loops = halluc = 0
+    removed = loops = halluc = short_total = 0
     audio = work = 0
     per_rec = {}
     for r in recs:
@@ -70,7 +70,10 @@ def score_engine(recs, runs, engine, with_original=False):
             name_tot += t
         spans = [(u['start_ms'], u['end_ms']) for u in r['utts']]
         hs = L.silence_hallucinations([(s['t0'], s['t1'], s['text']) for s in segs], spans)
+        # 앱 측정대 정의(KoCer.hallucination): 1초 미만 조각의 출력이 1~2글자
+        short_h = sum(1 for s in segs if 0 <= s['t1'] - s['t0'] < 1000 and 1 <= len(L.normalize(s['text'])) <= 2)
         halluc += hs
+        short_total += short_h
         audio += run['audio_ms']
         work += run['work_ms']
         per_rec[r['rec']] = dict(hyp_norm=hyp, ref_norm=ref_all, halluc=hs, numbers=(L.number_hits(ref_all, hyp)), names=names)
@@ -81,7 +84,7 @@ def score_engine(recs, runs, engine, with_original=False):
     lo, hi = L.bootstrap_ci(st)
     res = dict(engine=engine, recs=len(per_rec), utts=len(st), ref_chars=n, edits=e, cer=e / n if n else None, ci=[lo, hi],
                numbers=[num_hit, num_tot], names=[name_hit, name_tot], cleaned=removed, loops=loops, silence_halluc=halluc,
-               halluc_per_call=halluc / len(per_rec) if per_rec else None, audio_min=audio / 60000, rtf=work / audio if audio else None)
+               halluc_per_call=halluc / len(per_rec) if per_rec else None, short_halluc=short_total, audio_min=audio / 60000, rtf=work / audio if audio else None)
     if with_original and orig_stats:
         so = [orig_stats[i] for i in sorted(orig_stats)]
         res['cer_original_ref'] = sum(x[0] for x in so) / sum(x[1] for x in so)
@@ -206,6 +209,15 @@ def main():
                 pairs[e] = dict(vs=a.base, utts=len(ids), cer_base=sum(x[0] for x in sa) / sum(x[1] for x in sa),
                                 cer=sum(x[0] for x in sb) / sum(x[1] for x in sb), ratio=(sum(x[0] for x in sb) / sum(x[0] for x in sa)),
                                 ratio_ci=[lo, hi], p_not_better=p)
+    silver = {}
+    if a.base in per:
+        for e in per:
+            if e == a.base:
+                continue
+            recs_c = sorted(set(per[e]) & set(per[a.base]))
+            ed = sum(L.edits(per[a.base][r]['hyp_norm'], per[e][r]['hyp_norm']) for r in recs_c)
+            n = sum(len(per[a.base][r]['hyp_norm']) for r in recs_c)
+            silver[e] = dict(vs=a.base, recs=len(recs_c), cer_vs_base=ed / n if n else None)
     df = {}
     for fin in ('q5', 'q8'):
         if fin in per and 'sv' in per:
@@ -214,7 +226,7 @@ def main():
     if common:
         audio_min = sum(r['ms'] for r in recs if r['rec'] in common) / 60000
     refm = reference_methods(per, {r['rec']: r['ms'] for r in recs}) if recs and recs[0]['utts'] else {}
-    out = dict(set=a.set, engines=res, paired=pairs, draft_final=df, reference=refm, common_recs=sorted(common or []))
+    out = dict(set=a.set, engines=res, paired=pairs, silver=silver, draft_final=df, reference=refm, common_recs=sorted(common or []))
     os.makedirs(os.path.join(a.lab, 'scores'), exist_ok=True)
     json.dump(out, open(os.path.join(a.lab, 'scores', a.set + '.json'), 'w'), ensure_ascii=False, indent=1)
     for e, r in res.items():
@@ -224,6 +236,8 @@ def main():
             ' orig=%.4f' % r['cer_original_ref'] if 'cer_original_ref' in r else ''))
     for e, p in pairs.items():
         print('pair %s/%s utts=%d ratio=%.3f [%.3f,%.3f] p=%.3f' % (e, p['vs'], p['utts'], p['ratio'], p['ratio_ci'][0], p['ratio_ci'][1], p['p_not_better']))
+    for k, v in silver.items():
+        print('silver %s vs %s recs=%d CER=%.4f' % (k, v['vs'], v['recs'], v['cer_vs_base'] or 0))
     for k, v in df.items():
         print('draft', k, json.dumps(v))
 
