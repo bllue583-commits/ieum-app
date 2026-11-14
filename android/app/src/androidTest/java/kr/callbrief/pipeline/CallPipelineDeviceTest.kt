@@ -448,6 +448,29 @@ class CallPipelineDeviceTest {
         } finally { card.addWindow=realAdd;card.onVerdict={ c,a -> stats.verdict(c,a) };card.onFailure={ c,code -> stats.failure(c,code) } }
     }
 
+    /** v4.0 r21-3 on this Android's own battery service: the plug read every 5 seconds ([BatterySnapshot.pluggedNow], the
+     * sticky ACTION_BATTERY_CHANGED) sees the charger go away (`dumpsys battery unplug`), and [UnplugStop] cancels within 30 s. */
+    @Test fun t8_unplugStopsWithinThirtySecondsOnThisAndroid() {
+        fun shell(cmd:String) { inst.uiAutomation.executeShellCommand(cmd).close();Thread.sleep(500) }
+        val result=JSONObject()
+        try {
+            shell("dumpsys battery set ac 1")
+            assertTrue("plugged in",BatterySnapshot.pluggedNow(context))
+            val cancelled=java.util.concurrent.CountDownLatch(1)
+            UnplugStop(System.currentTimeMillis(),{ BatterySnapshot.pluggedNow(context) },{ cancelled.countDown() }).use { u ->
+                Thread.sleep(6_000);assertFalse("still plugged: no stop",u.stopped)
+                val off=System.currentTimeMillis()
+                shell("dumpsys battery unplug")
+                result.put("pluggedAfter",BatterySnapshot.pluggedNow(context))
+                val ok=cancelled.await(30,java.util.concurrent.TimeUnit.SECONDS)
+                result.put("stopped",ok).put("stopMs",System.currentTimeMillis()-off)
+                report("t8_unplug",result)
+                assertFalse("the read sees the charger gone",result.getBoolean("pluggedAfter"))
+                assertTrue("stopped within 30 s",ok);assertTrue(u.stopped)
+            }
+        } finally { shell("dumpsys battery reset") }
+    }
+
     /** Peak live Java heap above the start while [block] runs. The number compared is taken where the app needs memory
      * most, while a piece is being transcribed: the stand-in transcriber calls [held], which collects garbage on the decoding
      * thread itself, so nothing is being allocated meanwhile and the number is exactly what the code holds (the vault copy,

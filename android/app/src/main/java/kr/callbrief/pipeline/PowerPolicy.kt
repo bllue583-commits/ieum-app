@@ -64,7 +64,41 @@ internal object TranscriptionPower {
     /** v3.6.1 (T1, DESIGN_V7 2): Whisper encodes a whole 30-second window however little audio is in it, so a piece costs by
      * its windows: speed = work ms per (windows x 30 s), and the expected time of a piece = speed x windows x 30 s. */
     const val WINDOW_MS=30_000L
+    /** v4.0 r21-3: with "충전 중에만" on, a plugged-in run looks at the plug this often ([UnplugStop]) and stops once it has
+     * been away this long (a wireless pad's short blip rides over it): stopped at most poll + grace = 20 s after the charger
+     * went away (the promise is 30 s). */
+    const val UNPLUG_POLL_MS=5_000L
+    const val UNPLUG_GRACE_MS=15_000L
     val KST:ZoneId=ZoneId.of("Asia/Seoul")
+}
+
+/** v4.0 r21-3 (DESIGN_V8 6, user's "충전 중에만"): the plug looked at while a plugged-in run goes on. Pure: the plug and the time
+ * come in. [tick] says true once, when the run must stop: the plug away for [graceMs] since it was last seen ([lastPluggedMs],
+ * at first when the run began: now, or the last plug the ledger saw when the run began within the plug debounce). */
+internal class UnplugWatch(startPluggedMs:Long,private val graceMs:Long=TranscriptionPower.UNPLUG_GRACE_MS) {
+    @Volatile var lastPluggedMs=startPluggedMs;private set
+    /** When it said stop (null: not yet). */
+    @Volatile var stopAtMs:Long?=null;private set
+    val stopped get()=stopAtMs!=null
+    fun tick(plugged:Boolean,now:Long):Boolean {
+        if(stopAtMs!=null) return false
+        if(plugged) { lastPluggedMs=now;return false }
+        if(now-lastPluggedMs>=graceMs) { stopAtMs=now;return true }
+        return false
+    }
+}
+
+/** v4.0 r21-3: [UnplugWatch] on its own thread every [pollMs]; [onStop] (the engine's cancel) once it says stop. [close] ends
+ * the thread. The run reads [stopped] as its stop and its yield: the finished pieces stay, the piece under way is done again
+ * at the next charge (the resume rule as it is), and no stall is counted against it. */
+internal class UnplugStop(startPluggedMs:Long,private val plugged:()->Boolean,private val onStop:()->Unit,
+                          pollMs:Long=TranscriptionPower.UNPLUG_POLL_MS,graceMs:Long=TranscriptionPower.UNPLUG_GRACE_MS,
+                          private val now:()->Long={ System.currentTimeMillis() }):AutoCloseable {
+    val watch=UnplugWatch(startPluggedMs,graceMs)
+    val stopped get()=watch.stopped
+    private val timer=java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r,"ieum-unplug").apply { isDaemon=true } }
+    init { timer.scheduleWithFixedDelay({ runCatching { if(watch.tick(plugged(),now())) runCatching(onStop) } },pollMs,pollMs,java.util.concurrent.TimeUnit.MILLISECONDS) }
+    override fun close() { timer.shutdownNow() }
 }
 
 /** What the phone's power looks like now (DESIGN_V6 2.1). Read by the app itself, not through WorkManager constraints. */
@@ -93,6 +127,11 @@ internal data class BatterySnapshot(
         fun statusCode(v:Int)=when(v) { BatteryManager.BATTERY_STATUS_CHARGING -> "charging";BatteryManager.BATTERY_STATUS_DISCHARGING -> "discharging"
             BatteryManager.BATTERY_STATUS_NOT_CHARGING -> "notCharging";BatteryManager.BATTERY_STATUS_FULL -> "full";else -> "unknown" }
         fun thermalCode(v:Int)=when(v) { 0 -> "none";1 -> "light";2 -> "moderate";3 -> "severe";4 -> "critical";5 -> "emergency";6 -> "shutdown";else -> "unknown" }
+        /** v4.0 r21-3: only whether a plug is in (the sticky ACTION_BATTERY_CHANGED), for [UnplugStop]'s look every 5 seconds.
+         * Unknown counts as plugged in (no stop on a read that failed). */
+        fun pluggedNow(context:Context):Boolean = runCatching {
+            context.registerReceiver(null,IntentFilter(Intent.ACTION_BATTERY_CHANGED))?.getIntExtra(BatteryManager.EXTRA_PLUGGED,-1)?.let { it!=0 } ?: true
+        }.getOrDefault(true)
         /** The sticky ACTION_BATTERY_CHANGED plus PowerManager; everything optional is null when the phone does not say. */
         fun read(context:Context):BatterySnapshot {
             val i=runCatching { context.registerReceiver(null,IntentFilter(Intent.ACTION_BATTERY_CHANGED)) }.getOrNull()
@@ -275,7 +314,8 @@ internal object CpuSet {
 /** v3.6 (DESIGN_V6 3.1): the power ledger under [PipelineSettingsKeys.TRANSCRIPTION_POWER]. Pure JSON helpers (JVM-tested).
  * Layout: {"today":{day, battery{runs,ms,min,audioMs,audioMin,mAhScreenOff}, plugged{runs,ms,min,audioMs,audioMin}, budgetHit,
  * gapSkips,hotSkips,inCallSkips,morningSkips,lowSkips,powerSaveSkips,chargingOnlySkips,budgetSkips,levelFallingRuns,plugDropped,
- * killedChunkMs,deadlineMs,yieldCount,yieldMs,modelLoads,modelLoadMs,stopReasons{timeout,constraint,other}}, "prev":{same},
+ * killedChunkMs,deadlineMs,yieldCount,yieldMs,modelLoads,modelLoadMs,stopReasons{timeout,constraint,other},
+ * unplugStops and unplugLostMs (v4.0 r21-3: runs stopped because the charger went away, and the work of the pieces they threw away)}, "prev":{same},
  * hot{headroom,temp,slow,severe} (v3.6.1), "chunk":{rates[], coldRates[] (work ms per encoder-window ms, v3.6.1), lastMs,
  * lastAudioMs, lastRate, lastEndMs, threads, coldMedianMs, p50Ms (a 2-minute piece at that speed)}, "battery":{the last snapshot},
  * "hotRestMs" (v3.6.1: the last wake that found it hot), v3.7 (r17-1): chunk.byThreads{"<n>":{rates,coldRates}}, today.fg{runs,ms,min,
@@ -477,6 +517,13 @@ internal object PowerStats {
         return s.pct<=o.optInt("plugSamplePct",0)-LEVEL_DROP_PCT
     }
     const val LEVEL_DROP_PCT=2
+    /** v4.0 r21-3: a plugged-in run stopped at [stopMs] because the charger went away ([UnplugStop]); the plug was last seen at
+     * [lastPluggedMs] (the watch's, more recent than the ledger's). Counted in today's unplugStops. */
+    fun noteUnplugStop(old:JSONObject?,now:Long,stopMs:Long,lastPluggedMs:Long):JSONObject {
+        val o=copy(old);inc(today(o,PowerPolicy.day(now)),"unplugStops")
+        o.put("unplugStopMs",stopMs).put("lastPluggedMs",maxOf(o.optLong("lastPluggedMs",0),lastPluggedMs))
+        return o
+    }
     /** A battery run began a piece (written before it, cleared by [noteRun]): a run the process died in still counts. */
     fun noteBatteryStart(old:JSONObject?,now:Long):JSONObject { val o=copy(old);o.put("batteryRunStartMs",now);return o }
     /** The policy's memory for [PowerPolicy.decide]. [ownStartMs]: asked from inside the battery run that wrote this start
@@ -492,7 +539,10 @@ internal object PowerStats {
         val open=(o?.optLong("batteryRunStartMs",0) ?: 0).takeUnless { ownStartMs!=null && it==ownStartMs } ?: 0
         if(open>last && now-open>=TranscriptionPower.SELF_END_MS+2*60_000L) { last=open+TranscriptionPower.SELF_END_MS;if(PowerPolicy.day(open)==PowerPolicy.day(now)) used+=TranscriptionPower.SELF_END_MS }
         else if(open>last) last=now // one is running now: the gap holds
-        return PowerBudget(chargingOnly,used,b?.optLong("uahScreenOff",0) ?: 0,capacity,last,o?.optLong("lastPluggedMs",0) ?: 0,levelFalling(o,s,now),slow(o,now))
+        // v4.0 r21-3: after a run stopped because the charger went away, no plug debounce until a plug is seen again (a new run
+        // within the two minutes would only begin a piece on the battery and be stopped again).
+        val plugMs=(o?.optLong("lastPluggedMs",0) ?: 0).takeUnless { chargingOnly && it>0 && (o?.optLong("unplugStopMs",0) ?: 0)>=it } ?: 0
+        return PowerBudget(chargingOnly,used,b?.optLong("uahScreenOff",0) ?: 0,capacity,last,plugMs,levelFalling(o,s,now),slow(o,now))
     }
     /** v3.6.1 (T3a): between pieces, the run in [mode] may go on (the same mode still applies). [ownStartMs]: this battery
      * run's own start mark, null for a plugged-in run or before its first piece. */

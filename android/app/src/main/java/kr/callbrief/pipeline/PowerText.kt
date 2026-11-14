@@ -62,7 +62,9 @@ internal object PowerText {
     private val DAY_COUNTS=listOf("gapSkips","hotSkips","inCallSkips","morningSkips","lowSkips","powerSaveSkips","chargingOnlySkips","budgetSkips",
         "plugDropped","killedChunkMs","deadlineMs","yieldCount","yieldMs","modelLoads","modelLoadMs","decodeAudioMs",
         // v3.7 r17-3: the runs' process CPU time and the charge the battery runs took ([PowerStats.noteCpu]).
-        "cpuMs","cpuRuns","batteryUah")
+        "cpuMs","cpuRuns","batteryUah",
+        // v4.0 r21-3: plugged-in runs stopped because the charger went away ("충전 중에만"), and the piece work they threw away.
+        "unplugStops","unplugLostMs")
     /** v3.6.1 (T1): the causes counted under today's `hot` ([PowerStats.noteHot]). */
     val HOT_WHY=listOf("headroom","temp","slow","severe")
     private fun n(o:JSONObject?,k:String)=(o?.opt(k) as? Number)?.toLong()?.coerceAtLeast(0) ?: 0L

@@ -476,14 +476,20 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
             }
             else savePower(settings) { PowerStats.noteFg(it,System.currentTimeMillis(),"refused") }
         }
+        // v4.0 r21-3: "충전 중에만" on: the plug is looked at every 5 seconds while the run goes on, and the run stops within
+        // 20 seconds of the charger going away (the native run is cancelled mid-piece; the finished pieces stay). Off: as before
+        // (the rest of a plugged-in run goes to the battery rules).
+        val unplug=if(run.mode==PowerPolicy.Mode.PLUGGED && chargingOnly(settings))
+            UnplugStop(if(start.isPlugged) now else budget.lastPluggedMs.takeIf { it>0 } ?: now,{ BatterySnapshot.pluggedNow(storage) },{ engine?.cancel() }) else null
+        val unplugged={ unplug?.stopped==true }
         val events=object:CallTranscriptionRunner.Events {
             override fun piece(ms:Long,audioMs:Long,cold:Boolean) { savePower(settings) { PowerStats.notePiece(it,ms,audioMs,threads,cold,
                 foreground=if(run.mode==PowerPolicy.Mode.PLUGGED) fgSince>0 else null) } }
             override fun started() { if(run.mode==PowerPolicy.Mode.BATTERY) { val t=System.currentTimeMillis();ownStart=t;savePower(settings) { PowerStats.noteBatteryStart(it,t) } } }
-            override fun killed(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"killedChunkMs",ms) } }
+            override fun killed(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),if(unplugged()) "unplugLostMs" else "killedChunkMs",ms) } }
             override fun deadline(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"deadlineMs",ms) } }
-            override fun yielded() { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"yieldCount") } }
-            override fun yieldLeft(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"yieldMs",ms) } }
+            override fun yielded() { if(!unplugged()) savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"yieldCount") } }
+            override fun yieldLeft(ms:Long) { if(!unplugged()) savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"yieldMs",ms) } }
             override fun decodeAudio(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"decodeAudioMs",ms) } }
             override fun begun(recordingId:String) { runCatching { settings.update { s -> val prev=runCatching { JSONObject(s.optString(PipelineSettingsKeys.TRACE_TEXT_START)) }.getOrNull()
                 if(prev?.has(recordingId)!=true) s.put(PipelineSettingsKeys.TRACE_TEXT_START,Telemetry.noteTextStart(prev,recordingId,System.currentTimeMillis()).toString()) } } }
@@ -500,7 +506,7 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                     skipReason={ c -> skipReason(c,settings) },
                     // The app may not have been opened since the phone restarted: the sink is made here then (review 11/4, round 2).
                     sink={ CallTranscriptSinks.factory?.invoke(applicationContext) ?: CallSinkImpl(applicationContext) },
-                    stopped={ isStopped },
+                    stopped={ isStopped || unplugged() },
                     cleanedCount={ n -> settings.update{ it.put(PipelineSettingsKeys.TRANSCRIPT_CLEANED,it.optLong(PipelineSettingsKeys.TRANSCRIPT_CLEANED,0)+n) } },
                     speed={ ms -> settings.update{ it.put(PipelineSettingsKeys.LAST_MS_PER_AUDIO_MINUTE,ms).put(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,System.currentTimeMillis()) } },
                     // v3.6: old recordings (처음 정리) go only on a plugged-in run; a battery run takes today's calls only (in SQL).
@@ -515,9 +521,10 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                     events=events,
                     coldStart=coldStart,
                     // v3.7 T5: the foreground service's time limit (or the user closing it) is no stall of the piece.
-                    yieldStop={ fgStop() })
-                val pass=runner.run()
+                    yieldStop={ fgStop() || unplugged() })
+                val pass=try { runner.run() } finally { unplug?.close() }
                 val end=System.currentTimeMillis()
+                unplug?.watch?.stopAtMs?.let { at -> savePower(settings) { PowerStats.noteUnplugStop(it,end,at,unplug.watch.lastPluggedMs) } }
                 noteFgEnd(settings)
                 noteRun(settings,began,pass.state)
                 if(runner.startedPieces>0) {
@@ -540,14 +547,16 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                     savePower(settings) { PowerStats.noteWaiting(it,n,oldest) } }
                 // Stopped part way: queue the next pass (the finished pieces are kept) instead of waiting for the hourly one:
                 // at once while plugged in, after the gap on battery (the next wake decides again either way).
-                if(CallTranscriptionRunner.requeueNow(pass.state,pass.pieces) || severe()) {
+                // v4.0 r21-3: stopped because the charger went away: the next charge starts it again (the charger trigger).
+                if(unplugged()) armPlug(storage,true)
+                else if(CallTranscriptionRunner.requeueNow(pass.state,pass.pieces) || severe()) {
                     if(severe()) later(applicationContext,TranscriptionPower.HOT_DELAY_MS*2)
                     // A battery run that ended because the plug went in goes on at once (review r16-1 #7).
                     else if(run.mode==PowerPolicy.Mode.PLUGGED || BatterySnapshot.read(storage).isPlugged) enqueue(applicationContext) else later(applicationContext,TranscriptionPower.BATTERY_RUN_GAP_MS)
                 }
                 Result.success()
             } }
-        } catch(_:Exception) { noteFgEnd(settings);noteRun(settings,began,"ERROR");if(runAttemptCount<3)Result.retry() else Result.failure() }
+        } catch(_:Exception) { unplug?.close();noteFgEnd(settings);noteRun(settings,began,"ERROR");if(runAttemptCount<3)Result.retry() else Result.failure() }
     }
 
     /** v3.7 T5: the stop under way came from the foreground service (its time limit, or the user closing it), not the piece. */
