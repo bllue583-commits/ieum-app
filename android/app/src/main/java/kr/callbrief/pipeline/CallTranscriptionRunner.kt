@@ -163,6 +163,9 @@ internal class CallTranscriptionRunner(
     /** v3.7 T5: the stop under way is one the run is not to blame for (the foreground service's time limit, or a refused
      * foreground start): it ends like a [Yield], the attempt given back and no stop counted against the piece. */
     private val yieldStop:()->Boolean={false},
+    /** v4.0 r21 review M2: the stop under way is the charger going away ("충전 중에만"): from the [UNPLUG_SPLIT_AFTER]th such
+     * stop of a recording the piece it cut is done as two halves next time (the same way as a piece that keeps stalling). */
+    private val unplugged:()->Boolean={false},
 ) {
     /** v3.6 (DESIGN_V6 3.1): numbers only, for the power ledger. */
     interface Events {
@@ -230,6 +233,10 @@ internal class CallTranscriptionRunner(
             if(!lastStopHarmless)store.noteStall(key,stallId)
             throw Stopped()
         }
+        /** Review M2: a piece cut by the charger going away; the recording's second such stop on (and a whole piece long enough to
+         * halve) asks for the split. */
+        fun unplugCut(partId:Int,stallId:Int,samples:Int) { if(!unplugged()) return
+            runCatching { if(store.noteUnplugStop(key)>=UNPLUG_SPLIT_AFTER && partId>=0 && samples>=MIN_SPLIT_SAMPLES) store.askSplit(key,stallId) } }
         // One piece: skipped when finished earlier; a stop while it runs is counted against [stallId] (the whole chunk).
         fun piece(partId:Int,stallId:Int,offset:Long,pcm:FloatArray):List<CallTranscript.Segment> {
             finished[partId]?.let { return it }
@@ -250,14 +257,14 @@ internal class CallTranscriptionRunner(
                 } catch(e:Exception) {
                     pieceWorkMs+=now()-began;workStart=0L
                     closeShared() // a handle that was cancelled or failed is not used again (W3)
-                    if(stopped()){events.killed(now()-began);stop(stallId)} // cancel() ends the native run with an error
+                    if(stopped()){events.killed(now()-began);unplugCut(partId,stallId,pcm.size);stop(stallId)} // cancel() ends the native run with an error
                     // r12-8 A4: the native run ended by its own deadline (not a stop): a whole piece is halved next time.
                     if(deadline(e) && partId>=0 && pcm.size>=MIN_SPLIT_SAMPLES){events.deadline(now()-began);store.noteDeadline(key);store.askSplit(key,stallId);throw Deadline()}
                     if(deadline(e)) { events.deadline(now()-began);store.noteDeadline(key) }
                     throw e
                 }
             pieceWorkMs+=now()-began;workStart=0L
-            if(stopped()){events.killed(now()-began);closeShared();stop(stallId)} // a piece cut short is not kept
+            if(stopped()){events.killed(now()-began);closeShared();unplugCut(partId,stallId,pcm.size);stop(stallId)} // a piece cut short is not kept
             events.piece(now()-began,audioMs,first && coldStart)
             val shifted=raw.map { it.copy(startMs=it.startMs+offset,endMs=it.endMs+offset) } // v3.3: uncertain numbers go along
             store.savePart(key,partId,shifted);pieces++;recordingPieces++;doneAudioMs+=audioMs;return shifted
@@ -298,13 +305,15 @@ internal class CallTranscriptionRunner(
     private fun runJobs(maxJobs:Int):Pass {
         store.recoverRunning(MAX_ATTEMPTS);store.skipSuperseded()
         store.offerAll(store.candidates(),skipReason,stopped) // one transaction for the whole list (r7-1)
-        if(stopped())return Pass("STOPPED",0,0)
+        if(stopped())return Pass(if(yieldStop()) "YIELD" else "STOPPED",0,0)
         val target=sink() ?: return Pass("NO_SINK",0,0)
         val file=model.verifiedModelFile() ?: return Pass("NO_MODEL",0,0)
         var done=0;var failed=0;pieces=0;startedPieces=0;doneAudioMs=0
         val runStarted=now();var taken=0;runStartedMs=runStarted
         repeat(maxJobs) {
-            if(stopped())return Pass("STOPPED",done,failed,pieces)
+            // Review L3: a stop the run is not to blame for (the charger gone, the foreground limit) before a recording is
+            // taken is a yield, not "other" in stopReasons.
+            if(stopped())return Pass(if(yieldStop()) "YIELD" else "STOPPED",done,failed,pieces)
             // r12-8 A3: late in the run no new recording is begun (it would only be cut off by the time limit); the next run takes it.
             if(taken>0 && now()-runStarted>=minOf(newWorkMs,runLimitMs))return Pass("MORE",done,failed,pieces)
             if(taken>0 && !keepGoing())return Pass("YIELD",done,failed,pieces)
@@ -370,6 +379,8 @@ internal class CallTranscriptionRunner(
         fun requeueNow(state:String,pieces:Int)=state=="MORE"||state=="YIELD"||(state=="STOPPED"&&pieces>0)
         /** The same piece stopped this many times in a row is halved; not worth halving under ten seconds. */
         const val SPLIT_AFTER_STOPS=3
+        /** v4.0 r21 review M2: from this many charger-gone stops of one recording, the piece cut is halved. */
+        const val UNPLUG_SPLIT_AFTER=2
         const val MIN_SPLIT_SAMPLES=PipelineAudioMath.TARGET_RATE*10
         /** The native runtime's smallest piece (ieum_whisper.cpp: 1600 samples, 0.1 s at 16 kHz). */
         const val MIN_PIECE_SAMPLES=1600
@@ -482,11 +493,13 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
         val unplug=if(run.mode==PowerPolicy.Mode.PLUGGED && chargingOnly(settings))
             UnplugStop(if(start.isPlugged) now else budget.lastPluggedMs.takeIf { it>0 } ?: now,{ BatterySnapshot.pluggedNow(storage) },{ engine?.cancel() }) else null
         val unplugged={ unplug?.stopped==true }
+        var unplugKilled=false
         val events=object:CallTranscriptionRunner.Events {
             override fun piece(ms:Long,audioMs:Long,cold:Boolean) { savePower(settings) { PowerStats.notePiece(it,ms,audioMs,threads,cold,
                 foreground=if(run.mode==PowerPolicy.Mode.PLUGGED) fgSince>0 else null) } }
             override fun started() { if(run.mode==PowerPolicy.Mode.BATTERY) { val t=System.currentTimeMillis();ownStart=t;savePower(settings) { PowerStats.noteBatteryStart(it,t) } } }
-            override fun killed(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),if(unplugged()) "unplugLostMs" else "killedChunkMs",ms) } }
+            override fun killed(ms:Long) { if(unplugged()) unplugKilled=true
+                savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),if(unplugged()) "unplugLostMs" else "killedChunkMs",ms) } }
             override fun deadline(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"deadlineMs",ms) } }
             override fun yielded() { if(!unplugged()) savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"yieldCount") } }
             override fun yieldLeft(ms:Long) { if(!unplugged()) savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"yieldMs",ms) } }
@@ -521,7 +534,8 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                     events=events,
                     coldStart=coldStart,
                     // v3.7 T5: the foreground service's time limit (or the user closing it) is no stall of the piece.
-                    yieldStop={ fgStop() || unplugged() })
+                    yieldStop={ fgStop() || unplugged() },
+                    unplugged=unplugged)
                 val pass=try { runner.run() } finally { unplug?.close() }
                 val end=System.currentTimeMillis()
                 unplug?.watch?.stopAtMs?.let { at -> savePower(settings) { PowerStats.noteUnplugStop(it,end,at,unplug.watch.lastPluggedMs) } }
@@ -534,9 +548,12 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                     savePower(settings) { o -> var x=PowerStats.noteRun(o,end,run.mode,end-now,runner.doneAudioMs,uah)
                         // Begun as plugged in (or within the plug debounce) but ended on battery: the time since the plug was
                         // last seen goes to the battery budget, with the gap after it (review r16-1 #3).
+                        // Review L2: not after a stop for the charger going away ("충전 중에만"): those 15 to 25 seconds ran no piece on
+                        // the battery; they go to unplugLostMs (with the cut piece's work when one was cut, else here).
                         if(run.mode==PowerPolicy.Mode.PLUGGED && !endSnap.isPlugged) {
                             val since=o.optLong("lastPluggedMs",now).coerceIn(now,end)
-                            x=PowerStats.noteRun(x,end,PowerPolicy.Mode.BATTERY,end-since,0,null)
+                            x=if(unplugged()) { if(unplugKilled) x else PowerStats.add(x,end,"unplugLostMs",end-since) }
+                              else PowerStats.noteRun(x,end,PowerPolicy.Mode.BATTERY,end-since,0,null)
                         }
                         if(pass.state=="STOPPED") x=PowerStats.noteStop(x,end,if(timeLimitStop(began)) "timeout" else "other")
                         // v3.7 r17-3: CPU ms of the run and, on battery, the charge counter's drop (whatever the screen did).

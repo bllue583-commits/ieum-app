@@ -51,6 +51,14 @@ class R21CardStatsTest:ProtectedTextHostTestBase() {
         CardStats.failure(app,"hidden:lk")
         assertEquals(JSONObject().put("hidden:lk",1).toString(),heartbeat().getJSONObject("today").getJSONObject(CardStats.CAUSES).toString())
     }
+    @Test fun theHeartbeatKeepsOnlyCodeKeysInTheCauses() {
+        // Review L7: whatever the settings hold, the heartbeat's causes keys pass the same filter as CardStats.failure.
+        val now=1_800_000_000_000L;CardStats.clock={ now }
+        val stats=JSONObject().put("calls",1).put("day",CardStats.day(now))
+            .put("today",JSONObject().put("day",CardStats.day(now)).put("causes",JSONObject().put("hidden",2).put("010-1234-5678",1).put("김",1).put("a b",1)))
+        val hb=CardStats.heartbeat(JSONObject().put(kr.callbrief.pipeline.PipelineSettingsKeys.CARD_STATS,stats),now)!!
+        assertEquals(JSONObject().put("hidden",2).toString(),hb.getJSONObject("today").getJSONObject(CardStats.CAUSES).toString())
+    }
     @Test fun aCauseCodeIsShortAndSaysThePhone() {
         val t=1_800_000_000_000L
         assertEquals("hidden",CallCardOverlay.failCode("hidden",true,0,false,false,true,null,t))
@@ -59,6 +67,9 @@ class R21CardStatsTest:ProtectedTextHostTestBase() {
         assertEquals("the last exit only on a cold process","hidden:m4",CallCardOverlay.failCode("hidden",true,4,false,false,true,10 to t,t))
         val long=CallCardOverlay.failCode("addView:WindowManagerInvalidDisplayException",false,3,true,true,false,4 to t-50*3_600_000L,t)
         assertTrue(long,long.length<=40);assertTrue(long.startsWith("add:WindowManagerInv:"))
+        // Review L6: whole items go from the end, never half of one.
+        assertEquals("add:WindowManagerInv:d0:m3:cold:lk:off",long)
+        assertEquals("add:WindowManagerInv:d0:m3:cold:x10:h2",CallCardOverlay.failCode("addView:WindowManagerInvalidDisplayException",false,3,true,false,true,10 to t-3_600_000L,t))
         assertEquals(listOf("m5","m30","h2","h12","old"),listOf(60_000L,10*60_000L,3_600_000L,5*3_600_000L,13*3_600_000L).map(CallCardOverlay::agoBucket))
     }
 }

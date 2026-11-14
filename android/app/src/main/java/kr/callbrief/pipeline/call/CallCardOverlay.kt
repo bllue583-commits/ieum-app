@@ -101,8 +101,9 @@ internal object CallCardOverlay {
     const val CAUSE_OK_RETRY="okRetry"
     /** v4.0 r21-2: after a failure the window is put up again this much later, once per entry (0.6 s, then 2 s). */
     val RETRY_DELAYS_MS=listOf(600L,2_000L)
-    /** v4.0 r21-2: a window put up again is judged this soon (the process is warm by then; the first try keeps [HIDDEN_AFTER_MS]). */
-    const val RETRY_HIDDEN_MS=1_500L
+    /** v4.0 r21-2: a window put up again is judged this long after it was added. Review L5: the same 3 s as the first try (a
+     * slow moment can hold the first frame past 1.5 s, and a window about to draw would be taken away); shorter once numbers say so. */
+    const val RETRY_HIDDEN_MS=HIDDEN_AFTER_MS
     /** Added while the screen was locked and never seen until the call ended (the notice was beside it). */
     const val CAUSE_HIDDEN_LOCKED="hiddenLocked"
     /** Told once per call when the window was put up: [SHOWN] (added, unlocked), [LOCKED] (added while locked, the notice beside
@@ -573,15 +574,18 @@ internal object CallCardOverlay {
      * ([agoBucket]). E.g. `add:BadToken:cold:x10:m5`. */
     internal fun failCode(cause:String,draw:Boolean,mode:Int,cold:Boolean,locked:Boolean,screenOn:Boolean,exit:Pair<Int,Long>?,now:Long):String {
         val base=if(cause.startsWith("addView:")) "add:"+cause.removePrefix("addView:").removeSuffix("Exception").take(16) else cause.take(16)
-        val tail=buildString {
-            if(!draw) append(":d0")
-            if(mode>0) append(":m$mode")
-            if(cold) append(":cold")
-            if(locked) append(":lk")
-            if(!screenOn) append(":off")
-            if(cold && exit!=null) append(":x${exit.first}:${agoBucket(now-exit.second)}")
+        val items=buildList {
+            if(!draw) add(":d0")
+            if(mode>0) add(":m$mode")
+            if(cold) add(":cold")
+            if(locked) add(":lk")
+            if(!screenOn) add(":off")
+            if(cold && exit!=null) add(":x${exit.first}:${agoBucket(now-exit.second)}")
         }
-        return (base+tail).take(40)
+        // Review L6: past 40 characters whole items go from the end (":x10" never becomes ":x1").
+        var out=base
+        for(i in items) if(out.length+i.length<=40) out+=i else break
+        return out
     }
     /** How long ago, in buckets: m5 (under 5 minutes), m30, h2, h12 (under 12 hours), old. */
     internal fun agoBucket(ms:Long):String = when { ms<5*60_000L -> "m5";ms<30*60_000L -> "m30";ms<2*3_600_000L -> "h2";ms<12*3_600_000L -> "h12";else -> "old" }

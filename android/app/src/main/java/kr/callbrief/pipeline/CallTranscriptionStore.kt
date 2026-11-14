@@ -53,6 +53,8 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
                 // v3.6 r16-0 (DESIGN_V6 W4): charging_only = taken only while plugged in (deadline twice, or interrupted once);
                 // permanent = a failure that comes back the same however often it is tried (never revived); deadline_count for the first.
                 for(col in listOf("charging_only","permanent","deadline_count")) if(db.query("PRAGMA table_info(call_transcription_jobs)").none { it["name"]==col }) db.execute("ALTER TABLE call_transcription_jobs ADD COLUMN $col INTEGER NOT NULL DEFAULT 0")
+                // v4.0 r21 review M2: runs of this recording stopped mid-piece because the charger went away ("충전 중에만").
+                if(db.query("PRAGMA table_info(call_transcription_jobs)").none { it["name"]=="unplug_count" }) db.execute("ALTER TABLE call_transcription_jobs ADD COLUMN unplug_count INTEGER NOT NULL DEFAULT 0")
                 // v3.6 W5: failed rows are no longer revived here but at the start of a plugged-in run ([requeueFailed]).
                 null
             }
@@ -253,6 +255,9 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         db.execute("DELETE FROM call_transcription_splits WHERE recording_id=? AND source_version=? AND audio_sha=?",k.recordingId,k.sourceVersion,k.audioSha);null
     }
     /** r12-8 A4: the native run on piece [chunk] ran into its own deadline; the piece is done as two halves from now on. */
+    /** v4.0 r21 review M2: one more run of this recording stopped mid-piece by the charger going away; returns the count now. */
+    fun noteUnplugStop(k:Key):Int { db.execute("UPDATE call_transcription_jobs SET unplug_count=unplug_count+1 WHERE recording_id=? AND source_version=? AND audio_sha=?",k.recordingId,k.sourceVersion,k.audioSha)
+        return db.query("SELECT unplug_count AS n FROM call_transcription_jobs WHERE recording_id=? AND source_version=? AND audio_sha=?",k.recordingId,k.sourceVersion,k.audioSha).singleOrNull()?.get("n")?.let { (it as Number).toInt() } ?: 0 }
     fun askSplit(k:Key,chunk:Int)=db.execute("INSERT OR IGNORE INTO call_transcription_splits VALUES(?,?,?,?)",k.recordingId,k.sourceVersion,k.audioSha,chunk)
     fun splitAsked(k:Key,chunk:Int):Boolean = db.query("SELECT 1 FROM call_transcription_splits WHERE recording_id=? AND source_version=? AND audio_sha=? AND chunk=?",
         k.recordingId,k.sourceVersion,k.audioSha,chunk).isNotEmpty()
@@ -340,6 +345,11 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         fun permanent(code:String)=code in PERMANENT_CODES
         val PERMANENT_CODES=listOf("CodecException","ANDROID_STT_PCM_SIZE")
         private val PERMANENT_SQL=PERMANENT_CODES.joinToString(",") { "'$it'" }
+        /** v4.0 r21 review L8: a FAILED row of alias [j] that no later build will try again: marked permanent, or its revivals
+         * used up ([MAX_REQUEUES], one for INTERRUPTED and permanent codes; the same caps as [requeueFailedOnce]). Without the
+         * columns (an old or a test table) [hasCols] false: none is final. */
+        fun finalFailedSql(j:String,hasCols:Boolean)=if(!hasCols) "0" else
+            "(coalesce($j.permanent,0)=1 OR coalesce($j.requeue_count,0)>=(CASE WHEN $j.reason='INTERRUPTED' OR $j.reason IN($PERMANENT_SQL) THEN $MAX_REQUEUES_INTERRUPTED ELSE $MAX_REQUEUES END))"
         /** Queued recordings whose time (start or filename time, else the file's modified time) is before 10/1 become
          * SKIPPED with BEFORE_START, the reason the offer pass gives them. Arguments: updated_ms, [FirstPass.FROM_MS]. */
         const val SKIP_BEFORE_START_SQL="""UPDATE call_transcription_jobs SET state='SKIPPED',reason='BEFORE_START',updated_ms=? WHERE state='QUEUED' AND recording_id IN(

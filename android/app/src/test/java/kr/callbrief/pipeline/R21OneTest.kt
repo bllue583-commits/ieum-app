@@ -47,10 +47,11 @@ class R21OneTest:ProtectedTextHostTestBase() {
     }
     @After fun reset() { CallTranscriptionStore.buildCode={ kr.callbrief.BuildConfig.VERSION_CODE } }
     private fun store(at:Long)=CallRecordStore(context){ at }
-    private fun job(rec:String,state:String,sha:String="s") = port().use { p ->
-        p.execute("CREATE TABLE IF NOT EXISTS call_transcription_jobs(recording_id TEXT NOT NULL,source_version INTEGER NOT NULL,audio_sha TEXT NOT NULL,state TEXT NOT NULL,audio_ms INTEGER,reason TEXT,updated_ms INTEGER,PRIMARY KEY(recording_id,source_version,audio_sha))")
+    /** [permanent] / [requeues]: review L8, a FAILED row counts only when no later build tries it again. */
+    private fun job(rec:String,state:String,sha:String="s",permanent:Int=1,requeues:Int=0,reason:String="CodecException") = port().use { p ->
+        p.execute("CREATE TABLE IF NOT EXISTS call_transcription_jobs(recording_id TEXT NOT NULL,source_version INTEGER NOT NULL,audio_sha TEXT NOT NULL,state TEXT NOT NULL,audio_ms INTEGER,reason TEXT,updated_ms INTEGER,permanent INTEGER NOT NULL DEFAULT 0,requeue_count INTEGER,PRIMARY KEY(recording_id,source_version,audio_sha))")
         p.execute("CREATE TABLE IF NOT EXISTS local_files(recording_id TEXT PRIMARY KEY,filename_time_candidate_ms INTEGER)")
-        p.execute("INSERT INTO call_transcription_jobs(recording_id,source_version,audio_sha,state,audio_ms) VALUES(?,1,?,?,60000)",rec,sha,state) }
+        p.execute("INSERT INTO call_transcription_jobs(recording_id,source_version,audio_sha,state,audio_ms,reason,permanent,requeue_count) VALUES(?,1,?,?,60000,?,?,?)",rec,sha,state,reason,permanent,requeues) }
 
     @Test fun aCallWhoseTextCouldNotBeMadeIsCountedApart() {
         job("rec1","FAILED") // failed for good
@@ -58,9 +59,18 @@ class R21OneTest:ProtectedTextHostTestBase() {
         job("rec3","QUEUED") // waits
         job("rec4","FAILED");job("rec4","DONE","t") // a version went through (a personal call: its record is gone): not failed
         job("rec6","FAILED") // the day before
+        // Review L8: a failure the next build will try again is not "could not be made" yet; one whose tries are used up is.
+        job("rec5","FAILED",permanent=0,requeues=1,reason="STALLED")
         val c=store(kst(23,0)).use { it.dayCoverage(day) }
-        assertEquals("rec1 to rec4",4,c.calls);assertEquals("rec2, rec3",2,c.pending);assertEquals("rec1",1,c.failed);assertEquals(0,c.analyzed)
+        assertEquals("rec1 to rec5",5,c.calls);assertEquals("rec2, rec3",2,c.pending);assertEquals("rec1",1,c.failed);assertEquals(0,c.analyzed)
         assertEquals(1,store(kst(23,0)).use { it.dayCoverage(day.minusDays(1)) }.failed)
+        port().use { p -> p.execute("UPDATE call_transcription_jobs SET requeue_count=2 WHERE recording_id='rec5'") }
+        assertEquals("rec5's tries used up: counted",2,store(kst(23,0)).use { it.dayCoverage(day) }.failed)
+        port().use { p -> p.execute("UPDATE call_transcription_jobs SET requeue_count=0,reason='INTERRUPTED' WHERE recording_id='rec5'") }
+        assertEquals("INTERRUPTED once more",1,store(kst(23,0)).use { it.dayCoverage(day) }.failed)
+        port().use { p -> p.execute("UPDATE call_transcription_jobs SET requeue_count=1 WHERE recording_id='rec5'") }
+        assertEquals(2,store(kst(23,0)).use { it.dayCoverage(day) }.failed)
+        port().use { p -> p.execute("UPDATE call_transcription_jobs SET requeue_count=0,reason='STALLED' WHERE recording_id='rec5'") }
         // The night's state carries it for the report's head.failedCalls.
         val pending=store(kst(23,0)).use { it.tidyState(true,kst(23,0)) }.getJSONObject("pending")
         assertEquals(2,pending.getInt("yesterdayCalls"));assertEquals(1,pending.getInt("yesterdayFailed"))
@@ -86,7 +96,12 @@ class R21OneTest:ProtectedTextHostTestBase() {
 
     @Test fun theMorningReportSaysHowManyCouldNotBeMade() {
         val with=KakaoReport.compose(report(2),picture=false)
-        assertEquals("11/15(일) 챙길 일 3개 · 글자로 못 바꾼 통화 2건",with.list.first().header)
+        assertEquals("11/15(일) 챙길 일 3개 · 어제 글자로 못 바꾼 통화 2건",with.list.first().header)
+        // Review L9: the longest header (a two-digit day, 10 to-dos, a three-digit count) stays short, and the web view gets the count.
+        val longest="11/30(일) 챙길 일 10개"+KakaoReport.failedTag(100)
+        assertEquals(longest,39,KakaoReport.length(longest))
+        assertEquals(2,KakaoReport.webData(report(2),false).getJSONObject("head").getInt("failedCalls"))
+        assertEquals(0,KakaoReport.webData(report(null),false).getJSONObject("head").getInt("failedCalls"))
         assertTrue(with.chat.first().text,with.chat.first().text.lines()[1].endsWith("어제 통화 5건을 정리했어요. 글자로 못 바꾼 통화가 2건 있어요"))
         // None: nothing more than before (a v10 report has no key at all).
         for(r in listOf(report(0),report(null))) { val c=KakaoReport.compose(r,picture=false)

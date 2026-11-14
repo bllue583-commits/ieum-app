@@ -285,7 +285,7 @@ object KakaoReport {
         val day=runCatching { LocalDate.parse(o.optString("day")) }.getOrElse { CallRecordStore.kstDay(clock()) }
         return JSONObject().put("v",1).put("day",day.toString()).put("label",dayLabel(day)).put("phone",phone)
             .put("head",JSONObject().put("calls",n("calls")).put("newChecks",n("newChecks")).put("todayChecks",n("todayChecks"))
-                .put("issues",n("issues")).put("pendingCalls",n("pendingCalls")))
+                .put("issues",n("issues")).put("pendingCalls",n("pendingCalls")).put("failedCalls",n("failedCalls")))
             .put("today",today).put("inProgress",arr("inProgress",3,listOf("what"))).put("check",arr("check",3,listOf("what","who")))
             .put("yesterday",arr("yesterday",8,listOf("who","what"))).put("late",arr("late",LATE_ITEMS,listOf("who","what")))
     }
@@ -327,8 +327,9 @@ object KakaoReport {
     internal fun pendingSentence(n:Int)=if(n>0) ". ${n}건은 아직 글자로 바꾸는 중이에요" else ""
     /** v4.0 r21-1: ". 글자로 못 바꾼 통화가 1건 있어요" after the head line; nothing when there is none. */
     internal fun failedSentence(n:Int)=if(n>0) ". ${FAILED_WORDS}가 ${n}건 있어요" else ""
-    /** v4.0 r21-1: the first list bubble's header goes on with " · 글자로 못 바꾼 통화 1건"; nothing when there is none. */
-    internal fun failedTag(n:Int)=if(n>0) "$LIST_DOT$FAILED_WORDS ${n}건" else ""
+    /** v4.0 r21-1: the first list bubble's header goes on with " · 어제 글자로 못 바꾼 통화 1건" (review L9: "어제", so it is not
+     * read with the header's date, which is today); nothing when there is none. */
+    internal fun failedTag(n:Int)=if(n>0) "${LIST_DOT}어제 $FAILED_WORDS ${n}건" else ""
     const val FAILED_WORDS="글자로 못 바꾼 통화"
     /** The counts under [headLine] (v3.6 and before they were on the same line). */
     internal fun countsLine(r:Report)="새 체크 ${r.newChecks}개, 오늘 챙길 일 ${r.todayChecks}개"

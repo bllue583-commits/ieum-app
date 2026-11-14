@@ -118,11 +118,45 @@ class R21ThreeTest:ProtectedTextHostTestBase() {
         }
     }
 
+    /** Review M2: the same piece cut three times in a row by the charger going away: from the second stop it is halved, so
+     * the third run goes on with shorter pieces (the whole-piece minimum of 10 s as for stalls). */
+    @Test fun aPieceCutAgainAndAgainByTheChargerIsHalved() {
+        val key=recording("again",base-60*minute,3*60.0)
+        val sizes=mutableListOf<Int>()
+        fun runOnce(cutAt:Int):String { var pieces=0;var stop=false
+            val t=CallTranscriber { _,pcm,stopped -> pieces++;sizes+=pcm.size
+                if(pieces==cutAt) { stop=true;val until=System.currentTimeMillis()+2_000;while(!stopped() && System.currentTimeMillis()<until) Thread.sleep(2) }
+                listOf(CallTranscript.Segment(0,pcm.size*1000L/rate,"말")) }
+            return CallTranscriptionStore(context,{ clock },{}).use { s ->
+                CallTranscriptionRunner(s,model,PipelineAudioDecoder(),t,read={ c -> PipelineBytesInput(wavs.getValue(c.key.recordingId).copyOf()) },
+                    skipReason={null},sink={sink},stopped={ stop },now={clock},yieldStop={ stop },unplugged={ stop }).run().state } }
+        // Run 1 and 2: the first piece (2 minutes) cut each time.
+        assertEquals("YIELD",runOnce(1));assertEquals("YIELD",runOnce(1))
+        CallTranscriptionStore(context,{ clock },{}).use { s -> assertTrue("asked to halve after the second stop",s.splitAsked(key,0));assertEquals(0,s.totalStalls(key)) }
+        // Run 3 (cut at its first piece again): the piece is a half now.
+        sizes.clear();assertEquals("YIELD",runOnce(1))
+        assertTrue("a half of the 2-minute piece: ${sizes}",sizes.single() in 30*rate..90*rate)
+        // Run 4, no cut: the halves and the tail, the recording done.
+        sizes.clear();assertEquals("IDLE",runOnce(Int.MAX_VALUE))
+        assertTrue(sizes.toString(),sizes.size>=3 && sizes.all { it<=90*rate })
+    }
+
+    /** Review L3: stopped before a piece is taken (the charger already gone) is a yield, not a stop counted as "other". */
+    @Test fun stoppedBeforeAnyPieceIsAYield() {
+        recording("early",base-60*minute,30.0)
+        CallTranscriptionStore(context,{ clock },{}).use { s ->
+            val pass=CallTranscriptionRunner(s,model,PipelineAudioDecoder(),CallTranscriber { _,_,_ -> error("no piece") },read={ c -> PipelineBytesInput(wavs.getValue(c.key.recordingId).copyOf()) },
+                skipReason={null},sink={sink},stopped={ true },now={clock},yieldStop={ true },unplugged={ true }).run()
+            assertEquals("YIELD",pass.state)
+        }
+    }
+
     @Test fun theLedgerCountsTheStopAndNoDebounceStartsANewRun() {
         val snap=BatterySnapshot(60,"none","discharging")
         var o=PowerStats.notePlug(JSONObject(),BatterySnapshot(60,"wireless","charging"),base)
-        assertEquals("within two minutes of the plug: plugged in, as before",PowerPolicy.Mode.PLUGGED,
-            (PowerPolicy.decide(snap,PowerStats.budget(o,snap,base+30_000,true),base+30_000) as PowerPolicy.Decision.Run).mode)
+        // Review L1: "충전 중에만" on, no plug now: no new run within the two-minute debounce; a run going on keeps it (midRun).
+        assertEquals("chargingOnly",(PowerPolicy.decide(snap,PowerStats.budget(o,snap,base+30_000,true),base+30_000) as PowerPolicy.Decision.Wait).reason)
+        assertTrue(PowerStats.stillRuns(o,snap,base+30_000,true,PowerPolicy.Mode.PLUGGED,null))
         o=PowerStats.noteUnplugStop(o,base+20_000,base+20_000,base+5_000)
         o=PowerStats.add(o,base+20_000,"unplugLostMs",90_000)
         assertEquals("chargingOnly",(PowerPolicy.decide(snap,PowerStats.budget(o,snap,base+30_000,true),base+30_000) as PowerPolicy.Decision.Wait).reason)
@@ -131,7 +165,7 @@ class R21ThreeTest:ProtectedTextHostTestBase() {
         assertEquals(PowerPolicy.Mode.PLUGGED,(PowerPolicy.decide(snap,PowerStats.budget(o,snap,base+30_000,false),base+30_000) as PowerPolicy.Decision.Run).mode)
         // A plug seen again: back to normal.
         o=PowerStats.notePlug(o,BatterySnapshot(60,"wireless","charging"),base+5*minute)
-        assertTrue(PowerPolicy.decide(snap,PowerStats.budget(o,snap,base+5*minute+30_000,true),base+5*minute+30_000) is PowerPolicy.Decision.Run)
+        assertTrue("a run going on keeps the debounce again",PowerStats.stillRuns(o,snap,base+5*minute+30_000,true,PowerPolicy.Mode.PLUGGED,null))
         // The heartbeat: power.today.unplugStops and unplugLostMs.
         val hb=PowerText.heartbeat(o,true,base+5*minute)
         assertEquals(1,hb.getJSONObject("today").getInt("unplugStops"));assertEquals(90_000,hb.getJSONObject("today").getInt("unplugLostMs"))

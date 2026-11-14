@@ -208,8 +208,8 @@ internal object CardStats {
 
     /** v4.0 r21-2: one failure moment of the card's window, [code] from [CallCardOverlay.failCode]: counted in `today.causes`. */
     fun failure(context:Context,code:String) {
-        val c=code.take(40).filter { ch -> ch.code<128 && ch.isLetterOrDigit() || ch=='_' || ch=='-' || ch==':' }
-        if(c.isEmpty() || c.count(Char::isDigit)>=6) return
+        val c=causeCode(code)
+        if(c.isEmpty()) return
         write(context,emptyMap(),null,causes=mapOf(c to 1))
     }
     /** Every call state the service sees ([CallCardService.follow]), with its verdict [reason]: [CallCardService.SHOW],
@@ -325,7 +325,11 @@ internal object CardStats {
     /** `today.causes` as stored: code keys ([failure]'s), whole counts only. */
     private fun causesOf(today:JSONObject?):JSONObject = JSONObject().apply {
         val c=today?.optJSONObject(CAUSES) ?: return@apply
-        for(k in c.keys()) { val n=(c.opt(k) as? Number)?.toInt() ?: continue;if(n>0 && length()<MAX_CAUSES) put(k,n) } }
+        // Review L7: the same code filter as [failure] for whatever the settings hold.
+        for(k in c.keys()) { val n=(c.opt(k) as? Number)?.toInt() ?: continue;if(n>0 && length()<MAX_CAUSES && causeCode(k)==k) put(k,n) } }
+    /** A cause code as [failure] keeps it: 40 characters at most, ASCII letters, digits, `_`, `-`, `:`, no 6 digits (empty: none). */
+    internal fun causeCode(code:String):String = code.take(40).filter { ch -> ch.code<128 && ch.isLetterOrDigit() || ch=='_' || ch=='-' || ch==':' }
+        .takeIf { it.isNotEmpty() && it.count(Char::isDigit)<6 } ?: ""
     /** The stored `recent` entries, each with [RECENT_KEYS] only. */
     private fun recent(a:JSONArray?):List<JSONObject> = a?.let { (0 until it.length()).mapNotNull { i -> it.optJSONObject(i)?.let(::safe) } }.orEmpty()
     /** [o] with [RECENT_KEYS] only: numbers, yes/no and short codes (ASCII letters, digits, `_`, `-`, `:`). */

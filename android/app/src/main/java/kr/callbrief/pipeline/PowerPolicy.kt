@@ -211,10 +211,14 @@ internal object PowerPolicy {
 
     /** SEVERE heat or worse (it stopped every run before v3.6 too): rest 20 minutes whatever the plug says. */
     const val SEVERE=3
-    fun decide(s:BatterySnapshot,b:PowerBudget,now:Long):Decision {
+    /** [midRun]: asked between pieces of a run already going ([PowerStats.stillRuns]); the plug debounce then holds as before. */
+    fun decide(s:BatterySnapshot,b:PowerBudget,now:Long,midRun:Boolean=false):Decision {
         if(s.thermal>=SEVERE) return Decision.Wait("hot",TranscriptionPower.HOT_DELAY_MS*2)
         val plugged=plugged(s,b,now)
         if(b.chargingOnly && !plugged) return Decision.Wait("chargingOnly",null)
+        // v4.0 r21 review L1: "충전 중에만" on, no plug now: a new run waits for the charger (within the two-minute debounce it
+        // would load the model only to be stopped by UnplugStop seconds later). The charger trigger starts it again.
+        if(b.chargingOnly && !midRun && !s.isPlugged) return Decision.Wait("chargingOnly",null)
         if(plugged) {
             if(hot(s,b)) return Decision.Wait("hot",TranscriptionPower.HOT_DELAY_MS)
             // v3.7 (T3, review r16-1 #5): Samsung's protection (85%) holds the battery at notCharging/full below 90%: no rest then.
@@ -547,7 +551,7 @@ internal object PowerStats {
     /** v3.6.1 (T3a): between pieces, the run in [mode] may go on (the same mode still applies). [ownStartMs]: this battery
      * run's own start mark, null for a plugged-in run or before its first piece. */
     fun stillRuns(o:JSONObject?,s:BatterySnapshot,now:Long,chargingOnly:Boolean,mode:PowerPolicy.Mode,ownStartMs:Long?):Boolean =
-        PowerPolicy.decide(s,budget(o,s,now,chargingOnly,ownStartMs),now).let { it is PowerPolicy.Decision.Run && it.mode==mode }
+        PowerPolicy.decide(s,budget(o,s,now,chargingOnly,ownStartMs),now,midRun=true).let { it is PowerPolicy.Decision.Run && it.mode==mode }
     /** The battery as last seen (heartbeat `power` head). */
     fun noteSnapshot(old:JSONObject?,s:BatterySnapshot,cpusAllowed:Int?,cpuset:String?):JSONObject {
         val o=copy(old)

@@ -69,6 +69,7 @@ function show(r){
   p.appendChild(el("h1",null,(r.label||r.day||"")+" 아침 보고"));
   var first=(h.calls>0?"어제 통화 "+h.calls+"건을 정리했어요":"어제 정리한 통화가 없어요")+(h.pendingCalls>0?". "+h.pendingCalls+"건은 아직 글자로 바꾸는 중이에요":"");
   p.appendChild(el("p","head",first));
+  if(h.failedCalls>0)p.appendChild(el("p","head","어제 글자로 못 바꾼 통화가 "+h.failedCalls+"건 있어요"));
   p.appendChild(el("p","head","새 체크 "+(h.newChecks||0)+"개, 오늘 챙길 일 "+(h.todayChecks||0)+"개"));
   if(r.phone)p.appendChild(el("p","note","새벽 정리 없이 폰에서 만든 보고예요"));
   var blocks=[

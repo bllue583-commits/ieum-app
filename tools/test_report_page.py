@@ -71,6 +71,10 @@ class ReportPageTest(unittest.TestCase):
         self.assertEqual(0, out.returncode, out.stderr)
         self.assertEqual(SAMPLE, json.loads(out.stdout))
 
+    def test_failed_calls_line_only_when_there_are_some(self):
+        # v4.0 r21 review L9: head.failedCalls (the phone's webData) shows one line, only when it is above 0.
+        self.assertIn('if(h.failedCalls>0)p.appendChild(el("p","head","어제 글자로 못 바꾼 통화가 "+h.failedCalls+"건 있어요"));', page())
+
 
 if __name__ == "__main__":
     unittest.main()

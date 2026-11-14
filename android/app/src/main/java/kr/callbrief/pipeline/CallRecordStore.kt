@@ -1216,8 +1216,10 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
             val perMin=rows("""SELECT SUM(r.byte_count) AS b,SUM(c.duration_ms) AS d FROM call_records c JOIN recordings r ON r.recording_id=c.recording_id
                 WHERE c.duration_ms>0 AND r.byte_count>0""").single().let { val b=it.long("b") ?: 0;val d=it.long("d") ?: 0;if(b>0 && d>=60_000) b*60_000/d else null }
             val at="COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)"
+            val fin=CallTranscriptionStore.finalFailedSql("j",jobCols())
             rows("""SELECT j.recording_id,MAX(CASE WHEN j.state IN ('QUEUED','RUNNING') THEN 1 ELSE 0 END) AS waiting,MAX(j.audio_ms) AS audio_ms,MAX(r.byte_count) AS bytes,
-                (SELECT 1 FROM call_transcription_jobs d WHERE d.recording_id=j.recording_id AND d.state IN ('DONE','SKIPPED') LIMIT 1) AS ended
+                (SELECT 1 FROM call_transcription_jobs d WHERE d.recording_id=j.recording_id AND d.state IN ('DONE','SKIPPED') LIMIT 1) AS ended,
+                MAX(CASE WHEN j.state='FAILED' AND $fin THEN 1 ELSE 0 END) AS final
                 FROM call_transcription_jobs j JOIN recordings r ON r.recording_id=j.recording_id AND r.source_version=j.source_version
                 LEFT JOIN local_files l ON l.recording_id=j.recording_id WHERE j.state IN ('QUEUED','RUNNING','FAILED')
                 AND $at>=CAST(? AS INTEGER) AND $at<CAST(? AS INTEGER) AND NOT EXISTS(SELECT 1 FROM call_records c WHERE c.recording_id=j.recording_id)
@@ -1226,7 +1228,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
                 if((r.long("waiting") ?: 0)==1L) { pending++;untranscribed++
                     pendingMs+=r.long("audio_ms")?.takeIf { it>0 } ?: perMin?.let { p -> (r.long("bytes") ?: 0)*60_000/p } ?: 0 }
                 // r21-1: only FAILED rows and no version done or skipped (a personal call's record is gone but its job is done).
-                else if(r.long("ended")==null) failed++
+                // Review L8: and no later build will try it again (marked permanent, or its revivals used up).
+                else if(r.long("ended")==null && r.long("final")==1L) failed++
             }
         }
         return DayCoverage(calls,analyzed,pending,((pendingMs+30_000)/60_000).toInt(),untranscribed,failed)
@@ -1423,13 +1426,15 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
             LEFT JOIN local_files l ON l.recording_id=j.recording_id WHERE j.state IN ('QUEUED','RUNNING') AND $at>=CAST(? AS INTEGER) AND $at<CAST(? AS INTEGER)""",
             fromMs,toMs).mapNotNull { it.long("m") }
     }
+    /** Review L8: the job table has the revival columns ([CallTranscriptionStore.finalFailedSql]). */
+    private fun jobCols()=rows("PRAGMA table_info(call_transcription_jobs)").mapNotNull { it.str("name") }.toSet().containsAll(listOf("permanent","requeue_count","reason"))
     /** v4.0 r21-1: the times of the recordings from [fromMs] to [toMs] whose text could not be made (every try FAILED, none
      * done or skipped, no call record): the call list says so on the call-log line instead of "녹음 없음". */
     fun failedTextStarts(fromMs:Long,toMs:Long):List<Long> {
         if(rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name='call_transcription_jobs'").isEmpty()) return emptyList()
         val at="COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)"
         return rows("""SELECT DISTINCT j.recording_id,$at AS m FROM call_transcription_jobs j JOIN recordings r ON r.recording_id=j.recording_id
-            LEFT JOIN local_files l ON l.recording_id=j.recording_id WHERE j.state='FAILED' AND $at>=CAST(? AS INTEGER) AND $at<CAST(? AS INTEGER)
+            LEFT JOIN local_files l ON l.recording_id=j.recording_id WHERE j.state='FAILED' AND ${CallTranscriptionStore.finalFailedSql("j",jobCols())} AND $at>=CAST(? AS INTEGER) AND $at<CAST(? AS INTEGER)
             AND NOT EXISTS(SELECT 1 FROM call_transcription_jobs d WHERE d.recording_id=j.recording_id AND d.state IN ('QUEUED','RUNNING','DONE','SKIPPED'))
             AND NOT EXISTS(SELECT 1 FROM call_records c WHERE c.recording_id=j.recording_id)""",fromMs,toMs).mapNotNull { it.long("m") }
     }
