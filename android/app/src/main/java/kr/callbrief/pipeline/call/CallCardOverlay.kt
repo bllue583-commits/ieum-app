@@ -55,7 +55,13 @@ import java.util.concurrent.TimeUnit
  *   phone's call log says of it). The ringing path reads the card file and the call log only, never the call store.
  * - On the locked screen the notice shows the name, company and one check item unless "잠금 화면에서도 이름과 한 줄 보기" is off.
  *   A personal or excluded number ([CallSession.Snapshot.ignored]): nothing at all.
- * - [CardStats.expanded] when the person opens the strip again, [CardStats.closed] when they close the card. */
+ * - [CardStats.expanded] when the person opens the strip again, [CardStats.closed] when they close the card.
+ * - v4.0 r21-2 (DESIGN_V8 6 v4.2): a window that could not be added (an exception of `addView`) or was added but not seen
+ *   ([CardStats.HIDDEN]) is put up again [RETRY_DELAYS_MS] later (0.6 s, then 2 s after the next failure), the same view and
+ *   window parameters, only while the call still rings or is under way and the card was not closed; the notice stays up in
+ *   between. Seen on a later try: [CardStats.DRAWN] with [CAUSE_OK_RETRY] and [CardStats.RETRIED]. Every failure moment goes to
+ *   [CardStats.failure] as one cause code ([failCode]: what failed, the overlay check, the raw app-op mode, a cold process,
+ *   the lock, the screen, and on a cold process how the last one ended). */
 internal object CallCardOverlay {
     const val CHANNEL="ieum.calls.card"
     const val CHANNEL_NAME="이음 통화 카드"
@@ -90,8 +96,13 @@ internal object CallCardOverlay {
     const val HIDDEN_AFTER_MS=3_000L
     /** v3.6.1 cause codes ([CardStats.Attempt.cause]); an exception of `addView` is `addView:<its class>`. */
     const val CAUSE_OK="ok";const val CAUSE_DRAWN_DESPITE_FALSE="drawnDespiteFalse";const val CAUSE_SHORT="short"
-    /** v3.6.1 fix: seen on the one second try after the first window was taken for hidden. */
+    /** v3.6.1 fix: seen on the one second try after the first window was taken for hidden. v4.0 r21-2: seen on a later try
+     * ([RETRY_DELAYS_MS]) after the window could not be added or was hidden. */
     const val CAUSE_OK_RETRY="okRetry"
+    /** v4.0 r21-2: after a failure the window is put up again this much later, once per entry (0.6 s, then 2 s). */
+    val RETRY_DELAYS_MS=listOf(600L,2_000L)
+    /** v4.0 r21-2: a window put up again is judged this soon (the process is warm by then; the first try keeps [HIDDEN_AFTER_MS]). */
+    const val RETRY_HIDDEN_MS=1_500L
     /** Added while the screen was locked and never seen until the call ended (the notice was beside it). */
     const val CAUSE_HIDDEN_LOCKED="hiddenLocked"
     /** Told once per call when the window was put up: [SHOWN] (added, unlocked), [LOCKED] (added while locked, the notice beside
@@ -118,6 +129,12 @@ internal object CallCardOverlay {
     @Volatile internal var probe:(Context)->CardStats.Probe?={ c -> runCatching { CardProbe.read(c) }.getOrNull() }
     /** v3.6.1 (K2): what became of the window, once per call. Replaceable in host tests. */
     @Volatile internal var onVerdict:(Context,CardStats.Attempt)->Unit={ c,a -> CardStats.verdict(c,a) }
+    /** v4.0 r21-2: one failure moment's cause code ([failCode]), on the card's thread. Replaceable in host tests. */
+    @Volatile internal var onFailure:(Context,String)->Unit={ c,code -> CardStats.failure(c,code) }
+    /** v4.0 r21-2: the screen is on ([android.os.PowerManager.isInteractive]). Replaceable in host tests. */
+    @Volatile internal var screenOn:(Context)->Boolean={ c -> c.getSystemService(android.os.PowerManager::class.java)?.isInteractive!=false }
+    /** v4.0 r21-2: how this app's last process ended (reason, epoch ms), read once a process on the card's thread. Replaceable in host tests. */
+    @Volatile internal var lastExit:(Context)->Pair<Int,Long>?={ c -> CardProbe.lastExit(c) }
 
     private val main=Handler(Looper.getMainLooper())
     private val worker=Executors.newSingleThreadExecutor { r -> Thread(r,"ieum-call-card").apply { isDaemon=true } }
@@ -161,21 +178,28 @@ internal object CallCardOverlay {
     private var coldAtAdd=false
     private var outAtAdd=false
     private var addError:String?=null
-    /** No window again in this call (it could not be added, or it was hidden; a hidden one may still get [retryLeft]). */
+    /** No window now in this call (it could not be added, or it was hidden; a try may still be due: [retryLater]). */
     private var windowGone=false
-    /** v3.6.1 fix (review, medium): the window was taken for hidden; its verdict waits for the one more try (or the call's end),
-     * so a call is still told once. */
+    /** v3.6.1 fix (review, medium), v4.0 r21-2: the window failed and a later try is due; the verdict waits for it (or the
+     * call's end), so a call is still told once. */
     private var hiddenPending=false
-    /** The one more try of a hidden window at the next change of the call's state is not spent yet. */
-    private var retryLeft=true
-    /** This call's window is the second try. */
+    /** v4.0 r21-2: the tries of this call after a failure ([RETRY_DELAYS_MS]), and the window now up is one of them. */
+    private var retries=0
     private var retrying=false
+    /** v4.0 r21-2: the last failure's code ([CardStats.HIDDEN] or `addView:<class>`), and every failure of this call ("-" between). */
+    private var lastFail:String?=null
+    private var fails=""
+    /** v4.0 r21-2: the phone at this call's first failure, for its `recent` entry. */
+    private var failScreenOn:Boolean?=null;private var failState:String?=null
+    /** The window kept for a later try (taken away or refused), so the card is the same and never on the screen twice. */
+    private var spare:Pair<CallCardView,WindowManager.LayoutParams>?=null
     /** [onVerdict] was told; the window was seen. */
     private var judged=false
     private var seenOnce=false
     /** The phone's state read after the window was added (the card's thread). */
     @Volatile private var probed:CardStats.Probe?=null
     private val judgeLater=Runnable { app?.let { runCatching { judge(it,ending=false) }.onFailure(::warn) } }
+    private val retryLater=Runnable { app?.let { runCatching { retryNow(it) }.onFailure(::warn) } }
 
     private fun onMain(block:()->Unit) { if(Looper.myLooper()==Looper.getMainLooper()) runCatching(block).onFailure(::warn) else main.post { runCatching(block).onFailure(::warn) } }
     private fun warn(t:Throwable) { Log.w(LOG,"card: ${t.javaClass.simpleName}") }
@@ -204,7 +228,7 @@ internal object CallCardOverlay {
     fun hide():Unit = onMain { removeAll();forgetCall();state=CallSession.State.IDLE }
     private fun forgetCall() { closed=false;openedByHand=false;told=false;toldNoNumber=false;loading=false;key=null;content=null;stripY=null;shownAt=0L;generation++
         main.removeCallbacks(judgeLater);addedAt=0L;canDrawAtAdd=true;lockedAtAdd=false;addError=null;windowGone=false;judged=false;seenOnce=false;probed=null;coldAtAdd=false;outAtAdd=false
-        hiddenPending=false;retryLeft=true;retrying=false }
+        main.removeCallbacks(retryLater);hiddenPending=false;retries=0;retrying=false;lastFail=null;fails="";failScreenOn=null;failState=null;spare=null }
 
     private fun showNow(c:Context,phoneKey:String?,to:CallSession.State) {
         app=c
@@ -215,11 +239,8 @@ internal object CallCardOverlay {
         val newCall=phoneKey!=null && phoneKey!=key
         if(newCall) { removeAll();forgetCall() }
         if(phoneKey!=null) key=phoneKey
-        val changed=to!=state
         state=to
         if(closed) return
-        // v3.6.1 fix: a window taken for hidden is tried once more when the call's state changes (ringing to off hook).
-        if(changed && hiddenPending && retryLeft && view==null && content!=null) { retryLeft=false;retrying=true;windowGone=false;judged=false }
         if(content!=null) { place(c);relayout();afterState();return }
         val k=key
         if(k==null) { tell(c,NO_NUMBER,last=false);return }
@@ -305,11 +326,12 @@ internal object CallCardOverlay {
             if(runCatching { locked(c) }.getOrDefault(false)) return
             windowGone=true
             runCatching { c.getSystemService(WindowManager::class.java)?.removeViewImmediate(v) }
+            spare=params?.let { v to it }
             view=null;params=null
             Log.i(LOG,"card hidden")
             content?.let { notice(c,it) }
-            // v3.6.1 fix: the second try is hidden too, or there is none left: told now. Else told after the try (or at the end).
-            if(retrying || !retryLeft) { judged=true;hiddenPending=false;verdict(c,CardStats.FALLBACK,CardStats.HIDDEN,null) } else hiddenPending=true
+            // v4.0 r21-2: put up again later while the call goes on; told now when no try is left.
+            fail(c,CardStats.HIDDEN)
             return
         }
         judged=true
@@ -321,14 +343,55 @@ internal object CallCardOverlay {
             if(canDrawAtAdd) verdict(c,CardStats.DRAWN,if(retrying) CAUSE_OK_RETRY else CAUSE_OK,(clock()-addedAt).coerceAtLeast(0))
             else verdict(c,CardStats.UNCONFIRMED,CAUSE_DRAWN_DESPITE_FALSE,(clock()-addedAt).coerceAtLeast(0))
             if(canDrawAtAdd && !ending && noticeUp && !runCatching { locked(c) }.getOrDefault(false)) cancelNotice(c)
-        } else if(hiddenPending) { hiddenPending=false;verdict(c,CardStats.FALLBACK,CardStats.HIDDEN,null) }
+        } else if(hiddenPending) { hiddenPending=false;verdict(c,CardStats.FALLBACK,lastFail ?: CardStats.HIDDEN,null) }
         else verdict(c,if(noticeUp) CardStats.FALLBACK else CardStats.GONE,if(lockedAtAdd) CAUSE_HIDDEN_LOCKED else CAUSE_SHORT,null)
     }
+    /** v4.0 r21-2: one failure moment ([CardStats.HIDDEN] or `addView:<class>`): its cause code goes to [onFailure], and the
+     * window is put up again after the next [RETRY_DELAYS_MS] while the call rings or is under way (the verdict waits); with no
+     * try left (or the call over, or the card closed) the call is told now as a fallback. */
+    private fun fail(c:Context,cause:String) {
+        lastFail=cause;fails=if(fails.isEmpty()) cause else "$fails-$cause"
+        val draw=runCatching { canDraw(c) }.getOrDefault(false);val lock=runCatching { locked(c) }.getOrDefault(false)
+        val on=runCatching { screenOn(c) }.getOrDefault(true)
+        if(failState==null) { failScreenOn=on;failState=state.name }
+        val cold=runCatching { CardStats.elapsed()-CardStats.processStart()<CardStats.COLD_MS }.getOrDefault(false)
+        worker.execute { runCatching {
+            val mode=runCatching { probe(c)?.mode }.getOrNull() ?: -1
+            onFailure(c,failCode(cause,draw,mode,cold,lock,on,if(cold) exitOnce(c) else null,System.currentTimeMillis()))
+        }.onFailure(::warn) }
+        val live=state==CallSession.State.RINGING || state==CallSession.State.OFFHOOK
+        if(retries<RETRY_DELAYS_MS.size && live && !closed && content!=null) {
+            hiddenPending=true;windowGone=true
+            main.removeCallbacks(retryLater);main.postDelayed(retryLater,RETRY_DELAYS_MS[retries])
+        } else { judged=true;hiddenPending=false;verdict(c,CardStats.FALLBACK,cause,null) }
+    }
+    /** v4.0 r21-2: the window again, the same one ([spare]); nothing when the call is over, the card closed or already seen. */
+    private fun retryNow(c:Context) {
+        val live=state==CallSession.State.RINGING || state==CallSession.State.OFFHOOK
+        if(judged || closed || !live || content==null || view!=null) return
+        retries++;retrying=true;windowGone=false;addError=null
+        Log.i(LOG,"card tried again ($retries)")
+        place(c);relayout();afterState()
+    }
+    /** How this app's last process ended, read at most once per process (a binder call, on the card's thread). */
+    @Volatile private var exitRead:Pair<Int,Long>?=null;@Volatile private var exitDone=false
+    private fun exitOnce(c:Context):Pair<Int,Long>? { if(!exitDone) { exitRead=runCatching { lastExit(c) }.getOrNull();exitDone=true };return exitRead }
     private fun verdict(c:Context,result:String,cause:String,drawMs:Long?) {
         val after=runCatching { canDraw(c) }.getOrNull()
-        val base=CardStats.Attempt(result,cause,canDrawAtAdd,after,null,lockedAtAdd,coldAtAdd,drawMs,addError,outAtAdd)
+        val base=CardStats.Attempt(result,cause,canDrawAtAdd,after,null,lockedAtAdd,coldAtAdd,drawMs,(addError ?: lastFail?.takeIf { it.startsWith("addView:") }).takeIf { result!=CardStats.DRAWN },outAtAdd,
+            retries=retries,fails=fails.ifEmpty { null },screenOn=failScreenOn,callState=failState)
+        // v4.0 r21-2: a call not drawn without a failure moment of its own (seen although the check said no, gone before it was
+        // seen with the notice up, hidden behind the lock) gets its cause code too.
+        val own=result!=CardStats.DRAWN && result!=CardStats.GONE && fails.isEmpty()
+        val on=if(own) runCatching { screenOn(c) }.getOrDefault(true) else true
+        val draw=canDrawAtAdd;val cold=coldAtAdd;val lock=lockedAtAdd
         // On the card's thread, after the probe read when the window was added.
-        worker.execute { runCatching { onVerdict(c,base.copy(probe=probed ?: runCatching { probe(c) }.getOrNull())) }.onFailure(::warn) }
+        worker.execute { runCatching {
+            val ex=if(cold) exitOnce(c) else null
+            val a=base.copy(probe=probed ?: runCatching { probe(c) }.getOrNull(),exit=ex?.first,exitAgo=ex?.let { agoBucket(System.currentTimeMillis()-it.second) })
+            onVerdict(c,a)
+            if(own) onFailure(c,failCode(cause,draw,a.probe?.mode ?: -1,cold,lock,on,ex,System.currentTimeMillis()))
+        }.onFailure(::warn) }
     }
     private fun afterState() {
         val v=view ?: return
@@ -343,7 +406,12 @@ internal object CallCardOverlay {
         CallUi.applyTheme(c)
         val wm=c.getSystemService(WindowManager::class.java) ?: return
         canDrawAtAdd=draw;lockedAtAdd=isLocked
-        coldAtAdd=runCatching { CardStats.callCold() }.getOrDefault(false);outAtAdd=outgoing()
+        if(!retrying) { coldAtAdd=runCatching { CardStats.callCold() }.getOrDefault(false);outAtAdd=outgoing() }
+        // v4.0 r21-2: a later try puts up the same window again (never two cards).
+        spare?.let { (v,p) -> spare=null
+            runCatching { wm.removeViewImmediate(v) } // not attached: nothing to take away
+            v.maxHeightPx=maxHeight(c,v);if(!v.complete) { if(nameOnly) v.showName(data) else v.showAll(data) }
+            attach(c,wm,v,p,data,draw);return }
         val dm=c.resources.displayMetrics
         val v=CallCardView(c).apply {
             maxHeightPx=maxHeight(c,this)
@@ -362,17 +430,21 @@ internal object CallCardOverlay {
         }
         // A new height (the second drawing step, folding, larger letters) is checked against the limits again.
         v.addOnLayoutChangeListener { _,_,top,_,bottom,_,oldTop,_,oldBottom -> if(bottom-top!=oldBottom-oldTop) main.post { if(view===v) relayout() } }
+        attach(c,wm,v,p,data,draw)
+    }
+    private fun attach(c:Context,wm:WindowManager,v:CallCardView,p:WindowManager.LayoutParams,data:CallCardView.Content,draw:Boolean) {
         val gen=generation
-        worker.execute { runCatching { val pr=probe(c);if(gen==generation) probed=pr }.onFailure(::warn) }
+        if(!retrying) worker.execute { runCatching { val pr=probe(c);if(gen==generation) probed=pr }.onFailure(::warn) }
         // v3.6.1 (K2): the system's refusal is kept as a cause code, not swallowed (the notice shows instead).
+        // v4.0 r21-2: and the window is put up again a little later ([fail]).
         try { addWindow(wm,v,p) } catch(e:Exception) {
-            addError="addView:${e.javaClass.simpleName}";windowGone=true
+            addError="addView:${e.javaClass.simpleName}";windowGone=true;spare=v to p
             Log.w(LOG,"card refused: ${e.javaClass.simpleName} canDraw=$draw")
-            verdict(c,CardStats.FALLBACK,addError!!,null);judged=true
+            fail(c,addError!!)
             return
         }
         view=v;params=p;addedAt=clock()
-        main.postDelayed(judgeLater,HIDDEN_AFTER_MS)
+        main.postDelayed(judgeLater,if(retrying) RETRY_HIDDEN_MS else HIDDEN_AFTER_MS)
         // r11-3: the emulator check reads these lines (tools/device/call_card_test.sh); no number, no name.
         Log.i(LOG,"card shown unknown=${data.unknown} canDraw=$draw")
     }
@@ -493,6 +565,27 @@ internal object CallCardOverlay {
     private fun serviceNotice(c:Context):Notification =Notification.Builder(c,CallCardService.CHANNEL).setSmallIcon(R.drawable.ic_stat_ieum)
         .setContentTitle("통화 중에 이음 카드를 보여 드려요").setOngoing(true).setOnlyAlertOnce(true).setCategory(Notification.CATEGORY_CALL).setShowWhen(false).build()
 
+    /** v4.0 r21-2: one failure moment as one short code (at most 40 characters, the heartbeat's key length): what failed
+     * (`hidden` or `add:<exception class without "Exception">`), then `:d0` when the overlay check said no, `:m<mode>` when
+     * the raw app-op mode was read and is not 0 (allowed), `:cold` within [CardStats.COLD_MS] of the process start, `:lk`
+     * on a locked screen, `:off` with the screen off, and on a cold process `:x<reason>` how the last process ended
+     * ([android.app.ApplicationExitInfo] REASON_*, 10 = the user, as from the recent apps) with `:<bucket>` how long ago
+     * ([agoBucket]). E.g. `add:BadToken:cold:x10:m5`. */
+    internal fun failCode(cause:String,draw:Boolean,mode:Int,cold:Boolean,locked:Boolean,screenOn:Boolean,exit:Pair<Int,Long>?,now:Long):String {
+        val base=if(cause.startsWith("addView:")) "add:"+cause.removePrefix("addView:").removeSuffix("Exception").take(16) else cause.take(16)
+        val tail=buildString {
+            if(!draw) append(":d0")
+            if(mode>0) append(":m$mode")
+            if(cold) append(":cold")
+            if(locked) append(":lk")
+            if(!screenOn) append(":off")
+            if(cold && exit!=null) append(":x${exit.first}:${agoBucket(now-exit.second)}")
+        }
+        return (base+tail).take(40)
+    }
+    /** How long ago, in buckets: m5 (under 5 minutes), m30, h2, h12 (under 12 hours), old. */
+    internal fun agoBucket(ms:Long):String = when { ms<5*60_000L -> "m5";ms<30*60_000L -> "m30";ms<2*3_600_000L -> "h2";ms<12*3_600_000L -> "h12";else -> "old" }
+
     /** "3일 전 통화, 30일간 2번" for [phoneKey] from the phone's call log (the last 30 days), or null (no permission, not there). */
     private fun callLogLine(c:Context,phoneKey:String):String? {
         if(c.checkSelfPermission(Manifest.permission.READ_CALL_LOG)!=PackageManager.PERMISSION_GRANTED) return null
@@ -515,6 +608,8 @@ internal object CallCardOverlay {
         logLine=::callLogLine;outcome={ c,w -> CardStats.record(c,w) };serviceUp={ CallCardService.running!=null }
         onExpanded={ CardStats.expanded(it) };onClosed={ c,ms -> CardStats.closed(c,ms) };clock={ SystemClock.elapsedRealtime() }
         drawnNow={ it.seen };addWindow={ wm,v,p -> wm.addView(v,p) };probe={ c -> runCatching { CardProbe.read(c) }.getOrNull() }
-        onVerdict={ c,a -> CardStats.verdict(c,a) }
+        onVerdict={ c,a -> CardStats.verdict(c,a) };onFailure={ c,code -> CardStats.failure(c,code) }
+        screenOn={ c -> c.getSystemService(android.os.PowerManager::class.java)?.isInteractive!=false };lastExit={ c -> CardProbe.lastExit(c) }
+        exitRead=null;exitDone=false
     }
 }

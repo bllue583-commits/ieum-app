@@ -61,6 +61,22 @@ T_DB_FULL = "폰 저장 공간이 거의 찼어요"
 # v3.6.1 (K4): not "권한이 꺼져 있어요" any more: the permission read before and after the calls said yes.
 T_CARD_PERMISSION = "통화 카드가 통화 순간에 뜨지 않아요"
 CARD_NO_PERMISSION_PER_DAY = 3
+# v4.0 r21-2 (DESIGN_V8 6 v4.1 rule 4): a phone that counts `fallback` (v3.6.1 and later): one card that fell back to a
+# notice on a day is an issue (the phone already tried the window three times, RETRY_DELAYS_MS). Older phones (noPermission
+# only) keep the 3 above.
+CARD_FALLBACK_PER_DAY = 1
+
+
+def card_today_causes(card):
+    """v4.0 r21-2: callCard.today.causes {code: n} (the phone's failure moments today), codes only, most first."""
+    today = card.get("today") if isinstance(card.get("today"), dict) else {}
+    causes = today.get("causes") if isinstance(today.get("causes"), dict) else {}
+    seen = {}
+    for k, v in causes.items():
+        c = w_code(k)
+        if c and sum(ch.isdigit() for ch in c) < 6 and isinstance(v, int) and not isinstance(v, bool) and v > 0:
+            seen[c] = v
+    return ", ".join(f"{c} {n}번" for c, n in sorted(seen.items(), key=lambda x: (-x[1], x[0]))[:8])
 
 
 def card_causes(card):
@@ -762,18 +778,22 @@ def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count, version=None
             v = today.get(key)
             return v if isinstance(v, int) and not isinstance(v, bool) else None
         np = count("fallback") if count("fallback") is not None else count("noPermission")
+        limit = CARD_FALLBACK_PER_DAY if count("fallback") is not None else CARD_NO_PERMISSION_PER_DAY
         # v3.6.1 fix (review, critical): `unconfirmed` (seen although the check said no; the system may hide such a window on
         # its side only) is on the not-drawn side too.
         if np is not None and count("unconfirmed"):
             np += count("unconfirmed")
-        if np is not None and np >= CARD_NO_PERMISSION_PER_DAY:
+        if np is not None and np >= limit:
             drawn = count("drawn")
             got = drawn if drawn is not None else ms(today, "shown")
             causes = card_causes(card)
-            add(T_CARD_PERMISSION, f"하루에 {np}번 통화 카드 대신 알림으로 보여 드렸어요 (기준 3번). "
-                f"카드가 뜬 횟수: {got}번.\n\n"
-                "추정 원인: 통화 순간에 카드 창을 띄우지 못했어요(원인 코드는 하트비트 callCard.recent)."
-                + (f" 최근 원인 코드: {causes}." if causes else ""))
+            moments = card_today_causes(card)
+            retried = count("retried")
+            add(T_CARD_PERMISSION, f"하루에 {np}번 통화 카드 대신 알림으로 보여 드렸어요 (기준 {limit}번). "
+                f"카드가 뜬 횟수: {got}번" + (f"(다시 붙여서 뜬 통화 {retried}번)" if retried else "") + ".\n\n"
+                "추정 원인: 통화 순간에 카드 창을 띄우지 못했어요(원인 코드는 하트비트 callCard.recent, callCard.today.causes)."
+                + (f" 최근 원인 코드: {causes}." if causes else "")
+                + (f" 오늘 실패한 순간: {moments}." if moments else ""))
         err = phone.get("lastUpdateError")
         # v3.1 codes that are no install failure of their own: the old-version rule says them when they last.
         if err and w_code(err) not in ("USER_ACTION_REQUIRED", "INSTALL_SOURCE_NOT_ALLOWED"):

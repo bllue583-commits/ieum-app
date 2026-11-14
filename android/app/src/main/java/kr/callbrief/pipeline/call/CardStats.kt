@@ -50,13 +50,23 @@ internal object CardStats {
      * draws as VISIBLE, so it is not counted as [DRAWN]: the notice stays until the call ends, and the watchdog and the light
      * count it on the not-drawn side. */
     const val UNCONFIRMED="unconfirmed"
+    /** v4.0 r21-2: a call whose card was drawn on a later try after its window could not be added or was hidden
+     * ([CallCardOverlay.RETRY_DELAYS_MS]); counted beside [DRAWN]. */
+    const val RETRIED="retried"
+    /** v4.0 r21-2: today's failure moments by cause code ([CallCardOverlay.failCode]): `today.causes{code: n}`. */
+    const val CAUSES="causes"
+    /** At most this many different cause codes a day (the newest code past it is not kept). */
+    const val MAX_CAUSES=20
     /** Every count the heartbeat carries (zeros when missing). */
     val KINDS=listOf(CALLS,SHOWN,SHOWN_OUTGOING,ELIGIBLE_OUTGOING,NO_CARD,THIN,NO_NUMBER,NO_NUMBER_IN,NO_NUMBER_OUT,NO_ROLE,
-        IGNORED,OFF,LOCKED,COLD,FGS_REFUSED,NO_PERMISSION,NO_NOTIFY,EXPANDED,CLOSED_UNDER_2S,DRAWN,FALLBACK,HIDDEN,UNCONFIRMED)
+        IGNORED,OFF,LOCKED,COLD,FGS_REFUSED,NO_PERMISSION,NO_NOTIFY,EXPANDED,CLOSED_UNDER_2S,DRAWN,FALLBACK,HIDDEN,UNCONFIRMED,RETRIED)
     /** v3.6.1 (K3): the newest calls kept in `recent` (the heartbeat's `callCard.recent[]`), and the only keys an entry has. */
     const val RECENT=20
     val RECENT_KEYS=setOf("day","at","result","cause","canDraw","canDrawAfter","mode","pid","ageS","cold","locked","car","btAudio",
-        "commDevice","drawMs","error","out")
+        "commDevice","drawMs","error","out",
+        // v4.0 r21-2: the tries after a failure, every failure's code, the screen and the call's state at the first failure, and
+        // on a cold process how the last one ended (ApplicationExitInfo REASON_*) and how long before ([CallCardOverlay.agoBucket]).
+        "retries","fails","screenOn","callState","exit","exitAgo")
     /** What the card may tell [record]. */
     private val OUTCOMES=setOf(SHOWN,LOCKED,NO_PERMISSION,NO_NOTIFY,NO_CARD,NO_NUMBER)
     /** Outcomes where something reached the person (a window or a notice): they carry a ring-to-card time. */
@@ -160,7 +170,10 @@ internal object CardStats {
      * `addView:<exception class>` or `short` (the window went before it was seen); [canDraw] when the window was put up,
      * [canDrawAfter] when this was told; [probe] the phone then; [drawMs] from adding the window to its first drawing. */
     data class Attempt(val result:String,val cause:String,val canDraw:Boolean,val canDrawAfter:Boolean?=null,val probe:Probe?=null,
-        val locked:Boolean=false,val cold:Boolean=false,val drawMs:Long?=null,val error:String?=null,val out:Boolean=false)
+        val locked:Boolean=false,val cold:Boolean=false,val drawMs:Long?=null,val error:String?=null,val out:Boolean=false,
+        /** v4.0 r21-2: tries after a failure, the failures' codes ("-" between), the screen and call state at the first failure,
+         * the last process's exit reason and how long before (a cold process only). */
+        val retries:Int=0,val fails:String?=null,val screenOn:Boolean?=null,val callState:String?=null,val exit:Int?=null,val exitAgo:String?=null)
     /** The phone around the window ([CardProbe.read]): the raw app-op mode of drawing over apps ([android.app.AppOpsManager]
      * MODE_*: 0 allowed, 1 ignored, 2 errored, 3 default, 4 foreground; -1 not read), this process (pid, age in seconds), car mode,
      * a Bluetooth audio device connected, and the call audio's device type ([android.media.AudioDeviceInfo] TYPE_*; null: none). */
@@ -171,7 +184,7 @@ internal object CardStats {
     fun verdict(context:Context,a:Attempt) {
         val inc=LinkedHashMap<String,Int>()
         when(a.result) {
-            DRAWN -> inc[DRAWN]=1
+            DRAWN -> { inc[DRAWN]=1;if(a.retries>0) inc[RETRIED]=1 }
             UNCONFIRMED -> inc[UNCONFIRMED]=1
             FALLBACK -> { inc[FALLBACK]=1;if(a.cause==HIDDEN) inc[HIDDEN]=1 }
         }
@@ -185,11 +198,20 @@ internal object CardStats {
         a.canDrawAfter?.let { o.put("canDrawAfter",it) }
         a.drawMs?.let { o.put("drawMs",it) }
         a.error?.let { o.put("error",it) }
+        if(a.retries>0) o.put("retries",a.retries)
+        a.fails?.let { o.put("fails",it) };a.screenOn?.let { o.put("screenOn",it) };a.callState?.let { o.put("callState",it) }
+        a.exit?.let { o.put("exit",it) };a.exitAgo?.let { o.put("exitAgo",it) }
         a.probe?.let { p -> o.put("mode",p.mode).put("pid",p.pid).put("ageS",p.ageS).put("car",p.car).put("btAudio",p.btAudio)
             p.commDevice?.let { o.put("commDevice",it) } }
         return o
     }
 
+    /** v4.0 r21-2: one failure moment of the card's window, [code] from [CallCardOverlay.failCode]: counted in `today.causes`. */
+    fun failure(context:Context,code:String) {
+        val c=code.take(40).filter { ch -> ch.code<128 && ch.isLetterOrDigit() || ch=='_' || ch=='-' || ch==':' }
+        if(c.isEmpty() || c.count(Char::isDigit)>=6) return
+        write(context,emptyMap(),null,causes=mapOf(c to 1))
+    }
     /** Every call state the service sees ([CallCardService.follow]), with its verdict [reason]: [CallCardService.SHOW],
      * [NO_NUMBER], [NO_CARD], [CallCardService.IGNORED], [CallCardService.OFF], [CallCardService.WAITING] or null. IDLE ends the
      * call: then `calls` and what is only known at the end (no number, ignored, off, a call going out) are counted. */
@@ -255,11 +277,11 @@ internal object CardStats {
         fgsTold=false;expandTold=false;closeTold=false
     }
 
-    private fun write(context:Context,inc:Map<String,Int>,sample:Pair<Long,Boolean>?,entry:JSONObject?=null) {
+    private fun write(context:Context,inc:Map<String,Int>,sample:Pair<Long,Boolean>?,entry:JSONObject?=null,causes:Map<String,Int> =emptyMap()) {
         val app=context.applicationContext ?: context
         val now=clock()
         val open=ContactCards.lastOpenMs.takeIf { it>=0 }
-        writer.execute { runCatching { SecureSettings(app).update { s -> s.put(PipelineSettingsKeys.CARD_STATS,add(read(s),inc,now,sample,open,entry)) } }
+        writer.execute { runCatching { SecureSettings(app).update { s -> s.put(PipelineSettingsKeys.CARD_STATS,add(read(s),inc,now,sample,open,entry,causes)) } }
             .onFailure { Log.w(TAG,"not counted: ${it.javaClass.simpleName}") } }
     }
 
@@ -277,11 +299,17 @@ internal object CardStats {
     /** [stats] with [inc] added at [now]: the totals and today's (a new KST day starts today's from zero); [sample] a ring-to-card
      * time (ms, cold) kept among the newest [SAMPLES]; [cardOpenMs] the last card file open; [entry] one more `recent` call (the
      * newest [RECENT] kept). */
-    fun add(stats:JSONObject,inc:Map<String,Int>,now:Long,sample:Pair<Long,Boolean>?=null,cardOpenMs:Long?=null,entry:JSONObject?=null):JSONObject {
+    fun add(stats:JSONObject,inc:Map<String,Int>,now:Long,sample:Pair<Long,Boolean>?=null,cardOpenMs:Long?=null,entry:JSONObject?=null,
+            causes:Map<String,Int> =emptyMap()):JSONObject {
         val out=clean(stats)
         val today=day(now)
-        val t=if(stats.optInt("day",0)==today) clean(stats.optJSONObject("today") ?: JSONObject()) else clean(JSONObject())
+        val same=stats.optInt("day",0)==today
+        val t=if(same) clean(stats.optJSONObject("today") ?: JSONObject()) else clean(JSONObject())
         inc.forEach { (k,n) -> if(k in KINDS) { out.put(k,out.getInt(k)+n);t.put(k,t.getInt(k)+n) } }
+        // v4.0 r21-2: today's cause codes (a new day starts them from nothing).
+        val kept=if(same) causesOf(stats.optJSONObject("today")) else JSONObject()
+        causes.forEach { (k,n) -> if(kept.has(k) || kept.length()<MAX_CAUSES) kept.put(k,kept.optInt(k)+n) }
+        if(kept.length()>0) t.put(CAUSES,kept)
         out.put("day",today).put("today",t)
         for(name in listOf("ring","ringCold")) {
             val kept=numbers(stats.optJSONArray(name)).toMutableList()
@@ -294,6 +322,10 @@ internal object CardStats {
         if(recent.isNotEmpty()) out.put("recent",JSONArray(recent.takeLast(RECENT)))
         return out
     }
+    /** `today.causes` as stored: code keys ([failure]'s), whole counts only. */
+    private fun causesOf(today:JSONObject?):JSONObject = JSONObject().apply {
+        val c=today?.optJSONObject(CAUSES) ?: return@apply
+        for(k in c.keys()) { val n=(c.opt(k) as? Number)?.toInt() ?: continue;if(n>0 && length()<MAX_CAUSES) put(k,n) } }
     /** The stored `recent` entries, each with [RECENT_KEYS] only. */
     private fun recent(a:JSONArray?):List<JSONObject> = a?.let { (0 until it.length()).mapNotNull { i -> it.optJSONObject(i)?.let(::safe) } }.orEmpty()
     /** [o] with [RECENT_KEYS] only: numbers, yes/no and short codes (ASCII letters, digits, `_`, `-`, `:`). */
@@ -327,7 +359,9 @@ internal object CardStats {
         val st=read(s)
         if(KINDS.none { st.has(it) }) return null
         val stored=st.optInt("day",0);val day=now?.let(::day) ?: stored
-        val out=clean(st).put("day",day).put("today",clean(if(day==stored) st.optJSONObject("today") ?: JSONObject() else JSONObject()))
+        val t=clean(if(day==stored) st.optJSONObject("today") ?: JSONObject() else JSONObject())
+        if(day==stored) causesOf(st.optJSONObject("today")).takeIf { it.length()>0 }?.let { t.put(CAUSES,it) }
+        val out=clean(st).put("day",day).put("today",t)
         out.put("ringToCardMs",summary(numbers(st.optJSONArray("ring")))).put("ringToCardMsCold",summary(numbers(st.optJSONArray("ringCold"))))
         (st.opt("cardOpenMs") as? Number)?.toLong()?.let { out.put("cardOpenMs",it) }
         out.put("recent",JSONArray(recent(st.optJSONArray("recent")).takeLast(RECENT)))
@@ -366,4 +400,8 @@ internal object CardProbe {
     fun commDevice(c:Context):Int? = if(android.os.Build.VERSION.SDK_INT<31) null else runCatching {
         c.getSystemService(android.media.AudioManager::class.java)?.communicationDevice?.type }.getOrNull()
     fun read(c:Context):CardStats.Probe = CardStats.Probe(overlayMode(c),pid(),ageS(),car(c),btAudio(c),commDevice(c))
+    /** v4.0 r21-2: how this app's last process ended ([android.app.ApplicationExitInfo] reason, epoch ms), API 30+; null when
+     * none is kept or it cannot be read. No permission needed (the app's own exits). */
+    fun lastExit(c:Context):Pair<Int,Long>? = if(android.os.Build.VERSION.SDK_INT<30) null else runCatching {
+        c.getSystemService(android.app.ActivityManager::class.java)?.getHistoricalProcessExitReasons(c.packageName,0,1)?.firstOrNull()?.let { it.reason to it.timestamp } }.getOrNull()
 }

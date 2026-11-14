@@ -409,6 +409,45 @@ class CallPipelineDeviceTest {
         } finally { file.delete() }
     }
 
+    /** v4.0 r21-2 on this Android's own window manager: the card's window refused once (a synthetic BadTokenException on the
+     * first add only) is put up again 0.6 s later, the same window, and drawn; the call over, nothing more. The phone-only reads
+     * of the cause code (the app-op mode, the last process exit, the screen) run here too. Made-up number and card only (PreviewSeed). */
+    @Test fun t7_callCardTriesAgainOnThisAndroid() {
+        val card=kr.callbrief.pipeline.call.CallCardOverlay;val stats=kr.callbrief.pipeline.call.CardStats
+        val session=kr.callbrief.pipeline.call.CallSession
+        inst.uiAutomation.executeShellCommand("appops set ${context.packageName} SYSTEM_ALERT_WINDOW allow").close()
+        PreviewSeed.ensure(storage);ContactCards.rebuildAll(kr.callbrief.IeumApplication.store(storage))
+        assertNotNull("the made-up card",ContactCards.get(storage,"01011112222"))
+        val verdicts=java.util.concurrent.CopyOnWriteArrayList<kr.callbrief.pipeline.call.CardStats.Attempt>()
+        val codes=java.util.concurrent.CopyOnWriteArrayList<String>()
+        val tried=java.util.concurrent.CopyOnWriteArrayList<View>()
+        val realAdd=card.addWindow
+        card.addWindow={ wm,v,p -> tried+=v;if(tried.size==1) throw android.view.WindowManager.BadTokenException("device-test") else realAdd(wm,v,p) }
+        card.onVerdict={ c,a -> verdicts+=a;stats.verdict(c,a) };card.onFailure={ c,code -> codes+=code;stats.failure(c,code) }
+        val result=JSONObject()
+        try {
+            val mode=kr.callbrief.pipeline.call.CardProbe.overlayMode(context);val exit=kr.callbrief.pipeline.call.CardProbe.lastExit(context)
+            val on=context.getSystemService(android.os.PowerManager::class.java).isInteractive
+            result.put("mode",mode).put("exit",exit?.first ?: JSONObject.NULL).put("screenOn",on)
+            session.onPhoneState(context,android.telephony.TelephonyManager.EXTRA_STATE_RINGING,"010-1111-2222")
+            card.show(context,"010-1111-2222",kr.callbrief.pipeline.call.CallSession.State.RINGING)
+            val until=System.currentTimeMillis()+10_000
+            while(verdicts.isEmpty() && System.currentTimeMillis()<until) Thread.sleep(100)
+            val v=verdicts.firstOrNull()
+            result.put("tries",tried.size).put("sameWindow",tried.toSet().size==1).put("result",v?.result).put("cause",v?.cause).put("retries",v?.retries)
+                .put("codes",JSONArray(codes))
+            card.show(context,null,kr.callbrief.pipeline.call.CallSession.State.IDLE)
+            session.onPhoneState(context,android.telephony.TelephonyManager.EXTRA_STATE_IDLE,"")
+            Thread.sleep(3_000)
+            result.put("triesAfterEnd",tried.size)
+            report("t7_card_retry",result)
+            assertEquals("refused once, then put up again",2,tried.size);assertTrue("the same window",tried.toSet().size==1)
+            assertEquals(kr.callbrief.pipeline.call.CardStats.DRAWN,v!!.result);assertEquals(card.CAUSE_OK_RETRY,v.cause);assertEquals(1,v.retries)
+            assertTrue(codes.toString(),codes.single().startsWith("add:BadToken"))
+            assertEquals("nothing after the call",2,tried.size)
+        } finally { card.addWindow=realAdd;card.onVerdict={ c,a -> stats.verdict(c,a) };card.onFailure={ c,code -> stats.failure(c,code) } }
+    }
+
     /** Peak live Java heap above the start while [block] runs. The number compared is taken where the app needs memory
      * most, while a piece is being transcribed: the stand-in transcriber calls [held], which collects garbage on the decoding
      * thread itself, so nothing is being allocated meanwhile and the number is exactly what the code holds (the vault copy,

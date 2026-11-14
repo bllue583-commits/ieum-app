@@ -452,6 +452,7 @@ class R17CardWindowTest:ProtectedTextHostTestBase() {
     private val outcomes=mutableListOf<String>()
     private val verdicts=mutableListOf<CardStats.Attempt>()
     private var seen=true
+    private val fails=mutableListOf<String>()
     private val now=System.currentTimeMillis()
 
     @Before fun setup() {
@@ -461,12 +462,14 @@ class R17CardWindowTest:ProtectedTextHostTestBase() {
         CallCardOverlay.outcome={ _,w -> outcomes+=w };CallCardOverlay.onExpanded={};CallCardOverlay.onClosed={ _,_ -> }
         CallCardOverlay.drawnNow={ seen };CallCardOverlay.probe={ CardStats.Probe(1,4242,30,true,true,7) }
         CallCardOverlay.onVerdict={ _,a -> synchronized(verdicts) { verdicts+=a } }
+        CallCardOverlay.onFailure={ _,code -> synchronized(fails) { fails+=code } };CallCardOverlay.screenOn={ true };CallCardOverlay.lastExit={ null }
+        CardStats.elapsed={ 600_000L };CardStats.processStart={ 0L } // a warm process
         shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
         ContactCards.shutdown();ContactCards.clearPending()
         ContactCards.write(app,mapOf(key to ContactCard(key,listOf(ContactCard.Person("pe_1","김민수","대표",false)),ContactCard.Company("co_1","탄탄이엔씨","철근"),
             now-86_400_000L,"in",listOf(ContactCard.Recent(now-86_400_000L,"통화","견적서는 금요일까지 보내 드리기로 했어요.")),emptyList(),emptyList(),emptyList(),now)),replaceAll=true)
     }
-    @After fun reset() { CallCardOverlay.resetForHost();CallSession.resetForHost();ContactCards.shutdown();ContactCards.clearPending() }
+    @After fun reset() { CallCardOverlay.resetForHost();CallSession.resetForHost();ContactCards.shutdown();ContactCards.clearPending();CardStats.resetForHost() }
 
     private fun settle(ms:Long=0) { CallCardOverlay.awaitIdle();shadowOf(Looper.getMainLooper()).idle();if(ms>0) shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(ms));CallCardOverlay.awaitIdle() }
     private fun ring() { CallSession.onPhoneState(app,TelephonyManager.EXTRA_STATE_RINGING,number);CallCardOverlay.show(app,number,CallSession.State.RINGING) }
@@ -518,52 +521,86 @@ class R17CardWindowTest:ProtectedTextHostTestBase() {
         seen=true;settle(CallCardOverlay.HIDDEN_AFTER_MS)
         assertEquals(CardStats.DRAWN,verdict().result);assertEquals(1,windows.size)
     }
-    @Test fun anExceptionOfAddViewIsAFallbackWithItsName() {
-        CallCardOverlay.addWindow={ _,_,_ -> throw WindowManager.BadTokenException("synthetic") }
+    // ---- v4.0 r21-2: a refused or hidden window is put up again 0.6 s and 2 s later (a fake window manager) ----
+    @Test fun anExceptionOfAddViewIsTriedTwiceMoreThenAFallbackWithItsName() {
+        val tried=mutableListOf<View>()
+        CallCardOverlay.addWindow={ _,v,_ -> tried+=v;throw WindowManager.BadTokenException("synthetic") }
         ring();settle(50)
         assertTrue(windows.isEmpty());assertEquals(1,notices.size)
         assertEquals(listOf(CallCardOverlay.NO_PERMISSION),outcomes)
+        assertTrue("a try is due: not told yet",verdicts.isEmpty())
+        settle(CallCardOverlay.RETRY_DELAYS_MS[0]-100);assertEquals("not before 0.6 s",1,tried.size)
+        settle(100);assertEquals(2,tried.size)
+        settle(CallCardOverlay.RETRY_DELAYS_MS[1]);assertEquals(3,tried.size)
         assertEquals(CardStats.FALLBACK,verdict().result);assertEquals("addView:BadTokenException",verdict().cause)
-        assertEquals("addView:BadTokenException",verdict().error)
-        settle(CallCardOverlay.HIDDEN_AFTER_MS);idle();assertEquals(1,verdicts.size)
+        assertEquals("addView:BadTokenException",verdict().error);assertEquals(2,verdict().retries)
+        assertEquals("the same window every time",1,tried.toSet().size)
+        assertEquals("one code per failure moment",List(3) { "add:BadToken:m1" },synchronized(fails) { fails.toList() })
+        settle(5_000);assertEquals("no more tries",3,tried.size)
+        idle();assertEquals(1,verdicts.size);assertTrue(notices.isEmpty())
     }
-    @Test fun aWindowNotSeenInTimeIsHiddenTakenAwayAndTheNoticeShows() {
+    @Test fun aRefusedWindowAddedOnTheNextTryIsDrawnAndCountedAsRetried() {
+        val tried=mutableListOf<View>()
+        CallCardOverlay.addWindow={ wm,v,p -> tried+=v;if(tried.size==1) throw WindowManager.BadTokenException("synthetic") else wm.addView(v,p) }
+        ring();settle(50)
+        assertTrue(windows.isEmpty());assertEquals(1,notices.size)
+        settle(CallCardOverlay.RETRY_DELAYS_MS[0])
+        assertEquals("one card on the screen",1,windows.size);assertSame("the refused window, not a second one",tried[0],windows.single())
+        settle(CallCardOverlay.RETRY_HIDDEN_MS)
+        assertEquals(CardStats.DRAWN,verdict().result);assertEquals(CallCardOverlay.CAUSE_OK_RETRY,verdict().cause);assertEquals(1,verdict().retries)
+        assertNull("drawn: no error left",verdict().error);assertEquals("addView:BadTokenException",verdict().fails)
+        assertTrue("seen with the check saying yes: the notice goes",notices.isEmpty())
+        settle(5_000);assertEquals(1,windows.size);assertEquals(2,tried.size)
+        idle();assertTrue(windows.isEmpty());assertEquals(1,verdicts.size)
+    }
+    @Test fun aWindowNotSeenInTimeIsHiddenTriedTwiceMoreThenAFallback() {
         seen=false
         ring();settle(50)
         assertEquals(1,windows.size);assertTrue(notices.isEmpty())
+        val first=windows.single()
         settle(CallCardOverlay.HIDDEN_AFTER_MS)
-        assertTrue("the hidden window goes",windows.isEmpty());assertEquals(1,notices.size)
-        // v3.6.1 fix (review, medium): the verdict waits for the one more try at the next state (or the call's end).
-        assertTrue(verdicts.isEmpty())
-        // The call's state changes (ringing to off hook): tried once more, hidden again: a fallback, told once.
-        CallCardOverlay.show(app,null,CallSession.State.OFFHOOK);settle(50)
-        assertEquals("tried once more",1,windows.size);assertEquals(1,notices.size)
-        settle(CallCardOverlay.HIDDEN_AFTER_MS)
-        assertTrue(windows.isEmpty());assertEquals(1,notices.size)
-        assertEquals(CardStats.FALLBACK,verdict().result);assertEquals(CardStats.HIDDEN,verdict().cause)
-        // Only once: a later state does not add it again.
-        CallCardOverlay.show(app,null,CallSession.State.RINGING);settle(50)
+        assertTrue("the hidden window goes",windows.isEmpty());assertEquals(1,notices.size);assertTrue(verdicts.isEmpty())
+        settle(CallCardOverlay.RETRY_DELAYS_MS[0]);assertEquals("put up again",1,windows.size);assertSame(first,windows.single())
+        settle(CallCardOverlay.RETRY_HIDDEN_MS);assertTrue(windows.isEmpty());assertTrue(verdicts.isEmpty())
+        settle(CallCardOverlay.RETRY_DELAYS_MS[1]);assertEquals("once more",1,windows.size)
+        settle(CallCardOverlay.RETRY_HIDDEN_MS);assertTrue(windows.isEmpty());assertEquals(1,notices.size)
+        assertEquals(CardStats.FALLBACK,verdict().result);assertEquals(CardStats.HIDDEN,verdict().cause);assertEquals(2,verdict().retries)
+        assertEquals("hidden-hidden-hidden",verdict().fails);assertEquals("RINGING",verdict().callState);assertEquals(true,verdict().screenOn)
+        // Told once: a later state does not put it up again.
+        CallCardOverlay.show(app,null,CallSession.State.OFFHOOK);settle(5_000)
         assertTrue(windows.isEmpty());assertEquals(1,verdicts.size)
         idle();assertTrue(notices.isEmpty());assertEquals(1,verdicts.size)
     }
-    @Test fun aHiddenWindowSeenOnTheSecondTryIsDrawn() {
+    @Test fun aHiddenWindowSeenOnTheNextTryIsDrawn() {
         seen=false
         ring();settle(50);settle(CallCardOverlay.HIDDEN_AFTER_MS)
         assertTrue(windows.isEmpty());assertEquals(1,notices.size);assertTrue(verdicts.isEmpty())
         seen=true
-        CallCardOverlay.show(app,null,CallSession.State.OFFHOOK);settle(50)
-        assertEquals(1,windows.size)
-        settle(CallCardOverlay.HIDDEN_AFTER_MS)
-        assertEquals(CardStats.DRAWN,verdict().result);assertEquals(CallCardOverlay.CAUSE_OK_RETRY,verdict().cause)
+        settle(CallCardOverlay.RETRY_DELAYS_MS[0]);assertEquals(1,windows.size)
+        settle(CallCardOverlay.RETRY_HIDDEN_MS)
+        assertEquals(CardStats.DRAWN,verdict().result);assertEquals(CallCardOverlay.CAUSE_OK_RETRY,verdict().cause);assertEquals(1,verdict().retries)
         assertTrue("seen with the check saying yes: the notice goes",notices.isEmpty())
         idle();assertEquals(1,verdicts.size)
     }
-    @Test fun aHiddenWindowWithoutASecondTryIsToldAtTheCallsEnd() {
+    @Test fun noTryAfterTheCallEnded() {
         seen=false
         ring();settle(50);settle(CallCardOverlay.HIDDEN_AFTER_MS)
         assertTrue(verdicts.isEmpty())
         idle()
-        assertEquals(CardStats.FALLBACK,verdict().result);assertEquals(CardStats.HIDDEN,verdict().cause)
+        assertEquals(CardStats.FALLBACK,verdict().result);assertEquals(CardStats.HIDDEN,verdict().cause);assertEquals(0,verdict().retries)
+        settle(5_000);assertTrue("nothing put up after the call",windows.isEmpty());assertEquals(1,verdicts.size)
+        // A refused window and the call over before its try: the same.
+        verdicts.clear();CallCardOverlay.addWindow={ _,_,_ -> throw WindowManager.BadTokenException("synthetic") }
+        ring();settle(50);idle();settle(5_000)
+        assertEquals(CardStats.FALLBACK,verdict().result);assertEquals("addView:BadTokenException",verdict().cause);assertTrue(windows.isEmpty())
+    }
+    @Test fun theCauseCodeCarriesThePhone() {
+        // The check said no, the screen off and locked: the code says so.
+        CallCardOverlay.canDraw={ false };CallCardOverlay.screenOn={ false }
+        CallCardOverlay.addWindow={ _,_,_ -> throw WindowManager.BadTokenException("synthetic") }
+        ring();settle(50)
+        assertEquals("add:BadToken:d0:m1:off",synchronized(fails) { fails.single() })
+        idle()
     }
     @Test fun aWindowGoneBeforeItWasJudgedIsToldOnce() {
         seen=false

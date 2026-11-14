@@ -232,7 +232,7 @@ class WatchdogTest(unittest.TestCase):
         self.assertIn("hidden 2번, addView:BadTokenException 1번", body)
         self.assertNotIn("short", body)
         # fallback is there: noPermission alone (it may count the same calls) is not used.
-        self.assertEqual([], titles(phone=phone(callCard={"today": {"noPermission": 5, "fallback": 2, "drawn": 9}})))
+        self.assertEqual([], titles(phone=phone(callCard={"today": {"noPermission": 5, "fallback": 0, "drawn": 9}})))
         # Bad recent entries are skipped.
         bad = dict(card, recent=[None, "x", {"result": "fallback", "day": 20261110, "cause": "김 010"}])
         bad["recent"].append({"result": "fallback", "day": 20261110, "cause": "010-0000-3333"})
@@ -251,10 +251,28 @@ class WatchdogTest(unittest.TestCase):
         self.assertIn("하루에 3번", body)
         self.assertIn("카드가 뜬 횟수: 0번", body)
         self.assertIn("drawnDespiteFalse 3번", body)
-        # Two fallbacks and one unconfirmed reach the rule's 3; drawn alone does not.
-        self.assertEqual([w.T_CARD_PERMISSION], titles(phone=phone(callCard={"today": {"fallback": 2, "unconfirmed": 1, "drawn": 5}})))
-        self.assertEqual([], titles(phone=phone(callCard={"today": {"fallback": 1, "unconfirmed": 1, "drawn": 5}})))
+        # v4.0 r21-2: one fallback or one unconfirmed is enough on a phone that counts fallback; drawn alone is not.
+        self.assertEqual([w.T_CARD_PERMISSION], titles(phone=phone(callCard={"today": {"fallback": 0, "unconfirmed": 1, "drawn": 5}})))
+        self.assertEqual([w.T_CARD_PERMISSION], titles(phone=phone(callCard={"today": {"fallback": 1, "drawn": 5}})))
         self.assertEqual([], titles(phone=phone(callCard={"today": {"fallback": 0, "drawn": 9}})))
+        self.assertEqual([], titles(phone=phone(callCard={"today": {"fallback": 0, "unconfirmed": 0, "drawn": 9, "retried": 2}})))
+
+    def test_call_card_one_fallback_a_day_with_the_causes_r21(self):
+        # v4.0 r21-2 (DESIGN_V8 6 v4.1 rule 4): a single fallback is an issue; the body carries today's cause codes and the
+        # cards drawn on a later try, codes and numbers only.
+        card = {"day": 20261116, "recent": [],
+                "today": {"fallback": 1, "drawn": 30, "retried": 2,
+                          "causes": {"add:BadToken:cold:x10:m5": 2, "hidden": 1, "010-1234-5678": 1, "김": 1, "bad": "x"}}}
+        self.assertEqual([w.T_CARD_PERMISSION], titles(phone=phone(callCard=card)))
+        body = problems(phone=phone(callCard=card))[0]["body"]
+        self.assertIn("하루에 1번", body)
+        self.assertIn("기준 1번", body)
+        self.assertIn("다시 붙여서 뜬 통화 2번", body)
+        self.assertIn("오늘 실패한 순간: add:BadToken:cold:x10:m5 2번, hidden 1번.", body)
+        self.assertNotIn("5678", body)
+        self.assertNotIn("김", body)
+        # An old phone (noPermission only) keeps the 3.
+        self.assertEqual([], titles(phone=phone(callCard={"today": {"noPermission": 2}})))
 
     def test_exempted_bucket_is_no_cause(self):
         body = problems(phone=phone(atMs=NOW - 20 * H, standbyBucket="EXEMPTED"))[0]["body"]
