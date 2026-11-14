@@ -5,8 +5,10 @@ name: ci
 on:
   push:
     branches: ['feature/**', 'main']
-    # release-apk waits for this run on the same commit, so every path that releases also runs the tests.
-    paths: ['android/**', 'tools/**', '.github/workflows/android-ci.yml', '.github/workflows/release-apk.yml']
+    # release-apk waits for this run on the same commit, so every path that releases also runs the tests (v4.0 r21 review M1:
+    # release-apk's paths are a subset of these; tools/release/test_release_paths.py checks it).
+    paths: ['android/**', 'tools/**', 'run_gradle.py', 'third_party/**', 'docs/routines/**', 'docs/VERSION', 'docs/UPDATE_NOTE.txt',
+            '.github/workflows/android-ci.yml', '.github/workflows/release-apk.yml']
   pull_request:
   workflow_dispatch:
 

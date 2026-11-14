@@ -7,6 +7,7 @@ import os, re, unittest
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 WORKFLOW = os.path.join(ROOT, ".github", "workflows", "release-apk.yml")
+CI = os.path.join(ROOT, ".github", "workflows", "android-ci.yml")
 
 
 def push_paths(text):
@@ -59,10 +60,22 @@ class ReleasePathsTest(unittest.TestCase):
         self.assertEqual({"docs/routines/hourly.md", "docs/routines/tidy.md", "tools/inbox/watchdog.py", "tools/report_check.py"}, set(copied))
         for f in copied + ["android/app/src/main/java/kr/callbrief/pipeline/CallUi.kt", "android/app/build.gradle.kts", "docs/routines/self-report.md",
                            "docs/VERSION", "docs/UPDATE_NOTE.txt", "tools/build_android_whisper.py", "tools/fetch_sherpa_onnx.py",
-                           "run_gradle.py", "third_party/whisper.cpp-1.7.4/src/whisper.cpp", ".github/workflows/release-apk.yml"]:
+                           "run_gradle.py", "third_party/whisper.cpp-1.7.4/src/whisper.cpp", ".github/workflows/release-apk.yml",
+                           "tools/audio/public-ko.wav"]:
             self.assertTrue(triggers(self.paths, [f]), f)
         # A push with a tool and an app file still releases.
         self.assertTrue(triggers(self.paths, ["tools/inbox/score.py", "android/app/src/main/AndroidManifest.xml"]))
+
+    def test_every_release_path_runs_ci(self):
+        # Review M1: release-apk waits for ci on the same commit; a path that releases but does not run ci waits 40 minutes
+        # and fails. Each release pattern, and samples of what it matches, must start ci too.
+        with open(CI, encoding="utf-8") as f:
+            ci = push_paths(f.read())
+        samples = {"android/**": "android/x/y.kt", "third_party/**": "third_party/a/b.c", "docs/routines/**": "docs/routines/tidy.md",
+                   "tools/audio/**": "tools/audio/public-ko.wav"}
+        for p in self.paths:
+            f = samples.get(p, p)
+            self.assertTrue(triggers(ci, [f]), f"{p} releases but does not run ci")
 
     def test_the_matcher_follows_githubs_globs(self):
         self.assertTrue(triggers(["android/**"], ["android/a/b.kt"]))
