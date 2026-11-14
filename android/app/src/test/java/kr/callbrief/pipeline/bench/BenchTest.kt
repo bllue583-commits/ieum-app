@@ -154,6 +154,17 @@ class BenchTest:ProtectedTextHostTestBase() {
     }
 
     // ---- what goes up ----
+    /** Pattern syntax the JVM takes and Android's regex engine (ICU) does not: these tests run on the JVM, so such a pattern
+     * passes here and throws on the phone. (?U) in KoCer did exactly that on 11/14. The device test t0 runs the real thing. */
+    @Test fun noPatternInTheAppUsesSyntaxOnlyTheJvmTakes() {
+        val root=listOf(java.io.File("src/main/java"),java.io.File("android/app/src/main/java")).first { it.isDirectory }
+        val bad=listOf("(?U)","\\p{Is","\\p{java","\\p{In")
+        val hits=root.walkTopDown().filter { it.isFile && it.extension=="kt" }.flatMap { f ->
+            f.readLines().withIndex().filter { (_,line) -> val code=line.substringBefore("//").trimStart();!code.startsWith("*") && !code.startsWith("/*") && bad.any { it in code } }
+                .map { (i,_) -> "${f.name}:${i+1}" } }.toList()
+        assertEquals("patterns Android cannot compile",emptyList<String>(),hits)
+    }
+
     @Test fun theHeartbeatSaysWhereARunIsAndWhatEndedIt() {
         val s=BenchState.fresh(1,now)
         BenchState.setPlan(s,listOf(call("r1",2.0,0.1),call("r2",3.0,0.2)))

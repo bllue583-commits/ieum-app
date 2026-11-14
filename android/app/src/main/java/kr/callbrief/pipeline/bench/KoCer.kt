@@ -17,14 +17,17 @@ internal object KoCer {
     private val NATIVE=mapOf("한" to 1,"두" to 2,"세" to 3,"네" to 4,"다섯" to 5,"여섯" to 6,"일곱" to 7,"여덟" to 8,"아홉" to 9,"열" to 10)
     private const val COUNTERS="시|개|명|번|살|장|대|권|달|병|잔|통"
     private const val NUMCH="영공일이삼사오육륙칠팔구십백천만억조"
-    /** Python's \s is str.isspace(): Unicode white space plus the separators U+001C..U+001F. */
-    private const val WS="[\\s\\x1c-\\x1f]"
-    // (?U): \d and \s are Unicode classes, as in Python 3's re on str.
+    /** Python's \s is str.isspace(): Unicode white space plus the separators U+001C..U+001F. Written out as classes that mean
+     * the same on the JVM and on Android: the inline flag (?U) is not Android regex syntax — it threw when this object was first
+     * used on the phone (ExceptionInInitializerError, 11/14: the bench never finished a piece) while every JVM test passed. */
+    private const val WS="[\\s\\p{Z}\\x1c-\\x1f\\x85]"
+    /** Python's \d on str: any Unicode decimal digit. */
+    private const val D="\\p{Nd}"
     private const val UNIT="(?=$WS*(?:원|만|억|조|시|분|초|일|월|년|개|명|번|층|호|퍼센트|프로|%|km|kg|살|장|대|권|달|주|회|차))"
-    private const val TOK="(?:\\d[\\d,]*|[$NUMCH])"
-    private val SPAN=Regex("(?U)(?<![가-힣\\d])$TOK(?:$WS?$TOK)*$UNIT")
-    private val TOKENS=Regex("(?U)\\d[\\d,]*|[$NUMCH]")
-    private val NATIVE_COUNT=Regex("(?U)(?<![가-힣])(다섯|여섯|일곱|여덟|아홉|한|두|세|네|열)$WS*(?=($COUNTERS))")
+    private const val TOK="(?:$D[$D,]*|[$NUMCH])"
+    private val SPAN=Regex("(?<![가-힣$D])$TOK(?:$WS?$TOK)*$UNIT")
+    private val TOKENS=Regex("$D[$D,]*|[$NUMCH]")
+    private val NATIVE_COUNT=Regex("(?<![가-힣])(다섯|여섯|일곱|여덟|아홉|한|두|세|네|열)$WS*(?=($COUNTERS))")
 
     /** ko_cer.parse_num: digits, sino-Korean digits and units mixed ("3억 5천만", "30만", "천이백", "1,200"). */
     fun parseNum(span:String):BigInteger {
@@ -75,7 +78,7 @@ internal object KoCer {
     /** Length in code points (jiwer counts characters). */
     fun length(s:String)=s.codePointCount(0,s.length)
 
-    private val DIGITS=Regex("\\d+")
+    private val DIGITS=Regex("$D+")
     /** Number tokens of a normalized text (digit runs), as a multiset. */
     fun numbers(normalized:String):Map<String,Int> = DIGITS.findAll(normalized).map { it.value }.groupingBy { it }.eachCount()
     /** How many of the reference's number tokens the hypothesis has too (multiset), and how many the reference has. */

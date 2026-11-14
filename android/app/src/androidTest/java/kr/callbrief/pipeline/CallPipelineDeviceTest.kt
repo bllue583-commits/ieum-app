@@ -60,6 +60,26 @@ class CallPipelineDeviceTest {
 
     private fun publicKorean():FloatArray=PipelineAudioMath.decodeWav(context.assets.open("local-stt/public-ko.wav").use{it.readBytes()}).chunks.flatMap{it.second.asList()}.toFloatArray()
 
+    /** The bench's text math on this Android's own regex engine. The JVM tests cannot see a pattern that only the JVM accepts:
+     * the inline flag (?U) in KoCer threw when the object was first used on the phone (ExceptionInInitializerError, 11/14 — the
+     * bench never finished a piece, twice) while every unit test passed. Same expectations as BenchTest.numbersNamesAndHallucinations. */
+    @Test fun t0_benchTextMathOnThisAndroid() {
+        val k=kr.callbrief.pipeline.bench.KoCer
+        val r=k.normalize("철근 삼십만 원, 레미콘 두 대. 대한철강 김민수");val h=k.normalize("철근 30만원 레미콘 3대 대한철강")
+        assertEquals(1 to 2,k.numberHits(r,h))
+        assertEquals(1 to 2,k.nameHits(r,h,listOf("대한철강","김민수","없는업체").map(k::normalize)))
+        assertEquals(java.math.BigInteger("350000000"),k.parseNum("3억 5천만"))
+        assertTrue(k.hallucination(800,"그."));assertFalse(k.hallucination(800,"네 알겠습니다"))
+        // The switch and the heartbeat block (their objects hold patterns too).
+        val (bench,samples)=kr.callbrief.pipeline.bench.BenchConfigs.parse("""{"bench":{"on":true,"candidates":["b"],"calls":3,"run":7},"samples":{"on":false}}""")
+        assertTrue(bench.on);assertFalse(samples.on)
+        val state=kr.callbrief.pipeline.bench.BenchState.fresh(7,1L)
+        kr.callbrief.pipeline.bench.BenchState.setStage(state,"REFS");kr.callbrief.pipeline.bench.BenchState.setError(state,"ExceptionInInitializerError")
+        val hb=kr.callbrief.pipeline.bench.Bench.safe(kr.callbrief.pipeline.bench.BenchState.heartbeat(state,bench)!!)
+        assertEquals("REFS",hb.getString("stage"));assertEquals("ExceptionInInitializerError",hb.getString("err"))
+        report("t0_bench",JSONObject().put("ok",true).put("numbers",r.count { it.isDigit() }))
+    }
+
     @Test fun t1_modelDownloadsAndVerifies() {
         val model=model()
         val started=System.currentTimeMillis()
