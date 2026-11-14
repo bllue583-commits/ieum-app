@@ -149,7 +149,7 @@ class RoutineDocTest {
         // The format of DESIGN_V5 1절: every key the phone reads (r15-1 KakaoReport.compose).
         val format=JSONObject(section.substringAfter("```json\n").substringBefore("\n```"))
         assertEquals(listOf("day","generatedMs","tidyRev","head","yesterday","today","inProgress","check","late"),format.keys().asSequence().toList())
-        assertEquals(listOf("calls","newChecks","todayChecks","issues","pendingCalls"),format.getJSONObject("head").keys().asSequence().toList())
+        assertEquals(listOf("calls","newChecks","todayChecks","issues","pendingCalls","failedCalls"),format.getJSONObject("head").keys().asSequence().toList())
         assertEquals(listOf("who","what"),format.getJSONArray("late").getJSONObject(0).keys().asSequence().toList())
         assertEquals(listOf("who","what"),format.getJSONArray("yesterday").getJSONObject(0).keys().asSequence().toList())
         assertEquals(listOf("id","what","who","since","status","check","tag"),format.getJSONArray("today").getJSONObject(0).keys().asSequence().toList())
@@ -166,10 +166,12 @@ class RoutineDocTest {
         // The self-report: reportWritten, and prompt 7 in the line the watchdog compares with version.json's tidyVersion.
         assertTrue(prompt.contains("\"promptVersion\":\"$TIDY_VERSION\""));assertTrue(prompt.contains("\"reportWritten\":true}"))
         // v8: what the phone puts in the state for it (CallRecordStore.tidyState) and what the report takes from it.
-        listOf("pending{yesterdayCalls, yesterdayMin}","keyPoints, doneMs}","`pendingCalls`는 state의 `pending.yesterdayCalls`",
+        listOf("pending{yesterdayCalls, yesterdayMin, yesterdayFailed}","keyPoints, doneMs}","`pendingCalls`는 state의 `pending.yesterdayCalls`",
             "`late`: 뒤늦게 정리된 통화","그제 00:00(한국 시각) 전","doneMs가 지난 보고","최대 5줄","\"뒤늦게 정리된 통화\"",
             "`yesterday`와 `late`는 \"who: what\"").forEach { assertTrue(it,prompt.contains(it)) }
         assertTrue(prompt.contains("- `reportWritten`:"))
+        // v11 (r21-1): the calls whose text could not be made, from the state (CallRecordStore.tidyState) to the report's head.
+        listOf("`failedCalls`는 state의 `pending.yesterdayFailed`","\"글자로 못 바꾼 통화가 n건 있어요\"").forEach { assertTrue(it,prompt.contains(it)) }
         // v9 (r18, user 11/13): the to-dos carry one of five tags (the KakaoTalk list's thumbnails), in the tag order first.
         val tags=listOf("important","confirm","request","regular","optional")
         assertEquals("request",format.getJSONArray("today").getJSONObject(0).getString("tag"))
@@ -213,8 +215,9 @@ class RoutineDocTest {
         /** The version docs/routines/hourly.md is at (v7: DESIGN_V4 3.2-3, r13-2; v8: DESIGN_V4 4.3, r14-3, same rules and format;
          * v9: DESIGN_V7 3.3, r17-0, mail removed, same result keys). */
         const val DOC_VERSION=9
-        /** The version docs/routines/tidy.md is at (v7: DESIGN_V5 2.2, r15-2, the morning report; v8: DESIGN_V7 3.2, r17-2; v9: r18, today[].tag and 10 lines). */
-        const val TIDY_VERSION=10
+        /** The version docs/routines/tidy.md is at (v7: DESIGN_V5 2.2, r15-2, the morning report; v8: DESIGN_V7 3.2, r17-2; v9: r18, today[].tag and 10 lines;
+         * v10: r20, wrong[]; v11: r21-1, pending.yesterdayFailed and head.failedCalls). */
+        const val TIDY_VERSION=11
         /** True once ClaudeCallAnalyzer (r13-1's file) carries the doc's version (the orchestrator's integration step). */
         val codeAtDocVersion get()=ClaudeCallAnalyzer.PROMPT_VERSION>=DOC_VERSION
         /** Both routines find the inbox repository the same way. */

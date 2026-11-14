@@ -143,20 +143,20 @@ internal object Telemetry {
             .put("atMs",o.optLong("atMs")).put("totalRows",o.optLong("totalRows")).put("totalChars",o.optLong("totalChars")).put("top",top)
     }
 
-    /** [prev] ({day: [calls, inReport, pending]}) with the coverage [snapshot] ([kr.callbrief.pipeline.report.ReportCoverage.snapshot])
+    /** [prev] ({day: [calls, inReport, pending, failed]}, failed since r21-1) with the coverage [snapshot] ([kr.callbrief.pipeline.report.ReportCoverage.snapshot])
      * kept under its report day; the newest [COVERAGE_DAYS] days. */
     fun coverageDays(prev:JSONObject?,snapshot:JSONObject?):JSONObject {
         val o=prev?.let { JSONObject(it.toString()) } ?: JSONObject()
         val d=snapshot?.optString("day")?.takeIf { Regex("""\d{4}-\d{2}-\d{2}""").matches(it) } ?: return o
-        o.put(d,JSONArray().put(snapshot.optInt("yesterdayCalls")).put(snapshot.optInt("inReport")).put(snapshot.optInt("pending")))
+        o.put(d,JSONArray().put(snapshot.optInt("yesterdayCalls")).put(snapshot.optInt("inReport")).put(snapshot.optInt("pending")).put(snapshot.optInt("failed")))
         o.keys().asSequence().toList().sorted().dropLast(COVERAGE_DAYS).forEach { o.remove(it) }
         return o
     }
-    /** The heartbeat's `report.recent`: [{day, yesterdayCalls, inReport, pending}], oldest first. */
+    /** The heartbeat's `report.recent`: [{day, yesterdayCalls, inReport, pending, failed}], oldest first. */
     fun coverageRecent(o:JSONObject?):JSONArray {
         val a=JSONArray();o ?: return a
         o.keys().asSequence().filter { Regex("""\d{4}-\d{2}-\d{2}""").matches(it) }.sorted().forEach { d -> val v=o.optJSONArray(d) ?: return@forEach
-            a.put(JSONObject().put("day",d).put("yesterdayCalls",v.optInt(0)).put("inReport",v.optInt(1)).put("pending",v.optInt(2))) }
+            a.put(JSONObject().put("day",d).put("yesterdayCalls",v.optInt(0)).put("inReport",v.optInt(1)).put("pending",v.optInt(2)).put("failed",v.optInt(3))) }
         return a
     }
 

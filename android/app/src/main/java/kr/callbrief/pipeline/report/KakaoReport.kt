@@ -179,7 +179,9 @@ object KakaoReport {
                                /** v3.7 r17-2 (M4): calls from before yesterday summed up after the last report ("late", 5 at most), "who: what". */
                                val late:List<String> =emptyList(),
                                /** r18: the to-dos for the list bubbles, sorted by [TAGS] (stable), 10 at most. */
-                               val items:List<ListItem> =emptyList())
+                               val items:List<ListItem> =emptyList(),
+                               /** v4.0 r21-1: yesterday's calls whose text could not be made (head.failedCalls, recounted by the phone right before the send). */
+                               val failed:Int=0)
     private val WEEK=arrayOf("월","화","수","목","금","토","일")
     /** "11/7(금)". */
     internal fun dayLabel(d:LocalDate)="${d.monthValue}/${d.dayOfMonth}(${WEEK[d.dayOfWeek.value-1]})"
@@ -218,7 +220,7 @@ object KakaoReport {
             when { what.isEmpty() -> who.ifEmpty { null };who.isEmpty() -> what;else -> clean("$who: $what") } }
         fun n(key:String,fallback:Int)=head.optInt(key,-1).takeIf { it>=0 } ?: fallback
         return Report(day,n("calls",yesterday.size),n("newChecks",0),n("todayChecks",today.size),yesterday,today,inProgress,check,phoneFallback,
-            n("pendingCalls",0),late,items)
+            n("pendingCalls",0),late,items,n("failedCalls",0))
     }
     // ---- r18 (user 11/13): the list report ----
     /** The five tags (tidy.md v9 9-1), in the order they are shown; the thumbnails are res/drawable-nodpi/kakao_tag_<tag>.png. */
@@ -248,7 +250,7 @@ object KakaoReport {
         var at=0
         return sizes.mapIndexed { i,n ->
             val items=r.items.subList(at,at+n);at+=n
-            val header=if(i==0) "$label 챙길 일 ${total}개" else "$label 챙길 일 이어서"+(if(total>shown) LIST_DOT+"외 ${total-shown}개" else "")
+            val header=if(i==0) "$label 챙길 일 ${total}개"+failedTag(r.failed) else "$label 챙길 일 이어서"+(if(total>shown) LIST_DOT+"외 ${total-shown}개" else "")
             Message.ListCard(header,items,TASKS_LINK,webUrl,if(custom && n==5) templateId else 0)
         }
     }
@@ -321,8 +323,13 @@ object KakaoReport {
     }
     internal fun webPath(url:String):String { val rest=url.substringAfter("://","");val i=rest.indexOf('/');return if(i<0) "" else rest.substring(i+1) }
     /** v3.7 r17-2 (M3): "어제 통화 14건을 정리했어요. 9건은 아직 글자로 바꾸는 중이에요" (no second sentence when nothing waits). */
-    internal fun headLine(r:Report)=(if(r.calls>0) "어제 통화 ${r.calls}건을 정리했어요" else "어제 정리한 통화가 없어요")+pendingSentence(r.pending)
+    internal fun headLine(r:Report)=(if(r.calls>0) "어제 통화 ${r.calls}건을 정리했어요" else "어제 정리한 통화가 없어요")+pendingSentence(r.pending)+failedSentence(r.failed)
     internal fun pendingSentence(n:Int)=if(n>0) ". ${n}건은 아직 글자로 바꾸는 중이에요" else ""
+    /** v4.0 r21-1: ". 글자로 못 바꾼 통화가 1건 있어요" after the head line; nothing when there is none. */
+    internal fun failedSentence(n:Int)=if(n>0) ". ${FAILED_WORDS}가 ${n}건 있어요" else ""
+    /** v4.0 r21-1: the first list bubble's header goes on with " · 글자로 못 바꾼 통화 1건"; nothing when there is none. */
+    internal fun failedTag(n:Int)=if(n>0) "$LIST_DOT$FAILED_WORDS ${n}건" else ""
+    const val FAILED_WORDS="글자로 못 바꾼 통화"
     /** The counts under [headLine] (v3.6 and before they were on the same line). */
     internal fun countsLine(r:Report)="새 체크 ${r.newChecks}개, 오늘 챙길 일 ${r.todayChecks}개"
     /** v3.7 r17-2 (M4): the last block of the text and of the picture. */
@@ -356,7 +363,8 @@ object KakaoReport {
         if(phoneFallback) {
             // 1절: no report from the night's tidy: one text only, from what the phone has.
             val head=listOfNotNull("[이음 아침 보고] $label (새벽 정리 없이 폰에서 만든 보고)",
-                r.pending.takeIf { it>0 }?.let { "어제 통화 ${it}건은 아직 글자로 바꾸는 중이에요" },"오늘 챙길 일 ${r.todayChecks}개")
+                r.pending.takeIf { it>0 }?.let { "어제 통화 ${it}건은 아직 글자로 바꾸는 중이에요" },
+                r.failed.takeIf { it>0 }?.let { "어제 ${FAILED_WORDS}가 ${it}건 있어요" },"오늘 챙길 일 ${r.todayChecks}개")
             val items=numbered(r.today.take(TODAY_TEXT_ITEMS)).ifEmpty { listOf("새로 챙길 일 없음") }
             val more=(r.today.size-TODAY_TEXT_ITEMS).coerceAtLeast(0)
             return Composed(null,Message.Text(fit(head,items,more=more).first,TASKS_LINK),emptyList(),list=cards)
@@ -569,7 +577,7 @@ object KakaoReport {
         val gen=report.optLong("generatedMs",0).takeIf { it>0 && source==SOURCE_ROUTINE }
         val cov=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { (coverageOf ?: ::storeCoverage)(app,reportDay.minusDays(1),gen) }.getOrNull() }
         val sent=if(cov==null) report else JSONObject(report.toString()).apply {
-            put("head",(optJSONObject("head")?.let { JSONObject(it.toString()) } ?: JSONObject()).put("pendingCalls",cov.pending)) }
+            put("head",(optJSONObject("head")?.let { JSONObject(it.toString()) } ?: JSONObject()).put("pendingCalls",cov.pending).put("failedCalls",cov.failed)) }
         // v3.7 (user 11/12): texts read inside KakaoTalk; the picture only when the PICTURE setting asks for it.
         // r18 (user 11/13): the to-dos as list bubbles when there are two or more (also the phone's 06:00 report); the texts
         // when there are fewer, or when the list does not go. The user's own template only with the web view (its buttons are fixed).

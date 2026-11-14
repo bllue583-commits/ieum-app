@@ -68,12 +68,14 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
          * only while a transcription job's recording falls in the call's window ([RecordingGap.window]); without one, still
          * being looked for up to [SEARCH_MS] after the call ended, then no recording. Null for lines this does not cover
          * (personal, missed, not connected, blocked). The call list puts it after "받은 전화 3분, " (r12-5). */
-        internal fun stateWords(e:LoggedCall,now:Long,jobStarts:List<Long>,waitsForCharger:(LoggedCall)->Boolean={ false }):String? {
+        internal fun stateWords(e:LoggedCall,now:Long,jobStarts:List<Long>,failedStarts:List<Long> =emptyList(),waitsForCharger:(LoggedCall)->Boolean={ false }):String? {
             if(e.personal || e.kind!=FirstPass.LogKind.NO_RECORDING) return null
             val w=RecordingGap.window(e.startMs,e.durationMs)
             return when {
                 // v3.6 (DESIGN_V6 3.2): from 10 minutes after the call, a recording that waits for the charger says so.
                 jobStarts.any { it in w } -> if(now>=e.startMs+e.durationMs+PowerText.SAY_AFTER_MS && waitsForCharger(e)) PowerText.CHARGER_WORDS else TRANSCRIBING
+                // v4.0 r21-1: there is a recording, but its text could not be made (the morning report counts it too).
+                failedStarts.any { it in w } -> TEXT_FAILED
                 now<e.startMs+e.durationMs+SEARCH_MS -> SEARCHING
                 else -> NO_RECORDING
             }
@@ -82,6 +84,8 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
         const val SEARCH_MS=10*60_000L
         const val SEARCHING="녹음을 찾는 중이에요"
         const val NO_RECORDING="녹음 없음"
+        /** v4.0 r21-1: a call whose recording could not be turned into text ([CallRecordStore.failedTextStarts]). */
+        const val TEXT_FAILED="녹음을 글자로 바꾸지 못했어요"
         /** Whether [다시 정리하기] can help: a failed call, except one whose recording had no speech. */
         internal fun canRetry(c:CallRecord)=c.state==CallRecordStore.FAILED && c.error!="EMPTY_TRANSCRIPT"
         /** One call made searchable once: its record, all its words in lower case, and the same without spaces. */
@@ -102,6 +106,8 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
     private var logs:List<LoggedCall> =emptyList()
     /** When the recordings still waiting for their words were made (this day), and whether the folder is connected. */
     private var jobStarts:List<Long> =emptyList()
+    /** v4.0 r21-1: when this day's recordings whose text could not be made were made. */
+    private var failedStarts:List<Long> =emptyList()
     private var folder=false
     /** v3.6: the power ledger and the switch [충전 중에만 글자로 바꾸기], read with the day (a recording waiting for the charger). */
     private var power=org.json.JSONObject();private var chargingOnly=false
@@ -132,7 +138,7 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
     override fun back():Boolean { if(detail==null) return false;closeDetail();return true }
     /** From another screen (home memo, a check item, a company, a notification): this day, and this call open when [callId] is given. */
     fun show(d:LocalDate,callId:String?) {
-        if(d!=day) { calls=emptyList();logs=emptyList();jobStarts=emptyList();reading=true }
+        if(d!=day) { calls=emptyList();logs=emptyList();jobStarts=emptyList();failedStarts=emptyList();reading=true }
         handler.removeCallbacks(searchLater)
         day=d;query="";detail=callId;listY=0;pendingY=0;shown=null
     }
@@ -161,10 +167,11 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
                     runCatching { SecureSettings(storage).snapshot() }.getOrDefault(org.json.JSONObject()),
                     runCatching { s.personIdsOf(dayCalls.map { it.recordId }) }.getOrDefault(emptyMap()),
                     runCatching { s.openItems().associateBy { it.id } }.getOrDefault(emptyMap()),
-                    runCatching { s.wrongIds(0).toSet() }.getOrDefault(emptySet()))
+                    runCatching { s.wrongIds(0).toSet() }.getOrDefault(emptySet()),
+                    runCatching { s.failedTextStarts(from-NEAR_MS,to+NEAR_MS) }.getOrDefault(emptyList()))
             } }
             if(!live()||target!=day)return@launch
-            result.onSuccess { calls=it.calls;logs=it.logs;jobStarts=it.jobs;folder=it.settings.optString("treeUri").isNotBlank()
+            result.onSuccess { calls=it.calls;logs=it.logs;jobStarts=it.jobs;failedStarts=it.failed;folder=it.settings.optString("treeUri").isNotBlank()
                 power=runCatching { PowerText.ledger(it.settings) }.getOrDefault(org.json.JSONObject());chargingOnly=PowerText.chargingOnly(it.settings)
                 people=people+it.people;open=it.open;wrong=it.wrong;reading=false;pool=null;render() }
             result.onFailure {
@@ -175,7 +182,8 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
         }
     }
     private class Read(val calls:List<CallRecord>,val logs:List<LoggedCall>,val jobs:List<Long>,val settings:org.json.JSONObject,val people:Map<String,String>,val open:Map<String,OpenItem>,
-                       /** v3.9 r20 review M2: items taken out with [틀렸어요]: marked on a call's page. */ val wrong:Set<String> =emptySet())
+                       /** v3.9 r20 review M2: items taken out with [틀렸어요]: marked on a call's page. */ val wrong:Set<String> =emptySet(),
+                       /** v4.0 r21-1: [CallRecordStore.failedTextStarts] of the day. */ val failed:List<Long> =emptyList())
     /** The open check items by id, read with the day: a call's detail page puts [다 됐어요] on those still open (v3.3, DESIGN_V4 3.3-4). */
     private var open:Map<String,OpenItem> =emptyMap()
     private var wrong:Set<String> =emptySet()
@@ -188,7 +196,7 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
     /** ‹ ›: the new date and arrows at once with "불러오는 중이에요" in place of the list, then the read (review #16). */
     private fun go(d:LocalDate) {
         if(d>CallUi.today()) return
-        day=d;detail=null;calls=emptyList();logs=emptyList();jobStarts=emptyList();reading=true;listY=0;pendingY=0
+        day=d;detail=null;calls=emptyList();logs=emptyList();jobStarts=emptyList();failedStarts=emptyList();reading=true;listY=0;pendingY=0
         render();load()
     }
 
@@ -233,7 +241,7 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
         val who=e.name ?: e.numberKey?.let(CallUi::who) ?: "모르는 번호"
         val time=CallUi.time(e.startMs)
         // v3.1 (DESIGN_V4 2.1-4): being turned into text only with a job in the call's window, else looked for, then none.
-        val words=stateWords(e,now,jobStarts) { l -> PowerText.waitsForCharger(l.startMs,l.durationMs,now,power,chargingOnly) }
+        val words=stateWords(e,now,jobStarts,failedStarts) { l -> PowerText.waitsForCharger(l.startMs,l.durationMs,now,power,chargingOnly) }
         val pending=words==TRANSCRIBING || words==PowerText.CHARGER_WORDS
         val row=when {
             e.personal -> CallUi.logRow(a,time,who,"개인 통화",CallUi.SUBTLE)

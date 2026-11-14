@@ -65,11 +65,13 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
      * store opens, so the app start or the day's first transcription run does it; after that it finds nothing.
      * v3.5 r15-4 (M4): at most [MAX_REQUEUES] revivals for a row over all builds, and [MAX_REQUEUES_INTERRUPTED] when it last
      * failed as INTERRUPTED (a crash loop under the native reader would only crash again); requeue_count counts them.
+     * v4.0 r21-1: a row marked permanent (failPermanently) is never revived; one that failed with a permanent code but is not
+     * marked (a codec error the codec called transient, three times; or a row from before v3.6) only once in all, like INTERRUPTED.
      * Returns how many rows were revived now. */
     internal fun requeueFailedOnce(build:Int):Int {
         if(build<=0) return 0
         val where="state='FAILED' AND permanent=0 AND coalesce(failed_build,0)!=CAST(? AS INTEGER) AND coalesce(retried_build,0)!=CAST(? AS INTEGER)"+
-            " AND coalesce(requeue_count,0)<(CASE WHEN reason='INTERRUPTED' THEN $MAX_REQUEUES_INTERRUPTED ELSE $MAX_REQUEUES END)"
+            " AND coalesce(requeue_count,0)<(CASE WHEN reason='INTERRUPTED' OR reason IN($PERMANENT_SQL) THEN $MAX_REQUEUES_INTERRUPTED ELSE $MAX_REQUEUES END)"
         val n=db.query("SELECT count(*) AS n FROM call_transcription_jobs WHERE $where",build,build).single()["n"].let { (it as Number).toInt() }
         if(n>0) db.transaction {
             // v3.6 W5: the stop counts and halving marks of a revived row start again too (its finished pieces stay).
@@ -335,7 +337,9 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         /** v3.6 W4: this many native deadlines on one recording send it to the charger. */
         const val DEADLINES_TO_CHARGER=2
         /** v3.6 W4: failures that come back the same however often they are tried (the m4a cannot be read, too short, nothing in it). */
-        fun permanent(code:String)=code=="CodecException" || code=="ANDROID_STT_PCM_SIZE"
+        fun permanent(code:String)=code in PERMANENT_CODES
+        val PERMANENT_CODES=listOf("CodecException","ANDROID_STT_PCM_SIZE")
+        private val PERMANENT_SQL=PERMANENT_CODES.joinToString(",") { "'$it'" }
         /** Queued recordings whose time (start or filename time, else the file's modified time) is before 10/1 become
          * SKIPPED with BEFORE_START, the reason the offer pass gives them. Arguments: updated_ms, [FirstPass.FROM_MS]. */
         const val SKIP_BEFORE_START_SQL="""UPDATE call_transcription_jobs SET state='SKIPPED',reason='BEFORE_START',updated_ms=? WHERE state='QUEUED' AND recording_id IN(

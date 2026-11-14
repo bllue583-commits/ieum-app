@@ -1199,7 +1199,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
      * (the report's generatedMs: what the morning tidy could see). [pending]: still waiting for their text or their analysis
      * now, and [pendingMin] their minutes (a recording without its length yet: its size over the store's bytes per minute). */
     data class DayCoverage(val calls:Int,val analyzed:Int,val pending:Int,val pendingMin:Int,
-                           /** Of [pending]: recordings with no text yet (queued or running, no call record): the evening's "충전하면 n개". */ val untranscribed:Int=0)
+                           /** Of [pending]: recordings with no text yet (queued or running, no call record): the evening's "충전하면 n개". */ val untranscribed:Int=0,
+                           /** v4.0 r21-1: of [calls], recordings whose text could not be made (every try of them FAILED, none waiting or
+                            * done, no call record): "글자로 못 바꾼 통화 n건" of the morning report. Neither analysed nor [pending]. */ val failed:Int=0)
     fun dayCoverage(day:LocalDate,analyzedBy:Long?=null):DayCoverage {
         val from=startOf(day);val to=startOf(day.plusDays(1))
         val recs=rows("""SELECT c.*,NULL AS linked_person,(SELECT 1 FROM personal_numbers n WHERE n.phone_key=c.counterpart_key) AS personal_number FROM call_records c
@@ -1209,12 +1211,13 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         var calls=recs.size
         val analyzed=recs.count { it.state==ANALYZED && (analyzedBy==null || (it.analyzedMs ?: Long.MAX_VALUE)<=analyzedBy) }
         val waiting=recs.filter { it.state==TRANSCRIBED || it.state==WAITING_CONSENT }
-        var pending=waiting.size;var pendingMs=waiting.sumOf { it.durationMs.coerceAtLeast(0) };var untranscribed=0
+        var pending=waiting.size;var pendingMs=waiting.sumOf { it.durationMs.coerceAtLeast(0) };var untranscribed=0;var failed=0
         if(rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name='call_transcription_jobs'").isNotEmpty()) runCatching {
             val perMin=rows("""SELECT SUM(r.byte_count) AS b,SUM(c.duration_ms) AS d FROM call_records c JOIN recordings r ON r.recording_id=c.recording_id
                 WHERE c.duration_ms>0 AND r.byte_count>0""").single().let { val b=it.long("b") ?: 0;val d=it.long("d") ?: 0;if(b>0 && d>=60_000) b*60_000/d else null }
             val at="COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)"
-            rows("""SELECT j.recording_id,MAX(CASE WHEN j.state IN ('QUEUED','RUNNING') THEN 1 ELSE 0 END) AS waiting,MAX(j.audio_ms) AS audio_ms,MAX(r.byte_count) AS bytes
+            rows("""SELECT j.recording_id,MAX(CASE WHEN j.state IN ('QUEUED','RUNNING') THEN 1 ELSE 0 END) AS waiting,MAX(j.audio_ms) AS audio_ms,MAX(r.byte_count) AS bytes,
+                (SELECT 1 FROM call_transcription_jobs d WHERE d.recording_id=j.recording_id AND d.state IN ('DONE','SKIPPED') LIMIT 1) AS ended
                 FROM call_transcription_jobs j JOIN recordings r ON r.recording_id=j.recording_id AND r.source_version=j.source_version
                 LEFT JOIN local_files l ON l.recording_id=j.recording_id WHERE j.state IN ('QUEUED','RUNNING','FAILED')
                 AND $at>=CAST(? AS INTEGER) AND $at<CAST(? AS INTEGER) AND NOT EXISTS(SELECT 1 FROM call_records c WHERE c.recording_id=j.recording_id)
@@ -1222,9 +1225,11 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
                 calls++
                 if((r.long("waiting") ?: 0)==1L) { pending++;untranscribed++
                     pendingMs+=r.long("audio_ms")?.takeIf { it>0 } ?: perMin?.let { p -> (r.long("bytes") ?: 0)*60_000/p } ?: 0 }
+                // r21-1: only FAILED rows and no version done or skipped (a personal call's record is gone but its job is done).
+                else if(r.long("ended")==null) failed++
             }
         }
-        return DayCoverage(calls,analyzed,pending,((pendingMs+30_000)/60_000).toInt(),untranscribed)
+        return DayCoverage(calls,analyzed,pending,((pendingMs+30_000)/60_000).toInt(),untranscribed,failed)
     }
     /** v3.7 r17-2: the "어제" of a night's tidy state: before 21:00 KST the report that follows is tomorrow's, so its "어제" is
      * the day before today; from 21:00 on, today (the state goes up from 21:00 to 04:58). */
@@ -1254,7 +1259,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         // v3.7 r17-2 (M3): "어제" calls still waiting for their text or analysis, so the report says what it leaves out.
         val waiting=dayCoverage(tidyPendingDay(now))
         return JSONObject().put("generatedMs",now).put("firstPassDone",firstPassDone).put("tasks",tasks).put("records",records)
-            .put("pending",JSONObject().put("yesterdayCalls",waiting.pending).put("yesterdayMin",waiting.pendingMin))
+            // v4.0 r21-1 (tidy.md v11): yesterdayFailed, the calls whose text could not be made (head.failedCalls of the report).
+            .put("pending",JSONObject().put("yesterdayCalls",waiting.pending).put("yesterdayMin",waiting.pendingMin).put("yesterdayFailed",waiting.failed))
             .put("recentlyDone",JSONArray(recentlyDone(null))).apply { mergeCandidates?.takeIf { it.length()>0 }?.let { put("mergeCandidates",it) }
                 // v3.9 r20-2 (DESIGN_V7 6): the items the user marked [틀렸어요] in the last 14 days, with their titles like tasks
                 // (tidy.md v10: left out of the report and not made again). Only when there are some, so an old state reads the same.
@@ -1416,6 +1422,16 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         return rows("""SELECT $at AS m FROM call_transcription_jobs j JOIN recordings r ON r.recording_id=j.recording_id
             LEFT JOIN local_files l ON l.recording_id=j.recording_id WHERE j.state IN ('QUEUED','RUNNING') AND $at>=CAST(? AS INTEGER) AND $at<CAST(? AS INTEGER)""",
             fromMs,toMs).mapNotNull { it.long("m") }
+    }
+    /** v4.0 r21-1: the times of the recordings from [fromMs] to [toMs] whose text could not be made (every try FAILED, none
+     * done or skipped, no call record): the call list says so on the call-log line instead of "녹음 없음". */
+    fun failedTextStarts(fromMs:Long,toMs:Long):List<Long> {
+        if(rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name='call_transcription_jobs'").isEmpty()) return emptyList()
+        val at="COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)"
+        return rows("""SELECT DISTINCT j.recording_id,$at AS m FROM call_transcription_jobs j JOIN recordings r ON r.recording_id=j.recording_id
+            LEFT JOIN local_files l ON l.recording_id=j.recording_id WHERE j.state='FAILED' AND $at>=CAST(? AS INTEGER) AND $at<CAST(? AS INTEGER)
+            AND NOT EXISTS(SELECT 1 FROM call_transcription_jobs d WHERE d.recording_id=j.recording_id AND d.state IN ('QUEUED','RUNNING','DONE','SKIPPED'))
+            AND NOT EXISTS(SELECT 1 FROM call_records c WHERE c.recording_id=j.recording_id)""",fromMs,toMs).mapNotNull { it.long("m") }
     }
     /** A recording found to be with the personal number: the record, its words and anything sent or linked go. The
      * transcription job stays done, so it is not transcribed again. */

@@ -233,6 +233,38 @@ class ReportCheckTest(unittest.TestCase):
             self.assertEqual(2, rc.main([report, "--state"]))
         self.assertEqual({"a", "b"}, rc.wrong_ids({"wrong": [{"id": "a"}, "b", 3]}))
         self.assertEqual(set(), rc.wrong_ids({"wrong": None}))
+    def test_v11_failed_calls(self):
+        """tidy.md v11 (v4.0 r21-1): head.failedCalls is optional, a non-negative integer, and with --state the state's
+        pending.yesterdayFailed (0 when the state has none)."""
+        r = good()
+        r["head"]["failedCalls"] = 2
+        self.assertEqual([], rc.check(r))
+        r["head"]["failedCalls"] = -1
+        self.assertBreaks(r, "head.failedCalls")
+        r["head"]["failedCalls"] = "2"
+        self.assertBreaks(r, "head.failedCalls")
+        with tempfile.TemporaryDirectory() as d:
+            report = os.path.join(d, "2026-11-07.json")
+            r["head"]["failedCalls"] = 2
+            with open(report, "w", encoding="utf-8") as f:
+                json.dump(r, f, ensure_ascii=False)
+            state = os.path.join(d, "state.json")
+            with open(state, "w", encoding="utf-8") as f:
+                json.dump({"pending": {"yesterdayCalls": 1, "yesterdayMin": 3, "yesterdayFailed": 2}}, f)
+            self.assertEqual(0, rc.main([report, "--state", state]))
+            with open(state, "w", encoding="utf-8") as f:
+                json.dump({"pending": {"yesterdayCalls": 1, "yesterdayMin": 3}}, f)
+            self.assertEqual(["head.failedCalls: state의 pending.yesterdayFailed와 다름"],
+                             rc.check_file(report, set(), rc.state_failed(rc.read_state(state))))
+            self.assertEqual(1, rc.main([report, "--state", state]))
+            self.assertEqual(0, rc.main([report]), "without a state only the format is checked")
+            del r["head"]["failedCalls"]
+            with open(report, "w", encoding="utf-8") as f:
+                json.dump(r, f, ensure_ascii=False)
+            self.assertEqual(0, rc.main([report, "--state", state]), "a v10 report without the key passes")
+        self.assertIsNone(rc.state_failed(None))
+        self.assertEqual(0, rc.state_failed({"pending": None}))
+
 
 if __name__ == "__main__":
     unittest.main()

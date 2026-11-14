@@ -11,6 +11,8 @@ Usage: python3 tools/report_check.py report/2026-11-07.json [more files] [--stat
 
 v3.9 r20 (tidy.md v10): with --state, a today[] line whose id is in the state's wrong[] (check items the wife marked
 [틀렸어요]; ids or {id, ...} objects) fails too. A missing or unreadable state file is no failure (an old phone sends none).
+v4.0 r21-1 (tidy.md v11): head.failedCalls (yesterday's calls whose text could not be made; optional, so a v10 report passes).
+With --state, a head.failedCalls that is not the state's pending.yesterdayFailed (0 when the state has none) fails too.
 """
 import json, os, re, sys
 
@@ -20,7 +22,7 @@ HEAD_KEYS = ("calls", "newChecks", "todayChecks", "issues")
 TOP_KEYS = ("day", "generatedMs", "tidyRev", "head", "yesterday", "today", "inProgress", "check")
 # v3.7 (DESIGN_V7 3.2 M3, M4; tidy.md v8): head.pendingCalls and late[]. Optional, so a v7 report (before the routine moves to
 # v8 on the release day) still passes; when present they are checked like the rest.
-HEAD_OPTIONAL = ("pendingCalls",)
+HEAD_OPTIONAL = ("pendingCalls", "failedCalls")
 TOP_OPTIONAL = ("late",)
 # r18 (tidy.md v9, user 11/13): today[].tag, one of five in this order (the KakaoTalk list's thumbnails). Optional, so a v8
 # report (before the routine moves to v9 on the release day) still passes; the phone reads a missing tag as confirm or request.
@@ -226,6 +228,22 @@ def check_wrong(report, wrong):
     return [f"today[{i}].id: 틀린 일로 뺀 일(state wrong)" for i, t in enumerate(today) if isinstance(t, dict) and t.get("id") in wrong]
 
 
+def state_failed(state):
+    """The state's pending.yesterdayFailed (r21-1), 0 when there is none; None without a state."""
+    if not isinstance(state, dict):
+        return None
+    v = (state.get("pending") or {}).get("yesterdayFailed", 0) if isinstance(state.get("pending"), dict) else 0
+    return v if is_int(v) and v >= 0 else 0
+
+
+def check_failed(report, failed):
+    """head.failedCalls against the state's count (by key only)."""
+    head = report.get("head") if isinstance(report, dict) else None
+    if failed is None or not isinstance(head, dict) or "failedCalls" not in head or not is_int(head["failedCalls"]):
+        return []
+    return [] if head["failedCalls"] == failed else ["head.failedCalls: state의 pending.yesterdayFailed와 다름"]
+
+
 def read_state(path):
     try:
         with open(path, encoding="utf-8") as f:
@@ -234,7 +252,7 @@ def read_state(path):
         return None
 
 
-def check_file(path, wrong=None):
+def check_file(path, wrong=None, failed=None):
     name = os.path.basename(path)
     file_day = name[:-5] if name.endswith(".json") and DAY_RE.match(name[:-5]) else None
     try:
@@ -244,18 +262,21 @@ def check_file(path, wrong=None):
         return ["파일을 읽지 못함"]
     except ValueError:
         return ["JSON 형식이 깨짐"]
-    return check(report, file_day) + check_wrong(report, wrong or set())
+    return check(report, file_day) + check_wrong(report, wrong or set()) + check_failed(report, failed)
 
 
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
     wrong = set()
+    state_failed_n = None
     if "--state" in args:
         k = args.index("--state")
         if k + 1 >= len(args):
             print("사용법: python3 tools/report_check.py report/YYYY-MM-DD.json [--state tidy/state.json]")
             return 2
-        wrong = wrong_ids(read_state(args[k + 1]))
+        state = read_state(args[k + 1])
+        wrong = wrong_ids(state)
+        state_failed_n = state_failed(state)
         del args[k:k + 2]
     paths = args
     if not paths:
@@ -263,7 +284,7 @@ def main(argv=None):
         return 2
     failed = False
     for path in paths:
-        reasons = check_file(path, wrong)
+        reasons = check_file(path, wrong, state_failed_n)
         name = os.path.basename(path)
         if reasons:
             failed = True

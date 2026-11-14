@@ -438,7 +438,7 @@ class KakaoReportTest:ProtectedTextHostTestBase() {
         val o=JSONObject();ReportCoverage.note(o,day,CallRecordStore.DayCoverage(5,7,9,1),7,"phone",42)
         val c=ReportCoverage.snapshot(o)!!
         assertEquals("never more than the base",5,c.getInt("inReport"));assertEquals(5,c.getInt("pending"));assertEquals("phone",c.getString("source"))
-        assertEquals(listOf("day","yesterdayCalls","inReport","pending","atMs","source"),c.keys().asSequence().toList())
+        assertEquals(listOf("day","yesterdayCalls","inReport","pending","failed","atMs","source"),c.keys().asSequence().toList())
         c.put("day","x");assertEquals("a new object each call","2026-11-07",ReportCoverage.snapshot(o)!!.getString("day"))
     }
     @Test fun sdkCodesAndLinks() {
