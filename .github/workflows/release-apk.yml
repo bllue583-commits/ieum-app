@@ -11,10 +11,16 @@ name: release-apk
 # the same key as before; with the repository variable IEUM_ROTATE=1 it is re-signed with the rotated key and the key lineage
 # kept in the mailbox (tools/rotate_signing_key.sh). version.json says which (buildType, seedIndependent, lineageSha256), and a
 # gitleaks scan of the whole history goes to the mailbox as status/secrets-scan.json.
+# v4.0 r21-4 (DESIGN_V8 6 v4.1): only what reaches the phone or the mailbox starts a release: the app and what builds into
+# its APK (the native build and the bench libraries' fetch, run_gradle.py, third_party), the routines and the two tools this
+# workflow copies to the mailbox, and the version files. Other tools (score.py, the simulator, the eval scripts) no longer
+# send a new build to the phone; their tests still run in ci (android-ci.yml). tools/release/test_release_paths.py checks it.
 on:
   push:
     branches: ['feature/lean-calls', 'main']
-    paths: ['android/**', 'tools/**', '.github/workflows/release-apk.yml']
+    paths: ['android/**', 'run_gradle.py', 'third_party/**', 'tools/build_android_whisper.py', 'tools/fetch_sherpa_onnx.py',
+            'docs/routines/**', 'tools/inbox/watchdog.py', 'tools/report_check.py', 'docs/VERSION', 'docs/UPDATE_NOTE.txt',
+            '.github/workflows/release-apk.yml']
   workflow_dispatch:
 
 concurrency:
