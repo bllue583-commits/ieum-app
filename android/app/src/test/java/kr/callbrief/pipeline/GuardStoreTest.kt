@@ -93,14 +93,21 @@ class GuardStoreTest:ProtectedTextHostTestBase() {
         assertFalse(st.toString(),st.toString().contains("타설"))
     }
 
+    /** v4.0 r21-4 (flaky 11/14, ci run 43539082568): the card's updatedMs came from the wall clock, and the leak check looked
+     * for "7777" anywhere in the card's JSON, so a timestamp with those four digits in it failed the test now and then; the
+     * 30-day count read the wall clock too (it would have failed for good from 12/2). The cards now work at the test's clock,
+     * and the check looks for the number itself. */
     @Test fun aNumberOnlyTheCallLogKnowsHasAThinCard() = store().use { s ->
+        ContactCards.clock={ now }
         s.reconcileCallLog(listOf(FirstPass.LogEntry(1,"01077778888","현장 010-7777-8888",now-3*day,60_000,1),
             FirstPass.LogEntry(2,"01077778888","현장",now-40*day,60_000,2),FirstPass.LogEntry(3,"01077778888","현장",now-2*day-3_600_000,0,3)))
         ContactCards.flushPending(s)
         val card=ContactCards.get(context,"010-7777-8888")!!
         assertTrue(card.people.isEmpty() && card.company==null && card.recent.isEmpty())
         assertEquals(ContactCard.Thin("현장",2),card.thin)
-        assertFalse(card.toJson().toString().contains("7777"))
+        val json=card.toJson().toString()
+        assertFalse(json,json.contains("77778888") || json.contains("7777-8888"))
+        assertEquals(now,card.updatedMs)
         val c=kr.callbrief.pipeline.call.CallCardView.Content.of(card,now)
         assertEquals("현장",c.name);assertTrue(c.thin)
         // v3.4 (DESIGN_V4 4.2-3 ⑤): the thin card's first line.

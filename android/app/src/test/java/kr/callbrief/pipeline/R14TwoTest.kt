@@ -135,7 +135,7 @@ class R14TwoTest:ProtectedTextHostTestBase() {
         call("rec2",b+10*min,"견적서를 보내기로 했어요.")
         val eveningAt=b+20*min
         val saved=CallDigestText.eveningWaiting(store().day(today),today,eveningAt)
-        assertTrue(saved,saved.contains(waiting));assertFalse("record ids only",saved.contains("2222") || saved.contains("김민수"))
+        assertTrue(saved,saved.contains(waiting));assertFalse("record ids only",saved.contains("22223333") || saved.contains("2222-3333") || saved.contains("김민수"))
         assertEquals(0,CallDigestText.lateDone(store(),saved))
         analyze(waiting,"단가를 다시 받기로 했어요.")
         val after=call("rec3",b+30*min,"도면을 보내 드렸어요.")

@@ -135,6 +135,9 @@ internal object ContactCards {
     private val executor by lazy { Executors.newSingleThreadScheduledExecutor { r -> Thread(r,"ieum-contact-cards").apply { isDaemon=true } } }
     /** Off in host tests: touches then wait for [flushPending], and nothing opens the file behind a test's back. */
     @Volatile internal var background:Boolean=Build.FINGERPRINT!="robolectric"
+    /** v4.0 r21-4: the time cards are worked out at (the thin card's 30 days, updatedMs). Replaceable in host tests, which
+     * run at a fixed date: the wall clock made a test's 30-day count depend on the day it ran. */
+    @Volatile internal var clock:()->Long={ System.currentTimeMillis() }
     /** How long the last full read of the file into memory took (ms), or -1. */
     @Volatile var lastPreloadMs:Long=-1;private set
     /** v3.4: how long the last open of this file took (ms), or -1 (heartbeat callCard.cardOpenMs). */
@@ -292,7 +295,7 @@ internal object ContactCards {
         remember(store.cardContext)
         val index=keyIndex(store)
         val blocked=blocked(store,index)
-        val now=System.currentTimeMillis()
+        val now=clock()
         val out=keys.associateWith { k -> if(blocked(k)) null else build(store,k,(index[k].orEmpty()+k).toList(),now) }
         val personal=index.keys.filter { blocked(it) }.toSet()+keys.filter { blocked(it) }
         write(store.cardContext,out+personal.associateWith { null },replaceAll=false)
@@ -304,7 +307,7 @@ internal object ContactCards {
         remember(store.cardContext)
         val index=keyIndex(store)
         val blocked=blocked(store,index)
-        val now=System.currentTimeMillis()
+        val now=clock()
         val cards=index.keys.filterNot(blocked).mapNotNull { k -> build(store,k,(index[k].orEmpty()+k).toList(),now)?.let { k to it } }.toMap()
         write(store.cardContext,cards,replaceAll=true)
         writeBlocked(store,index,blocked)
@@ -470,7 +473,7 @@ internal object ContactCards {
         cache.clear();loadedAll=false;blockedKeys=null;blockedBuilt=null
     }
     /** Forgets touched numbers (tests). */
-    internal fun clearPending() { pending.clear();pendingAll=false }
+    internal fun clearPending() { pending.clear();pendingAll=false;clock={ System.currentTimeMillis() } }
     /** Every card is to be worked out again at the next flush (tests). */
     internal val wholeRebuildPending:Boolean get()=pendingAll
     /** Host tests: the blocked table cannot be read. */
