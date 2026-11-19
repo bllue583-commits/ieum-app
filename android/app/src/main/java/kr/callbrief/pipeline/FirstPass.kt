@@ -143,6 +143,13 @@ internal object FirstPass {
     /** The lengths agree within 20% or 15 s (an unknown recording length agrees with any). */
     fun lengthFits(recordingMs:Long,entryMs:Long):Boolean { if(recordingMs<=0) return true
         return kotlin.math.abs(recordingMs-entryMs)<=maxOf(15_000L,maxOf(recordingMs,entryMs)/5) }
+    /** v4.1 r22 review M3: a pair by the person whose lengths disagree takes at most this gap. */
+    const val PARTY_LENGTH_GAP_MS=120_000L
+    /** v4.1 r22 review M3: the same number, or exactly the same name ([CallRecordStore.samePrivacyName]). */
+    fun exactParty(r:RecordForMatch,e:LogEntry):Boolean {
+        val key=r.counterpartKey ?: return false
+        return if(key.all { it.isDigit() }) e.numberKey==key else CallRecordStore.samePrivacyName(e.name,r.counterpart ?: key)
+    }
     /** The entry is the person the file name names: the same number, or the phone-book name by [NameKey.sameName]. */
     fun sameParty(r:RecordForMatch,e:LogEntry):Boolean {
         val key=r.counterpartKey ?: return false
@@ -187,8 +194,10 @@ internal object FirstPass {
                 if(party.size>1) { why[r.recordId]="several";continue }
                 // v4.1 r22-1: the person agrees and the time is in the usual window, only the lengths do not (a recording
                 // that ran on past the call, ringing kept, a held call): the one entry of that person there is it. After
-                // every other pair; two such entries (a call made again) are left to the steps below.
-                val sameInWindow=between(r.startedMs-120_000L,r.startedMs+60_000L).filter { e -> sameParty(r,e) }
+                // every other pair; two such entries (a call made again) are left to the steps below. Review M3: only the
+                // same number or exactly the same name ([exactParty]) and at most [PARTY_LENGTH_GAP_MS] apart.
+                val sameInWindow=between(r.startedMs-120_000L,r.startedMs+60_000L).filter { e -> exactParty(r,e) &&
+                    (r.durationMs<=0 || kotlin.math.abs(r.durationMs-e.durationMs)<=PARTY_LENGTH_GAP_MS) }
                 if(sameInWindow.size==1) { fits+=Fit(r,sameInWindow[0],score(r,sameInWindow[0])+1_500.0);lengthOnly+=r.recordId;continue }
             }
             // 2. The usual window.

@@ -125,10 +125,10 @@ class R22PrivacyTest:ProtectedTextHostTestBase() {
 
     @Test fun theSamePersonInTheWindowPairsEvenWhenTheLengthsDisagree() {
         val at=now-3*3_600_000L
-        // 3 minutes in the log, 7 in the recording (ringing kept, a held call): before r22 this was "length" and went up
+        // 3 minutes in the log, 4.5 in the recording (ringing kept, a held call): before r22 this was "length" and went up
         // unpaired; an excluded person's call is now paired, so forgotten.
         val log=listOf(entry(1,family,"우리집",at,3*min,excluded=true))
-        seed("f",file("우리집",at+5_000L),7*min)
+        seed("f",file("우리집",at+5_000L),4*min+30_000)
         val saved=JSONObject()
         CallRecordStore(context,{ now },CallRecordStore.SettingsEdit { e -> e(saved) }).use { it.reconcileCallLog(log) }
         CallRecordStore(context){ now }.use { assertNull(it.record(rid("f"))) }
@@ -162,5 +162,80 @@ class R22PrivacyTest:ProtectedTextHostTestBase() {
         assertFalse(CallRecordStore.samePrivacyName("김과장","우리집"))
         val (numbers,names)=CallRecordStore.fileParty("010-2000-9003",CallRecordStore.counterpartKey("010-2000-9003"),"Call recording 010-2000-9003_251105_120000.m4a")
         assertEquals(setOf(family),numbers);assertTrue(names.isEmpty())
+    }
+
+    // ---- review H1 to M3: only a confirmed match holds a call back ----------------------------------------------------
+    @Test fun aNameInsideAnotherIsNoMatchAndTheWorkCallsGoUp() {
+        val at=now-3*3_600_000L
+        // Excluded "민수" and "지영언니" (two hours off, no candidate), a personal number known as "대표님".
+        val log=listOf(entry(1,family,"민수",at-2*3_600_000L,3*min,excluded=true),entry(2,"01020009004","지영언니",at-2*3_600_000L+min,3*min,excluded=true),
+            entry(3,friend,"대표님",at-3*86_400_000L,3*min))
+        CallRecordStore(context){ now }.use { it.reconcileCallLog(log);it.rememberPersonal(friend) }
+        seed("a",file("김민수 과장",at),3*min);seed("b",file("김대표",at+10*min),3*min);seed("c",file("지영 실장",at+20*min),3*min)
+        val s=settings();val inbox=run(s,log)
+        assertEquals(3,sentJobs(inbox))
+        CallRecordStore(context){ now }.use { db -> for(id in listOf("a","b","c")) { val r=db.record(rid(id))!!;assertEquals(id,CallRecordStore.TRANSCRIBED,r.state);assertTrue(id,r.transcript.isNotEmpty()) } }
+        assertEquals(0L,s.optLong(CallRecordStore.PRIVACY_N_KEPT_BY_NAME));assertEquals(3L,s.optLong(CallRecordStore.PRIVACY_N_UPLOADED_UNLINKED))
+        assertFalse(CallRecordStore.samePrivacyName("민수","김민수 과장"));assertFalse(CallRecordStore.samePrivacyName("대표님","김대표"))
+        assertFalse(CallRecordStore.samePrivacyName("지영언니","지영 실장"));assertTrue(CallRecordStore.samePrivacyName("민수","민 수 🙂"))
+    }
+
+    @Test fun theSameNameWithOnlySpacesOrEmojiApartIsHeldBack() {
+        val at=now-3*3_600_000L
+        val log=listOf(entry(1,family,"민수",at-2*3_600_000L,3*min,excluded=true))
+        seed("x",file("민 수❤",at),3*min)
+        val s=settings();val inbox=run(s,log)
+        assertEquals(0,sentJobs(inbox));CallRecordStore(context){ now }.use { assertNull(it.record(rid("x"))) }
+    }
+
+    @Test fun aWorkResultIsNotOverwrittenByANameMatch() {
+        val at=now-3*3_600_000L
+        // Sent unpaired; then a personal number turns out to carry the same phone-book name, and the result comes back work.
+        seed("w",file("박소장",at),3*min)
+        val s=settings();val inbox=run(s,emptyList())
+        assertEquals(1,sentJobs(inbox))
+        CallRecordStore(context){ now }.use { it.reconcileCallLog(listOf(entry(1,friend,"박소장",at-5*86_400_000L,min)));it.rememberPersonal(friend) }
+        inbox.files.clear()
+        inbox.files[CallInbox.RESULTS+"/a.json"]=JSONObject().put("id",CallInbox.recordKey(rid("w"))).put("analysis",ClaudeCallAnalyzerTest.analysis()).toString()
+        run(s,emptyList(),inbox)
+        CallRecordStore(context){ now }.use { db -> val r=db.record(rid("w"))!!
+            assertEquals(CallRecordStore.ANALYZED,r.state);assertEquals(true,r.analysis?.business);assertEquals(0,db.personalStreak(friend)) }
+        assertEquals(0L,s.optLong(CallRecordStore.PRIVACY_N_KEPT_BY_LINK))
+    }
+
+    @Test fun keepingAsPersonalByNameNeverCountsTowardRememberingANumber() {
+        val at=now-3*3_600_000L
+        val log=listOf(entry(1,friend,"친구철수",at-3*86_400_000L,4*min))
+        CallRecordStore(context){ now }.use { it.reconcileCallLog(log);it.rememberPersonal(friend) }
+        seed("p",file("친구철수",at),5*min)
+        run(settings(),log)
+        CallRecordStore(context){ now }.use { assertEquals(0,it.personalStreak("친구철수")) }
+    }
+
+    @Test fun thePersonPairsDespiteTheLengthOnlyExactlyAndWithinTwoMinutes() {
+        val at=now-3*3_600_000L
+        fun stats(r:FirstPass.RecordForMatch,e:FirstPass.LogEntry):Pair<Map<String,FirstPass.LogEntry>,FirstPass.MatchStats> { var st:FirstPass.MatchStats?=null
+            return FirstPass.match(listOf(r),listOf(e)) { st=it } to st!! }
+        // Exactly the same name, 90 s apart: paired.
+        assertEquals(1L,stats(FirstPass.RecordForMatch("r",at,"우리집","우리집",4*min+30_000),entry(1,family,"우리 집",at,3*min)).first["r"]?.id)
+        // One name inside the other: not by the person (it may still pair by time alone, never as byPartyLength).
+        val (out,st)=stats(FirstPass.RecordForMatch("r",at,"민수","민수",7*min),entry(1,work,"김민수 과장",at,3*min))
+        assertEquals(0,st.byPartyLength);assertNull(out["r"])
+        // Over 120 s apart: not paired.
+        val (far,fst)=stats(FirstPass.RecordForMatch("r",at,"우리집","우리집",6*min),entry(1,family,"우리집",at,3*min))
+        assertNull(far["r"]);assertEquals(0,fst.byPartyLength);assertEquals(1,fst.length)
+        // The same number: paired.
+        assertEquals(1L,stats(FirstPass.RecordForMatch("r",at,"010-2000-9003",family,4*min),entry(1,family,null,at,3*min)).first["r"]?.id)
+    }
+
+    @Test fun anUnpairedCallOfAnExcludedRuleIsForgottenWithoutTheCallLog() {
+        // Review M1: the rules kept on the phone (here a made-up alias rule) hold it back even when no call log was read.
+        val at=now-3*3_600_000L
+        seed("x",file("우리집",at),3*min)
+        val salt="ab".repeat(32)
+        val rule=JSONObject().put("type","alias").put("hash",kr.callbrief.core.PrivacyRules.salted(salt,kr.callbrief.core.PrivacyRules.normalizeAlias("우리집"))).put("length",3)
+        val s=settings().put(kr.callbrief.LocalPrivacy.SALT_KEY,salt).put(kr.callbrief.LocalPrivacy.PERSONAL_KEY,org.json.JSONArray()).put("exclusions",org.json.JSONArray().put(rule))
+        val inbox=run(s,emptyList())
+        assertEquals(0,sentJobs(inbox));CallRecordStore(context){ now }.use { assertNull(it.record(rid("x"))) }
     }
 }

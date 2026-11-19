@@ -75,6 +75,12 @@ internal class CallRecordAnalysisRunner(
           // v4.1 r22-1: the privacy gate's counts of this pass, added to the settings once at the end (numbers only).
           val privacyCounts=HashMap<String,Long>()
           fun note(key:String) { privacyCounts[key]=(privacyCounts[key] ?: 0)+1 }
+          // Review L: unpaired calls are counted once they really went up (after markSent).
+          val unsentUnlinked=HashSet<String>()
+          fun sentNow(id:String) { if(unsentUnlinked.remove(id)) note(CallRecordStore.PRIVACY_N_UPLOADED_UNLINKED) }
+          // Review M1: the exclusion rules kept on the phone, for a number or a name of a file name (exact, PrivacyRules).
+          val rules=kr.callbrief.LocalPrivacy.rules(settings())
+          val excludedRule:(String?,String?)->Boolean={ name,phone -> if(phone!=null) rules.excluded(phone,phone) else name!=null && rules.excluded(name) }
           try {
             runCatching { db.reconcileCallLog(callLog()) }
             // Each edit goes up first; those that went are then taken off in one transaction (review data #2).
@@ -108,9 +114,10 @@ internal class CallRecordAnalysisRunner(
                 .sortedBy { it.second!!.dayMs }
             var duplicates=0;var appliedNow=0
             for((name,record,analysis) in items) runCatching {
-                // v4.1 r22-1: a call sent before its call-log entry was found, whose entry or file name now shows a personal
-                // number: its result is kept as personal, the way the gate would have kept it (design E9).
-                if(analysis.business!=false && (db.isPersonal(record!!.counterpartKey) || record.kind=="통화" && !db.linked(record.recordId) && db.personalByFileName(record))) {
+                // v4.1 r22-1: a call sent before its call-log entry was found, now tied to it and the entry's number found
+                // personal: its result is kept as personal, the way the gate would have kept it (design E9). Review H3: only
+                // by the tied entry's number; a match by name alone leaves the result as it is.
+                if(analysis.business!=false && db.linked(record!!.recordId) && db.isPersonal(record.counterpartKey)) {
                     db.keepPersonal(record.recordId);note(CallRecordStore.PRIVACY_N_KEPT_BY_LINK);return@runCatching }
                 val isOld=FirstPass.stale(record!!.dayMs,clock())
                 // Checked against what is there now, more widely than when it was sent: what changed since must not drop good items.
@@ -149,14 +156,16 @@ internal class CallRecordAnalysisRunner(
                 if(r.transcript.isBlank()) { db.setState(r.recordId,CallRecordStore.FAILED,"EMPTY_TRANSCRIPT");return false }
                 // A number found personal before (design E9): kept here as personal, never sent. v4.1 r22-1: also a call without
                 // its call-log entry whose file name's person is a personal number ([CallRecordStore.personalByFileName]);
-                // the excluded ones were forgotten by the call-log pass above.
+                // the excluded ones by the call-log pass above, and here (review M1) by the exclusion rules kept on the phone,
+                // whatever that pass could read. A check that fails is "not confirmed": the record goes up (review H2).
                 val unlinked=r.kind=="통화" && !db.linked(r.recordId)
+                if(unlinked && runCatching { db.forgetIfExcluded(r,excludedRule) }.getOrDefault(false)) { note(CallRecordStore.PRIVACY_N_KEPT_BY_NAME);return false }
                 if(db.isPersonal(r.counterpartKey)) { db.keepPersonal(r.recordId);if(unlinked) note(CallRecordStore.PRIVACY_N_KEPT_BY_NAME);return false }
-                if(unlinked && db.personalByFileName(r)) { db.keepPersonal(r.recordId);note(CallRecordStore.PRIVACY_N_KEPT_BY_NAME);return false }
+                if(unlinked && runCatching { db.personalByFileName(r) }.getOrDefault(false)) { db.keepPersonal(r.recordId);note(CallRecordStore.PRIVACY_N_KEPT_BY_NAME);return false }
                 // Sent and answered (the answer waits to be applied): never again. Sent and silent for 6 hours: again.
                 if(db.receivedMs(r.recordId)!=null) return false
                 val sentBefore=db.sentMs(r.recordId)
-                if(sentBefore==null && unlinked) note(CallRecordStore.PRIVACY_N_UPLOADED_UNLINKED)
+                if(sentBefore==null && unlinked) unsentUnlinked+=r.recordId
                 return sentBefore?.let { clock()-it>=RESEND_MS } ?: true
             }
             val user=userInfo(s)
@@ -169,7 +178,7 @@ internal class CallRecordAnalysisRunner(
                 if(!db.inTransaction { due(record).also { go -> if(go) db.ledgerIdFor(record) } }) continue
                 // atMs: the task works in call-time order. A late old recording keeps the old-record marker.
                 store.put(CallInbox.INBOX+"/"+CallInbox.fileName(record.recordId),CallInbox.job(CallInbox.recordKey(record.recordId),request(record,FirstPass.stale(record.dayMs,clock())),clock(),record.dayMs))
-                db.markSent(record.recordId,clock());sent++
+                db.markSent(record.recordId,clock());sent++;sentNow(record.recordId)
             }
             val liveFrom=FirstPass.liveFrom(s,clock())
             if(liveFrom!=null) {
@@ -192,7 +201,7 @@ internal class CallRecordAnalysisRunner(
                     if(slots<=0 || (chunk.size<FirstPass.BATCH && bound!=null && !overdue)) break
                     val items=db.inTransaction { chunk.map { r -> db.ledgerIdFor(r);CallInbox.recordKey(r.recordId) to request(r,true) } }
                     store.put(CallInbox.INBOX+"/"+CallInbox.batchName(chunk.first().dayMs,items.map { it.first }),CallInbox.batch(items,clock(),chunk.map { it.dayMs }))
-                    db.inTransaction { chunk.forEach { db.markSent(it.recordId,clock()) } };sent++;sentBatches++
+                    db.inTransaction { chunk.forEach { db.markSent(it.recordId,clock()) } };sent++;sentBatches++;chunk.forEach { sentNow(it.recordId) }
                     val today=kstDay()
                     save { it.put(PipelineSettingsKeys.FIRST_PASS_BATCHES_TODAY,(if(it.optString(PipelineSettingsKeys.FIRST_PASS_BATCH_DAY)==today) it.optInt(PipelineSettingsKeys.FIRST_PASS_BATCHES_TODAY,0) else 0)+1)
                         .put(PipelineSettingsKeys.FIRST_PASS_BATCH_DAY,today) }

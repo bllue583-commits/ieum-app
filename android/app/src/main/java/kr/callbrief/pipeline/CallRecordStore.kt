@@ -169,13 +169,14 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
          * forgotten); calls sent without their entry. */
         const val PRIVACY_N_KEPT_BY_NAME="privacyKeptByName";const val PRIVACY_N_KEPT_BY_LINK="privacyKeptByLink"
         const val PRIVACY_N_UPLOADED_UNLINKED="privacyUploadedUnlinked"
-        /** v4.1 r22-1: the same person for the privacy check: the same letters once spaces, emoji and punctuation are ignored
-         * ([kr.callbrief.core.PrivacyRules.normalizeAlias]), or [NameKey.sameName] (one name inside the other). Wider than the
-         * call-log pairing on purpose: a work call that shares a personal contact's name is kept back rather than sent. */
+        /** v4.1 r22-1 (review H1, H2): the same person for the privacy check: exactly the same letters once spaces, emoji,
+         * punctuation and case are ignored ([kr.callbrief.core.PrivacyRules.normalizeAlias]). Never one name inside another
+         * ("민수" is not "김민수 과장", "대표님" not "김대표"): what this matches is forgotten or kept as personal for good, so
+         * only a confirmed match counts (user: only what is confirmed is held back, no work call may be lost). */
         fun samePrivacyName(a:String?,b:String?):Boolean {
             if(a.isNullOrBlank() || b.isNullOrBlank()) return false
             val x=kr.callbrief.core.PrivacyRules.normalizeAlias(a);val y=kr.callbrief.core.PrivacyRules.normalizeAlias(b)
-            return x.isNotEmpty() && x==y || NameKey.sameName(a,b)
+            return x.isNotEmpty() && x==y
         }
         /** v4.1 r22-1, pure: the numbers (phone keys) and names the file name gives for a call: the record's key when it
          * is a number, phone-number tokens in the counterpart or the file name, and the counterpart or the file name's
@@ -837,15 +838,17 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     fun openTaskIds():Set<String> =rows("SELECT id FROM workflow_items WHERE status NOT IN ('done','merged','wrong') AND kind='TODO'").mapNotNull { it.str("id") }.toSet()
 
     /** Stores the result and applies tasks in one transaction. User-edited and finished items are never changed. */
-    fun applyAnalysis(id:String,a:ClaudeCallAnalysis):List<Applied> {
+    /** [streak]: a business=false verdict of the analysis counts toward remembering the number ([notePersonal]); the
+     * phone's own keeping ([keepPersonal], review H3) does not: only the analysis's verdicts make a number personal. */
+    fun applyAnalysis(id:String,a:ClaudeCallAnalysis,streak:Boolean=true):List<Applied> {
         skippedNear.clear();guarded.clear()
         val cardKeys=runCatching { cardKeysOfRecord(id) }.getOrDefault(emptySet()) // before: a personal text is deleted
-        val out=applyInTransaction(id,a)
+        val out=applyInTransaction(id,a,streak)
         flushMergeCandidates();flushGuardStats()
         ContactCards.touch(this) { cardKeys+cardKeysOfRecord(id) }
         return out
     }
-    private fun applyInTransaction(id:String,a:ClaudeCallAnalysis):List<Applied> =port.transaction {
+    private fun applyInTransaction(id:String,a:ClaudeCallAnalysis,streak:Boolean=true):List<Applied> =port.transaction {
         val record=rows("SELECT recording_id,counterpart_key,state,COALESCE(started_ms,created_ms) AS day_ms FROM call_records WHERE record_id=?",id).singleOrNull() ?: return@transaction emptyList()
         if(record.str("state")==ANALYZED) return@transaction emptyList() // applied already: never twice
         val recording=record.str("recording_id")!!
@@ -854,7 +857,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         // transcribed again) with its words wiped. Neither reaches the ledger, the lists or the check items.
         if(!a.business) {
             // A number seen to be personal twice in a row, and tied to no work, is remembered: its next calls and texts are not sent (design E9).
-            record.str("counterpart_key")?.takeIf { k -> k.length>=8 && k.all { it.isDigit() } }?.let { notePersonal(it,id) }
+            if(streak) record.str("counterpart_key")?.takeIf { k -> k.length>=8 && k.all { it.isDigit() } }?.let { notePersonal(it,id) }
             if(MessageKind.of(recording)!="통화") {
                 port.execute("DELETE FROM call_inbox_sent WHERE record_id=?",id);port.execute("DELETE FROM call_records WHERE record_id=?",id)
                 port.execute("DELETE FROM recordings WHERE recording_id=? AND grant_id='messages'",recording)
@@ -1101,7 +1104,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
             r.str("analysis_json")?.let { j -> runCatching { JSONObject(j).optJSONObject("analysis")?.optBoolean("business",true) }.getOrNull() }!=false }
     }
     /** A waiting record with a personal number: kept as personal here, exactly as a business=false result would leave it. */
-    fun keepPersonal(id:String)=applyAnalysis(id,ClaudeCallAnalysis("개인 내용",emptyList(),null,null,emptyList(),emptyList(),business=false))
+    fun keepPersonal(id:String)=applyAnalysis(id,ClaudeCallAnalysis("개인 내용",emptyList(),null,null,emptyList(),emptyList(),business=false),streak=false)
 
     /** When the oldest call still waiting for its summary was stored, or null when none waits (settings: "지금 상태"). */
     fun oldestWaitingMs():Long? =rows("SELECT MIN(created_ms) AS m FROM call_records WHERE state IN ('TRANSCRIBED','WAITING_CONSENT')").firstOrNull()?.long("m")
@@ -1393,6 +1396,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
             val key=r.counterpartKey ?: continue;if(isContact(key)) continue
             val numbers=names.filter { (n,_) -> NameKey.sameName(n,r.counterpart ?: key) }.map { it.second }.distinct()
             if(numbers.size!=1 || numbers[0] in excludedKeys(log)) continue
+            // v4.1 r22 review H2: a personal number only by exactly the same name ("대표님" is not "김대표"): with it the call
+            // is kept as personal and its words wiped, so a name inside another must not give it.
+            if(isPersonal(numbers[0]) && names.none { (n,k) -> k==numbers[0] && samePrivacyName(n,r.counterpart ?: key) }) continue
             port.execute("UPDATE call_records SET counterpart_key=? WHERE record_id=? AND (counterpart_key IS NULL OR counterpart_key GLOB '*[^0-9]*')",numbers[0],r.recordId)
             byPhoneBook++ }
         stats?.let { st -> onStats(st.copy(noTime=noTime,records24h=open.count { it.r.startedMs>=day }+linkedSince(day),
@@ -1434,7 +1440,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
      * in the file name, or the alias's number found on the phone — an earlier call of the same alias tied to its entry,
      * an entry of that name in the usual window of this call ([FirstPass.inWindow]), the stored call log's or the people's
      * names of the personal numbers. Contacts are not read (no new permission). Unknown: false (it goes up, as before; the
-     * analysis may still find it personal, design E9). */
+     * analysis may still find it personal, design E9). Names by [samePrivacyName] only (exact). Review H2: true means
+     * [keepPersonal], which wipes the call's words and summary on the phone; that cannot be undone. */
     fun personalByFileName(r:CallRecord,displayName:String?=null):Boolean {
         if(r.kind!="통화") return false
         val keys=rows("SELECT phone_key FROM personal_numbers").mapNotNull { it.str("phone_key") }.toSet();if(keys.isEmpty()) return false
@@ -1457,6 +1464,18 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     private fun recordingName(recordingId:String):String? = runCatching {
         if(rows("SELECT 1 FROM sqlite_master WHERE type='table' AND name='recordings'").isEmpty()) null
         else rows("SELECT display_name FROM recordings WHERE recording_id=?",recordingId).firstOrNull()?.str("display_name") }.getOrNull()
+    /** v4.1 r22 review M1: a call without its call-log entry whose file name is an excluded person by the exclusion rules
+     * kept on the phone ([excluded] on a number of the file name, or on a name or alias exactly): forgotten as a paired
+     * excluded call is. The excluded entries themselves are never stored (E9), so a name the rule does not hold is found
+     * only by the call-log pass ([privacyByName]). True when it was forgotten. */
+    fun forgetIfExcluded(r:CallRecord,excluded:(name:String?,phone:String?)->Boolean):Boolean {
+        if(r.kind!="통화" || linked(r.recordId)) return false
+        val display=recordingName(r.recordingId)
+        val (numbers,names)=fileParty(r.counterpart,r.counterpartKey,display)
+        val hit=numbers.any { excluded(null,it) } || names.any { excluded(it,null) } || display?.let { excluded(it,null) }==true
+        if(hit) port.transaction { forgetCall(r.recordId);null }
+        return hit
+    }
     /** v4.1 r22-1: the call is tied to its call-log entry. */
     fun linked(recordId:String):Boolean=rows("SELECT 1 FROM call_record_log WHERE record_id=?",recordId).isNotEmpty()
     /** One record to hold against the call log (r12-7): [filledTime] when the record had no start time and got the
