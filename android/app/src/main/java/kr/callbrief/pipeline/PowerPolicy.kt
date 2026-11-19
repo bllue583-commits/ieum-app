@@ -132,6 +132,9 @@ internal data class PowerBudget(
     val levelFalling:Boolean=false,
     /** The last piece ran at least [TranscriptionPower.HOT_RATIO] times the cold median ([PowerStats.slow]). */
     val slow:Boolean=false,
+    /** v4.2 r23-1: how long one whole piece is expected to take on battery (the recent median speed, no margin), 0: unknown
+     * ([TranscriptionPower.DEFAULT_RATE] then). A battery run starts only while at least this much of the day's budget is left. */
+    val pieceMs:Long=0,
 )
 
 /** v3.6 (DESIGN_V6 2.2): whether a transcription run may start now and how. Pure: everything comes in as arguments. */
@@ -162,9 +165,14 @@ internal object PowerPolicy {
         val seven=z.toLocalDate().atTime(TranscriptionPower.MORNING_REST_TO_HOUR,0).atZone(TranscriptionPower.KST).toInstant().toEpochMilli()
         return (seven-now).coerceIn(60_000L,TranscriptionPower.BATTERY_RUN_GAP_MS)
     }
-    /** The battery budget is used up: [TranscriptionPower.BATTERY_BUDGET_MIN] minutes, or [TranscriptionPower.BATTERY_BUDGET_PCT]% of the battery. */
+    /** v4.2 r23-1: one whole piece as [PowerBudget.pieceMs] says, else at the default speed (5 minutes). */
+    fun pieceMs(b:PowerBudget)=b.pieceMs.takeIf { it>0 } ?: PowerPolicy.splitExpectMs(PipelineAudioMath.MAX_CHUNK_MS,null)
+    /** The battery budget is used up: [TranscriptionPower.BATTERY_BUDGET_MIN] minutes, or [TranscriptionPower.BATTERY_BUDGET_PCT]% of the battery.
+     * v4.2 r23-1: "min" also when less than one piece ([pieceMs]) of the minutes is left. Before, the run limit was raised to
+     * a minute and the first piece of a run always starts, so a run begun at 19 minutes did a whole piece (5 minutes and more)
+     * and the day ended at 29 and 34 minutes (11/16, 11/19). */
     fun budgetHit(b:PowerBudget):String? = when {
-        b.batteryRunMs>=TranscriptionPower.BATTERY_BUDGET_MS -> "min"
+        b.batteryRunMs+pieceMs(b)>TranscriptionPower.BATTERY_BUDGET_MS -> "min"
         b.capacityUah!=null && b.capacityUah>0 && b.batteryUah*100>=b.capacityUah*TranscriptionPower.BATTERY_BUDGET_PCT -> "pct"
         else -> null
     }
@@ -192,7 +200,8 @@ internal object PowerPolicy {
             val since=now-b.lastBatteryRunEndMs
             if(since in 0 until TranscriptionPower.BATTERY_RUN_GAP_MS) return Decision.Wait("gap",TranscriptionPower.BATTERY_RUN_GAP_MS-since)
         }
-        val left=(TranscriptionPower.BATTERY_BUDGET_MS-b.batteryRunMs).coerceAtLeast(60_000L)
+        // At least one piece is left (budgetHit): the first piece fits, the next ones are checked against what is left (W1).
+        val left=TranscriptionPower.BATTERY_BUDGET_MS-b.batteryRunMs
         return Decision.Run(Mode.BATTERY,TranscriptionPower.THREADS_OTHER,minOf(TranscriptionPower.SELF_END_MS,left),"none")
     }
 
@@ -494,7 +503,8 @@ internal object PowerStats {
         if(open>last && now-open>=TranscriptionPower.SELF_END_MS+2*60_000L) { last=open+TranscriptionPower.SELF_END_MS;if(PowerPolicy.day(open)==PowerPolicy.day(now)) used+=TranscriptionPower.SELF_END_MS }
         else if(open>last) last=now // one is running now: the gap holds
         val plugMs=o?.optLong("lastPluggedMs",0) ?: 0
-        return PowerBudget(used,b?.optLong("uahScreenOff",0) ?: 0,capacity,last,plugMs,levelFalling(o,s,now),slow(o,now))
+        return PowerBudget(used,b?.optLong("uahScreenOff",0) ?: 0,capacity,last,plugMs,levelFalling(o,s,now),slow(o,now),
+            PowerPolicy.splitExpectMs(PipelineAudioMath.MAX_CHUNK_MS,rate(o,TranscriptionPower.THREADS_OTHER)))
     }
     /** v3.6.1 (T3a): between pieces, the run in [mode] may go on (the same mode still applies). [ownStartMs]: this battery
      * run's own start mark, null for a plugged-in run or before its first piece. */
