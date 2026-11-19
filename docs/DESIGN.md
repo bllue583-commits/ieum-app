@@ -235,6 +235,7 @@
 
 | 항목 | 동작 | 근거 |
 | --- | --- | --- |
+| 막힘의 증거(v4.1 r22-2) | 원인을 모르므로 우회하지 않고 증거만 모은다. 실패 순간의 원인 부호에 앱옵의 원래 모드(`unsafeCheckOpRawNoThrow`, `:r<n>` — 제한 반영 모드 `:m<n>`과 다를 때만, 다르면 사용자 설정이 아니라 시스템 제한), 마지막 설치 뒤 시간(`:u1`·`:u6`·`:u24`·`:u48`·`:uo`), 설치한 쪽 종류(`:is` 자기 업데이트·`:ip` 스토어·`:ik` 패키지 설치 화면·`:in` 없음·`:io` 다른 앱; 이름은 싣지 않음). `today`에 그날 첫 실패 시각(`firstFailHm`), 그 직전 마지막으로 그려진 시각(`okBeforeMs`), 마지막 설치 시각(`installedMs`). 통화 시작·끝에서 `canDrawOverlays`를 읽어 "시작 허용 → 통화 중 거부(실패 부호 `:d0`) → 끝 허용"인 통화(`flipCalls`), 시작·끝에서 거부(`deniedAtStart`·`deniedAtEnd`). 대체 알림은 1초 뒤 실제로 떠 있는지(`fallbackShown`), 알림 꺼짐·채널 중요도가 높음 아래인지(`fallbackMuted`) — 설정은 바꾸지 않는다. 통화가 끝난 뒤에는 지금처럼 아무것도 띄우지 않는다. 접근성 서비스·전체 화면 알림·다른 창 종류는 사용자와 정한 뒤 | 11/13·11/16·11/17~19: 설치 뒤 한동안 되다가 통화 중에만 앱옵 모드 2 |
 | 권한 | READ_PHONE_STATE(필수 처음 설정), READ_CALL_LOG(필수), 다른 앱 위에 표시(선택), 발신 역할 `ROLE_CALL_REDIRECTION`(설정의 선택 항목 "거는 전화에 번호를 더 빨리 알기"만, 카드는 역할 없이 뜸) | `SettingsScreen.steps`, `callCardGroup` |
 | 번호 | 수신은 `PHONE_STATE`의 `EXTRA_INCOMING_NUMBER`, 발신은 OFFHOOK 방송의 번호(역할이 있으면 `OutgoingCallService.onPlaceCall`이 먼저 적고 즉시 `placeCallUnmodified`, 20초 안에 OFFHOOK이면 발신 확정). 첫 방송에 번호가 없으면 다음 방송을 기다린다. CallScreeningService는 쓰지 않는다(전화부 상대를 넘기지 않음) | `CallSession`, `OUTGOING_WINDOW_MS` |
 | 서비스 | 포그라운드 서비스 `CallCardService`(phoneCall, 거부되면 specialUse). 이미 돌면 정적 참조로 상태 전달, start는 첫 시작에만. 시작 거부면 `fgsRefused`를 세고 카드를 직접 띄운 뒤 0.5초 뒤 한 번 더 시작. IDLE 3초 뒤 종료, 10분마다 `isInCall` 점검, 4시간이면 무조건 종료. 오버레이 권한이 없어도 서비스는 시작한다(알림 대체) | `STOP_AFTER_IDLE_MS`, `CHECK_MS`, `MAX_LIFE_MS` |

@@ -357,8 +357,8 @@ internal object CallCardOverlay {
         if(failState==null) { failScreenOn=on;failState=state.name }
         val cold=runCatching { CardStats.elapsed()-CardStats.processStart()<CardStats.COLD_MS }.getOrDefault(false)
         worker.execute { runCatching {
-            val mode=runCatching { probe(c)?.mode }.getOrNull() ?: -1
-            onFailure(c,failCode(cause,draw,mode,cold,lock,on,if(cold) exitOnce(c) else null,System.currentTimeMillis()))
+            val p=runCatching { probe(c) }.getOrNull()
+            onFailure(c,failCode(cause,draw,p?.mode ?: -1,cold,lock,on,if(cold) exitOnce(c) else null,System.currentTimeMillis(),p?.raw ?: -1,p?.update,p?.installer))
         }.onFailure(::warn) }
         val live=state==CallSession.State.RINGING || state==CallSession.State.OFFHOOK
         if(retries<RETRY_DELAYS_MS.size && live && !closed && content!=null) {
@@ -391,7 +391,7 @@ internal object CallCardOverlay {
             val ex=if(cold) exitOnce(c) else null
             val a=base.copy(probe=probed ?: runCatching { probe(c) }.getOrNull(),exit=ex?.first,exitAgo=ex?.let { agoBucket(System.currentTimeMillis()-it.second) })
             onVerdict(c,a)
-            if(own) onFailure(c,failCode(cause,draw,a.probe?.mode ?: -1,cold,lock,on,ex,System.currentTimeMillis()))
+            if(own) onFailure(c,failCode(cause,draw,a.probe?.mode ?: -1,cold,lock,on,ex,System.currentTimeMillis(),a.probe?.raw ?: -1,a.probe?.update,a.probe?.installer))
         }.onFailure(::warn) }
     }
     private fun afterState() {
@@ -542,7 +542,8 @@ internal object CallCardOverlay {
         else b.setContentTitle("이음 통화 카드").setContentText("잠금을 풀면 카드가 보여요").build()
     }
     private fun notice(c:Context,data:CallCardView.Content) {
-        if(Build.VERSION.SDK_INT>=33 && c.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) return
+        if(Build.VERSION.SDK_INT>=33 && c.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) {
+            worker.execute { runCatching { CardStats.fallbackNotice(c,false,true) } };return } // v4.1 r22-2: muted
         runCatching {
             val m=c.getSystemService(NotificationManager::class.java) ?: return
             val n=buildNotice(c,data)
@@ -550,8 +551,23 @@ internal object CallCardOverlay {
             if(runCatching { serviceUp() }.getOrDefault(false)) { m.notify(CallCardService.NOTIFICATION_ID,n);noticeMerged=true }
             else { m.notify(NOTICE_TAG,NOTICE_ID,n);noticeMerged=false }
             noticeUp=true
+            // v4.1 r22-2: a second later, whether the notice is really up and whether it could be heard (counts only).
+            val merged=noticeMerged
+            main.postDelayed({ worker.execute { runCatching { noticeCheck(c,merged) }.onFailure(::warn) } },NOTICE_CHECK_MS)
         }.onFailure(::warn)
     }
+    /** v4.1 r22-2: how long after posting the fallback notice it is looked for among the active ones. */
+    const val NOTICE_CHECK_MS=1_000L
+    /** v4.1 r22-2: the fallback notice found among this app's active notices, and notices off or the card's channel below
+     * high importance (no heads-up: the person may never see it). Nothing is changed in the settings. Replaceable in host tests. */
+    private val defaultNoticeCheck:(Context,Boolean)->Unit={ c,merged ->
+        val m=c.getSystemService(NotificationManager::class.java)
+        val shown=m?.activeNotifications?.any { if(merged) it.id==CallCardService.NOTIFICATION_ID else it.id==NOTICE_ID && it.tag==NOTICE_TAG }==true
+        val channel=m?.getNotificationChannel(CHANNEL) // the card's notice is in its own channel also in the service's slot
+        val muted=m==null || !m.areNotificationsEnabled() || channel!=null && channel.importance<NotificationManager.IMPORTANCE_HIGH
+        CardStats.fallbackNotice(c,shown,muted)
+    }
+    @Volatile internal var noticeCheck:(Context,Boolean)->Unit=defaultNoticeCheck
     private fun cancelNotice(c:Context) {
         runCatching {
             val m=c.getSystemService(NotificationManager::class.java) ?: return@runCatching
@@ -571,12 +587,18 @@ internal object CallCardOverlay {
      * the raw app-op mode was read and is not 0 (allowed), `:cold` within [CardStats.COLD_MS] of the process start, `:lk`
      * on a locked screen, `:off` with the screen off, and on a cold process `:x<reason>` how the last process ended
      * ([android.app.ApplicationExitInfo] REASON_*, 10 = the user, as from the recent apps) with `:<bucket>` how long ago
-     * ([agoBucket]). E.g. `add:BadToken:cold:x10:m5`. */
-    internal fun failCode(cause:String,draw:Boolean,mode:Int,cold:Boolean,locked:Boolean,screenOn:Boolean,exit:Pair<Int,Long>?,now:Long):String {
+     * ([agoBucket]). E.g. `add:BadToken:cold:x10:m5`. v4.1 r22-2: after the mode, `:r<raw>` when the raw mode was read and
+     * differs from it (the system's restriction, not the user's setting), the time since the last install (`:u1` … `:uo`,
+     * [CardProbe.updateBucket]) and the installer's kind (`:is` … `:io`, [CardProbe.installerKind]):
+     * `add:BadToken:d0:m2:r0:u48:is`. */
+    internal fun failCode(cause:String,draw:Boolean,mode:Int,cold:Boolean,locked:Boolean,screenOn:Boolean,exit:Pair<Int,Long>?,now:Long,
+                          raw:Int=-1,update:String?=null,installer:String?=null):String {
         val base=if(cause.startsWith("addView:")) "add:"+cause.removePrefix("addView:").removeSuffix("Exception").take(16) else cause.take(16)
         val items=buildList {
             if(!draw) add(":d0")
             if(mode>0) add(":m$mode")
+            if(raw>=0 && mode>=0 && raw!=mode) add(":r$raw")
+            update?.let { add(":$it") };installer?.let { add(":$it") }
             if(cold) add(":cold")
             if(locked) add(":lk")
             if(!screenOn) add(":off")
@@ -614,6 +636,6 @@ internal object CallCardOverlay {
         drawnNow={ it.seen };addWindow={ wm,v,p -> wm.addView(v,p) };probe={ c -> runCatching { CardProbe.read(c) }.getOrNull() }
         onVerdict={ c,a -> CardStats.verdict(c,a) };onFailure={ c,code -> CardStats.failure(c,code) }
         screenOn={ c -> c.getSystemService(android.os.PowerManager::class.java)?.isInteractive!=false };lastExit={ c -> CardProbe.lastExit(c) }
-        exitRead=null;exitDone=false
+        exitRead=null;exitDone=false;noticeCheck=defaultNoticeCheck
     }
 }

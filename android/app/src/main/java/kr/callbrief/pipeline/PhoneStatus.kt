@@ -387,7 +387,7 @@ internal object PhoneStatus {
                 matchStats(s),s.optString(DB_RECOVERY_LAST).takeIf { it.isNotBlank() },inboxErrorSince(app,s,now),
                 (s.opt(kr.callbrief.IeumApplication.DB_OPEN_MS) as? Number)?.toLong(),(s.opt(kr.callbrief.IeumApplication.HOME_READ_MS) as? Number)?.toLong(),
                 (s.opt(ResultChain.ROUND_KEY) as? Number)?.toInt(),(s.opt(ResultChain.NEXT_MS_KEY) as? Number)?.toLong()?.takeIf { it>0 },
-                runCatching { kr.callbrief.pipeline.call.CardStats.heartbeat(s,now) }.getOrNull()),
+                runCatching { kr.callbrief.pipeline.call.CardStats.heartbeat(s,now,info?.lastUpdateTime) }.getOrNull()),
             v31 = v31(app,s),
             v33 = V33(jsonOf(s,PipelineSettingsKeys.GOLDEN),jsonOf(s,PipelineSettingsKeys.GUARD_STATS)),
             v34 = v34(app,s),

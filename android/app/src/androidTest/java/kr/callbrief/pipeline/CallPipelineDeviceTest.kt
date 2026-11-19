@@ -448,6 +448,23 @@ class CallPipelineDeviceTest {
         } finally { card.addWindow=realAdd;card.onVerdict={ c,a -> stats.verdict(c,a) };card.onFailure={ c,code -> stats.failure(c,code) } }
     }
 
+    /** v4.1 r22-2 on this Android: the phone-only reads behind the card's cause code run without an exception and give codes
+     * (the raw and the restricted app-op modes of drawing over apps, the last install's age, the installer's kind), and the
+     * code they make passes the heartbeat's filter. */
+    @Test fun t9_cardEvidenceReadsOnThisAndroid() {
+        val probe=kr.callbrief.pipeline.call.CardProbe
+        inst.uiAutomation.executeShellCommand("appops set ${context.packageName} SYSTEM_ALERT_WINDOW allow").close()
+        val p=probe.read(context)
+        val code=kr.callbrief.pipeline.call.CallCardOverlay.failCode("addView:BadTokenException",false,p.mode,false,false,true,null,System.currentTimeMillis(),p.raw,p.update,p.installer)
+        val result=JSONObject().put("mode",p.mode).put("raw",p.raw).put("update",p.update ?: JSONObject.NULL).put("installer",p.installer ?: JSONObject.NULL)
+            .put("canDraw",android.provider.Settings.canDrawOverlays(context)).put("code",code)
+        report("t9_card_evidence",result)
+        assertTrue("restricted mode read: ${p.mode}",p.mode in 0..4);assertTrue("raw mode read: ${p.raw}",p.raw in 0..4)
+        assertNotNull("install age",p.update);assertTrue("installer kind ${p.installer}",p.installer in setOf("is","ip","ik","in","io"))
+        assertEquals("the heartbeat keeps the code as it is",code,kr.callbrief.pipeline.call.CardStats.causeCode(code))
+        assertTrue(code,code.startsWith("add:BadToken:d0") && code.length<=40)
+    }
+
     /** v4.0 r21-3 on this Android's own battery service: the plug read every 5 seconds ([BatterySnapshot.pluggedNow], the
      * sticky ACTION_BATTERY_CHANGED) sees the charger go away (`dumpsys battery unplug`), and [UnplugStop] cancels within 30 s. */
     @Test fun t8_unplugStopsWithinThirtySecondsOnThisAndroid() {
