@@ -179,14 +179,17 @@ class FirstPassTest:ProtectedTextHostTestBase() {
             listOf(e(1,null,t+15_000),e(2,"홍길동",t+3_600_000-5_000),e(3,"김민수",t+7_200_000),e(4,"이민호",t+7_200_000+20_000),e(5,"한소장",t+10_800_000),
                 e(6,null,t+14_400_000),e(7,null,t+14_400_000+30_000))) { st=it }
         assertEquals(1L,out["null"]?.id);assertEquals(2L,out["spelt"]?.id)
-        assertNull(out["two"]);assertNull(out["far"]);assertNull(out["long"]);assertNull(out["both"])
+        // v4.1 r22-1: "long" is the one entry of the file name's person in the usual window; the lengths disagree (5 min
+        // against 1) but the person and the time agree, so it pairs (byPartyLength) instead of going up unpaired.
+        assertNull(out["two"]);assertNull(out["far"]);assertEquals(5L,out["long"]?.id);assertNull(out["both"])
         val s=st!!
-        assertEquals(2,s.matched);assertEquals(1,s.nameDiffers);assertEquals(1,s.noCandidate);assertEquals(1,s.length);assertEquals(1,s.nameNull)
-        assertEquals(mapOf(-20 to 1,0 to 1),s.gapSec)
+        assertEquals(3,s.matched);assertEquals(1,s.nameDiffers);assertEquals(1,s.noCandidate);assertEquals(0,s.length);assertEquals(1,s.nameNull)
+        assertEquals(1,s.byPartyLength)
+        assertEquals(mapOf(-20 to 1,0 to 2),s.gapSec)
         // Stored as one JSON string that grows run by run.
         val once=s.copy(noTime=2).mergeInto(null,100);val twice=s.mergeInto(once,200)
         val o=JSONObject(twice)
-        assertEquals(2,o.getInt("runs"));assertEquals(200L,o.getLong("lastMs"));assertEquals(4,o.getInt("matched"))
+        assertEquals(2,o.getInt("runs"));assertEquals(200L,o.getLong("lastMs"));assertEquals(6,o.getInt("matched"))
         assertEquals(0,o.getJSONObject("last").getInt("noTime"));assertEquals(2,o.getJSONObject("gapSec").getInt("-20"))
     }
 

@@ -67,7 +67,9 @@ internal object PhoneStatus {
          * [kr.callbrief.pipeline.bench.Samples.heartbeat]); left out of the file while never switched on. Numbers and codes only. */
         val bench:JSONObject?=null,val samples:JSONObject?=null,
         /** v3.9 r20-2 (DESIGN_V7 6): `feedback{wrong, undone}` ([TaskFeedback.heartbeat]), counts only; zeros when null. */
-        val feedback:JSONObject?=null)
+        val feedback:JSONObject?=null,
+        /** v4.1 r22-1: `privacy{keptByName, keptByLink, uploadedUnlinked}` ([privacy]), counts only. */
+        val privacy:JSONObject?=null)
     /** v3.7 r17-3 (DESIGN_V7 3.3, SCORECARD): [latency] goes into `latency` beside the 7-day numbers ({segments{endToText,
      * textToUpload,uploadToApplied}, day{p50Min,p90Min,n,waiting}, over7d}); [window14] into `transcription.window14`
      * {created,failed,failedPermanent,days}; [coverage] is `report.coverage` ([kr.callbrief.pipeline.report.ReportCoverage.snapshot])
@@ -198,6 +200,7 @@ internal object PhoneStatus {
         i.bench?.let { o.put("bench",kr.callbrief.pipeline.bench.Bench.safe(it)) }
         i.samples?.let { o.put("samples",kr.callbrief.pipeline.bench.Bench.safe(it)) }
         o.put("feedback",TaskFeedback.heartbeat(i.feedback?.let { JSONObject().put(TaskFeedback.KEY,it) }))
+        o.put("privacy",i.privacy ?: JSONObject.NULL)
         return o
     }
     /** v3.7 r17-3: the scorecard's blocks. `use` and `report.coverage` always (null inside until known), the rest when known. */
@@ -391,8 +394,11 @@ internal object PhoneStatus {
             v37 = runCatching { v37(app,s,now) }.onFailure { Log.w(TAG,"v3.7 numbers not read: ${it.javaClass.simpleName}") }.getOrDefault(V37()),
             security = runCatching { security(s) }.getOrNull(),certUnknown = UpdateCert.unknownCount(s),
             bench = kr.callbrief.pipeline.bench.Bench.heartbeat(s),samples = kr.callbrief.pipeline.bench.Samples.heartbeat(s),
-            feedback = TaskFeedback.heartbeat(s))
+            feedback = TaskFeedback.heartbeat(s),privacy = privacy(s))
     }
+    /** v4.1 r22-1 (design E9): the privacy gate of calls without their call-log entry, numbers only (zeros when none). */
+    internal fun privacy(s:JSONObject):JSONObject=JSONObject().put("keptByName",s.optLong(CallRecordStore.PRIVACY_N_KEPT_BY_NAME,0))
+        .put("keptByLink",s.optLong(CallRecordStore.PRIVACY_N_KEPT_BY_LINK,0)).put("uploadedUnlinked",s.optLong(CallRecordStore.PRIVACY_N_UPLOADED_UNLINKED,0))
     /** v3.8 r18-lock: the certificate check and the number hash salt, yes/no and counts only (never the salt). */
     internal fun security(s:JSONObject):JSONObject { val o=UpdateCert.heartbeat(s);val p=kr.callbrief.LocalPrivacy.heartbeat(s)
         for(k in p.keys()) o.put(k,p.get(k));return o }
@@ -491,7 +497,7 @@ internal object PhoneStatus {
         val allowed=app.checkSelfPermission(android.Manifest.permission.READ_CALL_LOG)==android.content.pm.PackageManager.PERMISSION_GRANTED
         val rules=kr.callbrief.LocalPrivacy.rules(s)
         // Read like the hourly pass reads it; the numbers stay in this function and only counts leave it.
-        val entries=if(allowed) FirstPass.readCallLog(app) { n -> rules.excluded(n,n) } else emptyList()
+        val entries=if(allowed) FirstPass.readCallLog(app,{ name -> rules.excluded(name) }) { n -> rules.excluded(n,n) } else emptyList()
         val today=java.time.Instant.ofEpochMilli(now).atZone(CallRecordStore.KST).toLocalDate().atStartOfDay(CallRecordStore.KST).toInstant().toEpochMilli()
         val from=FirstPass.FROM_MS
         kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(app)).let { db ->

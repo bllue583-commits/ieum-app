@@ -93,12 +93,17 @@ internal object FirstPass {
                           val byParty:Int=0,
                           /** r12-7, set by the store: call records of the last 24 hours, those of them still without an entry,
                            * and records named by a phone-book name that got the one number of that name without an entry. */
-                          val records24h:Int=0,val open24h:Int=0,val byPhoneBook:Int=0) {
+                          val records24h:Int=0,val open24h:Int=0,val byPhoneBook:Int=0,
+                          /** v4.1 r22-1: pairs made by the person in the file name in the usual window although the lengths
+                           * disagree (the only entry of that person there), and for each record still left "length", the
+                           * recording's length minus the nearest in-window entry's in signed 15 s bins from -120 to 120 s. */
+                          val byPartyLength:Int=0,val lengthGapSec:Map<String,Int> =emptyMap()) {
         fun reasons()=JSONObject().put("noTime",noTime).put("noCandidate",noCandidate).put("length",length).put("nameNull",nameNull)
             .put("nameDiffers",nameDiffers).put("numberDiffers",numberDiffers).put("several",several).put("matched",matched).put("byEnd",byEnd)
             .put("missGapMin",JSONObject().apply { missGapMin.forEach { (k,v) -> put(k,v) } })
             .put("missGapHour",JSONObject().apply { missGapHour.forEach { (k,v) -> put(k,v) } }).put("byParty",byParty)
-            .put("records24h",records24h).put("open24h",open24h).put("byPhoneBook",byPhoneBook)
+            .put("records24h",records24h).put("open24h",open24h).put("byPhoneBook",byPhoneBook).put("byPartyLength",byPartyLength)
+            .put("lengthGapSec",JSONObject().apply { lengthGapSec.forEach { (k,v) -> put(k,v) } })
         /** The stored JSON with this pass added: "last" is this pass's reasons (the records still waiting are counted again
          * every pass, so they are not summed), "matched", "byEnd" and "gapSec" add up over all passes, "runs" counts passes.
          * "missGapMin" is this pass's distribution (the same waiting records come back every pass, like "last"). */
@@ -108,6 +113,7 @@ internal object FirstPass {
             for((bin,n) in gapSec) gaps.put(bin.toString(),gaps.optInt(bin.toString(),0)+n)
             return o.put("runs",o.optInt("runs",0)+1).put("lastMs",now).put("last",reasons()).put("matched",o.optInt("matched",0)+matched).put("gapSec",gaps)
                 .put("byEnd",o.optInt("byEnd",0)+byEnd).put("byParty",o.optInt("byParty",0)+byParty).put("byPhoneBook",o.optInt("byPhoneBook",0)+byPhoneBook)
+                .put("byPartyLength",o.optInt("byPartyLength",0)+byPartyLength)
                 .put("missGapMin",JSONObject().apply { missGapMin.forEach { (k,v) -> put(k,v) } }).toString()
         }
     }
@@ -162,6 +168,7 @@ internal object FirstPass {
         val starts=LongArray(answeredLog.size) { answeredLog[it].startMs }
         val fits=ArrayList<Fit>()
         val why=HashMap<String,String>() // recordId -> reason when it has no fit at all
+        val lengthOnly=HashSet<String>()
         fun firstFrom(from:Long)=java.util.Arrays.binarySearch(starts,from).let { if(it>=0) { var k=it;while(k>0 && starts[k-1]==starts[it]) k--;k } else -it-1 }
         fun between(from:Long,to:Long):List<LogEntry> { val out=ArrayList<LogEntry>();var i=firstFrom(from)
             while(i<starts.size && starts[i]<=to) out+=answeredLog[i++];return out }
@@ -178,6 +185,11 @@ internal object FirstPass {
                 val pick=if(party.size<=1) party else party.filter { inWindow(r.startedMs,it.startMs) }
                 if(pick.isNotEmpty()) { pick.forEach { fits+=Fit(r,it,score(r,it)) };continue }
                 if(party.size>1) { why[r.recordId]="several";continue }
+                // v4.1 r22-1: the person agrees and the time is in the usual window, only the lengths do not (a recording
+                // that ran on past the call, ringing kept, a held call): the one entry of that person there is it. After
+                // every other pair; two such entries (a call made again) are left to the steps below.
+                val sameInWindow=between(r.startedMs-120_000L,r.startedMs+60_000L).filter { e -> sameParty(r,e) }
+                if(sameInWindow.size==1) { fits+=Fit(r,sameInWindow[0],score(r,sameInWindow[0])+1_500.0);lengthOnly+=r.recordId;continue }
             }
             // 2. The usual window.
             val inTime=between(r.startedMs-120_000L,r.startedMs+60_000L)
@@ -222,26 +234,33 @@ internal object FirstPass {
                 val bin=near?.let { missBin(r.startedMs-it) } ?: MISS_FAR
                 miss[bin]=(miss[bin] ?: 0)+1
                 if(bin==MISS_FAR && near!=null) missHour(r.startedMs-near).let { h -> hours[h]=(hours[h] ?: 0)+1 } }
+            val lengthGaps=HashMap<String,Int>()
+            for(r in records) { if(r.recordId in out || why[r.recordId]!="length") continue
+                val near=between(r.startedMs-120_000L,r.startedMs+60_000L).minByOrNull { kotlin.math.abs(r.startedMs-it.startMs) } ?: continue
+                val bin=(Math.floorDiv(r.durationMs-near.durationMs,15_000L)*15).coerceIn(-120,120).toString();lengthGaps[bin]=(lengthGaps[bin] ?: 0)+1 }
             stats(MatchStats(noCandidate=counts["noCandidate"] ?: 0,length=counts["length"] ?: 0,nameNull=counts["nameNull"] ?: 0,nameDiffers=counts["nameDiffers"] ?: 0,
                 numberDiffers=counts["numberDiffers"] ?: 0,several=counts["several"] ?: 0,matched=out.size,gapSec=gaps,missGapMin=miss,
                 byEnd=records.count { r -> out[r.recordId]?.let { byEnd(r,it) }==true },missGapHour=hours,
-                byParty=records.count { r -> out[r.recordId]?.let { !inWindow(r.startedMs,it.startMs) }==true }))
+                byParty=records.count { r -> out[r.recordId]?.let { !inWindow(r.startedMs,it.startMs) }==true },
+                byPartyLength=records.count { it.recordId in out && it.recordId in lengthOnly },lengthGapSec=lengthGaps))
         }
         return out
     }
 
     /** The phone's call log since [FROM_MS], every kind (missed, rejected, unanswered, answered); numbers the user's
      * exclusion rule keeps off are marked [LogEntry.excluded]. Stays on the phone. */
-    fun readCallLog(context:Context,excluded:(String)->Boolean):List<LogEntry> {
+    fun readCallLog(context:Context,excludedName:(String)->Boolean={ false },excluded:(String)->Boolean):List<LogEntry> {
         if(context.checkSelfPermission(Manifest.permission.READ_CALL_LOG)!=PackageManager.PERMISSION_GRANTED) return emptyList()
         val out=mutableListOf<LogEntry>()
         context.contentResolver.query(CallLog.Calls.CONTENT_URI,
             arrayOf(CallLog.Calls._ID,CallLog.Calls.NUMBER,CallLog.Calls.CACHED_NAME,CallLog.Calls.DATE,CallLog.Calls.DURATION,CallLog.Calls.TYPE),
             "${CallLog.Calls.DATE}>=?",arrayOf(FROM_MS.toString()),"${CallLog.Calls.DATE} ASC")?.use { c ->
             while(c.moveToNext() && out.size<20_000) {
-                val number=c.getString(1).orEmpty()
-                out+=LogEntry(c.getLong(0),kr.callbrief.core.PhoneKey.of(number),c.getString(2)?.trim()?.takeIf { it.isNotEmpty() },c.getLong(3),c.getLong(4)*1000,c.getInt(5),
-                    number.isNotBlank() && excluded(number))
+                val number=c.getString(1).orEmpty();val name=c.getString(2)?.trim()?.takeIf { it.isNotEmpty() }
+                // v4.1 r22-1: an entry whose phone-book name the exclusion rule names is excluded too, as the call-log report
+                // has always shown it ("(제외 번호)"); before, only its number was held against the rule.
+                out+=LogEntry(c.getLong(0),kr.callbrief.core.PhoneKey.of(number),name,c.getLong(3),c.getLong(4)*1000,c.getInt(5),
+                    number.isNotBlank() && excluded(number) || name!=null && excludedName(name))
             }
         }
         return out
@@ -249,6 +268,6 @@ internal object FirstPass {
     /** [readCallLog] with the exclusion rules saved on this phone. */
     fun readCallLog(context:Context,settings:JSONObject):List<LogEntry> {
         val rules=kr.callbrief.LocalPrivacy.rules(settings)
-        return readCallLog(context) { n -> rules.excluded(n,n) }
+        return readCallLog(context,{ name -> rules.excluded(name) }) { n -> rules.excluded(n,n) }
     }
 }

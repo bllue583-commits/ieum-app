@@ -22,7 +22,7 @@ internal class CallRecordAnalysisRunner(
     private val inbox:CallInboxStore?=CallInboxConfig.store(),
     private val save:((JSONObject)->Unit)->Unit={ edit -> runCatching { SecureSettings(context).update { edit(it) } } },
     private val callLog:()->List<FirstPass.LogEntry> ={ val rules=kr.callbrief.LocalPrivacy.rules(settings())
-        FirstPass.readCallLog(context) { n -> rules.excluded(n,n) } },
+        FirstPass.readCallLog(context,{ name -> rules.excluded(name) }) { n -> rules.excluded(n,n) } },
     private val smsAllowed:()->Boolean={ context.checkSelfPermission(android.Manifest.permission.READ_SMS)==android.content.pm.PackageManager.PERMISSION_GRANTED },
     /** Runs after a pass that sent something: the result chain starts again, its first round 10 minutes on (r10-3). */
     private val afterSend:()->Unit={ ResultChain.start(context) },
@@ -72,6 +72,9 @@ internal class CallRecordAnalysisRunner(
         InboxETags.results=ETagSlot({ settings().optString(InboxETags.RESULTS_ETAG_KEY).ifEmpty { null } },
             { v -> if(settings().optString(InboxETags.RESULTS_ETAG_KEY)!=(v ?: "")) save { it.put(InboxETags.RESULTS_ETAG_KEY,v ?: "") } })
         withStore { db ->
+          // v4.1 r22-1: the privacy gate's counts of this pass, added to the settings once at the end (numbers only).
+          val privacyCounts=HashMap<String,Long>()
+          fun note(key:String) { privacyCounts[key]=(privacyCounts[key] ?: 0)+1 }
           try {
             runCatching { db.reconcileCallLog(callLog()) }
             // Each edit goes up first; those that went are then taken off in one transaction (review data #2).
@@ -105,6 +108,10 @@ internal class CallRecordAnalysisRunner(
                 .sortedBy { it.second!!.dayMs }
             var duplicates=0;var appliedNow=0
             for((name,record,analysis) in items) runCatching {
+                // v4.1 r22-1: a call sent before its call-log entry was found, whose entry or file name now shows a personal
+                // number: its result is kept as personal, the way the gate would have kept it (design E9).
+                if(analysis.business!=false && (db.isPersonal(record!!.counterpartKey) || record.kind=="통화" && !db.linked(record.recordId) && db.personalByFileName(record))) {
+                    db.keepPersonal(record.recordId);note(CallRecordStore.PRIVACY_N_KEPT_BY_LINK);return@runCatching }
                 val isOld=FirstPass.stale(record!!.dayMs,clock())
                 // Checked against what is there now, more widely than when it was sent: what changed since must not drop good items.
                 val request=db.request(record,isOld,wide=true)
@@ -140,11 +147,17 @@ internal class CallRecordAnalysisRunner(
                 if(!consent) { db.setState(r.recordId,CallRecordStore.WAITING_CONSENT);return false }
                 if(r.state!=CallRecordStore.TRANSCRIBED) db.setState(r.recordId,CallRecordStore.TRANSCRIBED)
                 if(r.transcript.isBlank()) { db.setState(r.recordId,CallRecordStore.FAILED,"EMPTY_TRANSCRIPT");return false }
-                // A number found personal before (design E9): kept here as personal, never sent.
-                if(db.isPersonal(r.counterpartKey)) { db.keepPersonal(r.recordId);return false }
+                // A number found personal before (design E9): kept here as personal, never sent. v4.1 r22-1: also a call without
+                // its call-log entry whose file name's person is a personal number ([CallRecordStore.personalByFileName]);
+                // the excluded ones were forgotten by the call-log pass above.
+                val unlinked=r.kind=="통화" && !db.linked(r.recordId)
+                if(db.isPersonal(r.counterpartKey)) { db.keepPersonal(r.recordId);if(unlinked) note(CallRecordStore.PRIVACY_N_KEPT_BY_NAME);return false }
+                if(unlinked && db.personalByFileName(r)) { db.keepPersonal(r.recordId);note(CallRecordStore.PRIVACY_N_KEPT_BY_NAME);return false }
                 // Sent and answered (the answer waits to be applied): never again. Sent and silent for 6 hours: again.
                 if(db.receivedMs(r.recordId)!=null) return false
-                return db.sentMs(r.recordId)?.let { clock()-it>=RESEND_MS } ?: true
+                val sentBefore=db.sentMs(r.recordId)
+                if(sentBefore==null && unlinked) note(CallRecordStore.PRIVACY_N_UPLOADED_UNLINKED)
+                return sentBefore?.let { clock()-it>=RESEND_MS } ?: true
             }
             val user=userInfo(s)
             fun request(r:CallRecord,old:Boolean)=db.request(r,old).copy(user=user)
@@ -205,6 +218,8 @@ internal class CallRecordAnalysisRunner(
                 }
             }
           } finally {
+            db.takePrivacyNotes().forEach { (k,n) -> privacyCounts[k]=(privacyCounts[k] ?: 0)+n }
+            if(privacyCounts.isNotEmpty()) runCatching { save { o -> privacyCounts.forEach { (k,n) -> o.put(k,o.optLong(k,0)+n) } } }
             if(consent) runCatching { warnIfStalled(db) } // from data on the phone, whatever failed above
             if(sent>0) runCatching { afterSend() }
           }
