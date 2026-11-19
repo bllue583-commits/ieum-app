@@ -45,7 +45,7 @@ class R16TwoTest {
         assertEquals(0,empty.getJSONObject("waiting").getInt("n"));assertTrue(empty.getJSONObject("waiting").isNull("oldestMin"))
         assertTrue(empty.isNull("prev"));assertFalse(empty.getBoolean("chargingOnly"))
 
-        val o=PhoneStatus.build(input.copy(powerLedger=ledger(hit="min",waiting=3 to now-90*min),chargingOnly=true)).getJSONObject("power")
+        val o=PhoneStatus.build(input.copy(powerLedger=ledger(hit="min",waiting=3 to now-90*min))).getJSONObject("power")
         assertEquals(70,o.getInt("batteryPct"));assertEquals("none",o.getString("plugged"));assertEquals("light",o.getString("thermal"))
         assertEquals(365,o.getInt("tempDeciC"));assertEquals(4,o.getInt("cpusAllowed"));assertEquals("bg",o.getString("cpuset"))
         val t=o.getJSONObject("today")
@@ -58,7 +58,7 @@ class R16TwoTest {
         assertEquals(240_000,c.getInt("lastMs"));assertEquals(4,c.getInt("threads"));assertEquals(240_000L,c.getLong("coldMedianMs"))
         assertTrue(c.isNull("tokensLast"));assertTrue(c.isNull("perTokenMsLast"))
         assertEquals(3,o.getJSONObject("waiting").getInt("n"));assertEquals(90,o.getJSONObject("waiting").getInt("oldestMin"))
-        assertTrue(o.getBoolean("chargingOnly"))
+        assertFalse("v4.1 r22-3: the switch is gone, the key always false",o.getBoolean("chargingOnly"))
         // Numbers, yes/no and short ASCII codes only: no Korean, nothing long.
         fun walk(v:Any?) { when(v) {
             is JSONObject -> v.keys().forEach { walk(v.opt(it)) }
@@ -68,11 +68,11 @@ class R16TwoTest {
         walk(o)
     }
     @Test fun aLedgerFromYesterdayGivesEmptyTodayAndItAsPrev() {
-        val o=PowerText.heartbeat(ledger(day=today-1),false,now)
+        val o=PowerText.heartbeat(ledger(day=today-1),now)
         assertEquals(iso(today),o.getJSONObject("today").getString("day"));assertEquals(0,o.getJSONObject("today").getJSONObject("battery").getInt("min"))
         assertEquals(iso(today-1),o.getJSONObject("prev").getString("day"));assertEquals(5,o.getJSONObject("prev").getJSONObject("battery").getInt("min"))
         // A broken ledger still gives the block.
-        assertEquals(0,PowerText.heartbeat(JSONObject().put("today","x").put("waiting",5),false,now).getJSONObject("waiting").getInt("n"))
+        assertEquals(0,PowerText.heartbeat(JSONObject().put("today","x").put("waiting",5),now).getJSONObject("waiting").getInt("n"))
         assertEquals(0L,PowerText.batteryMinToday(ledger(day=today-1),now));assertEquals(5L,PowerText.batteryMinToday(ledger(),now))
         // Settings keep it as a JSON text.
         val s=JSONObject().put(PipelineSettingsKeys.TRANSCRIPTION_POWER,ledger().toString())
@@ -106,20 +106,20 @@ class R16TwoTest {
     // ---- 3. per call: waits for the charger, from 10 minutes after the call ----
     @Test fun waitsForChargerCases() {
         val start=now-30*min
-        fun w(dur:Long,p:JSONObject?,only:Boolean=false,at:Long=start)=PowerText.waitsForCharger(at,dur,now,p,only)
+        fun w(dur:Long,p:JSONObject?,at:Long=start)=PowerText.waitsForCharger(at,dur,now,p)
         // Today, short, budget left, on battery: it goes on battery.
         assertFalse(w(60_000,ledger()))
-        // Long or very short, the switch, the budget, another day.
+        // Long or very short, the budget, another day (v4.1 r22-3: no switch any more).
         assertTrue(w(4*min,ledger()));assertTrue(w(10_000,ledger()))
-        assertTrue(w(60_000,ledger(),only=true));assertTrue(w(60_000,ledger(hit="pct")))
+        assertTrue(w(60_000,ledger(hit="pct")))
         assertTrue(w(60_000,ledger(batteryMs=TranscriptionPower.BATTERY_BUDGET_MS)))
         assertTrue(w(60_000,ledger(),at=now-15*h))
         // Low battery.
         assertTrue(w(60_000,ledger(pct=30)))
-        // Plugged in: nothing waits, even with the switch on.
-        assertFalse(w(4*min,ledger(plugged="ac")));assertFalse(w(4*min,ledger(plugged="wireless"),only=true))
-        // No ledger yet: only the switch says so; a budget from yesterday does not count.
-        assertFalse(w(4*min,null));assertTrue(w(4*min,null,only=true))
+        // Plugged in: nothing waits.
+        assertFalse(w(4*min,ledger(plugged="ac")));assertFalse(w(4*min,ledger(plugged="wireless")))
+        // No ledger yet: nothing says so; a budget from yesterday does not count.
+        assertFalse(w(4*min,null))
         assertFalse(w(60_000,ledger(hit="min",day=today-1)))
     }
     @Test fun callListSaysChargerTenMinutesAfterTheCall() {
@@ -127,14 +127,14 @@ class R16TwoTest {
         val e=LoggedCall(1,"01000000000","박정우",end-dur,dur,CallLog.Calls.INCOMING_TYPE,false)
         val jobs=listOf(e.startMs+1_000)
         val p=ledger()
-        fun words(at:Long)=CallsScreen.stateWords(e,at,jobs) { l -> PowerText.waitsForCharger(l.startMs,l.durationMs,at,p,false) }
+        fun words(at:Long)=CallsScreen.stateWords(e,at,jobs) { l -> PowerText.waitsForCharger(l.startMs,l.durationMs,at,p) }
         assertEquals(PowerText.CHARGER_WORDS,words(now))
         assertEquals(CallsScreen.TRANSCRIBING,words(end+9*min))
         // Without a queued recording in its window it is never said (no promise without a recording).
         assertEquals(CallsScreen.NO_RECORDING,CallsScreen.stateWords(e,now,emptyList()) { true })
         // A short call of today on battery with budget: still being turned into text.
         val short=e.copy(durationMs=60_000)
-        assertEquals(CallsScreen.TRANSCRIBING,CallsScreen.stateWords(short,now,listOf(short.startMs)) { l -> PowerText.waitsForCharger(l.startMs,l.durationMs,now,p,false) })
+        assertEquals(CallsScreen.TRANSCRIBING,CallsScreen.stateWords(short,now,listOf(short.startMs)) { l -> PowerText.waitsForCharger(l.startMs,l.durationMs,now,p) })
     }
     @Test fun noticeWordsForACallWaitingForTheCharger() {
         val e=CallFollowupNotice.Entry(1,"김민수 대표",null,"h",now-30*min,now-26*min,state=CallFollowupNotice.CHARGER)
@@ -143,8 +143,8 @@ class R16TwoTest {
         assertEquals("확인할 통화",CallFollowupNotice.publicTitle(CallFollowupNotice.LATE))
         assertEquals("통화 정리 중",CallFollowupNotice.publicTitle(CallFollowupNotice.CHARGER))
         assertEquals("통화 알림 2개" to "정리 중 2건",CallFollowupNotice.summaryWords(listOf(CallFollowupNotice.CHARGER,CallFollowupNotice.WORKING)))
-        assertTrue(CallFollowupNotice.waitsForCharger(e,now,ledger(),false))
-        assertFalse(CallFollowupNotice.waitsForCharger(e,now,ledger(plugged="usb"),false))
+        assertTrue(CallFollowupNotice.waitsForCharger(e,now,ledger()))
+        assertFalse(CallFollowupNotice.waitsForCharger(e,now,ledger(plugged="usb")))
     }
 
     // ---- 4. the evening's last line ----
@@ -161,7 +161,5 @@ class R16TwoTest {
     @Test fun settingsWords() {
         assertEquals("배터리를 아끼려고 긴 녹음은 충전 중에 글자로 바꿔요. 오늘 배터리로 7분 썼어요(한도 20분)",PowerText.settingsLine(7))
         assertEquals("녹음 4개는 충전기에 꽂으면 글자로 바꿔요",PowerText.nowLine(4))
-        assertEquals("충전 중에만 글자로 바꾸기",PowerText.SWITCH)
-        assertFalse(PowerText.chargingOnly(JSONObject()));assertTrue(PowerText.chargingOnly(JSONObject().put(PipelineSettingsKeys.TRANSCRIBE_CHARGING_ONLY,true)))
     }
 }

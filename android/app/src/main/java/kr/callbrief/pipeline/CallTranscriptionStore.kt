@@ -210,11 +210,11 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
     fun bytesPerMs():Double? = db.query("SELECT sum(r.byte_count) AS b,sum(j.audio_ms) AS ms FROM call_transcription_jobs j JOIN recordings r ON r.recording_id=j.recording_id AND r.source_version=j.source_version WHERE j.audio_ms>0 AND r.byte_count>0")
         .singleOrNull()?.let { r -> val b=(r["b"] as? Number)?.toDouble() ?: 0.0;val ms=(r["ms"] as? Number)?.toDouble() ?: 0.0;if(b>0 && ms>0) b/ms else null }
     /** v3.6 (DESIGN_V6 3.2): queued recordings a battery run would not take (they wait for the charger), and the oldest
-     * queue entry among them. With [chargingOnly] every queued row waits. */
-    fun powerWaiting(w:BatteryWindow,chargingOnly:Boolean):Pair<Int,Long?> {
+     * queue entry among them. */
+    fun powerWaiting(w:BatteryWindow):Pair<Int,Long?> {
         val bpm=w.bytesPerMs ?: 0.0
-        val cond=if(chargingOnly) "1=1" else "(charging_only=1 OR q_at<CAST(? AS INTEGER) OR q_len IS NULL OR q_len<CAST(? AS INTEGER) OR q_len>CAST(? AS INTEGER))"
-        val args=mutableListOf<Any?>(bpm,bpm);if(!chargingOnly) args.addAll(listOf(w.fromMs,TranscriptionPower.SHORT_MIN_MS,TranscriptionPower.SHORT_MAX_MS))
+        val cond="(charging_only=1 OR q_at<CAST(? AS INTEGER) OR q_len IS NULL OR q_len<CAST(? AS INTEGER) OR q_len>CAST(? AS INTEGER))"
+        val args=mutableListOf<Any?>(bpm,bpm,w.fromMs,TranscriptionPower.SHORT_MIN_MS,TranscriptionPower.SHORT_MAX_MS)
         val r=db.query("""SELECT count(*) AS n,min(q_entered) AS m FROM (SELECT j.charging_only AS charging_only,coalesce(j.queued_ms,j.updated_ms) AS q_entered,
             coalesce(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0) AS q_at,${lengthSql("r.byte_count","coalesce(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)")} AS q_len
             FROM call_transcription_jobs j LEFT JOIN recordings r ON r.recording_id=j.recording_id AND r.source_version=j.source_version LEFT JOIN local_files l ON l.recording_id=j.recording_id
@@ -255,9 +255,6 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         db.execute("DELETE FROM call_transcription_splits WHERE recording_id=? AND source_version=? AND audio_sha=?",k.recordingId,k.sourceVersion,k.audioSha);null
     }
     /** r12-8 A4: the native run on piece [chunk] ran into its own deadline; the piece is done as two halves from now on. */
-    /** v4.0 r21 review M2: one more run of this recording stopped mid-piece by the charger going away; returns the count now. */
-    fun noteUnplugStop(k:Key):Int { db.execute("UPDATE call_transcription_jobs SET unplug_count=unplug_count+1 WHERE recording_id=? AND source_version=? AND audio_sha=?",k.recordingId,k.sourceVersion,k.audioSha)
-        return db.query("SELECT unplug_count AS n FROM call_transcription_jobs WHERE recording_id=? AND source_version=? AND audio_sha=?",k.recordingId,k.sourceVersion,k.audioSha).singleOrNull()?.get("n")?.let { (it as Number).toInt() } ?: 0 }
     fun askSplit(k:Key,chunk:Int)=db.execute("INSERT OR IGNORE INTO call_transcription_splits VALUES(?,?,?,?)",k.recordingId,k.sourceVersion,k.audioSha,chunk)
     fun splitAsked(k:Key,chunk:Int):Boolean = db.query("SELECT 1 FROM call_transcription_splits WHERE recording_id=? AND source_version=? AND audio_sha=? AND chunk=?",
         k.recordingId,k.sourceVersion,k.audioSha,chunk).isNotEmpty()

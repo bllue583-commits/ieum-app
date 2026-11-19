@@ -225,7 +225,7 @@ class R17MeasureTest:ProtectedTextHostTestBase() {
         assertNull(Telemetry.cpuMsOf("garbage",100))
         assertNotNull("this process can be read",Telemetry.processCpuMs())
         var l=PowerStats.noteCpu(null,t,1500,null);l=PowerStats.noteCpu(l,t,500,2_000)
-        val d=PowerText.heartbeat(l,false,t).getJSONObject("today")
+        val d=PowerText.heartbeat(l,t).getJSONObject("today")
         assertEquals(2000L,d.getLong("cpuMs"));assertEquals(2L,d.getLong("cpuRuns"));assertEquals(2000L,d.getLong("batteryUah"))
         // Text starts: the first one stays, the oldest go past the limit.
         var s=Telemetry.noteTextStart(null,"a",5);s=Telemetry.noteTextStart(s,"a",9)

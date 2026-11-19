@@ -55,15 +55,15 @@ class R17SttTest:ProtectedTextHostTestBase() {
         o=PowerStats.notePiece(o,50_000,7_000,6,cold=false,now=base+6*minute)
         assertEquals(50_000.0/30_000,o.getJSONObject("chunk").getDouble("lastRate"),0.001)
         assertFalse("the old rate (7.1 per audio ms) was 3.5x the cold one",PowerStats.slow(o,base+7*minute))
-        assertNull(PowerPolicy.hotWhy(snap(),PowerStats.budget(o,snap(),base+7*minute,false)))
-        assertTrue(PowerPolicy.decide(snap(),PowerStats.budget(o,snap(),base+7*minute,false),base+7*minute) is PowerPolicy.Decision.Run)
+        assertNull(PowerPolicy.hotWhy(snap(),PowerStats.budget(o,snap(),base+7*minute)))
+        assertTrue(PowerPolicy.decide(snap(),PowerStats.budget(o,snap(),base+7*minute),base+7*minute) is PowerPolicy.Decision.Run)
     }
     @Test fun aTwoMinutePieceThatReallyRunsSlowIsSlow() {
         var o=PowerStats.notePiece(null,240_000,120_000,6,cold=true,now=base)
         o=PowerStats.notePiece(o,350_000,120_000,6,cold=false,now=base+6*minute);assertFalse(PowerStats.slow(o,base+7*minute))
         o=PowerStats.notePiece(o,360_000,120_000,6,cold=false,now=base+12*minute)
         assertTrue("1.5x the cold piece",PowerStats.slow(o,base+13*minute))
-        val b=PowerStats.budget(o,snap(),base+13*minute,false)
+        val b=PowerStats.budget(o,snap(),base+13*minute)
         assertEquals("slow",PowerPolicy.hotWhy(snap(),b))
         assertEquals("headroom",PowerPolicy.hotWhy(snap(headroom=0.9f),b));assertEquals("temp",PowerPolicy.hotWhy(snap(temp=400),b))
         val w=PowerPolicy.decide(snap(),b,base+13*minute) as PowerPolicy.Decision.Wait
@@ -75,8 +75,8 @@ class R17SttTest:ProtectedTextHostTestBase() {
         o=PowerStats.notePiece(o,360_000,120_000,6,cold=false,now=end)
         // The run yields; the next wake at once finds it hot: a 10-minute rest, counted as slow.
         val t1=end+minute
-        assertTrue(PowerPolicy.hot(snap(),PowerStats.budget(o,snap(),t1,false)))
-        o=PowerStats.noteHot(o,t1,PowerPolicy.hotWhy(snap(),PowerStats.budget(o,snap(),t1,false)))
+        assertTrue(PowerPolicy.hot(snap(),PowerStats.budget(o,snap(),t1)))
+        o=PowerStats.noteHot(o,t1,PowerPolicy.hotWhy(snap(),PowerStats.budget(o,snap(),t1)))
         assertEquals(1,o.getJSONObject("today").getJSONObject("hot").getInt("slow"))
         // An hourly tick during the rest: still hot, and the rest does not start again.
         val tick=t1+4*minute
@@ -85,7 +85,7 @@ class R17SttTest:ProtectedTextHostTestBase() {
         val t2=t1+TranscriptionPower.HOT_DELAY_MS
         assertTrue(t2-end<TranscriptionPower.COLD_AFTER_MS)
         assertFalse(PowerStats.slow(o,t2))
-        assertTrue(PowerPolicy.decide(snap(),PowerStats.budget(o,snap(),t2,false),t2) is PowerPolicy.Decision.Run)
+        assertTrue(PowerPolicy.decide(snap(),PowerStats.budget(o,snap(),t2),t2) is PowerPolicy.Decision.Run)
         o.put("lastRunEndMs",end)
         assertTrue("the first piece after a hot rest is cold",PowerStats.coldStart(o,t2))
         assertFalse("no rest, a short break: not cold",PowerStats.coldStart(JSONObject().put("lastRunEndMs",end),end+minute))
@@ -94,7 +94,7 @@ class R17SttTest:ProtectedTextHostTestBase() {
         assertEquals(2,o.getJSONObject("chunk").getJSONArray("coldRates").length())
         assertFalse(PowerStats.slow(o,t2+7*minute))
         // The heartbeat splits hotSkips by cause.
-        val hb=PowerText.heartbeat(o,false,t2+7*minute).getJSONObject("today").getJSONObject("hot")
+        val hb=PowerText.heartbeat(o,t2+7*minute).getJSONObject("today").getJSONObject("hot")
         assertEquals("two wakes skipped (the rest and the tick in it)",2,hb.getInt("slow"));assertEquals(0,hb.getInt("headroom"));assertEquals(0,hb.getInt("temp"));assertEquals(0,hb.getInt("severe"))
     }
     @Test fun theExpectedTimeCountsWindowsSoATailDoesNotSplitTheNextPiece() {
@@ -210,7 +210,7 @@ class R17SttTest:ProtectedTextHostTestBase() {
         rec("a",afternoon-3*hour,40.0);rec("b",afternoon-2*hour,40.0);rec("c",afternoon-hour,40.0)
         val s0=snap(pct=70,plugged="none",status="discharging",headroom=0.4f)
         var ledger=JSONObject()
-        val start=PowerPolicy.decide(s0,PowerStats.budget(ledger,s0,clock,false),clock) as PowerPolicy.Decision.Run
+        val start=PowerPolicy.decide(s0,PowerStats.budget(ledger,s0,clock),clock) as PowerPolicy.Decision.Run
         assertEquals(PowerPolicy.Mode.BATTERY,start.mode)
         var ownStart:Long?=null
         val events=object:CallTranscriptionRunner.Events {
@@ -224,7 +224,7 @@ class R17SttTest:ProtectedTextHostTestBase() {
             CallTranscriptionRunner(s,model,PipelineAudioDecoder(),t,read={ c -> PipelineBytesInput(wavs.getValue(c.key.recordingId).copyOf()) },
                 skipReason={null},sink={sink},now={clock},battery=CallTranscriptionStore.BatteryWindow(PowerPolicy.dayStartMs(clock),1.0),
                 runLimitMs=start.runLimitMs,rate={ PowerStats.rate(ledger) },events=events,
-                keepGoing={ PowerStats.stillRuns(ledger,s0,clock,false,PowerPolicy.Mode.BATTERY,if(own) ownStart else null) }).run()
+                keepGoing={ PowerStats.stillRuns(ledger,s0,clock,PowerPolicy.Mode.BATTERY,if(own) ownStart else null) }).run()
         }
         return pass to sunk
     }
@@ -239,12 +239,12 @@ class R17SttTest:ProtectedTextHostTestBase() {
     @Test fun anotherRunsStartMarkStillHoldsTheGap() {
         val s=snap(pct=70,plugged="none",status="discharging")
         val o=PowerStats.noteBatteryStart(JSONObject(),base)
-        assertEquals("gap",(PowerPolicy.decide(s,PowerStats.budget(o,s,base+minute,false),base+minute) as PowerPolicy.Decision.Wait).reason)
-        assertTrue(PowerPolicy.decide(s,PowerStats.budget(o,s,base+minute,false,ownStartMs=base),base+minute) is PowerPolicy.Decision.Run)
-        assertFalse("another start",PowerStats.stillRuns(o,s,base+minute,false,PowerPolicy.Mode.BATTERY,base-1))
+        assertEquals("gap",(PowerPolicy.decide(s,PowerStats.budget(o,s,base+minute),base+minute) as PowerPolicy.Decision.Wait).reason)
+        assertTrue(PowerPolicy.decide(s,PowerStats.budget(o,s,base+minute,ownStartMs=base),base+minute) is PowerPolicy.Decision.Run)
+        assertFalse("another start",PowerStats.stillRuns(o,s,base+minute,PowerPolicy.Mode.BATTERY,base-1))
         // The budget still counts: past 20 minutes of today's battery runs the run ends.
         val spent=JSONObject().put("today",JSONObject().put("day",PowerPolicy.day(base)).put("battery",JSONObject().put("ms",TranscriptionPower.BATTERY_BUDGET_MS)))
-        assertFalse(PowerStats.stillRuns(PowerStats.noteBatteryStart(spent,base),s,base+minute,false,PowerPolicy.Mode.BATTERY,base))
+        assertFalse(PowerStats.stillRuns(PowerStats.noteBatteryStart(spent,base),s,base+minute,PowerPolicy.Mode.BATTERY,base))
     }
 
     // ---- v3.6.1 fix (review, medium): only a rest for a slow piece makes the next piece cold ----

@@ -377,12 +377,10 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         body.addView(switchRow("consent_switch",s.optBoolean(PipelineSettingsKeys.CONSENT_GRANTED,false),PipelineSettingsKeys.CONSENT_GRANTED) { on ->
             if(on) "켜짐: 통화 내용을 정리해요" else "꺼짐: 정리하지 않아요" })
 
-        // v3.6 (DESIGN_V6 3.2, r16-2): the battery, in one line and one switch.
+        // v3.6 (DESIGN_V6 3.2, r16-2): the battery, in one line. v4.1 r22-3: its switch "충전 중에만" is gone (user 11/19).
         sub("글자로 바꾸기")
         val now=System.currentTimeMillis()
         body.addView(CallUi.text(a,PowerText.settingsLine(PowerText.batteryMinToday(PowerText.ledger(s),now)),CallUi.BODY).apply { tag="power_line";fontFeatureSettings="tnum" })
-        body.addView(switchRow("charging_only_switch",PowerText.chargingOnly(s),PipelineSettingsKeys.TRANSCRIBE_CHARGING_ONLY,
-            done={ runCatching { CallTranscriptionWork.enqueue(a) } }) { PowerText.SWITCH })
 
         sub("알림 시각")
         hourRow("저녁 통화 정리",PipelineSettingsKeys.EVENING_HOUR,s.optInt(PipelineSettingsKeys.EVENING_HOUR,19),15..23)

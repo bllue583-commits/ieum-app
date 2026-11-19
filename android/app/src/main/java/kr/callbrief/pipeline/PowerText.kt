@@ -15,7 +15,6 @@ internal object PowerText {
         is JSONObject -> v
         is String -> PowerStats.parse(v)
         else -> JSONObject() }
-    fun chargingOnly(s:JSONObject?)=s?.optBoolean(PipelineSettingsKeys.TRANSCRIBE_CHARGING_ONLY,false) ?: false
 
     /** "today" when it is today's KST day, else null (another day: today's numbers are 0). */
     fun today(o:JSONObject?,now:Long):JSONObject? = o?.optJSONObject("today")?.takeIf { it.optInt("day")==PowerPolicy.day(now) }
@@ -35,14 +34,13 @@ internal object PowerText {
     }
 
     /** Whether a call's recording still waiting for its text waits for the charger (DESIGN_V6 2.2): not plugged in (the last
-     * snapshot says "none"; unknown counts only with the switch on), and the switch on, or the battery too low or in power
+     * snapshot says "none"; unknown does not count), and the battery too low or in power
      * saving, or the call not "today, short" (outside [TranscriptionPower.SHORT_MIN_MS]..[TranscriptionPower.SHORT_MAX_MS], or
      * not of today KST), or today's battery budget used up. Without the transcription DB: from the ledger [power] only. */
-    fun waitsForCharger(callStartMs:Long,callDurationMs:Long,nowMs:Long,power:JSONObject?,chargingOnly:Boolean):Boolean {
+    fun waitsForCharger(callStartMs:Long,callDurationMs:Long,nowMs:Long,power:JSONObject?):Boolean {
         val b=power?.optJSONObject("battery")
         val plug=b?.optString("plugged")?.takeIf { it.isNotEmpty() }
         if(plug!=null && plug!="none") return false
-        if(chargingOnly) return true
         if(b==null || plug==null) return false
         if(b.optInt("batteryPct",100)<TranscriptionPower.BATTERY_MIN_PCT || b.optBoolean("powerSave",false)) return true
         if(callDurationMs<TranscriptionPower.SHORT_MIN_MS || callDurationMs>TranscriptionPower.SHORT_MAX_MS) return true
@@ -52,19 +50,16 @@ internal object PowerText {
 
     // ---- words (DESIGN_V6 3.2) ----
     fun settingsLine(minToday:Long)="배터리를 아끼려고 긴 녹음은 충전 중에 글자로 바꿔요. 오늘 배터리로 ${minToday}분 썼어요(한도 ${TranscriptionPower.BATTERY_BUDGET_MIN}분)"
-    const val SWITCH="충전 중에만 글자로 바꾸기"
     fun nowLine(n:Int)="녹음 ${n}개는 충전기에 꽂으면 글자로 바꿔요"
     fun lightLong(n:Int)="녹음 ${n}개가 이틀째 충전을 기다려요. 밤에 충전기에 꽂아 두면 정리돼요"
     fun lightGreen(n:Int)="충전하면 ${n}개를 바꿔요"
     fun eveningLine(n:Int)="충전하면 ${n}개를 이어서 정리해요"
 
     // ---- the heartbeat's `power` block (DESIGN_V6 3.1): numbers and short codes only ----
-    private val DAY_COUNTS=listOf("gapSkips","hotSkips","inCallSkips","morningSkips","lowSkips","powerSaveSkips","chargingOnlySkips","budgetSkips",
+    private val DAY_COUNTS=listOf("gapSkips","hotSkips","inCallSkips","morningSkips","lowSkips","powerSaveSkips","budgetSkips",
         "plugDropped","killedChunkMs","deadlineMs","yieldCount","yieldMs","modelLoads","modelLoadMs","decodeAudioMs",
         // v3.7 r17-3: the runs' process CPU time and the charge the battery runs took ([PowerStats.noteCpu]).
-        "cpuMs","cpuRuns","batteryUah",
-        // v4.0 r21-3: plugged-in runs stopped because the charger went away ("충전 중에만"), and the piece work they threw away.
-        "unplugStops","unplugLostMs")
+        "cpuMs","cpuRuns","batteryUah")
     /** v3.6.1 (T1): the causes counted under today's `hot` ([PowerStats.noteHot]). */
     val HOT_WHY=listOf("headroom","temp","slow","severe")
     private fun n(o:JSONObject?,k:String)=(o?.opt(k) as? Number)?.toLong()?.coerceAtLeast(0) ?: 0L
@@ -95,7 +90,7 @@ internal object PowerText {
             .put("fgN",pr?.optJSONArray("fg")?.length() ?: 0).put("bgN",pr?.optJSONArray("bg")?.length() ?: 0))
         return o
     }
-    fun heartbeat(ledger:JSONObject?,chargingOnly:Boolean,now:Long):JSONObject {
+    fun heartbeat(ledger:JSONObject?,now:Long):JSONObject {
         val o=JSONObject();val l=ledger ?: JSONObject()
         val b=l.optJSONObject("battery")
         fun code(k:String)=b?.optString(k)?.let(PhoneStatus::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL
@@ -119,7 +114,8 @@ internal object PowerText {
             .put("tokensLast",JSONObject.NULL).put("perTokenMsLast",JSONObject.NULL))
         val w=waiting(l)
         o.put("waiting",JSONObject().put("n",w.n).put("oldestMin",w.oldestMs?.let { ((now-it)/60_000).coerceAtLeast(0) } ?: JSONObject.NULL))
-        o.put("chargingOnly",chargingOnly)
+        // v4.1 r22-3: the switch is gone; the key stays, always false, for readers of older heartbeats.
+        o.put("chargingOnly",false)
         // v3.7 T5: the [transcribeForeground] setting the last run saw, and whether that day was a foreground day.
         o.put("fgSetting",l.optString("fgSetting").takeIf { it=="auto" || it=="on" || it=="off" } ?: JSONObject.NULL)
         o.put("fgOn",(l.opt("fgOn") as? Boolean) ?: JSONObject.NULL)

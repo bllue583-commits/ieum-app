@@ -154,7 +154,7 @@ class R17OneTest:ProtectedTextHostTestBase() {
             assertEquals("short",s.nextQueued(null,w)!!.candidate.key.recordingId)
             val k2=key(s,"short");s.claim(k2);s.finish(k2,"DONE","")
             assertNull("long: 6 minutes by the log",s.nextQueued(null,w))
-            assertEquals(1,s.powerWaiting(w,false).first)
+            assertEquals(1,s.powerWaiting(w).first)
         }
     }
 
@@ -268,7 +268,7 @@ class R17OneTest:ProtectedTextHostTestBase() {
         l=PowerStats.notePiece(l,300_000,120_000,6,cold=false,now=t+10*minute,foreground=false)
         l=PowerStats.notePiece(l,500_000,120_000,4,cold=false,now=t+11*minute) // battery: in neither
         l=PowerStats.noteFgSetting(l,"auto",true)
-        val hb=PowerText.heartbeat(l,false,t+hour)
+        val hb=PowerText.heartbeat(l,t+hour)
         val today=hb.getJSONObject("today")
         val fg=today.getJSONObject("fg")
         assertEquals(1,fg.getInt("runs"));assertEquals(120,fg.getInt("min"));assertEquals(1,fg.getInt("refused"));assertEquals(0,fg.getInt("timeout"))
@@ -276,7 +276,7 @@ class R17OneTest:ProtectedTextHostTestBase() {
         assertEquals(210_000L,med.getLong("fg"));assertEquals(300_000L,med.getLong("bg"));assertEquals(2,med.getInt("fgN"));assertEquals(1,med.getInt("bgN"))
         assertEquals("auto",hb.getString("fgSetting"));assertTrue(hb.getBoolean("fgOn"))
         // Nothing yet: zeros and nulls, the block always there.
-        val empty=PowerText.heartbeat(null,false,t).getJSONObject("today")
+        val empty=PowerText.heartbeat(null,t).getJSONObject("today")
         assertEquals(0,empty.getJSONObject("fg").getInt("runs"));assertTrue(empty.getJSONObject("pieceMedianMs").isNull("fg"))
     }
     @Test fun theForegroundNoticeIsQuietAndOneLine() {
@@ -310,9 +310,9 @@ class R17OneTest:ProtectedTextHostTestBase() {
         // Heartbeat: today.fg{cpus, cpuset, threads}; a text never gets through as the cpuset.
         val t=kst(10,2)
         var l=PowerStats.noteFgCpu(PowerStats.noteFg(null,t,"run",60_000),t,8,"foreground",6)
-        var fg=PowerText.heartbeat(l,false,t+60_000).getJSONObject("today").getJSONObject("fg")
+        var fg=PowerText.heartbeat(l,t+60_000).getJSONObject("today").getJSONObject("fg")
         assertEquals(8,fg.getInt("cpus"));assertEquals("foreground",fg.getString("cpuset"));assertEquals(6,fg.getInt("threads"));assertEquals(1,fg.getInt("runs"))
-        fg=PowerText.heartbeat(PowerStats.noteFg(null,t,"run",60_000),false,t+60_000).getJSONObject("today").getJSONObject("fg")
+        fg=PowerText.heartbeat(PowerStats.noteFg(null,t,"run",60_000),t+60_000).getJSONObject("today").getJSONObject("fg")
         assertTrue(fg.isNull("cpus"));assertTrue(fg.isNull("cpuset"));assertTrue(fg.isNull("threads"))
     }
 }

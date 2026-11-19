@@ -190,3 +190,4 @@
 | (r22-2) 원래 모드와 제한 반영 모드 둘 다 | 지금까지 하트비트의 `mode`는 이름과 달리 제한 반영 모드(`unsafeCheckOpNoThrow`)였다. 원래 모드는 `:r`/`rawMode`로 새로 | 코드 확인(`CardProbe.overlayMode`) — 11/17~19의 `m2`는 제한 반영 값 |
 | (r22-2) "통화 전 허용 → 통화 중 거부 → 통화 뒤 허용" | 통화 중 값은 실패 순간의 부호 `:d0`로 본다(따로 읽지 않음) | 실패 순간에 이미 `canDrawOverlays`를 읽는다 |
 | (r22-2) 막힌 뒤 통화가 끝나면 아무것도 안 띄움 | 지금 동작과 같아 코드는 바꾸지 않음 | 지시문대로 우회 없음 |
+| (r22-3) "충전 중에만" 스위치 | 지움: 설정 줄, 저장값 읽기, `PowerPolicy`의 분기, `UnplugStop`·`UnplugWatch`·반으로 나누기(`UNPLUG_SPLIT_AFTER`), 하트비트 `unplugStops`·`unplugLostMs`·`chargingOnlySkips`. `power.chargingOnly`는 늘 false로 남김. DB 열 `unplug_count`는 남김 | 사용자 결정 11/19: 배터리 괜찮음, 스위치 삭제. 키를 남긴 것은 옛 하트비트를 읽는 도구가 깨지지 않게 |

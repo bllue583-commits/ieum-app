@@ -219,10 +219,10 @@ internal object CallFollowupNotice {
     internal fun chargerPass(context:Context,s:JSONObject,now:Long):Int {
         val open=entries(context).filter { (it.state==WORKING || it.state==CHARGER) && it.record==null }
         if(open.isEmpty()) return 0
-        val power=PowerText.ledger(s);val only=PowerText.chargingOnly(s)
+        val power=PowerText.ledger(s)
         val db=runCatching { store(context) }.getOrNull()
         val changed=open.mapNotNull { e ->
-            val waits=now-e.endedMs>=PowerText.SAY_AFTER_MS && waitsForCharger(e,now,power,only) &&
+            val waits=now-e.endedMs>=PowerText.SAY_AFTER_MS && waitsForCharger(e,now,power) &&
                 RecordingGap.window(e.startedMs,e.endedMs-e.startedMs).let { w -> runCatching { db?.transcribingStarts(w.first,w.last+1) }.getOrNull()?.isNotEmpty()==true }
             when {
                 waits && e.state==WORKING -> e.copy(state=CHARGER)
@@ -236,8 +236,8 @@ internal object CallFollowupNotice {
         return changed.size
     }
     /** [PowerText.waitsForCharger] for the call of [e] (its length from the call's start and end). */
-    internal fun waitsForCharger(e:Entry,now:Long,power:JSONObject?,chargingOnly:Boolean)=
-        PowerText.waitsForCharger(e.startedMs,(e.endedMs-e.startedMs).coerceAtLeast(0),now,power,chargingOnly)
+    internal fun waitsForCharger(e:Entry,now:Long,power:JSONObject?)=
+        PowerText.waitsForCharger(e.startedMs,(e.endedMs-e.startedMs).coerceAtLeast(0),now,power)
 
     // ---- 3. the hourly tick and the evening report ------------------------------------------------------------------
     /** The hourly pass and the evening report call this. Notices of calls before an evening report that went out are taken away;

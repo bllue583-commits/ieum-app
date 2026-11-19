@@ -109,8 +109,8 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
     /** v4.0 r21-1: when this day's recordings whose text could not be made were made. */
     private var failedStarts:List<Long> =emptyList()
     private var folder=false
-    /** v3.6: the power ledger and the switch [충전 중에만 글자로 바꾸기], read with the day (a recording waiting for the charger). */
-    private var power=org.json.JSONObject();private var chargingOnly=false
+    /** v3.6: the power ledger, read with the day (a recording waiting for the charger). */
+    private var power=org.json.JSONObject()
     /** True from a day change (or the first opening) until that day is read: the list shows "불러오는 중이에요". */
     private var reading=true
     /** Where the list was scrolled when a detail page opened from it; put back once the list is drawn again (design G1). */
@@ -172,7 +172,7 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
             } }
             if(!live()||target!=day)return@launch
             result.onSuccess { calls=it.calls;logs=it.logs;jobStarts=it.jobs;failedStarts=it.failed;folder=it.settings.optString("treeUri").isNotBlank()
-                power=runCatching { PowerText.ledger(it.settings) }.getOrDefault(org.json.JSONObject());chargingOnly=PowerText.chargingOnly(it.settings)
+                power=runCatching { PowerText.ledger(it.settings) }.getOrDefault(org.json.JSONObject())
                 people=people+it.people;open=it.open;wrong=it.wrong;reading=false;pool=null;render() }
             result.onFailure {
                 reading=false
@@ -241,7 +241,7 @@ internal class CallsScreen(a:MainActivity):AppScreen(a) {
         val who=e.name ?: e.numberKey?.let(CallUi::who) ?: "모르는 번호"
         val time=CallUi.time(e.startMs)
         // v3.1 (DESIGN_V4 2.1-4): being turned into text only with a job in the call's window, else looked for, then none.
-        val words=stateWords(e,now,jobStarts,failedStarts) { l -> PowerText.waitsForCharger(l.startMs,l.durationMs,now,power,chargingOnly) }
+        val words=stateWords(e,now,jobStarts,failedStarts) { l -> PowerText.waitsForCharger(l.startMs,l.durationMs,now,power) }
         val pending=words==TRANSCRIBING || words==PowerText.CHARGER_WORDS
         val row=when {
             e.personal -> CallUi.logRow(a,time,who,"개인 통화",CallUi.SUBTLE)

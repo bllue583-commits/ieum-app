@@ -160,9 +160,10 @@ class R16OneTest:ProtectedTextHostTestBase() {
         assertTrue(PowerPolicy.decide(snap(pct=90,plugged="ac"),PowerBudget(),six) is PowerPolicy.Decision.Run)
         assertTrue(PowerPolicy.decide(snap(pct=50,plugged="ac"),PowerBudget(),six+hour) is PowerPolicy.Decision.Run)
     }
-    @Test fun theSwitchKeepsEverythingForTheCharger() {
-        assertEquals("chargingOnly",wait(PowerPolicy.decide(snap(pct=100),PowerBudget(chargingOnly=true),base)).reason)
-        assertTrue(PowerPolicy.decide(snap(plugged="ac"),PowerBudget(chargingOnly=true),base) is PowerPolicy.Decision.Run)
+    @Test fun theBatteryRunsWithinItsGuardsWithoutASwitch() {
+        // v4.1 r22-3: the switch "충전 중에만" is gone; a full battery runs, nothing reads a saved "on" from before.
+        assertTrue(PowerPolicy.decide(snap(pct=100),PowerBudget(),base) is PowerPolicy.Decision.Run)
+        assertTrue(PowerPolicy.decide(snap(plugged="ac"),PowerBudget(),base) is PowerPolicy.Decision.Run)
     }
     @Test fun threadsStayWithinTheCoresTheProcessMayUse() {
         assertEquals(4,CpuSet.count("0-3"));assertEquals(5,CpuSet.count("0-3,6"));assertEquals(8,CpuSet.count("0-7"));assertNull(CpuSet.count(""));assertNull(CpuSet.count("x"))
@@ -177,17 +178,17 @@ class R16OneTest:ProtectedTextHostTestBase() {
         val t=o.getJSONObject("today")
         assertEquals(1,t.getJSONObject("battery").getInt("runs"));assertEquals(6,t.getJSONObject("battery").getInt("min"));assertEquals(12,t.getJSONObject("battery").getInt("mAhScreenOff"))
         assertEquals(9,t.getJSONObject("plugged").getInt("min"));assertEquals(2,t.getInt("gapSkips"));assertEquals("min",t.getString("budgetHit"))
-        val b=PowerStats.budget(o,snap(),base+hour,false)
+        val b=PowerStats.budget(o,snap(),base+hour)
         assertEquals(6*minute,b.batteryRunMs);assertEquals(base,b.lastBatteryRunEndMs)
         // A battery run the process died in: the gap holds while it may still run, then it counts as a whole run.
         val started=PowerStats.noteBatteryStart(o,base+2*hour)
-        assertEquals(base+2*hour+minute,PowerStats.budget(started,snap(),base+2*hour+minute,false).lastBatteryRunEndMs)
-        val dead=PowerStats.budget(started,snap(),base+3*hour,false)
+        assertEquals(base+2*hour+minute,PowerStats.budget(started,snap(),base+2*hour+minute).lastBatteryRunEndMs)
+        val dead=PowerStats.budget(started,snap(),base+3*hour)
         assertEquals(base+2*hour+TranscriptionPower.SELF_END_MS,dead.lastBatteryRunEndMs);assertEquals(6*minute+TranscriptionPower.SELF_END_MS,dead.batteryRunMs)
-        assertEquals("a run that wrote its end clears the mark",6*minute+minute,PowerStats.budget(PowerStats.noteRun(started,base+2*hour+minute,PowerPolicy.Mode.BATTERY,minute,0,null),snap(),base+3*hour,false).batteryRunMs)
+        assertEquals("a run that wrote its end clears the mark",6*minute+minute,PowerStats.budget(PowerStats.noteRun(started,base+2*hour+minute,PowerPolicy.Mode.BATTERY,minute,0,null),snap(),base+3*hour).batteryRunMs)
         // The next KST day starts again; yesterday is prev.
         val next=base+24*hour
-        assertEquals(0L,PowerStats.budget(o,snap(),next,false).batteryRunMs)
+        assertEquals(0L,PowerStats.budget(o,snap(),next).batteryRunMs)
         o=PowerStats.noteSkip(o,next,"low")
         assertEquals(1,o.getJSONObject("prev").getJSONObject("battery").getInt("runs"));assertFalse(o.getJSONObject("today").has("battery"))
         // A piece on another thread count starts the speed list again.
@@ -208,9 +209,8 @@ class R16OneTest:ProtectedTextHostTestBase() {
             val pass=runner(s,t,battery=w).run()
             assertEquals("IDLE",pass.state);assertEquals(listOf("short2","short1"),sunk)
             for(id in listOf("yesterday","long","tiny","long2")) assertEquals(id,"QUEUED",state(s,id).first)
-            val (n,oldest)=s.powerWaiting(w,chargingOnly=false)
+            val (n,oldest)=s.powerWaiting(w)
             assertEquals(4,n);assertNotNull(oldest)
-            assertEquals("the switch: every queued row waits",4,s.powerWaiting(w,chargingOnly=true).first)
             assertEquals("unknown length (no size ratio) is not taken on battery",null,s.nextQueued(null,CallTranscriptionStore.BatteryWindow(today,null)))
         }
     }

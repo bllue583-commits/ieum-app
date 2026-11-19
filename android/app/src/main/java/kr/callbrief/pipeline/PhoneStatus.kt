@@ -56,8 +56,8 @@ internal object PhoneStatus {
         /** DESIGN_V5 (v3.5, key commit makes the places, r15-1 writes the values): the KakaoTalk morning report. */
         val v35:V35=V35(),
         /** DESIGN_V6 3.1 (v3.6, r16-2): the power ledger r16-1 writes ([PipelineSettingsKeys.TRANSCRIPTION_POWER]) and the switch
-         * [충전 중에만 글자로 바꾸기]; the heartbeat's `power` block ([PowerText.heartbeat]), always there, numbers and codes only. */
-        val powerLedger:JSONObject?=null,val chargingOnly:Boolean=false,
+         * (v4.1 r22-3: the switch "충전 중에만" is gone); the heartbeat's `power` block ([PowerText.heartbeat]), always there, numbers and codes only. */
+        val powerLedger:JSONObject?=null,
         /** DESIGN_V7 3.3 (v3.7, r17-3): the scorecard's measurement ([V37]). */
         val v37:V37=V37(),
         /** v3.8 r18-lock (DESIGN_V7 4.2): `security{certCheck, certSelf, saltedHash, legacyHashes}` ([UpdateCert.heartbeat],
@@ -195,7 +195,7 @@ internal object PhoneStatus {
         o.put("guard",i.v33.guard?.let(::counts) ?: JSONObject.NULL)
         putV34(o,i.v34)
         putV35(o,i.v35)
-        o.put("power",runCatching { PowerText.heartbeat(i.powerLedger,i.chargingOnly,i.nowMs) }.getOrElse { JSONObject.NULL })
+        o.put("power",runCatching { PowerText.heartbeat(i.powerLedger,i.nowMs) }.getOrElse { JSONObject.NULL })
         putV37(o,i.v37)
         o.put("security",i.security ?: JSONObject.NULL)
         o.optJSONObject("update")?.put("certUnknown",i.certUnknown)
@@ -393,7 +393,6 @@ internal object PhoneStatus {
             v34 = v34(app,s),
             v35 = v35(s),
             powerLedger = runCatching { PowerText.ledger(s) }.getOrNull(),
-            chargingOnly = PowerText.chargingOnly(s),
             v37 = runCatching { v37(app,s,now) }.onFailure { Log.w(TAG,"v3.7 numbers not read: ${it.javaClass.simpleName}") }.getOrDefault(V37()),
             security = runCatching { security(s) }.getOrNull(),certUnknown = UpdateCert.unknownCount(s),
             bench = kr.callbrief.pipeline.bench.Bench.heartbeat(s),samples = kr.callbrief.pipeline.bench.Samples.heartbeat(s),
