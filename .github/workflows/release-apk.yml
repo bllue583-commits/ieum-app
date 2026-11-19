@@ -102,10 +102,12 @@ jobs:
           IEUM_SIGNING_SEED: ${{ secrets.IEUM_SIGNING_SEED }}
           # v3.5: Kakao native app key; empty = the KakaoTalk morning report hides itself (the build still works).
           IEUM_KAKAO_APP_KEY: ${{ secrets.IEUM_KAKAO_APP_KEY }}
-          # r18: the user's own 5-item KakaoTalk list template and the web view's address (repository variables, not secrets;
-          # empty = Kakao's default list of 3 and no [웹으로 보기]). docs/OPERATIONS.md says how to make both.
-          IEUM_KAKAO_LIST_TEMPLATE_ID: ${{ vars.IEUM_KAKAO_LIST_TEMPLATE_ID }}
-          IEUM_KAKAO_WEB_BASE: ${{ vars.IEUM_KAKAO_WEB_BASE }}
+          # r18: the user's own 5-item KakaoTalk list template and the web view's address. Neither is a secret. v4.1 (11/19): the
+          # template (Kakao console, app 이음, "이음 아침 보고 5줄") and the GitHub Pages site (feature/lean-calls, /docs) exist, so
+          # their values are the defaults here; a repository variable of the same name still wins. To go back to Kakao's default
+          # list of 3 with no [웹으로 보기], set both defaults to ''. docs/OPERATIONS.md says how both were made.
+          IEUM_KAKAO_LIST_TEMPLATE_ID: ${{ vars.IEUM_KAKAO_LIST_TEMPLATE_ID || '139143' }}
+          IEUM_KAKAO_WEB_BASE: ${{ vars.IEUM_KAKAO_WEB_BASE || 'https://bllue583-commits.github.io/ieum-app/report/' }}
           # r18-lock: with IEUM_ROTATE=1 Gradle signs with the new key (re-signed with the lineage below); the old key is not made.
           ROTATE: ${{ vars.IEUM_ROTATE }}
           IEUM_SIGNING_SEED_V2: ${{ vars.IEUM_ROTATE == '1' && secrets.IEUM_SIGNING_SEED_V2 || '' }}
