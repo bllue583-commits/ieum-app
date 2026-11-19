@@ -69,7 +69,9 @@ internal object PhoneStatus {
         /** v3.9 r20-2 (DESIGN_V7 6): `feedback{wrong, undone}` ([TaskFeedback.heartbeat]), counts only; zeros when null. */
         val feedback:JSONObject?=null,
         /** v4.1 r22-1: `privacy{keptByName, keptByLink, uploadedUnlinked}` ([privacy]), counts only. */
-        val privacy:JSONObject?=null)
+        val privacy:JSONObject?=null,
+        /** v4.1 r22-4: `selfCheck{day, shown[code]}` ([selfCheck]): the self-check notices shown that day, codes only. */
+        val selfCheck:JSONObject?=null)
     /** v3.7 r17-3 (DESIGN_V7 3.3, SCORECARD): [latency] goes into `latency` beside the 7-day numbers ({segments{endToText,
      * textToUpload,uploadToApplied}, day{p50Min,p90Min,n,waiting}, over7d}); [window14] into `transcription.window14`
      * {created,failed,failedPermanent,days}; [coverage] is `report.coverage` ([kr.callbrief.pipeline.report.ReportCoverage.snapshot])
@@ -201,6 +203,7 @@ internal object PhoneStatus {
         i.samples?.let { o.put("samples",kr.callbrief.pipeline.bench.Bench.safe(it)) }
         o.put("feedback",TaskFeedback.heartbeat(i.feedback?.let { JSONObject().put(TaskFeedback.KEY,it) }))
         o.put("privacy",i.privacy ?: JSONObject.NULL)
+        o.put("selfCheck",i.selfCheck ?: JSONObject.NULL)
         return o
     }
     /** v3.7 r17-3: the scorecard's blocks. `use` and `report.coverage` always (null inside until known), the rest when known. */
@@ -394,8 +397,12 @@ internal object PhoneStatus {
             v37 = runCatching { v37(app,s,now) }.onFailure { Log.w(TAG,"v3.7 numbers not read: ${it.javaClass.simpleName}") }.getOrDefault(V37()),
             security = runCatching { security(s) }.getOrNull(),certUnknown = UpdateCert.unknownCount(s),
             bench = kr.callbrief.pipeline.bench.Bench.heartbeat(s),samples = kr.callbrief.pipeline.bench.Samples.heartbeat(s),
-            feedback = TaskFeedback.heartbeat(s),privacy = privacy(s))
+            feedback = TaskFeedback.heartbeat(s),privacy = privacy(s),selfCheck = selfCheck(s))
     }
+    /** v4.1 r22-4: the day and codes [SelfCheckNotices] keeps for its once-a-day rule, as they are (codes only: A-Z, 0-9, _). */
+    internal fun selfCheck(s:JSONObject):JSONObject=JSONObject()
+        .put("day",s.optString(SelfCheckNotices.DAY_KEY).takeIf { Regex("""\d{4}-\d{2}-\d{2}""").matches(it) } ?: JSONObject.NULL)
+        .put("shown",org.json.JSONArray().apply { s.optString(SelfCheckNotices.SHOWN_KEY).split(',').filter { Regex("[A-Z0-9_]{1,40}").matches(it) }.distinct().forEach { put(it) } })
     /** v4.1 r22-1 (design E9): the privacy gate of calls without their call-log entry, numbers only (zeros when none). */
     internal fun privacy(s:JSONObject):JSONObject=JSONObject().put("keptByName",s.optLong(CallRecordStore.PRIVACY_N_KEPT_BY_NAME,0))
         .put("keptByLink",s.optLong(CallRecordStore.PRIVACY_N_KEPT_BY_LINK,0)).put("uploadedUnlinked",s.optLong(CallRecordStore.PRIVACY_N_UPLOADED_UNLINKED,0))

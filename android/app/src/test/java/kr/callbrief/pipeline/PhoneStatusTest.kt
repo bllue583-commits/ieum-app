@@ -17,6 +17,14 @@ class PhoneStatusTest {
         assertEquals("v2.1",o.getString("appVersion"));assertEquals(12,o.getInt("storageUsedPercent"))
         assertFalse(o.has("lastUpdateError"));assertFalse(o.has("lastInboxError"))
     }
+    @Test fun selfCheckCarriesTheDayAndCodesOnly() {
+        // v4.1 r22-4: the self-check notices of the day as SelfCheckNotices keeps them; anything not a code is left out.
+        val s=org.json.JSONObject().put(SelfCheckNotices.DAY_KEY,"2026-11-19").put(SelfCheckNotices.SHOWN_KEY,"NO_RESULT,ROUTINE_LATE,문구,NO_RESULT")
+        val o=PhoneStatus.build(input().copy(selfCheck=PhoneStatus.selfCheck(s),privacy=PhoneStatus.privacy(s))).getJSONObject("selfCheck")
+        assertEquals("2026-11-19",o.getString("day"));assertEquals("[\"NO_RESULT\",\"ROUTINE_LATE\"]",o.getJSONArray("shown").toString())
+        assertTrue(PhoneStatus.selfCheck(org.json.JSONObject()).isNull("day"))
+        assertEquals(0L,PhoneStatus.build(input().copy(privacy=PhoneStatus.privacy(s))).getJSONObject("privacy").getLong("keptByName"))
+    }
     @Test fun nothingWaitingGivesNullAge() { assertTrue(PhoneStatus.build(input()).isNull("oldestQueuedMs")) }
     @Test fun errorsAreCodesOnly() {
         val o=PhoneStatus.build(input(inbox="INBOX_HTTP_401",update="STATUS_FAILURE: 김 부장님 010-1234-5678 통화 내용 ".repeat(5)))
