@@ -120,6 +120,72 @@ class ScoreTest(unittest.TestCase):
 
 
 
+class UseV4Test(unittest.TestCase):
+    """채점표 v4(11/20): 10번은 접점으로 잰다 — 카톡이 간 평일 ≥ 90%, 통화 카드 ≥ 95%(3번과 같은 식), SUS ≥ 80."""
+    window = {"weekdays": 10, "min_pass_days": 9, "calendar_days": 14}
+    cfg = {"min_kakao_weekday_ratio": 0.9, "min_card_reach": 0.95, "min_card_calls": 30, "min_sus": 80, "very_disappointed": True}
+    survey = {"sus": 85, "veryDisappointed": True}
+
+    def daily(self, skip=(), drawn=10, use=None):
+        """ASOF 전 16일. skip: 카톡이 가지 않은 날(sent가 그대로)."""
+        out, sent = {}, 0
+        for i in range(16, 0, -1):
+            day = ASOF - dt.timedelta(days=i)
+            if day not in skip:
+                sent += 1
+            b = beat(day, True, kakao={"on": True, "sent": sent})
+            b["callCard"]["today"]["drawn"] = drawn
+            if use is not None:
+                b["use"] = use
+            out[day] = b
+        return out
+
+    def test_weekends_do_not_count(self):
+        weekends = {ASOF - dt.timedelta(days=i) for i in range(1, 15) if (ASOF - dt.timedelta(days=i)).weekday() >= 5}
+        r = score.item_use(self.cfg, self.window, ASOF, self.daily(skip=weekends), self.survey)
+        self.assertTrue(r["pass"], r["reason"])
+        self.assertEqual({"sent": 10, "of": 10, "ratio": 1.0}, r["value"]["kakaoWeekdays"])
+
+    def test_two_weekdays_without_kakao_fail(self):
+        days = [ASOF - dt.timedelta(days=i) for i in range(1, 15) if (ASOF - dt.timedelta(days=i)).weekday() < 5]
+        one = score.item_use(self.cfg, self.window, ASOF, self.daily(skip={days[0]}), self.survey)
+        self.assertTrue(one["pass"], "9/10 = 90%")
+        two = score.item_use(self.cfg, self.window, ASOF, self.daily(skip=set(days[:2])), self.survey)
+        self.assertFalse(two["pass"]); self.assertEqual("미충족: kakaoWeekdays", two["reason"])
+
+    def test_the_card_and_the_survey(self):
+        r = score.item_use(self.cfg, self.window, ASOF, self.daily(drawn=9), self.survey)
+        self.assertFalse(r["pass"]); self.assertEqual("미충족: card", r["reason"]); self.assertEqual(0.9, r["value"]["card"]["ratio"])
+        r = score.item_use(self.cfg, self.window, ASOF, self.daily(), {"sus": 79, "veryDisappointed": True})
+        self.assertEqual("미충족: sus", r["reason"])
+        r = score.item_use(self.cfg, self.window, ASOF, self.daily(), None)
+        self.assertEqual("미충족: sus, veryDisappointed", r["reason"])
+
+    def test_the_old_numbers_are_reference_only(self):
+        # 앱을 한 번도 열지 않고 [다 됐어요]도 없어도(옛 기준 0) 접점이 되면 통과. 옛 숫자는 그대로 나온다.
+        r = score.item_use(self.cfg, self.window, ASOF, self.daily(use={"prev": {"opens": 0, "taskDone": 0, "kakaoOpen": 0}}), self.survey)
+        self.assertTrue(r["pass"], r["reason"])
+        self.assertEqual({"daysSeen": 13, "openDaysPerWeek": 0.0, "taskDonePerWeek": 0.0}, r["value"]["reference"])
+        r = score.item_use(self.cfg, self.window, ASOF, self.daily(), self.survey)
+        self.assertEqual(6.5, r["value"]["reference"]["openDaysPerWeek"]); self.assertEqual(19.5, r["value"]["reference"]["taskDonePerWeek"])
+
+    def test_too_few_days_or_calls(self):
+        d = self.daily()
+        late = {k: v for k, v in d.items() if k >= ASOF - dt.timedelta(days=5)}
+        r = score.item_use(self.cfg, self.window, ASOF, late, self.survey)
+        self.assertFalse(r["pass"]); self.assertIn("카톡 관측 평일", r["reason"])
+        for b in d.values():
+            b["callCard"]["today"].update(calls=1, drawn=1)
+        r = score.item_use(self.cfg, self.window, ASOF, d, self.survey)
+        self.assertFalse(r["pass"]); self.assertIn("통화 14건", r["reason"])
+
+    def test_the_card_says_v4(self):
+        with open(os.path.join(os.path.dirname(os.path.abspath(score.__file__)), "scorecard.json"), encoding="utf-8") as handle:
+            card = json.load(handle)
+        self.assertEqual(4, card["version"])
+        self.assertEqual(80, card["items"]["10_use_and_satisfaction"]["min_sus"])
+
+
 class SecurityReasonTest(unittest.TestCase):
     """r20 review: secretFindings 0 is met (0 == False made the reason list it as unmet; the verdict was right)."""
     def test_zero_findings_is_not_listed_as_unmet(self):

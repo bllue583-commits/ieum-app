@@ -186,8 +186,9 @@ def item_timeliness(cfg, window, days, daily):
     return result(passed, values, why)
 
 
-def item_call_card(cfg, window, asof, daily):
-    """3. 통화 카드: 최근 14일의 날짜별 today 묶음 합."""
+def card_reach(window, asof, daily):
+    """통화 카드가 그려진 통화 수와 분모(최근 14일의 날짜별 today 묶음 합): 3번과 10번(v4)이 같은 식을 쓴다.
+    (그려진 수, 통화 수, 날짜별 값, 마지막 callCard, fgsRefused 합)."""
     since = asof - dt.timedelta(days=window["calendar_days"])
     calls = reached = refused = 0
     per_day, latest = {}, None
@@ -207,6 +208,12 @@ def item_call_card(cfg, window, asof, daily):
             continue
         calls, reached, latest = calls + base, reached + min(got, base), card
         per_day[day.isoformat()] = {"reached": min(got, base), "of": base, "noPermission": today.get("noPermission", 0)}
+    return reached, calls, per_day, latest, refused
+
+
+def item_call_card(cfg, window, asof, daily):
+    """3. 통화 카드: 최근 14일의 날짜별 today 묶음 합."""
+    reached, calls, per_day, latest, refused = card_reach(window, asof, daily)
     if calls < cfg["min_calls"] or latest is None:
         return result(False, per_day, f"통화 {calls}건(기준 {cfg['min_calls']}건 이상)")
     reach = reached / calls
@@ -300,6 +307,28 @@ def cron_hours(cron: str) -> list[int]:
     return hours or list(range(24))
 
 
+def kakao_count(window, asof, daily, weekdays_only=False):
+    """카톡 보고가 간 날 수와 센 날 수(최근 14일, 달력 날짜 기준). 하트비트가 없는 날은 안 간 날로 센다. 카톡을 켠 날
+    다음 날부터 센다. weekdays_only: 평일만(10번 v4)."""
+    since = asof - dt.timedelta(days=window["calendar_days"])
+    sent = 0
+    previous = None
+    for day in sorted(daily):
+        beat = daily[day]
+        sent_now = (beat.get("kakao") or {}).get("sent")
+        if (since <= day < asof and (beat.get("kakao") or {}).get("on") and previous is not None and sent_now is not None
+                and not (weekdays_only and day.weekday() >= 5)):
+            sent += sent_now > previous
+        if sent_now is not None:
+            previous = sent_now
+    on_since = min((d for d, b in daily.items() if (b.get("kakao") or {}).get("on")), default=None)
+    days = 0
+    if on_since is not None:
+        days = sum(1 for i in range(window["calendar_days"]) if since + dt.timedelta(days=i) > on_since
+                   and not (weekdays_only and (since + dt.timedelta(days=i)).weekday() >= 5))
+    return sent, days
+
+
 def item_operations(cfg, window, asof, hourly_runs, tidy_runs, daily):
     """9. 운영: 예약 작업 슬롯, 아침 보고서, 카톡 전송일, 자막 실패율."""
     span = window["calendar_days"]
@@ -340,19 +369,7 @@ def item_operations(cfg, window, asof, hourly_runs, tidy_runs, daily):
             fail_rate = 1.0  # 카운터가 줄었다 = 초기화. 통과로 치지 않는다
         elif failed + done > 0:
             fail_rate = failed / (failed + done)
-    # 카톡: 달력 날짜 기준. 하트비트가 없는 날은 안 간 날로 센다
-    kakao_days = kakao_sent = 0
-    previous = None
-    for day in sorted(daily):
-        beat = daily[day]
-        sent_now = (beat.get("kakao") or {}).get("sent")
-        if since <= day < asof and (beat.get("kakao") or {}).get("on") and previous is not None and sent_now is not None:
-            kakao_sent += sent_now > previous
-        if sent_now is not None:
-            previous = sent_now
-    kakao_on_since = min((d for d, b in daily.items() if (b.get("kakao") or {}).get("on")), default=None)
-    if kakao_on_since is not None:
-        kakao_days = sum(1 for i in range(span) if since + dt.timedelta(days=i) > kakao_on_since)
+    kakao_sent, kakao_days = kakao_count(window, asof, daily)
     kakao_ratio = min(1.0, kakao_sent / kakao_days) if kakao_days else None
     value = {"slotRatio": round(slot_ratio, 3), "reportRatio": round(report_ratio, 3),
              "failRate": None if fail_rate is None else round(fail_rate, 3),
@@ -366,8 +383,11 @@ def item_operations(cfg, window, asof, hourly_runs, tidy_runs, daily):
 
 
 def item_use(cfg, window, asof, daily, survey):
-    """10. 쓰임과 만족: 하트비트 use(날짜별 횟수) + 설문(status/survey.json)."""
-    since = asof - dt.timedelta(days=window["calendar_days"])
+    """10. 쓰임과 만족(채점표 v4, 11/20): 앱 화면이 아니라 접점으로 잰다 — 카톡 보고가 간 평일 비율, 통화 카드가 그려진
+    통화 비율(3번과 같은 식), 설문(status/survey.json)의 SUS와 "없어지면 매우 아쉽다". 옛 기준(앱 열기 주 n일,
+    [다 됐어요] 주 n회, 하트비트 use)은 참고 숫자로만 낸다."""
+    span = window["calendar_days"]
+    since = asof - dt.timedelta(days=span)
     open_days = done = seen = 0
     for day, beat in daily.items():
         use = ((beat.get("use") or {}).get("prev")) or {}
@@ -376,14 +396,28 @@ def item_use(cfg, window, asof, daily, survey):
         seen += 1
         open_days += (use.get("opens", 0) + use.get("kakaoOpen", 0)) > 0
         done += use.get("taskDone", 0)
-    weeks = window["calendar_days"] / 7
-    value = {"daysSeen": seen, "openDaysPerWeek": round(open_days / weeks, 1), "taskDonePerWeek": round(done / weeks, 1),
-             "sus": (survey or {}).get("sus"), "veryDisappointed": (survey or {}).get("veryDisappointed")}
-    if seen < window["calendar_days"]:
-        return result(False, value, f"사용 숫자 관측 {seen}/{window['calendar_days']}일")
-    ok = (value["openDaysPerWeek"] >= cfg["min_open_days_per_week"] and value["taskDonePerWeek"] >= cfg["min_task_done_per_week"]
-          and (value["sus"] or 0) >= cfg["min_sus"] and value["veryDisappointed"] is True)
-    return result(ok, value, "")
+    weeks = span / 7
+    sent, of = kakao_count(window, asof, daily, weekdays_only=True)
+    need = sum(1 for i in range(span) if (since + dt.timedelta(days=i)).weekday() < 5)
+    reached, calls, _, _, _ = card_reach(window, asof, daily)
+    value = {"kakaoWeekdays": {"sent": sent, "of": of, "ratio": round(min(1.0, sent / of), 3) if of else None},
+             "card": {"reached": reached, "of": calls, "ratio": round(reached / calls, 3) if calls else None},
+             "sus": (survey or {}).get("sus"), "veryDisappointed": (survey or {}).get("veryDisappointed"),
+             "reference": {"daysSeen": seen, "openDaysPerWeek": round(open_days / weeks, 1), "taskDonePerWeek": round(done / weeks, 1)}}
+    if of < need:
+        return result(False, value, f"카톡 관측 평일 {of}/{need}일")
+    if calls < cfg["min_card_calls"]:
+        return result(False, value, f"통화 {calls}건(기준 {cfg['min_card_calls']}건 이상)")
+    unmet = []
+    if value["kakaoWeekdays"]["ratio"] < cfg["min_kakao_weekday_ratio"]:
+        unmet.append("kakaoWeekdays")
+    if value["card"]["ratio"] < cfg["min_card_reach"]:
+        unmet.append("card")
+    if (value["sus"] or 0) < cfg["min_sus"]:
+        unmet.append("sus")
+    if value["veryDisappointed"] is not True:
+        unmet.append("veryDisappointed")
+    return result(not unmet, value, "미충족: " + ", ".join(unmet) if unmet else "")
 
 
 # ---------- 전체 ----------
