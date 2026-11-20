@@ -22,8 +22,8 @@ import java.time.LocalDate
 import kotlin.math.PI
 import kotlin.math.sin
 
-/** v4.1 r22 review L: the yield of a run stopped by something it is not to blame for (r21's charger stop is gone, the
- * foreground service's limit is the same path): the piece under way is thrown away and done again next time, the finished
+/** v4.1 r22 review L: the yield of a run stopped by something it is not to blame for (r21's charger stop is gone; v4.2
+ * r23-2: the foreground service's limit went with the foreground run, the user stopping the app is that path now): the piece under way is thrown away and done again next time, the finished
  * pieces stay, no stall and no attempt are counted; stopped before any piece is a yield too. Generated audio only. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[35],shadows=[ShadowTextKeys::class,ShadowTextAtomicFile::class])
@@ -74,7 +74,7 @@ class R22YieldTest:ProtectedTextHostTestBase() {
         var stop=false;var pieces=0
         val killed=mutableListOf<Long>();var yielded=0
         val events=object:CallTranscriptionRunner.Events { override fun killed(ms:Long) { killed+=ms };override fun yielded() { yielded++ } }
-        // The second piece: a stop the run is not to blame for comes while it runs (the foreground service's limit); the
+        // The second piece: a stop the run is not to blame for comes while it runs (the user stopping the app); the
         // native run returns once cancelled (here: once stopped).
         val t=CallTranscriber { _,pcm,stopped -> pieces++
             if(pieces==2) { stop=true;val until=System.currentTimeMillis()+5_000;while(!stopped() && System.currentTimeMillis()<until) Thread.sleep(5) }

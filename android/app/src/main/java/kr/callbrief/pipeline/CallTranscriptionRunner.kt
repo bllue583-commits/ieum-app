@@ -160,8 +160,8 @@ internal class CallTranscriptionRunner(
     private val events:Events=Events.NONE,
     /** v3.6: the first piece of this run counts as cold (the phone rested before it). */
     private val coldStart:Boolean=false,
-    /** v3.7 T5: the stop under way is one the run is not to blame for (the foreground service's time limit, or a refused
-     * foreground start): it ends like a [Yield], the attempt given back and no stop counted against the piece. */
+    /** The stop under way is one the run is not to blame for (v4.2 r23-2: the user stopping the app; the foreground run of
+     * v3.7 T5 is gone): it ends like a [Yield], the attempt given back and no stop counted against the piece. */
     private val yieldStop:()->Boolean={false},
 ) {
     /** v3.6 (DESIGN_V6 3.1): numbers only, for the power ledger. */
@@ -225,7 +225,7 @@ internal class CallTranscriptionRunner(
         val startedLate=laterInRun
         // A stop is counted against the piece only when it is no time-limit stop after progress (review #12).
         fun stop(stallId:Int):Nothing {
-            if(yieldStop()) throw Yield() // v3.7 T5: not this piece's fault
+            if(yieldStop()) throw Yield() // not this piece's fault
             lastStopHarmless=harmlessStop(timeLimited(),recordingPieces,startedLate)
             if(!lastStopHarmless)store.noteStall(key,stallId)
             throw Stopped()
@@ -304,7 +304,7 @@ internal class CallTranscriptionRunner(
         var done=0;var failed=0;pieces=0;startedPieces=0;doneAudioMs=0
         val runStarted=now();var taken=0;runStartedMs=runStarted
         repeat(maxJobs) {
-            // Review L3: a stop the run is not to blame for (the charger gone, the foreground limit) before a recording is
+            // Review L3: a stop the run is not to blame for (the user stopping the app) before a recording is
             // taken is a yield, not "other" in stopReasons.
             if(stopped())return Pass(if(yieldStop()) "YIELD" else "STOPPED",done,failed,pieces)
             // r12-8 A3: late in the run no new recording is begun (it would only be cut off by the time limit); the next run takes it.
@@ -413,8 +413,6 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
     @Volatile private var engine:AndroidWhisperEngine?=null
     /** The system asks us to stop (time limit, replaced): end the native run now, not after the piece. */
     override fun onStopped() { runCatching { engine?.cancel() };super.onStopped() }
-    /** v3.7 T5: this run is in the foreground now (its pieces are counted as such), and when it went in (elapsed ms). */
-    @Volatile private var fgSince=0L
 
     private fun power(settings:SecureSettings)=PowerStats.parse(settings.snapshot().optString(PipelineSettingsKeys.TRANSCRIPTION_POWER))
     private fun savePower(settings:SecureSettings,change:(JSONObject)->JSONObject)=runCatching {
@@ -446,7 +444,7 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
             return Result.success()
         }
         val run=decision as PowerPolicy.Decision.Run
-        var threads=PowerPolicy.threads(run.threads,cores)
+        val threads=PowerPolicy.threads(run.threads,cores)
         val severe={ BatterySnapshot.read(storage).thermal>=PowerManager.THERMAL_STATUS_SEVERE }
         val began=android.os.SystemClock.elapsedRealtime()
         // v3.7 r17-3 (DESIGN_V7 3.3): the run's process CPU time, start to end (/proc/self/stat).
@@ -463,23 +461,8 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
             if(t-lastCheck>=20_000L) { lastCheck=t;val s=BatterySnapshot.read(storage).also { s -> savePower(settings) { PowerStats.notePlug(it,s,t) } }
                 lastOk=PowerStats.stillRuns(power(settings),s,t,run.mode,ownStart) }
             lastOk }
-        // v3.7 T5 (DESIGN_V7 3.1): a plugged-in run on a foreground day goes into the foreground (a measurement).
-        val fgSetting=ForegroundPolicy.setting(settings.snapshot().optString(PipelineSettingsKeys.TRANSCRIBE_FOREGROUND))
-        savePower(settings) { PowerStats.noteFgSetting(it,fgSetting,ForegroundPolicy.onToday(fgSetting,now)) }
-        if(ForegroundPolicy.wanted(fgSetting,run.mode,now,PowerStats.fgUsedMs(power(settings),now),PowerStats.fgRefusedToday(power(settings),now))) {
-            if(TranscriptionForeground.start(this)) {
-                fgSince=android.os.SystemClock.elapsedRealtime()
-                // The cores the process may use change once it is in the foreground: the count read at the start of the run was
-                // the background's (4 on the S26), so a foreground run still decoded with 4 threads (11/14).
-                val (cpus,cpuset)=CpuSet.settled()
-                threads=PowerPolicy.threads(run.threads,cpus ?: cores)
-                savePower(settings) { PowerStats.noteFgCpu(it,System.currentTimeMillis(),cpus,cpuset,threads) }
-            }
-            else savePower(settings) { PowerStats.noteFg(it,System.currentTimeMillis(),"refused") }
-        }
         val events=object:CallTranscriptionRunner.Events {
-            override fun piece(ms:Long,audioMs:Long,cold:Boolean) { savePower(settings) { PowerStats.notePiece(it,ms,audioMs,threads,cold,
-                foreground=if(run.mode==PowerPolicy.Mode.PLUGGED) fgSince>0 else null) } }
+            override fun piece(ms:Long,audioMs:Long,cold:Boolean) { savePower(settings) { PowerStats.notePiece(it,ms,audioMs,threads,cold,plugged=run.mode==PowerPolicy.Mode.PLUGGED) } }
             override fun started() { if(run.mode==PowerPolicy.Mode.BATTERY) { val t=System.currentTimeMillis();ownStart=t;savePower(settings) { PowerStats.noteBatteryStart(it,t) } } }
             override fun killed(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"killedChunkMs",ms) } }
             override fun deadline(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"deadlineMs",ms) } }
@@ -515,11 +498,10 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                     keepGoing={ keepGoing() && !severe() },
                     events=events,
                     coldStart=coldStart,
-                    // v3.7 T5: the foreground service's time limit (or the user closing it) is no stall of the piece.
-                    yieldStop={ fgStop() })
+                    // The user stopping the app is no stall of the piece (v4.2 r23-2: was the foreground service's limit).
+                    yieldStop={ userStop() })
                 val pass=runner.run()
                 val end=System.currentTimeMillis()
-                noteFgEnd(settings)
                 noteRun(settings,began,pass.state)
                 if(runner.startedPieces>0) {
                     val endSnap=BatterySnapshot.read(storage)
@@ -548,21 +530,13 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                 }
                 Result.success()
             } }
-        } catch(_:Exception) { noteFgEnd(settings);noteRun(settings,began,"ERROR");if(runAttemptCount<3)Result.retry() else Result.failure() }
+        } catch(_:Exception) { noteRun(settings,began,"ERROR");if(runAttemptCount<3)Result.retry() else Result.failure() }
     }
 
-    /** v3.7 T5: the stop under way came from the foreground service (its time limit, or the user closing it), not the piece. */
-    private fun fgStop():Boolean = isStopped && TranscriptionForeground.yieldStop(stopCode(),fgSince>0)
+    /** v4.2 r23-2: the stop under way came from the user (the app stopped from the task manager), not the piece. */
+    private fun userStop():Boolean = isStopped && TranscriptionStops.yieldStop(stopCode())
     /** The system's stop reason (Android 12 and later), else unknown. */
     private fun stopCode():Int = if(android.os.Build.VERSION.SDK_INT>=31) runCatching { stopReason }.getOrDefault(androidx.work.WorkInfo.STOP_REASON_UNKNOWN) else androidx.work.WorkInfo.STOP_REASON_UNKNOWN
-    /** v3.7 T5: the foreground time of this run into today.fg (once), and a time-limit stop as fg.timeout. */
-    private fun noteFgEnd(settings:SecureSettings) {
-        val since=fgSince;if(since<=0) return;fgSince=0
-        val ms=android.os.SystemClock.elapsedRealtime()-since
-        val timeout=isStopped && stopCode()==androidx.work.WorkInfo.STOP_REASON_FOREGROUND_SERVICE_TIMEOUT
-        savePower(settings) { o -> PowerStats.noteFg(o,System.currentTimeMillis(),if(timeout) "timeout" else "run",ms) }
-    }
-
     /** The queue as the battery rules see it, for the settings line, the light and the heartbeat (opens the store). */
     private fun noteWaiting(settings:SecureSettings,now:Long) = runCatching {
         CallTranscriptionStore(applicationContext).use { store ->
@@ -582,9 +556,7 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
 
     /** The system's time limit stopped the work: its own reason on Android 12 and later, else a run near the 10 minute limit. */
     private fun timeLimitStop(beganElapsed:Long):Boolean {
-        // v3.7 T5: the foreground service's own limit (Android 15+) is a time limit too.
-        val code=stopCode()
-        if(code==androidx.work.WorkInfo.STOP_REASON_TIMEOUT || code==androidx.work.WorkInfo.STOP_REASON_FOREGROUND_SERVICE_TIMEOUT) return true
+        if(stopCode()==androidx.work.WorkInfo.STOP_REASON_TIMEOUT) return true
         return android.os.SystemClock.elapsedRealtime()-beganElapsed>=CallTranscriptionRunner.TIME_LIMIT_NEAR_MS
     }
 
@@ -639,36 +611,8 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
     }
 }
 
-/** v3.7 T5 (DESIGN_V7 3.1): the plugged-in transcription run in the foreground, a measurement of whether the process then runs
- * on faster cores. mediaProcessing on Android 15 and later, dataSync below (both declared on WorkManager's
- * SystemForegroundService in the manifest). A silent, minimum-importance notice of one line. */
-internal object TranscriptionForeground {
-    const val CHANNEL="ieum.transcribe.foreground"
-    const val NOTIFICATION_ID=0x1E0_57
-    const val TEXT="충전하는 동안 통화를 글자로 바꾸고 있어요"
-    fun type():Int = when {
-        android.os.Build.VERSION.SDK_INT>=35 -> android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING
-        android.os.Build.VERSION.SDK_INT>=29 -> android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-        else -> 0 }
-    fun info(context:Context):androidx.work.ForegroundInfo {
-        val m=context.getSystemService(android.app.NotificationManager::class.java)
-        runCatching { m?.createNotificationChannel(android.app.NotificationChannel(CHANNEL,"충전 중 글자로 바꾸기",android.app.NotificationManager.IMPORTANCE_MIN).apply {
-            setSound(null,null);enableVibration(false);setShowBadge(false) }) }
-        val n=android.app.Notification.Builder(context,CHANNEL).setSmallIcon(kr.callbrief.R.drawable.ic_stat_ieum).setContentTitle(TEXT)
-            .setOngoing(true).setOnlyAlertOnce(true).setShowWhen(false).setCategory(android.app.Notification.CATEGORY_PROGRESS).build()
-        val t=type()
-        return if(t!=0) androidx.work.ForegroundInfo(NOTIFICATION_ID,n,t) else androidx.work.ForegroundInfo(NOTIFICATION_ID,n)
-    }
-    /** Asks WorkManager to run [worker] in the foreground; false when the system refused (ForegroundServiceStartNotAllowedException
-     * and the like, or no answer in 10 seconds): the run then goes on in the background. */
-    fun start(worker:androidx.work.ListenableWorker):Boolean = runCatching {
-        // Review fix: asked only when the app is exempt from battery optimization (the documented exemption for a start from
-        // the background). A refused start leaves WorkManager holding the work as foreground: its stops are then ignored.
-        val app=worker.applicationContext
-        if(app.getSystemService(android.os.PowerManager::class.java)?.isIgnoringBatteryOptimizations(app.packageName)!=true) return@runCatching false
-        worker.setForegroundAsync(info(worker.applicationContext)).get(10,TimeUnit.SECONDS);true }.getOrDefault(false)
-    /** A stop with [reason] ends the run as a yield, not a stall: the foreground service's time limit, or (while in the
-     * foreground) the user stopping the app from its notice or the task manager. */
-    fun yieldStop(reason:Int,inForeground:Boolean)=reason==androidx.work.WorkInfo.STOP_REASON_FOREGROUND_SERVICE_TIMEOUT ||
-        inForeground && reason==androidx.work.WorkInfo.STOP_REASON_USER
+/** The stops a transcription run is not to blame for: they end it as a yield (the attempt given back, no stall). v4.2 r23-2:
+ * the foreground run (v3.7 T5) is gone with its time limit; the user stopping the app stays, now also in the background. */
+internal object TranscriptionStops {
+    fun yieldStop(reason:Int)=reason==androidx.work.WorkInfo.STOP_REASON_USER
 }

@@ -102,10 +102,6 @@ internal object BenchState {
     }
     fun setModel(s:JSONObject,c:String,state:String):JSONObject { (s.optJSONObject("models") ?: JSONObject().also { s.put("models",it) }).put(c,state);return s }
 
-    /** Foreground ms used today (KST day) by the whisper candidates. */
-    fun fgUsed(s:JSONObject,day:String)=if(s.optString("fgDay")==day) s.optLong("fgMs",0) else 0L
-    fun addFg(s:JSONObject,day:String,ms:Long):JSONObject { val prev=fgUsed(s,day);return s.put("fgDay",day).put("fgMs",prev+ms) }
-
     private val CODE=Regex("[A-Za-z0-9_]{1,60}")
     private fun code(v:String?)=v?.takeIf { CODE.matches(it) }
     private fun ratio(a:Long,b:Long,scale:Double=1.0,digits:Int=3):Any = if(b<=0) JSONObject.NULL else Math.round(a.toDouble()/b*scale*Math.pow(10.0,digits.toDouble()))/Math.pow(10.0,digits.toDouble())

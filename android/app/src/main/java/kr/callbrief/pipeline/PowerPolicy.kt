@@ -236,32 +236,8 @@ internal object PowerPolicy {
     fun dayStartMs(now:Long)=Instant.ofEpochMilli(now).atZone(TranscriptionPower.KST).toLocalDate().atStartOfDay(TranscriptionPower.KST).toInstant().toEpochMilli()
 }
 
-/** v3.7 T5 (DESIGN_V7 3.1): whether a plugged-in run goes into the foreground (a measurement: nights on and off compared).
- * Pure. Setting [PipelineSettingsKeys.TRANSCRIBE_FOREGROUND]: "on", "off", or "auto" (the default) = on when the KST date is even. */
-internal object ForegroundPolicy {
-    /** Stop asking once today's foreground time reaches this (the system allows 6 hours a day for dataSync/mediaProcessing). */
-    const val DAY_LIMIT_MS=5*3_600_000L
-    fun setting(v:String?)=when(v) { "on","off" -> v;else -> "auto" }
-    /** The KST date of [now] is even (11/10 on, 11/11 off). */
-    fun evenDay(now:Long)=Instant.ofEpochMilli(now).atZone(TranscriptionPower.KST).dayOfMonth%2==0
-    /** Today counts as a foreground day under [setting]. */
-    fun onToday(setting:String?,now:Long)=when(setting(setting)) { "on" -> true;"off" -> false;else -> evenDay(now) }
-    /** Ask for the foreground: a plugged-in run, a foreground day, and less than [DAY_LIMIT_MS] used today. */
-    /** After this many refusals in a day the run stops asking until the next day (the system will say no again). */
-    const val REFUSALS_PER_DAY=3
-    fun wanted(setting:String?,mode:PowerPolicy.Mode,now:Long,usedTodayMs:Long,refusedToday:Int=0)=
-        mode==PowerPolicy.Mode.PLUGGED && onToday(setting,now) && usedTodayMs<DAY_LIMIT_MS && refusedToday<REFUSALS_PER_DAY
-}
-
 /** P7 (DESIGN_V6 2.3, 1.3): which cores this process may use, read from /proc (the same as sched_getaffinity for this thread). */
 internal object CpuSet {
-    /** Waits (at most [waitMs]) until the process has left the background cpuset after it asked for the foreground, then
-     * returns (cores allowed, cpuset code). Never throws. */
-    fun settled(waitMs:Long=3_000L,step:Long=250L,code:()->String?=::readCode,allowed:()->Int?=::readAllowed,sleep:(Long)->Unit={ Thread.sleep(it) }):Pair<Int?,String?> {
-        var waited=0L
-        while(waited<waitMs && code()=="background") { runCatching { sleep(step) };waited+=step }
-        return allowed() to code()
-    }
     /** "0-3,6" -> 5; null when it cannot be read. */
     fun count(list:String?):Int? {
         if(list.isNullOrBlank()) return null
@@ -288,8 +264,9 @@ internal object CpuSet {
  * (v4.1 r22-3: unplugStops and unplugLostMs went with the switch "충전 중에만")}, "prev":{same},
  * hot{headroom,temp,slow,severe} (v3.6.1), "chunk":{rates[], coldRates[] (work ms per encoder-window ms, v3.6.1), lastMs,
  * lastAudioMs, lastRate, lastEndMs, threads, coldMedianMs, p50Ms (a 2-minute piece at that speed)}, "battery":{the last snapshot},
- * "hotRestMs" (v3.6.1: the last wake that found it hot), v3.7 (r17-1): chunk.byThreads{"<n>":{rates,coldRates}}, today.fg{runs,ms,min,
- * refused,timeout}, today.pieceRates{fg[],bg[]} (plugged-in pieces), "fgSetting","fgOn",
+ * "hotRestMs" (v3.6.1: the last wake that found it hot), v3.7 (r17-1): chunk.byThreads{"<n>":{rates,coldRates}},
+ * today.pieceRates{bg[]} (plugged-in pieces; v4.2 r23-2: today.fg, pieceRates.fg, "fgSetting" and "fgOn" went with the
+ * foreground run),
  * "lastBatteryRunEndMs","lastRunEndMs","lastPluggedMs","plugSampleMs","plugSamplePct","waiting":{n,oldestMs}}. */
 internal object PowerStats {
     private const val KEEP=12
@@ -333,9 +310,9 @@ internal object PowerStats {
     /** A finished piece: [ms] of work for [audioMs] of audio on [threads] threads; [cold]: the first piece of a run after a rest.
      * v3.7 (T3, review r16-1 #4): the samples are kept per thread count under chunk.byThreads{"<n>":{rates,coldRates}}, so the
      * battery's 4 threads by day and the charger's 6 by night no longer throw each other's samples away; chunk.rates and
-     * chunk.coldRates are the lists of the last piece's thread count. [foreground]: v3.7 T5, a plugged-in piece run in the
-     * foreground (true) or not (false), counted per day under today.pieceRates{fg,bg}; null (battery) counts in neither. */
-    fun notePiece(old:JSONObject?,ms:Long,audioMs:Long,threads:Int,cold:Boolean,now:Long=System.currentTimeMillis(),foreground:Boolean?=null):JSONObject {
+     * chunk.coldRates are the lists of the last piece's thread count. [plugged]: a plugged-in piece, counted per day under
+     * today.pieceRates.bg (v4.2 r23-2: every run is in the background now; battery pieces count in none). */
+    fun notePiece(old:JSONObject?,ms:Long,audioMs:Long,threads:Int,cold:Boolean,now:Long=System.currentTimeMillis(),plugged:Boolean=false):JSONObject {
         val o=copy(old);val c=sub(o,"chunk")
         if(audioMs<=0 || ms<=0) return o
         // v3.6.1 (T1): per encoder window, so a short tail piece is no "slow" piece.
@@ -360,9 +337,9 @@ internal object PowerStats {
         c.put("lastMs",ms).put("lastAudioMs",audioMs).put("threads",threads).put("lastRate",rate).put("lastEndMs",now)
         median(c.optJSONArray("coldRates"))?.let { c.put("coldMedianMs",(it*PipelineAudioMath.MAX_CHUNK_MS).toLong()) }
         median(c.optJSONArray("rates"))?.let { c.put("p50Ms",(it*PipelineAudioMath.MAX_CHUNK_MS).toLong()) }
-        if(foreground!=null) {
+        if(plugged) {
             val pr=sub(today(o,PowerPolicy.day(now)),"pieceRates")
-            val k=if(foreground) "fg" else "bg";val a=pr.optJSONArray(k) ?: JSONArray();a.put(rate);while(a.length()>DAY_PIECES) a.remove(0);pr.put(k,a)
+            val a=pr.optJSONArray("bg") ?: JSONArray();a.put(rate);while(a.length()>DAY_PIECES) a.remove(0);pr.put("bg",a)
         }
         return o
     }
@@ -375,7 +352,7 @@ internal object PowerStats {
         if(uah!=null && uah>0) inc(t,"batteryUah",uah)
         return o
     }
-    /** v3.7 T5: pieces of one day kept per way (foreground or not) for the day's median. */
+    /** Plugged-in pieces of one day kept for the day's median (v3.7 T5). */
     private const val DAY_PIECES=80
     fun median(a:JSONArray?):Double? {
         if(a==null || a.length()==0) return null
@@ -398,35 +375,6 @@ internal object PowerStats {
         return maxOf(any,TranscriptionPower.DEFAULT_RATE)
     }
 
-    // ---- v3.7 T5 (DESIGN_V7 3.1): the plugged-in run in the foreground, today.fg{runs,ms,min,refused,timeout} ----
-    /** A run that went into the foreground for [ms], or a request the system refused, or a run the FGS time limit stopped. */
-    fun noteFg(old:JSONObject?,now:Long,what:String,ms:Long=0):JSONObject {
-        val o=copy(old);val f=sub(today(o,PowerPolicy.day(now)),"fg")
-        when(what) {
-            "run" -> { inc(f,"runs");inc(f,"ms",ms.coerceAtLeast(0)) }
-            "refused" -> inc(f,"refused")
-            // The system's limit reached: no more requests today ([ForegroundPolicy.DAY_LIMIT_MS] counts as used).
-            "timeout" -> { inc(f,"runs");inc(f,"timeout");inc(f,"ms",ms.coerceAtLeast(0));f.put("limitHit",true) }
-        }
-        f.put("min",f.optLong("ms",0)/60_000)
-        return o
-    }
-    /** The cores this process may use and its cpuset once a run is in the foreground (read a moment after the request: the
-     * system moves the process on its own time). 11/14: the foreground made a 2-minute piece only 16% faster and the thread
-     * count stayed at the background's 4 — this says whether the foreground lifts the limit on this phone at all. */
-    fun noteFgCpu(old:JSONObject?,now:Long,cpus:Int?,cpuset:String?,threads:Int?=null):JSONObject {
-        val o=copy(old);val f=sub(today(o,PowerPolicy.day(now)),"fg")
-        cpus?.let { f.put("cpus",it) };cpuset?.let { f.put("cpuset",it) };threads?.let { f.put("threads",it) }
-        return o
-    }
-    /** Foreground ms used today (KST). */
-    fun fgUsedMs(o:JSONObject?,now:Long):Long {
-        val f=o?.optJSONObject("today")?.takeIf { it.optInt("day")==PowerPolicy.day(now) }?.optJSONObject("fg") ?: return 0
-        return if(f.optBoolean("limitHit",false)) maxOf(f.optLong("ms",0),ForegroundPolicy.DAY_LIMIT_MS) else f.optLong("ms",0)
-    }
-    fun fgRefusedToday(o:JSONObject?,now:Long):Int = o?.optJSONObject("today")?.takeIf { it.optInt("day")==PowerPolicy.day(now) }?.optJSONObject("fg")?.optInt("refused",0) ?: 0
-    /** The setting the last run saw ("auto" | "on" | "off") and whether today is a foreground day, for the heartbeat. */
-    fun noteFgSetting(old:JSONObject?,setting:String,on:Boolean):JSONObject { val o=copy(old);o.put("fgSetting",setting).put("fgOn",on);return o }
     /** The last piece ran at least [TranscriptionPower.HOT_RATIO] times the cold median (needs both), and it ended less than
      * [TranscriptionPower.COLD_AFTER_MS] ago: after a rest the phone is taken as cool again, else one slow piece would stop
      * every later run for good (review r16-1 #1). */
@@ -513,6 +461,8 @@ internal object PowerStats {
     /** The battery as last seen (heartbeat `power` head). */
     fun noteSnapshot(old:JSONObject?,s:BatterySnapshot,cpusAllowed:Int?,cpuset:String?):JSONObject {
         val o=copy(old)
+        // v4.2 r23-2: the foreground run's keys of older builds are dropped (today.fg goes with the day roll).
+        o.remove("fgSetting");o.remove("fgOn")
         o.put("battery",JSONObject().put("batteryPct",s.pct).put("plugged",s.plugged).put("status",s.status).put("powerSave",s.powerSave)
             .put("thermal",BatterySnapshot.thermalCode(s.thermal)).apply {
                 s.headroom?.let { put("headroom",Math.round(it*100)/100.0) };s.tempDeciC?.let { put("tempDeciC",it) }

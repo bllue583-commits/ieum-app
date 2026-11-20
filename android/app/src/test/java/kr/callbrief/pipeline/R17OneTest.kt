@@ -23,7 +23,8 @@ import kotlin.math.PI
 import kotlin.math.sin
 
 /** v3.7 r17-1 (DESIGN_V7 3.1): T2 yesterday and today first, T3 the rest of v3.6.1 (call-log length, the morning rule under
- * Samsung's protection, samples per thread count, yieldMs and decodeAudioMs), T5 the plugged-in run in the foreground.
+ * Samsung's protection, samples per thread count, yieldMs and decodeAudioMs). T5 (the plugged-in run in the foreground) was
+ * removed in v4.2 r23-2.
  * Generated recordings and calls only. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[35],shadows=[ShadowTextKeys::class,ShadowTextAtomicFile::class])
@@ -214,8 +215,9 @@ class R17OneTest:ProtectedTextHostTestBase() {
         }
     }
 
-    // ---- T5: a foreground stop is a yield, not a stall, and spends no attempt ----
-    @Test fun aForegroundTimeoutOrRefusalIsAYield() {
+    // ---- A stop the run is not to blame for is a yield, not a stall, and spends no attempt (v4.2 r23-2: the user's stop;
+    // the foreground run of T5, and its time limit, are gone) ----
+    @Test fun aUserStopIsAYield() {
         rec("call",kst(10,20),seconds=300.0)
         var stop=false;var yields=0
         val events=object:CallTranscriptionRunner.Events { override fun yielded() { yields++ } }
@@ -226,93 +228,46 @@ class R17OneTest:ProtectedTextHostTestBase() {
             assertEquals("YIELD",pass.state);assertEquals(1,yields)
             assertEquals(0,s.attempts(k));assertEquals(0,s.totalStalls(k))
             assertTrue(s.rows().single().let { it.second=="QUEUED" && it.third.first=="STOPPED" })
-            // The same stop without the foreground reason: a stall is counted (the first recording of a run, no piece done).
+            // The same stop without that reason: a stall is counted (the first recording of a run, no piece done).
             stop=false
             runner(s,t,events,stopped={ stop },timeLimited={ false }).run()
             assertEquals(1,s.totalStalls(k))
         }
-        assertTrue(TranscriptionForeground.yieldStop(androidx.work.WorkInfo.STOP_REASON_FOREGROUND_SERVICE_TIMEOUT,false))
-        assertTrue(TranscriptionForeground.yieldStop(androidx.work.WorkInfo.STOP_REASON_USER,true))
-        assertFalse(TranscriptionForeground.yieldStop(androidx.work.WorkInfo.STOP_REASON_USER,false))
-        assertFalse(TranscriptionForeground.yieldStop(androidx.work.WorkInfo.STOP_REASON_TIMEOUT,true))
+        assertTrue(TranscriptionStops.yieldStop(androidx.work.WorkInfo.STOP_REASON_USER))
+        assertFalse(TranscriptionStops.yieldStop(androidx.work.WorkInfo.STOP_REASON_TIMEOUT))
+        assertFalse(TranscriptionStops.yieldStop(androidx.work.WorkInfo.STOP_REASON_UNKNOWN))
+        assertFalse("no foreground service any more",TranscriptionStops.yieldStop(androidx.work.WorkInfo.STOP_REASON_FOREGROUND_SERVICE_TIMEOUT))
     }
 
-    // ---- T5: when to ask, the 5-hour day, the ledger and the heartbeat ----
-    @Test fun evenNightsOnlyAndFiveHoursADay() {
-        assertTrue(ForegroundPolicy.evenDay(kst(10,1)));assertFalse(ForegroundPolicy.evenDay(kst(11,1)))
-        assertFalse("23:59 KST of 11/11 is odd",ForegroundPolicy.evenDay(kst(11,23,59)))
-        assertTrue(ForegroundPolicy.onToday(null,kst(10,2)));assertTrue(ForegroundPolicy.onToday("auto",kst(10,2)))
-        assertFalse(ForegroundPolicy.onToday("auto",kst(11,2)));assertTrue(ForegroundPolicy.onToday("on",kst(11,2)))
-        assertFalse(ForegroundPolicy.onToday("off",kst(10,2)));assertEquals("auto",ForegroundPolicy.setting("x"))
-        val p=PowerPolicy.Mode.PLUGGED
-        assertTrue(ForegroundPolicy.wanted("auto",p,kst(10,2),0))
-        assertFalse("never on battery",ForegroundPolicy.wanted("on",PowerPolicy.Mode.BATTERY,kst(10,2),0))
-        assertFalse(ForegroundPolicy.wanted("auto",p,kst(10,2),ForegroundPolicy.DAY_LIMIT_MS))
-        assertFalse(ForegroundPolicy.wanted("auto",p,kst(10,2),0,refusedToday=ForegroundPolicy.REFUSALS_PER_DAY))
+    // ---- v4.2 r23-2: the heartbeat keeps the plugged-in piece median, without the foreground keys ----
+    @Test fun pluggedPiecesKeepTheDayMedianWithoutForegroundKeys() {
         val t=kst(10,2)
-        var o=PowerStats.noteFg(null,t,"run",4*hour)
-        assertTrue(ForegroundPolicy.wanted("auto",p,t,PowerStats.fgUsedMs(o,t)))
-        o=PowerStats.noteFg(o,t+4*hour,"run",hour)
-        assertEquals(5*hour,PowerStats.fgUsedMs(o,t+5*hour))
-        assertFalse("5 hours used",ForegroundPolicy.wanted("auto",p,t+5*hour,PowerStats.fgUsedMs(o,t+5*hour)))
-        // A time-limit stop: no more requests today, whatever was counted; the next even day starts again.
-        var x=PowerStats.noteFg(null,t,"timeout",30*minute)
-        assertEquals(ForegroundPolicy.DAY_LIMIT_MS,PowerStats.fgUsedMs(x,t))
-        assertEquals(0L,PowerStats.fgUsedMs(x,t+2*day))
-        x=PowerStats.noteFg(x,t,"refused")
-        assertEquals(1,PowerStats.fgRefusedToday(x,t))
-        // Heartbeat: fg{runs,min,refused,timeout} and the day's piece median per way.
-        var l=PowerStats.noteFg(PowerStats.noteFg(null,t,"run",2*hour),t,"refused")
-        l=PowerStats.notePiece(l,200_000,120_000,6,cold=true,now=t,foreground=true)
-        l=PowerStats.notePiece(l,220_000,120_000,6,cold=false,now=t+5*minute,foreground=true)
-        l=PowerStats.notePiece(l,300_000,120_000,6,cold=false,now=t+10*minute,foreground=false)
-        l=PowerStats.notePiece(l,500_000,120_000,4,cold=false,now=t+11*minute) // battery: in neither
-        l=PowerStats.noteFgSetting(l,"auto",true)
+        var l=PowerStats.notePiece(null,200_000,120_000,6,cold=true,now=t,plugged=true)
+        l=PowerStats.notePiece(l,300_000,120_000,6,cold=false,now=t+5*minute,plugged=true)
+        l=PowerStats.notePiece(l,500_000,120_000,4,cold=false,now=t+11*minute) // battery: not counted
+        // A ledger of an older build: its foreground keys are dropped with the next snapshot.
+        l.put("fgSetting","auto").put("fgOn",true)
+        l=PowerStats.noteSnapshot(l,snap(),6,"top-app")
+        assertFalse(l.has("fgSetting"));assertFalse(l.has("fgOn"))
         val hb=PowerText.heartbeat(l,t+hour)
+        assertFalse(hb.has("fgSetting"));assertFalse(hb.has("fgOn"))
         val today=hb.getJSONObject("today")
-        val fg=today.getJSONObject("fg")
-        assertEquals(1,fg.getInt("runs"));assertEquals(120,fg.getInt("min"));assertEquals(1,fg.getInt("refused"));assertEquals(0,fg.getInt("timeout"))
+        assertFalse(today.has("fg"))
         val med=today.getJSONObject("pieceMedianMs")
-        assertEquals(210_000L,med.getLong("fg"));assertEquals(300_000L,med.getLong("bg"));assertEquals(2,med.getInt("fgN"));assertEquals(1,med.getInt("bgN"))
-        assertEquals("auto",hb.getString("fgSetting"));assertTrue(hb.getBoolean("fgOn"))
+        assertEquals(250_000.0,med.getLong("bg").toDouble(),100.0);assertEquals(2,med.getInt("bgN"));assertFalse(med.has("fg"));assertFalse(med.has("fgN"))
         // Nothing yet: zeros and nulls, the block always there.
         val empty=PowerText.heartbeat(null,t).getJSONObject("today")
-        assertEquals(0,empty.getJSONObject("fg").getInt("runs"));assertTrue(empty.getJSONObject("pieceMedianMs").isNull("fg"))
-    }
-    @Test fun theForegroundNoticeIsQuietAndOneLine() {
-        val info=TranscriptionForeground.info(context)
-        assertEquals(android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING,info.foregroundServiceType)
-        assertEquals("충전하는 동안 통화를 글자로 바꾸고 있어요",info.notification.extras.getCharSequence(android.app.Notification.EXTRA_TITLE).toString())
-        assertTrue(info.notification.flags and android.app.Notification.FLAG_ONLY_ALERT_ONCE!=0)
-        val ch=context.getSystemService(android.app.NotificationManager::class.java).getNotificationChannel(TranscriptionForeground.CHANNEL)
-        assertEquals(android.app.NotificationManager.IMPORTANCE_MIN,ch.importance);assertNull(ch.sound)
-    }
-    @Test fun theManifestDeclaresTheForegroundTypes() {
-        val info=context.packageManager.getPackageInfo(context.packageName,android.content.pm.PackageManager.GET_PERMISSIONS)
-        assertTrue(info.requestedPermissions!!.contains("android.permission.FOREGROUND_SERVICE_DATA_SYNC"))
-        assertTrue(info.requestedPermissions!!.contains("android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING"))
-        val xml=File("src/main/AndroidManifest.xml").readText()
-        val service=Regex("""<service android:name="androidx\.work\.impl\.foreground\.SystemForegroundService"[^>]*>""").find(xml)!!.value
-        assertTrue(service.contains("""android:foregroundServiceType="dataSync|mediaProcessing""""));assertTrue(service.contains("""tools:node="merge""""))
-    }
-
-    @Test fun aForegroundRunCountsItsCoresAfterItLeftTheBackground() {
-        // The cpuset is read again until the process has left the background (the system moves it on its own time).
-        var reads=0;val slept=ArrayList<Long>()
-        val moved=CpuSet.settled(code={ if(reads++<2) "background" else "foreground" },allowed={ 8 },sleep={ slept+=it })
-        assertEquals(8 to "foreground",moved);assertEquals(listOf(250L,250L),slept)
-        // A phone that never moves it: the wait ends and the background's numbers are what the run gets.
-        slept.clear()
-        val stuck=CpuSet.settled(waitMs=1_000L,code={ "background" },allowed={ 4 },sleep={ slept+=it })
-        assertEquals(4 to "background",stuck);assertEquals(4,slept.size)
-        // The run's thread count follows the cores it has now (6 while plugged in, never more than the cores).
+        assertFalse(empty.has("fg"));assertTrue(empty.getJSONObject("pieceMedianMs").isNull("bg"))
+        // The run's thread count follows the cores it has (6 while plugged in, never more than the cores).
         assertEquals(6,PowerPolicy.threads(6,8));assertEquals(4,PowerPolicy.threads(6,4))
-        // Heartbeat: today.fg{cpus, cpuset, threads}; a text never gets through as the cpuset.
-        val t=kst(10,2)
-        var l=PowerStats.noteFgCpu(PowerStats.noteFg(null,t,"run",60_000),t,8,"foreground",6)
-        var fg=PowerText.heartbeat(l,t+60_000).getJSONObject("today").getJSONObject("fg")
-        assertEquals(8,fg.getInt("cpus"));assertEquals("foreground",fg.getString("cpuset"));assertEquals(6,fg.getInt("threads"));assertEquals(1,fg.getInt("runs"))
-        fg=PowerText.heartbeat(PowerStats.noteFg(null,t,"run",60_000),t+60_000).getJSONObject("today").getJSONObject("fg")
-        assertTrue(fg.isNull("cpus"));assertTrue(fg.isNull("cpuset"));assertTrue(fg.isNull("threads"))
+    }
+    @Test fun theManifestKeepsOnlyTheCallCardsForegroundService() {
+        val info=context.packageManager.getPackageInfo(context.packageName,android.content.pm.PackageManager.GET_PERMISSIONS)
+        assertFalse(info.requestedPermissions!!.contains("android.permission.FOREGROUND_SERVICE_DATA_SYNC"))
+        assertFalse(info.requestedPermissions!!.contains("android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING"))
+        assertTrue(info.requestedPermissions!!.contains("android.permission.FOREGROUND_SERVICE_PHONE_CALL"))
+        val xml=File("src/main/AndroidManifest.xml").readText()
+        assertFalse("WorkManager's service is the library's own again",xml.contains("androidx.work.impl.foreground.SystemForegroundService"))
+        assertTrue(xml.contains("""android:foregroundServiceType="phoneCall|specialUse""""))
     }
 }

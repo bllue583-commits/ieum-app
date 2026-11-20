@@ -32,12 +32,9 @@ import kr.callbrief.pipeline.PipelineModelOkHttp
 import kr.callbrief.pipeline.PowerPolicy
 import kr.callbrief.pipeline.Telemetry
 import kr.callbrief.pipeline.TranscriptClean
-import kr.callbrief.pipeline.TranscriptionForeground
 import org.json.JSONObject
 import java.io.File
 import java.time.Instant
-import java.time.LocalDate
-import java.time.ZoneId
 import java.util.concurrent.TimeUnit
 
 /** r18-bench (DESIGN_V7 4.4): the engine bench on the phone. Switched on only by the mailbox's app/config.json ([Bench]); the
@@ -57,9 +54,6 @@ class BenchWork(context:Context,params:WorkerParameters):Worker(context,params) 
         if(disk.optInt("run",-1)==s.optInt("run",-2) && disk.optString("state")=="OFF") s.put("state","OFF")
         cur.put(BenchState.KEY,s.toString()) } }
     private fun stopped()=isStopped || gateCode!=null
-    /** The foreground of this run (elapsed ms when it began, 0: not in the foreground); counted for the whole doWork. */
-    private var fgSince=0L
-    private val day get()=LocalDate.now(ZoneId.of("Asia/Seoul")).toString()
     private val began=android.os.SystemClock.elapsedRealtime()
     /** The system's 10-minute limit (or the foreground service's) ended the run. */
     private fun timeLimited():Boolean {
@@ -153,7 +147,6 @@ class BenchWork(context:Context,params:WorkerParameters):Worker(context,params) 
             save(BenchState.setStatus(s,"WAITING",codeOf(e),System.currentTimeMillis()));later(app,60);return Result.success()
         } finally {
             watcher.stop();runCatching { engine?.close() };engine=null
-            if(fgSince>0) { BenchState.addFg(s,day,android.os.SystemClock.elapsedRealtime()-fgSince);fgSince=0;save(s) }
         }
     }
 
@@ -175,15 +168,12 @@ class BenchWork(context:Context,params:WorkerParameters):Worker(context,params) 
         val from=BenchState.nextPiece(s,c,index)
         var opened:BenchEngine?=null
         fun open():BenchEngine = opened ?: run {
-            // (나) and (가) in the foreground like the app's plugged-in run, within the bench's own daily allowance (counted over
-            // the whole run, from the moment it went in). Asked before the thread count is read: the cores the process may
-            // use change when it leaves the background (11/14: read before, the count was the background's 4).
-            if(c!="c" && fgSince==0L && BenchState.fgUsed(s,day)<cfg.fgMinutes*60_000L && TranscriptionForeground.start(this)) fgSince=android.os.SystemClock.elapsedRealtime()
-            val (cpus,cpuset)=if(fgSince>0) CpuSet.settled() else CpuSet.readAllowed() to CpuSet.readCode()
+            // v4.2 r23-2: the foreground run is gone (T5 fell short of its bar); every candidate runs in the background and
+            // `fgMinutes` is not supported any more (read, ignored).
+            val (cpus,cpuset)=CpuSet.readAllowed() to CpuSet.readCode()
             val threads=BenchConfig.threadsFor(cfg,c,cpus)
             BenchState.setRun(s,c,threads,cpus,cpuset)
             val e=when(c) {
-                // (다) never asks for the foreground: it needs no long run, and the notice would only show for nothing.
                 "c" -> openWithin(OPEN_LIMIT_MS) { SenseVoiceBenchEngine(app,models.file(BenchModels.SENSE_VOICE),models.file(BenchModels.SENSE_VOICE_TOKENS),models.file(BenchModels.SILERO_VAD),threads) }
                 else -> {
                     val (file,bytes)=if(c=="b") models.file(BenchModels.TURBO_Q8) to BenchModels.TURBO_Q8.bytes
@@ -214,7 +204,7 @@ class BenchWork(context:Context,params:WorkerParameters):Worker(context,params) 
                     val q=BenchScore.piece(raw,offset,endMs,ref,names)
                     BenchState.addPiece(s,c,index,i,BenchState.Piece(pcm.size*1000L/PipelineAudioMath.TARGET_RATE,wall,
                         if(cpu0!=null && cpu1!=null && cpu1>=cpu0) cpu1-cpu0 else null,q.refChars,q.edits,q.numRef,q.numHit,q.nameRef,q.nameHit,
-                        q.halluc,raw.size,fgSince>0,timed=ref.timed))
+                        q.halluc,raw.size,false,timed=ref.timed))
                     save(s)
                 }
                 PipelineAudioDecoder().decode(input,call.mime) { i,offset,pcm ->

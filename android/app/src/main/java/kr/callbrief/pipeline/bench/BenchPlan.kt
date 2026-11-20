@@ -12,7 +12,7 @@ internal data class BenchConfig(val on:Boolean=false,val candidates:List<String>
     val run:Int=1,
     /** Threads per candidate (null: (가)/(나) the plugged-in run's count, (다) [SENSE_VOICE_THREADS]). */
     val threads:Map<String,Int> =emptyMap(),
-    /** Foreground minutes a day the whisper candidates may use (the system's limit is shared with the transcription run). */
+    /** v4.2 r23-2: not supported any more (the foreground run is gone); still read so an older config parses, and ignored. */
     val fgMinutes:Int=DEFAULT_FG_MINUTES) {
     fun toJson():JSONObject = JSONObject().put("on",on).put("candidates",JSONArray(candidates)).put("calls",calls).put("run",run)
         .put("threads",JSONObject().apply { threads.forEach { (k,v) -> put(k,v) } }).put("fgMinutes",fgMinutes)
