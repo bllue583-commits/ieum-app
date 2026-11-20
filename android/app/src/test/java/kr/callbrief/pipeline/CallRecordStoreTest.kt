@@ -105,7 +105,7 @@ class CallRecordStoreTest:ProtectedTextHostTestBase() {
         val before=board()
         store().use { it.completeItem(a,1) }
         assertEquals("done",item(a)["status"]);assertEquals(2L,item(a)["revision"]);assertEquals(before+1,board())
-        assertEquals(now,(item(a)["done_ms"] as Number).toLong()) // finished at, for the 14-day guard against making it again
+        assertEquals(now,(item(a)["done_ms"] as Number).toLong()) // finished at, for the guard against making it again (3 days, same company; v4.2 r23-6)
         assertEquals(1,port().use { it.query("SELECT * FROM workflow_item_history WHERE item_id=?",a).size })
         assertTrue(store().use { it.openItems() }.none { it.id==a })
         try { store().use { it.completeItem(a,1) };fail("stale revision must be rejected") } catch(e:IllegalArgumentException) { assertEquals("ITEM_REVISION_CONFLICT",e.message) }
@@ -173,14 +173,38 @@ class CallRecordStoreTest:ProtectedTextHostTestBase() {
         // 2-letter pieces: 0.6 and above is the same open item of the same company.
         assertEquals(listOf(false,true),makeItems("△△철강",near,"전혀 다른 일 도면 받기"))
         val first=port().use { it.query("SELECT id FROM workflow_items WHERE title=?",long1).single()["id"] as String }
-        // Finished 5 days ago: only the identical title is blocked (spaces ignored); wording that is merely near is a new item.
-        port().use { it.execute("UPDATE workflow_items SET status='done',done_ms=? WHERE id=?",now-5*86_400_000L,first) }
+        // v4.2 r23-6: finished 2 days ago: the same company's identical title is blocked (spaces ignored); wording that is
+        // merely near is a new item.
+        port().use { it.execute("UPDATE workflow_items SET status='done',done_ms=? WHERE id=?",now-2*86_400_000L,first) }
         assertEquals(listOf(false),makeItems("△△철강",long1.replace(" ","")))
         assertEquals(listOf(true),makeItems("△△철강",near))
-        // Finished 20 days ago: no longer blocks the identical title either.
-        port().use { it.execute("UPDATE workflow_items SET done_ms=? WHERE id=?",now-20*86_400_000L,first) }
         port().use { it.execute("UPDATE workflow_items SET status='done',done_ms=? WHERE title=?",now-20*86_400_000L,near) }
+        // Finished 4 days ago (was blocked for 14 days before v4.2): the same job again is a new item.
+        port().use { it.execute("UPDATE workflow_items SET done_ms=? WHERE id=?",now-4*86_400_000L,first) }
         assertEquals(listOf(true),makeItems("△△철강",long1))
+        // A weekly job: finished 7 days ago, it comes back.
+        done(long1,now-7*86_400_000L)
+        assertEquals(listOf(true),makeItems("△△철강",long1))
+        // Another company's same title is never held against a finished one, even a day after it.
+        done(long1,now-86_400_000L)
+        assertEquals(listOf(true),makeItems("□□건설",long1))
+        done(long1,now-86_400_000L)
+        assertEquals(listOf(false),makeItems("△△철강",long1))
+        // An open item still blocks its identical title, whatever the company and however old.
+        assertEquals(listOf(true),makeItems("○○설비","4층 배관 자재 반입 확인"))
+        port().use { it.execute("UPDATE workflow_items SET created_ms=? WHERE title=?",now-30*86_400_000L,"4층 배관 자재 반입 확인") }
+        assertEquals(listOf(false),makeItems("□□건설","4층 배관 자재 반입 확인"))
+    }
+    private fun done(title:String,at:Long)=port().use { it.execute("UPDATE workflow_items SET status='done',done_ms=? WHERE title=?",at,title) }
+
+    /** v4.2 r23-6: a [틀렸어요] item still blocks for 14 days (unchanged), and finished items for 3. */
+    @Test fun theBlockDays() {
+        assertEquals(3L,CallRecordStore.DONE_BLOCK_DAYS);assertEquals(14L,CallRecordStore.WRONG_BLOCK_DAYS)
+        assertEquals(listOf(true),makeItems("△△철강","2층 거푸집 해체 일정 확인"))
+        port().use { it.execute("UPDATE workflow_items SET status='wrong',done_ms=? WHERE title=?",now-10*86_400_000L,"2층 거푸집 해체 일정 확인") }
+        assertEquals(listOf(false),makeItems("□□건설","2층 거푸집 해체 일정 확인"))
+        port().use { it.execute("UPDATE workflow_items SET done_ms=? WHERE title=?",now-15*86_400_000L,"2층 거푸집 해체 일정 확인") }
+        assertEquals(listOf(true),makeItems("□□건설","2층 거푸집 해체 일정 확인"))
     }
 
     /** Design 3.4: a shared person's name and "확인" no longer make two jobs one; a near one skipped is kept as a merge candidate. */

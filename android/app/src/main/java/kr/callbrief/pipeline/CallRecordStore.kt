@@ -82,6 +82,10 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         const val TRANSCRIBED="TRANSCRIBED";const val ANALYZED="ANALYZED";const val FAILED="FAILED"
         /** v3.9 r20-2: a check item the user marked [틀렸어요] (a workflow_items status, apart from done and merged). */
         const val WRONG="wrong"
+        /** v4.2 r23-6 (DESIGN_V8 6 중복 막기): a finished item blocks the same company's same title this many days (was 14). */
+        const val DONE_BLOCK_DAYS=3L
+        /** A [틀렸어요] item blocks the same or a near title this many days (v3.9 r20; never used yet, so unchanged). */
+        const val WRONG_BLOCK_DAYS=14L
         const val WAITING_CONSENT="WAITING_CONSENT"
         /** Transcripts of records that got their result are trimmed after this many days: the whole sealed DB must stay under 16 MB. Summaries stay.
          * v3.6.1 (D1, DESIGN_V7 2): 14 -> 7 days, and [TRANSCRIPT_KEEP_DAYS_FULL] once the store is [TRANSCRIPT_FULL_PERCENT]% full. */
@@ -1547,7 +1551,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     }
     /** An item with the same words (spaces and punctuation ignored), or an open one of the same known company that is near it
      * (2-letter pieces, 0.6) and has the same numbers: "3층"/"4층", "11/5"/"11/12" and "2공구"/"3공구" are different jobs. Items
-     * finished or merged in the last 14 days (B11) only block an identical title. [companyId] null means the company is unknown:
+     * finished or merged in the last [DONE_BLOCK_DAYS] days (B11) only block an identical title of the same company (v4.2
+     * r23-6: was 14 days and any company, so a weekly job never came back); a [틀렸어요] item blocks for [WRONG_BLOCK_DAYS]
+     * days, a near title of its company too. [companyId] null means the company is unknown:
      * unknown against unknown matches by identical title only; "?" is a company not yet in the ledger, which only an identical
      * title can match. */
     private fun isDuplicate(title:String,companyId:String?,now:Long):Boolean=duplicateOf(title,companyId,now)!=null
@@ -1556,9 +1562,13 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
      * 확인" are two jobs even when both carry "김민수 과장". */
     private fun duplicateOf(title:String,companyId:String?,now:Long):Pair<String,Boolean>? {
         if(NameKey.bare(title).isEmpty()) return null
-        val list=rows("""SELECT i.id,i.title,i.status,tc.company_id AS cid FROM workflow_items i LEFT JOIN task_companies tc ON tc.item_id=i.id
-            WHERE i.kind='TODO' AND (i.status NOT IN ('done','merged','wrong') OR COALESCE(i.done_ms,i.created_ms)>=CAST(? AS INTEGER))""",now-14*86_400_000L)
-        list.firstOrNull { NameKey.sameWords(title,it.str("title").orEmpty()) }?.let { return it.str("id")!! to false }
+        val list=rows("""SELECT i.id,i.title,i.status,tc.company_id AS cid,COALESCE(i.done_ms,i.created_ms) AS at FROM workflow_items i LEFT JOIN task_companies tc ON tc.item_id=i.id
+            WHERE i.kind='TODO' AND (i.status NOT IN ('done','merged','wrong') OR COALESCE(i.done_ms,i.created_ms)>=CAST(? AS INTEGER))""",now-WRONG_BLOCK_DAYS*86_400_000L)
+        // v4.2 r23-6: a finished (or merged) item blocks only the same company's same title, and only for DONE_BLOCK_DAYS: the
+        // same weekly job a week later is a new one. Unknown against unknown counts as the same company.
+        list.firstOrNull { r -> val finished=r.str("status") in setOf("done","merged")
+            (!finished || r.str("cid")==companyId && (r.long("at") ?: 0)>=now-DONE_BLOCK_DAYS*86_400_000L) && NameKey.sameWords(title,r.str("title").orEmpty()) }
+            ?.let { return it.str("id")!! to false }
         if(companyId==null) return null
         // v3.9 r20 review M1: a wrong item of the last 14 days also blocks a near title (the same wrong item in other words).
         val same=list.filter { it.str("status") !in setOf("done","merged") && it.str("cid")==companyId };if(same.isEmpty()) return null
