@@ -108,7 +108,7 @@ class RoutineDocTest {
         val prompt=text.substringAfter("\n---\n")
         listOf("\"확인 필요: 저장소 접근\"","`git pull`이 실패하면","결과를 만드는 항목은 20건까지","status/last-run-hourly.json","\"repoOk\":true","\"pushed\":true",
             "python3 tools/watchdog.py --root . --apply bllue583-commits/ieum-inbox","\"확인 필요: 감시 이슈 n건\"","renameCompany({\"from\",\"to\"}",
-            "\"promptVersion\": 7도 과도기 요청","\"promptVersion\": 8도 과도기 요청","과도기 버전 4, 5, 6, 7, 8은 제외").forEach { assertTrue(it,prompt.contains(it)) }
+            "\"promptVersion\": 7도 과도기 요청","\"promptVersion\": 8도 과도기 요청","\"promptVersion\": 9도 과도기 요청","과도기 버전 4, 5, 6, 7, 8, 9는 제외").forEach { assertTrue(it,prompt.contains(it)) }
         // v9 (DESIGN_V7 3.3): mail is gone from the rules, the result format, the reply line and the self-report; the mask of an
         // address inside a text stays (rule 17), and an old mail request from a phone not yet updated is answered and counted as sms.
         assertFalse(rules.contains("[문자와 메일]"));assertFalse(rules.contains("보낸 사람"));assertFalse(rules.contains("첨부"))
@@ -213,8 +213,8 @@ class RoutineDocTest {
 
     private companion object {
         /** The version docs/routines/hourly.md is at (v7: DESIGN_V4 3.2-3, r13-2; v8: DESIGN_V4 4.3, r14-3, same rules and format;
-         * v9: DESIGN_V7 3.3, r17-0, mail removed, same result keys). */
-        const val DOC_VERSION=9
+         * v9: DESIGN_V7 3.3, r17-0, mail removed, same result keys; v10: r23-7, rule 12 on jobs finished more than 3 days ago). */
+        const val DOC_VERSION=10
         /** The version docs/routines/tidy.md is at (v7: DESIGN_V5 2.2, r15-2, the morning report; v8: DESIGN_V7 3.2, r17-2; v9: r18, today[].tag and 10 lines;
          * v10: r20, wrong[]; v11: r21-1, pending.yesterdayFailed and head.failedCalls). */
         const val TIDY_VERSION=11

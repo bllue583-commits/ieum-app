@@ -802,7 +802,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
             callLog = rows("SELECT x.direction,l.name,l.start_ms,l.duration_ms FROM call_record_log x JOIN call_log l ON l.log_id=x.log_id WHERE x.record_id=?",r.recordId).firstOrNull()
                 ?.let { ClaudeCallRequest.CallLogView(it.str("name"),it.str("direction"),kstTime(it.long("start_ms")),it.long("duration_ms") ?: 0) },
             recentTexts = recentTexts(r,listOfNotNull(key,person?.str("phone_key")).distinct(),if(wide) RECENT_TEXT_CHARS*3 else RECENT_TEXT_CHARS),
-            recentlyDone = if(lean) emptyList() else recentlyDone(companyId,before),
+            // v4.2 r23-7: the last DONE_BLOCK_DAYS only (rule 12): an older finished job promised again is a new item.
+            recentlyDone = if(lean) emptyList() else recentlyDone(companyId,before,DONE_BLOCK_DAYS),
             sameDayCompany = if(companyId==null) emptyList() else rows("""SELECT c.started_ms,c.created_ms,c.summary,p.name AS person FROM call_links l JOIN call_records c ON c.record_id=l.record_id
                 LEFT JOIN people p ON p.id=l.person_id WHERE l.company_id=? AND c.record_id!=? AND c.state='ANALYZED' AND c.summary IS NOT NULL
                 AND COALESCE(c.started_ms,c.created_ms)>=CAST(? AS INTEGER) AND COALESCE(c.started_ms,c.created_ms)<CAST(? AS INTEGER) AND (l.person_id IS NULL OR l.person_id!=?)
@@ -835,9 +836,9 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
     }
     /** Check items finished or merged in the 30 days before [at] (this company first), so they are not made again. Ones asked for
      * after [at] are left out. */
-    fun recentlyDone(companyId:String?,at:Long=clock()):List<String> =rows("""SELECT i.title FROM workflow_items i LEFT JOIN task_companies tc ON tc.item_id=i.id
+    fun recentlyDone(companyId:String?,at:Long=clock(),days:Long=30):List<String> =rows("""SELECT i.title FROM workflow_items i LEFT JOIN task_companies tc ON tc.item_id=i.id
         WHERE i.status IN ('done','merged') AND i.kind='TODO' AND COALESCE(i.done_ms,i.created_ms)>=CAST(? AS INTEGER) AND i.created_ms<=CAST(? AS INTEGER)
-        ORDER BY CASE WHEN tc.company_id=? THEN 0 ELSE 1 END,COALESCE(i.done_ms,i.created_ms) DESC LIMIT 15""",at-30*86_400_000L,at,companyId ?: "")
+        ORDER BY CASE WHEN tc.company_id=? THEN 0 ELSE 1 END,COALESCE(i.done_ms,i.created_ms) DESC LIMIT 15""",at-days*86_400_000L,at,companyId ?: "")
         .mapNotNull { it.str("title") }
     fun openTaskIds():Set<String> =rows("SELECT id FROM workflow_items WHERE status NOT IN ('done','merged','wrong') AND kind='TODO'").mapNotNull { it.str("id") }.toSet()
 

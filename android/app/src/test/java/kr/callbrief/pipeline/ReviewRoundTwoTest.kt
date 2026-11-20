@@ -62,6 +62,11 @@ class ReviewRoundTwoTest:ProtectedTextHostTestBase() {
         val item=store().use { it.openItems().single() }
         AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql")).use { p -> p.execute("UPDATE workflow_items SET status='done' WHERE id=?",item.id) }
         assertEquals(listOf("견적서 보내기"),store().use { it.request(it.record(id)!!).recentlyDone })
+        // v4.2 r23-7: the request lists the 3 days before the call only; finished 4 days before it, a weekly job promised again is a new one.
+        AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql")).use { p -> p.execute("UPDATE workflow_items SET done_ms=? WHERE id=?",now-5*day,item.id) }
+        assertEquals(emptyList<String>(),store().use { it.request(it.record(id)!!).recentlyDone })
+        assertEquals("the tidy's list keeps 30 days",listOf("견적서 보내기"),store().use { it.recentlyDone(null) })
+        AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql")).use { p -> p.execute("UPDATE workflow_items SET done_ms=NULL WHERE id=?",item.id) }
         val again=store().use { it.insert(call("rec2",now));CallRecordStore.recordId(call("rec2",0)) }
         store().use { it.applyAnalysis(again,analysis(ClaudeCallAnalyzerTest.task("create",null,"견적서 보내기","견적서는 내일까지"))) }
         assertTrue("finished lately: not made again",store().use { it.openItems() }.isEmpty())
