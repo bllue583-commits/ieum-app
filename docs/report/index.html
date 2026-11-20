@@ -36,6 +36,14 @@ li:last-child{padding-bottom:0}
 .sub{color:var(--sub);font-size:16px}
 .empty{color:var(--sub)}
 .msg{background:var(--card);border-radius:16px;padding:20px 16px;margin-top:14px}
+/* v4.2 (user 11/20: 미려함): the three numbers of the morning at a glance, and a count beside each list's title. */
+.stats{display:flex;gap:8px;margin:12px 0 0}
+.stat{flex:1;background:var(--card);border-radius:14px;padding:12px 8px 10px;text-align:center;min-width:0}
+.stat b{display:block;font-size:26px;line-height:1.15;font-weight:700;font-variant-numeric:tabular-nums}
+.stat span{display:block;color:var(--sub);font-size:14px;margin-top:2px;white-space:nowrap}
+.stat.key b{color:var(--accent)}
+h2 .n{color:var(--sub);font-weight:600;font-size:16px;margin-left:6px}
+main{padding-bottom:calc(40px + env(safe-area-inset-bottom))}
 </style>
 </head>
 <body>
@@ -58,7 +66,7 @@ async function decodeReport(d){
 function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e}
 function list(title,rows,draw,empty){
   if(!rows.length&&!empty)return null;
-  var s=el("section");s.appendChild(el("h2",null,title));
+  var s=el("section"),h2=el("h2",null,title);if(rows.length>1)h2.appendChild(el("span","n",String(rows.length)));s.appendChild(h2);
   if(!rows.length){s.appendChild(el("p","empty",empty));return s}
   var ul=el("ul");rows.forEach(function(r){var li=el("li");draw(li,r);ul.appendChild(li)});s.appendChild(ul);return s;
 }
@@ -67,10 +75,13 @@ function show(r){
   var p=document.getElementById("page");p.textContent="";
   var h=r.head||{};
   p.appendChild(el("h1",null,(r.label||r.day||"")+" 아침 보고"));
-  var first=(h.calls>0?"어제 통화 "+h.calls+"건을 정리했어요":"어제 정리한 통화가 없어요")+(h.pendingCalls>0?". "+h.pendingCalls+"건은 아직 글자로 바꾸는 중이에요":"");
-  p.appendChild(el("p","head",first));
-  if(h.failedCalls>0)p.appendChild(el("p","head","어제 글자로 못 바꾼 통화가 "+h.failedCalls+"건 있어요"));
-  p.appendChild(el("p","head","새 체크 "+(h.newChecks||0)+"개, 오늘 챙길 일 "+(h.todayChecks||0)+"개"));
+  var stats=el("div","stats");
+  [["오늘 챙길 일",h.todayChecks||0,"key"],["새 체크",h.newChecks||0,""],["어제 통화",h.calls||0,""]].forEach(function(x){
+    var c=el("div","stat"+(x[2]?" "+x[2]:""));c.appendChild(el("b",null,String(x[1])));c.appendChild(el("span",null,x[0]));stats.appendChild(c)});
+  p.appendChild(stats);
+  if(!(h.calls>0))p.appendChild(el("p","note","어제 정리한 통화가 없어요"));
+  if(h.pendingCalls>0)p.appendChild(el("p","note","통화 "+h.pendingCalls+"건은 아직 글자로 바꾸는 중이에요"));
+  if(h.failedCalls>0)p.appendChild(el("p","note","어제 글자로 못 바꾼 통화가 "+h.failedCalls+"건 있어요"));
   if(r.phone)p.appendChild(el("p","note","새벽 정리 없이 폰에서 만든 보고예요"));
   var blocks=[
     list("오늘 챙길 일",r.today||[],function(li,t){
