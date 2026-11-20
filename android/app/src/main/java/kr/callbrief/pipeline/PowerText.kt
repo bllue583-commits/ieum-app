@@ -59,7 +59,9 @@ internal object PowerText {
     private val DAY_COUNTS=listOf("gapSkips","hotSkips","inCallSkips","morningSkips","lowSkips","powerSaveSkips","budgetSkips",
         "plugDropped","killedChunkMs","deadlineMs","yieldCount","yieldMs","modelLoads","modelLoadMs","decodeAudioMs",
         // v3.7 r17-3: the runs' process CPU time and the charge the battery runs took ([PowerStats.noteCpu]).
-        "cpuMs","cpuRuns","batteryUah")
+        "cpuMs","cpuRuns","batteryUah",
+        // r23 review: pieces stopped because the plug went away and the rest did not fit in the day's battery budget.
+        "plugDropStops")
     /** v3.6.1 (T1): the causes counted under today's `hot` ([PowerStats.noteHot]). */
     val HOT_WHY=listOf("headroom","temp","slow","severe")
     private fun n(o:JSONObject?,k:String)=(o?.opt(k) as? Number)?.toLong()?.coerceAtLeast(0) ?: 0L
@@ -69,11 +71,15 @@ internal object PowerText {
         // The day as "yyyy-MM-dd": a yyyymmdd number can look like a phone number to the heartbeat's leak check ("010").
         val o=JSONObject().put("day",(if(d!=null && d.optInt("day")>0) d.optInt("day") else day).let { if(it>0) "%04d-%02d-%02d".format(it/10000,it/100%100,it%100) else JSONObject.NULL })
         o.put("battery",JSONObject().put("runs",n(b,"runs")).put("ms",n(b,"ms")).put("min",n(b,"min")).put("audioMin",n(b,"audioMin"))
-            .put("mAhScreenOff",(b?.opt("mAhScreenOff") as? Number)?.toLong()?.takeIf { it>0 } ?: JSONObject.NULL))
+            .put("mAhScreenOff",(b?.opt("mAhScreenOff") as? Number)?.toLong()?.takeIf { it>0 } ?: JSONObject.NULL)
+            // r23 review: battery runs the process died in, and the minutes counted for them (until last seen alive).
+            .put("killedRuns",n(b,"killedRuns")).put("killedMin",n(b,"killedMs")/60_000))
         o.put("plugged",JSONObject().put("runs",n(p,"runs")).put("ms",n(p,"ms")).put("min",n(p,"min")).put("audioMin",n(p,"audioMin")))
         o.put("budgetMin",TranscriptionPower.BATTERY_BUDGET_MIN)
         o.put("budgetHit",d?.optString("budgetHit")?.takeIf { it=="min" || it=="pct" } ?: "none")
         DAY_COUNTS.forEach { o.put(it,n(d,it)) }
+        // r23 review: minutes on battery after the plug went away in a plugged-in run (part of battery.min).
+        o.put("plugDropMin",n(d,"plugDropMs")/60_000)
         o.put("levelFallingSkips",n(d,"levelFallingRuns"))
         // v3.6.1 (T1): why the wakes found it hot (hotSkips split by cause; severe = the thermal status).
         val hot=d?.optJSONObject("hot")

@@ -177,6 +177,8 @@ internal class CallTranscriptionRunner(
         fun modelLoad(ms:Long) {}
         /** A piece is about to begin (the first of the run: the battery run's start is written before it). */
         fun started() {}
+        /** r23 review: a piece of [audioMs] begins now and is expected to take [expectedMs] (no margin). */
+        fun pieceStart(audioMs:Long,expectedMs:Long) {}
         /** v3.7 r17-3: a recording's text is begun (claimed), for the heartbeat's trace[].textStartS. */
         fun begun(recordingId:String) {}
         companion object { val NONE=object:Events {} }
@@ -241,6 +243,7 @@ internal class CallTranscriptionRunner(
             val first=startedPieces==0
             if(!first && !keepGoing() || !PowerPolicy.startPiece(first,now()-runStartedMs,PowerPolicy.expectedPieceMs(audioMs,rate()),runLimitMs)) throw Yield()
             if(startedPieces==0) events.started()
+            events.pieceStart(audioMs,PowerPolicy.splitExpectMs(audioMs,rate()))
             startedPieces++
             val began=now()
             val raw=try {
@@ -411,6 +414,8 @@ class CallTranscriptionPlug(context:Context,params:WorkerParameters):Worker(cont
  * v3.6 (DESIGN_V6 2): no WorkManager constraint; each wake reads the battery and asks [PowerPolicy] whether and how to run. */
 class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(context,params) {
     @Volatile private var engine:AndroidWhisperEngine?=null
+    /** r23 review: the plug went away mid-piece and the rest of the piece does not fit in the day's battery budget. */
+    @Volatile private var plugDropStop=false
     /** The system asks us to stop (time limit, replaced): end the native run now, not after the piece. */
     override fun onStopped() { runCatching { engine?.cancel() };super.onStopped() }
 
@@ -427,9 +432,18 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
         val now=System.currentTimeMillis()
         val start=BatterySnapshot.read(storage)
         val cores=CpuSet.readAllowed()
-        savePower(settings) { o -> PowerStats.noteSnapshot(PowerStats.notePlug(o,start,now),start,cores,CpuSet.readCode()) }
-        val budget=PowerStats.budget(power(settings),start,now)
-        val decision=PowerPolicy.decide(start,budget,now)
+        // r23 review: a battery run the process died in (the app closed from the recent list) is booked once, as long as it
+        // was last seen alive.
+        savePower(settings) { o -> PowerStats.settleDead(PowerStats.noteSnapshot(PowerStats.notePlug(o,start,now),start,cores,CpuSet.readCode()),now) }
+        var budget=PowerStats.budget(power(settings),start,now)
+        var decision=PowerPolicy.decide(start,budget,now)
+        // r23 review: less than a whole piece is left of the budget, but the short call a battery run would take first is
+        // expected to fit: decide again with that call's own piece.
+        if(decision is PowerPolicy.Decision.Wait && decision.reason=="budget" && PowerPolicy.budgetHit(budget)=="min" && budget.batteryRunMs<TranscriptionPower.BATTERY_BUDGET_MS) {
+            val len=runCatching { CallTranscriptionStore(storage).use { it.nextShortLengthMs(CallTranscriptionStore.BatteryWindow(PowerPolicy.dayStartMs(now),it.bytesPerMs())) } }.getOrNull()
+            val piece=len?.let { PowerPolicy.shortPieceMs(it,PowerStats.rate(power(settings),TranscriptionPower.THREADS_OTHER)) }
+            if(piece!=null && piece<PowerPolicy.pieceMs(budget)) { budget=budget.copy(pieceMs=piece);decision=PowerPolicy.decide(start,budget,now) }
+        }
         if(start.isPlugged && budget.levelFalling) savePower(settings) { PowerStats.add(it,now,"levelFallingRuns") }
         if(start.isPlugged) armPlug(storage,false) else armPlug(storage,true)
         if(decision is PowerPolicy.Decision.Wait) {
@@ -444,6 +458,7 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
             return Result.success()
         }
         val run=decision as PowerPolicy.Decision.Run
+        val budgetAtStart=budget
         val threads=PowerPolicy.threads(run.threads,cores)
         val severe={ BatterySnapshot.read(storage).thermal>=PowerManager.THERMAL_STATUS_SEVERE }
         val began=android.os.SystemClock.elapsedRealtime()
@@ -461,18 +476,43 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
             if(t-lastCheck>=20_000L) { lastCheck=t;val s=BatterySnapshot.read(storage).also { s -> savePower(settings) { PowerStats.notePlug(it,s,t) } }
                 lastOk=PowerStats.stillRuns(power(settings),s,t,run.mode,ownStart) }
             lastOk }
+        // r23 review: the piece under way (its start and expected time) and the recording, for the plug-drop check and the
+        // user's stops.
+        var pieceBegan=0L;var pieceExpect=0L;var recording:String?=null
+        val battery=run.mode==PowerPolicy.Mode.BATTERY
         val events=object:CallTranscriptionRunner.Events {
-            override fun piece(ms:Long,audioMs:Long,cold:Boolean) { savePower(settings) { PowerStats.notePiece(it,ms,audioMs,threads,cold,plugged=run.mode==PowerPolicy.Mode.PLUGGED) } }
+            override fun piece(ms:Long,audioMs:Long,cold:Boolean) { pieceBegan=0L;savePower(settings) { o -> val x=PowerStats.notePiece(o,ms,audioMs,threads,cold,plugged=!battery)
+                if(battery) PowerStats.noteBatteryAlive(x,System.currentTimeMillis()) else x } }
+            override fun pieceStart(audioMs:Long,expectedMs:Long) { pieceExpect=expectedMs;pieceBegan=System.currentTimeMillis()
+                if(battery) savePower(settings) { PowerStats.noteBatteryAlive(it,pieceBegan) } }
             override fun started() { if(run.mode==PowerPolicy.Mode.BATTERY) { val t=System.currentTimeMillis();ownStart=t;savePower(settings) { PowerStats.noteBatteryStart(it,t) } } }
             override fun killed(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"killedChunkMs",ms) } }
             override fun deadline(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"deadlineMs",ms) } }
             override fun yielded() { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"yieldCount") } }
             override fun yieldLeft(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"yieldMs",ms) } }
             override fun decodeAudio(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"decodeAudioMs",ms) } }
-            override fun begun(recordingId:String) { runCatching { settings.update { s -> val prev=runCatching { JSONObject(s.optString(PipelineSettingsKeys.TRACE_TEXT_START)) }.getOrNull()
+            override fun begun(recordingId:String) { recording=recordingId;runCatching { settings.update { s -> val prev=runCatching { JSONObject(s.optString(PipelineSettingsKeys.TRACE_TEXT_START)) }.getOrNull()
                 if(prev?.has(recordingId)!=true) s.put(PipelineSettingsKeys.TRACE_TEXT_START,Telemetry.noteTextStart(prev,recordingId,System.currentTimeMillis()).toString()) } } }
             override fun modelLoad(ms:Long) { savePower(settings) { o -> PowerStats.add(PowerStats.add(o,System.currentTimeMillis(),"modelLoads"),System.currentTimeMillis(),"modelLoadMs",ms) } }
         }
+        // r23 review (r23-1 completed): a plugged-in run whose plug goes away mid-piece finishes the piece only when the day's
+        // battery budget holds the rest of it ([PowerPolicy.plugDropFits]); else the piece is cancelled and the run yields
+        // (finished pieces kept, no stall, no attempt; the next run takes it up from that piece). Looked at every 20 seconds.
+        val watch=if(battery) null else Thread({
+            while(!Thread.currentThread().isInterrupted && !plugDropStop) {
+                try { Thread.sleep(20_000L) } catch(_:InterruptedException) { break }
+                runCatching {
+                    val t=System.currentTimeMillis();val s=BatterySnapshot.read(storage)
+                    savePower(settings) { PowerStats.notePlug(it,s,t) }
+                    val o=power(settings);val b=PowerStats.budget(o,s,t)
+                    val began0=pieceBegan
+                    if(began0>0 && !PowerPolicy.plugged(s,b,t)) {
+                        val tail=t-o.optLong("lastPluggedMs",t).coerceAtMost(t)
+                        if(!PowerPolicy.plugDropFits(b,tail,began0+pieceExpect-t)) { plugDropStop=true;runCatching { engine?.cancel() } }
+                    }
+                }
+            }
+        },"ieum-plug-drop").apply { isDaemon=true;start() }
         return try {
             GeneralLocalStore(storage).use { local -> CallTranscriptionStore(storage).use { store ->
                 // v3.6 W5: failed rows get their new-build try only while plugged in.
@@ -484,7 +524,7 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                     skipReason={ c -> skipReason(c,settings) },
                     // The app may not have been opened since the phone restarted: the sink is made here then (review 11/4, round 2).
                     sink={ CallTranscriptSinks.factory?.invoke(applicationContext) ?: CallSinkImpl(applicationContext) },
-                    stopped={ isStopped },
+                    stopped={ isStopped || plugDropStop },
                     cleanedCount={ n -> settings.update{ it.put(PipelineSettingsKeys.TRANSCRIPT_CLEANED,it.optLong(PipelineSettingsKeys.TRANSCRIPT_CLEANED,0)+n) } },
                     speed={ ms -> settings.update{ it.put(PipelineSettingsKeys.LAST_MS_PER_AUDIO_MINUTE,ms).put(PipelineSettingsKeys.LAST_TRANSCRIBED_MS,System.currentTimeMillis()) } },
                     // v3.6: old recordings (처음 정리) go only on a plugged-in run; a battery run takes today's calls only (in SQL).
@@ -498,10 +538,14 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                     keepGoing={ keepGoing() && !severe() },
                     events=events,
                     coldStart=coldStart,
-                    // The user stopping the app is no stall of the piece (v4.2 r23-2: was the foreground service's limit).
-                    yieldStop={ userStop() })
+                    // The user stopping the app is no stall of the piece (v4.2 r23-2: was the foreground service's limit), up
+                    // to [TranscriptionStops.USER_YIELDS] times in a row for one recording; nor is a stop for the plug going away.
+                    yieldStop={ plugDropStop || userStop() && PowerStats.userYields(power(settings),recording)<TranscriptionStops.USER_YIELDS })
                 val pass=runner.run()
+                watch?.interrupt()
                 val end=System.currentTimeMillis()
+                if(userStop()) savePower(settings) { o -> val x=PowerStats.noteStop(o,end,"user");if(pass.state=="YIELD") PowerStats.noteUserYield(x,recording) else x }
+                if(plugDropStop) savePower(settings) { PowerStats.add(it,end,"plugDropStops") }
                 noteRun(settings,began,pass.state)
                 if(runner.startedPieces>0) {
                     val endSnap=BatterySnapshot.read(storage)
@@ -512,9 +556,9 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                         // last seen goes to the battery budget, with the gap after it (review r16-1 #3).
                         if(run.mode==PowerPolicy.Mode.PLUGGED && !endSnap.isPlugged) {
                             val since=o.optLong("lastPluggedMs",now).coerceIn(now,end)
-                            x=PowerStats.noteRun(x,end,PowerPolicy.Mode.BATTERY,end-since,0,null)
+                            x=PowerStats.add(PowerStats.noteRun(x,end,PowerPolicy.Mode.BATTERY,end-since,0,null),end,"plugDropMs",end-since)
                         }
-                        if(pass.state=="STOPPED") x=PowerStats.noteStop(x,end,if(timeLimitStop(began)) "timeout" else "other")
+                        if(pass.state=="STOPPED" && !userStop()) x=PowerStats.noteStop(x,end,if(timeLimitStop(began)) "timeout" else "other")
                         // v3.7 r17-3: CPU ms of the run and, on battery, the charge counter's drop (whatever the screen did).
                         val drop=if(run.mode==PowerPolicy.Mode.BATTERY) start.chargeUah?.let { a -> endSnap.chargeUah?.let { b -> (a-b).takeIf { it>0 } } } else null
                         PowerStats.noteCpu(x,end,cpuAtStart?.let { a -> Telemetry.processCpuMs()?.let { b -> (b-a).takeIf { it>=0 } } },drop) }
@@ -530,7 +574,7 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                 }
                 Result.success()
             } }
-        } catch(_:Exception) { noteRun(settings,began,"ERROR");if(runAttemptCount<3)Result.retry() else Result.failure() }
+        } catch(_:Exception) { watch?.interrupt();noteRun(settings,began,"ERROR");if(runAttemptCount<3)Result.retry() else Result.failure() }
     }
 
     /** v4.2 r23-2: the stop under way came from the user (the app stopped from the task manager), not the piece. */
@@ -601,6 +645,7 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
         }
         /** App start: hourly safety net, one pass now, and the model download if it is missing. */
         fun schedule(context:Context) {
+            TranscriptionStops.dropOldChannel(context)
             // UPDATE: the tick of older builds carried the battery-not-low constraint; v3.6 decides inside the run.
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(PERIODIC,ExistingPeriodicWorkPolicy.UPDATE,
                 PeriodicWorkRequestBuilder<CallTranscriptionTick>(1,TimeUnit.HOURS).build())
@@ -615,4 +660,9 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
  * the foreground run (v3.7 T5) is gone with its time limit; the user stopping the app stays, now also in the background. */
 internal object TranscriptionStops {
     fun yieldStop(reason:Int)=reason==androidx.work.WorkInfo.STOP_REASON_USER
+    /** r23 review: the user's stops in a row of one recording that are yields; the next one counts as a stall. */
+    const val USER_YIELDS=2
+    /** r23 review: the notice channel of the foreground run (v3.7 T5, removed in v4.2) is deleted at app start. */
+    const val OLD_CHANNEL="ieum.transcribe.foreground"
+    fun dropOldChannel(context:Context)=runCatching { context.getSystemService(android.app.NotificationManager::class.java)?.deleteNotificationChannel(OLD_CHANNEL) }
 }

@@ -32,6 +32,19 @@ class GradleLogTailTest(unittest.TestCase):
         out = g.report("a\nb")
         self.assertEqual(['--- gradle: no "What went wrong" in the log ---', "--- gradle: last 2 lines ---", "| a", "| b"], out)
 
+    def test_tokens_are_masked_before_the_cut(self):
+        pat = "github_pat_" + "A1b2" * 20
+        self.assertEqual("| key *** end", g.safe("key " + pat + " end"))
+        self.assertEqual("| ***", g.safe("ghp_" + "x" * 36))
+        self.assertEqual("| a *** b", g.safe("a gho_abc123 b"))
+        self.assertEqual("| ***", g.safe("a" * 40))
+        self.assertEqual("| " + "a" * 39, g.safe("a" * 39))
+        # A token past the 500-character cut is masked too, and its first part never shows.
+        line = "x " * 240 + "ghp_" + "Z" * 36
+        self.assertNotIn("ZZZZ", g.safe(line)); self.assertNotIn("ghp_", g.safe(line))
+        self.assertEqual("| > Task :app:compileReleaseKotlin FAILED", g.safe("> Task :app:compileReleaseKotlin FAILED"))
+        self.assertTrue(all("ghp_" not in l for l in g.report("ghp_" + "Q" * 36 + "\n* What went wrong:\nx")))
+
     def test_overlapping_marks_join(self):
         lines = ["x"] * 50
         lines[10] = lines[20] = "* What went wrong:"

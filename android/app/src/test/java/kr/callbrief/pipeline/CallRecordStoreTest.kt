@@ -206,6 +206,26 @@ class CallRecordStoreTest:ProtectedTextHostTestBase() {
         port().use { it.execute("UPDATE workflow_items SET done_ms=? WHERE title=?",now-15*86_400_000L,"2층 거푸집 해체 일정 확인") }
         assertEquals(listOf(true),makeItems("□□건설","2층 거푸집 해체 일정 확인"))
     }
+    /** r23 review: an unknown company on either side counts as the same within the 3 days; merged items keep 14 days. */
+    @Test fun anUnknownCompanyIsTheSameAndMergedKeepsFourteenDays() {
+        assertEquals(listOf(true),makeItems("△△철강","5층 단열재 견본 회신 확인"))
+        done("5층 단열재 견본 회신 확인",now-2*86_400_000L)
+        assertEquals("a call that names no company",listOf(false),makeItems(null,"5층 단열재 견본 회신 확인"))
+        assertEquals(listOf(true),makeItems("△△철강","1층 출입문 시공 순서 확인"))
+        // The finished item's company is not known (an item made before its company was).
+        port().use { it.execute("DELETE FROM task_companies WHERE item_id IN (SELECT id FROM workflow_items WHERE title=?)","1층 출입문 시공 순서 확인") }
+        done("1층 출입문 시공 순서 확인",now-2*86_400_000L)
+        assertEquals("the finished one's company unknown",listOf(false),makeItems("□□건설","1층 출입문 시공 순서 확인"))
+        // Done 7 days ago: made again (a weekly job).
+        done("1층 출입문 시공 순서 확인",now-7*86_400_000L)
+        assertEquals(listOf(true),makeItems("□□건설","1층 출입문 시공 순서 확인"))
+        // Merged 7 days ago: still blocks the identical title, any company.
+        assertEquals(listOf(true),makeItems("△△철강","옥상 방수 하자 보수 일정 확인"))
+        port().use { it.execute("UPDATE workflow_items SET status='merged',done_ms=? WHERE title=?",now-7*86_400_000L,"옥상 방수 하자 보수 일정 확인") }
+        assertEquals(listOf(false),makeItems("□□건설","옥상 방수 하자 보수 일정 확인"))
+        port().use { it.execute("UPDATE workflow_items SET done_ms=? WHERE title=?",now-15*86_400_000L,"옥상 방수 하자 보수 일정 확인") }
+        assertEquals(listOf(true),makeItems("□□건설","옥상 방수 하자 보수 일정 확인"))
+    }
 
     /** Design 3.4: a shared person's name and "확인" no longer make two jobs one; a near one skipped is kept as a merge candidate. */
     @Test fun aPersonsNameInBothTitlesDoesNotMakeThemOneAndSkippedNearOnesAreKept() {

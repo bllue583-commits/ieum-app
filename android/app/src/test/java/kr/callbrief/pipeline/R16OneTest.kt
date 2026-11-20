@@ -180,11 +180,12 @@ class R16OneTest:ProtectedTextHostTestBase() {
         assertEquals(9,t.getJSONObject("plugged").getInt("min"));assertEquals(2,t.getInt("gapSkips"));assertEquals("min",t.getString("budgetHit"))
         val b=PowerStats.budget(o,snap(),base+hour)
         assertEquals(6*minute,b.batteryRunMs);assertEquals(base,b.lastBatteryRunEndMs)
-        // A battery run the process died in: the gap holds while it may still run, then it counts as a whole run.
-        val started=PowerStats.noteBatteryStart(o,base+2*hour)
+        // A battery run the process died in: the gap holds while it may still run, then it counts until it was last seen
+        // alive (r23 review: was always a whole run).
+        val started=PowerStats.noteBatteryAlive(PowerStats.noteBatteryStart(o,base+2*hour),base+2*hour+4*minute)
         assertEquals(base+2*hour+minute,PowerStats.budget(started,snap(),base+2*hour+minute).lastBatteryRunEndMs)
         val dead=PowerStats.budget(started,snap(),base+3*hour)
-        assertEquals(base+2*hour+TranscriptionPower.SELF_END_MS,dead.lastBatteryRunEndMs);assertEquals(6*minute+TranscriptionPower.SELF_END_MS,dead.batteryRunMs)
+        assertEquals(base+2*hour+4*minute,dead.lastBatteryRunEndMs);assertEquals(6*minute+4*minute,dead.batteryRunMs)
         assertEquals("a run that wrote its end clears the mark",6*minute+minute,PowerStats.budget(PowerStats.noteRun(started,base+2*hour+minute,PowerPolicy.Mode.BATTERY,minute,0,null),snap(),base+3*hour).batteryRunMs)
         // The next KST day starts again; yesterday is prev.
         val next=base+24*hour

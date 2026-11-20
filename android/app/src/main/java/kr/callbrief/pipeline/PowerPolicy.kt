@@ -165,8 +165,18 @@ internal object PowerPolicy {
         val seven=z.toLocalDate().atTime(TranscriptionPower.MORNING_REST_TO_HOUR,0).atZone(TranscriptionPower.KST).toInstant().toEpochMilli()
         return (seven-now).coerceIn(60_000L,TranscriptionPower.BATTERY_RUN_GAP_MS)
     }
-    /** v4.2 r23-1: one whole piece as [PowerBudget.pieceMs] says, else at the default speed (5 minutes). */
-    fun pieceMs(b:PowerBudget)=b.pieceMs.takeIf { it>0 } ?: PowerPolicy.splitExpectMs(PipelineAudioMath.MAX_CHUNK_MS,null)
+    /** v4.2 r23-1: one whole piece as [PowerBudget.pieceMs] says, else at the default speed (5 minutes). r23 review: never above
+     * half the budget, so one median that jumped does not starve the battery runs for the day. */
+    fun pieceMs(b:PowerBudget)=(b.pieceMs.takeIf { it>0 } ?: PowerPolicy.splitExpectMs(PipelineAudioMath.MAX_CHUNK_MS,null)).coerceAtMost(PIECE_CAP_MS)
+    const val PIECE_CAP_MS=TranscriptionPower.BATTERY_BUDGET_MS/2
+    /** r23 review: the expected time of the first piece of a short call of [lenMs] (a battery run takes those only): its own
+     * windows, at most a whole piece's. */
+    fun shortPieceMs(lenMs:Long,rate:Double?)=PowerPolicy.splitExpectMs(lenMs.coerceIn(1L,PipelineAudioMath.MAX_CHUNK_MS),rate)
+    /** r23 review (r23-1 completed): a plugged-in run whose plug went away mid-piece finishes that piece only when the day's
+     * battery budget holds what it used already, the time on battery since the plug went ([tailMs]) and what the piece is
+     * still expected to take ([remainingMs]). Not a switch (v4.0's UnplugStop): the budget decides. */
+    fun plugDropFits(b:PowerBudget,tailMs:Long,remainingMs:Long)=
+        b.batteryRunMs+tailMs.coerceAtLeast(0)+remainingMs.coerceAtLeast(0)<=TranscriptionPower.BATTERY_BUDGET_MS
     /** The battery budget is used up: [TranscriptionPower.BATTERY_BUDGET_MIN] minutes, or [TranscriptionPower.BATTERY_BUDGET_PCT]% of the battery.
      * v4.2 r23-1: "min" also when less than one piece ([pieceMs]) of the minutes is left. Before, the run limit was raised to
      * a minute and the first piece of a run always starts, so a run begun at 19 minutes did a whole piece (5 minutes and more)
@@ -294,7 +304,7 @@ internal object PowerStats {
         inc(m,"audioMs",audioMs.coerceAtLeast(0));m.put("audioMin",m.optLong("audioMs")/60_000)
         if(mode==PowerPolicy.Mode.BATTERY) {
             if(uahScreenOff!=null && uahScreenOff>0) { inc(m,"uahScreenOff",uahScreenOff);m.put("mAhScreenOff",m.optLong("uahScreenOff")/1000) }
-            o.put("lastBatteryRunEndMs",now);o.remove("batteryRunStartMs")
+            o.put("lastBatteryRunEndMs",now);o.remove("batteryRunStartMs");o.remove("batteryRunAliveMs")
         }
         o.put("lastRunEndMs",now)
         return o
@@ -436,7 +446,39 @@ internal object PowerStats {
     }
     const val LEVEL_DROP_PCT=2
     /** A battery run began a piece (written before it, cleared by [noteRun]): a run the process died in still counts. */
-    fun noteBatteryStart(old:JSONObject?,now:Long):JSONObject { val o=copy(old);o.put("batteryRunStartMs",now);return o }
+    fun noteBatteryStart(old:JSONObject?,now:Long):JSONObject { val o=copy(old);o.put("batteryRunStartMs",now).put("batteryRunAliveMs",now);return o }
+    /** r23 review: the user's yields in a row of the recording [rid] ([TranscriptionStops.USER_YIELDS]); 0 for another one. */
+    fun userYields(o:JSONObject?,rid:String?):Int { val u=o?.optJSONObject("userYield") ?: return 0
+        return if(rid!=null && u.optString("rid")==rid) u.optInt("n",0) else 0 }
+    fun noteUserYield(old:JSONObject?,rid:String?):JSONObject { val o=copy(old);if(rid==null) return o
+        o.put("userYield",JSONObject().put("rid",rid).put("n",userYields(o,rid)+1));return o }
+    /** r23 review: the battery run was alive now (written at each piece's start and end), for [deadMs]. */
+    fun noteBatteryAlive(old:JSONObject?,now:Long):JSONObject { val o=copy(old);if(o.optLong("batteryRunStartMs",0)>0) o.put("batteryRunAliveMs",now);return o }
+    /** A battery run's start mark this old without its end: the process died in it (the user closing the app from the recent
+     * list kills it with the run). */
+    fun dead(open:Long,now:Long)=now-open>=TranscriptionPower.SELF_END_MS+2*60_000L
+    /** r23 review: a dead run's time: from its start to when it was last seen alive, at most [TranscriptionPower.SELF_END_MS]
+     * (before: always the whole 9 minutes, and only in the next wake's decision). */
+    fun deadMs(o:JSONObject?,open:Long):Long = ((o?.optLong("batteryRunAliveMs",0) ?: 0).takeIf { it>=open } ?: open).minus(open).coerceIn(0L,TranscriptionPower.SELF_END_MS)
+    /** r23 review: books a dead battery run for good, once: its [deadMs] into the battery minutes of its day (today, or prev
+     * when that is its day), counted as battery.killedRuns and killedMs, and its end for the gap. Before, the start mark was
+     * only overwritten by the next run, and a dead run never reached battery.min. */
+    fun settleDead(old:JSONObject?,now:Long):JSONObject {
+        val o=copy(old);val open=o.optLong("batteryRunStartMs",0)
+        if(open<=0 || !dead(open,now)) return o
+        if(open>o.optLong("lastBatteryRunEndMs",0)) {
+            val ms=deadMs(o,open);val day=PowerPolicy.day(open)
+            // The run's day gets its block first (a ledger whose today is older), then today's comes.
+            if((o.optJSONObject("today")?.optInt("day") ?: 0)<day) roll(o,day)
+            roll(o,PowerPolicy.day(now))
+            val t=listOf("today","prev").firstNotNullOfOrNull { k -> o.optJSONObject(k)?.takeIf { it.optInt("day")==day } }
+            if(t!=null) { val b=sub(t,"battery");inc(b,"runs");inc(b,"ms",ms);b.put("min",b.optLong("ms")/60_000)
+                inc(b,"killedRuns");inc(b,"killedMs",ms);b.put("killedMin",b.optLong("killedMs")/60_000) }
+            o.put("lastBatteryRunEndMs",open+ms)
+        }
+        o.remove("batteryRunStartMs");o.remove("batteryRunAliveMs")
+        return o
+    }
     /** The policy's memory for [PowerPolicy.decide]. [ownStartMs]: asked from inside the battery run that wrote this start
      * ([noteBatteryStart]); that mark is the run itself, not another one, so it holds no gap (v3.6.1 T3a: before, the run's
      * own mark made every check between pieces a "gap" and a battery run did one piece). */
@@ -448,11 +490,12 @@ internal object PowerStats {
         // A battery run that never wrote its end (the process died, review r16-1 #4): it counts as a full run that ended then,
         // once it is older than a run can be.
         val open=(o?.optLong("batteryRunStartMs",0) ?: 0).takeUnless { ownStartMs!=null && it==ownStartMs } ?: 0
-        if(open>last && now-open>=TranscriptionPower.SELF_END_MS+2*60_000L) { last=open+TranscriptionPower.SELF_END_MS;if(PowerPolicy.day(open)==PowerPolicy.day(now)) used+=TranscriptionPower.SELF_END_MS }
+        // r23 review: as long as it was last seen alive ([deadMs]), not a whole 9 minutes ([settleDead] books it for good).
+        if(open>last && dead(open,now)) { val d=deadMs(o,open);last=open+d;if(PowerPolicy.day(open)==PowerPolicy.day(now)) used+=d }
         else if(open>last) last=now // one is running now: the gap holds
         val plugMs=o?.optLong("lastPluggedMs",0) ?: 0
         return PowerBudget(used,b?.optLong("uahScreenOff",0) ?: 0,capacity,last,plugMs,levelFalling(o,s,now),slow(o,now),
-            PowerPolicy.splitExpectMs(PipelineAudioMath.MAX_CHUNK_MS,rate(o,TranscriptionPower.THREADS_OTHER)))
+            PowerPolicy.splitExpectMs(PipelineAudioMath.MAX_CHUNK_MS,rate(o,TranscriptionPower.THREADS_OTHER)).coerceAtMost(PowerPolicy.PIECE_CAP_MS))
     }
     /** v3.6.1 (T3a): between pieces, the run in [mode] may go on (the same mode still applies). [ownStartMs]: this battery
      * run's own start mark, null for a plugged-in run or before its first piece. */

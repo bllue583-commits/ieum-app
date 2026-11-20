@@ -196,7 +196,10 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
         return "coalesce(j.audio_ms,$logged,$record,CASE WHEN CAST(? AS REAL)>0 AND $byteCount>0 THEN CAST($byteCount/CAST(? AS REAL) AS INTEGER) END)"
     }
     /** Short calls of today, newest first: the filter is in SQL, so a long call at the top never ends a battery run (DESIGN_V6 함정 ③). */
-    private fun nextShort(w:BatteryWindow):Job? {
+    private fun nextShort(w:BatteryWindow):Job? = nextShortRow(w)?.let{Job(candidate(it),it["state"].toString(),it["reason"].toString(),(it["attempts"] as Number).toInt())}
+    /** r23 review: the length (ms) of the call a battery run would take first ([nextShort]), null without one. */
+    fun nextShortLengthMs(w:BatteryWindow):Long? = nextShortRow(w)?.let { (it["q_len"] as? Number)?.toLong() }
+    private fun nextShortRow(w:BatteryWindow):Map<String,Any?>? {
         val at="coalesce(x.original_started_at_ms,x.modified_at_ms,0)"
         val bpm=w.bytesPerMs ?: 0.0
         return db.query("""SELECT * FROM (SELECT j.state,j.reason,j.attempts,j.updated_ms AS job_updated_ms,x.*,$at AS q_at,${lengthSql("x.byte_count",at)} AS q_len
@@ -204,7 +207,7 @@ internal class CallTranscriptionStore(context:Context,private val now:()->Long=S
             ON x.recording_id=j.recording_id AND x.source_version=j.source_version AND x.audio_sha256=j.audio_sha
             WHERE j.state='QUEUED' AND j.charging_only=0) WHERE q_at>=CAST(? AS INTEGER) AND q_len>=CAST(? AS INTEGER) AND q_len<=CAST(? AS INTEGER)
             ORDER BY q_at DESC,job_updated_ms LIMIT 1""".trimIndent(),bpm,bpm,GeneralLocalStore.OWNER,w.fromMs,TranscriptionPower.SHORT_MIN_MS,TranscriptionPower.SHORT_MAX_MS)
-            .singleOrNull()?.let{Job(candidate(it),it["state"].toString(),it["reason"].toString(),(it["attempts"] as Number).toInt())}
+            .singleOrNull()
     }
     /** Bytes per ms of the recordings whose decoded length is known (for [BatteryWindow]); null without any. */
     fun bytesPerMs():Double? = db.query("SELECT sum(r.byte_count) AS b,sum(j.audio_ms) AS ms FROM call_transcription_jobs j JOIN recordings r ON r.recording_id=j.recording_id AND r.source_version=j.source_version WHERE j.audio_ms>0 AND r.byte_count>0")

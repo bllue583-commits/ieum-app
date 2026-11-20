@@ -5,9 +5,13 @@ Only to the console (GitHub masks the secrets it knows there; an uploaded file i
 line goes out behind "| ", so a line of the log can never be read as a workflow command ("::add-mask::", "::error::" ...).
 Standard library only. Usage: python3 tools/release/gradle_log_tail.py evidence/release-build.log
 """
+import re
 import sys
 
 MARK = "* What went wrong:"
+# r23 review: anything that looks like a token is masked before a line is cut or printed (GitHub masks only the secrets it
+# knows): GitHub tokens, and any run of 40 or more letters, digits and underscores.
+TOKEN = re.compile(r"github_pat_[A-Za-z0-9_]+|gh[opsur]_[A-Za-z0-9]+|[A-Za-z0-9_]{40,}")
 BEFORE, AFTER, TAIL = 5, 25, 80
 
 
@@ -24,8 +28,12 @@ def wrong_blocks(lines, before=BEFORE, after=AFTER):
     return out
 
 
+def mask(line):
+    return TOKEN.sub("***", line)
+
+
 def safe(line):
-    return "| " + line.rstrip("\r\n")[:500]
+    return "| " + mask(line.rstrip("\r\n"))[:500]
 
 
 def report(text, tail=TAIL):
