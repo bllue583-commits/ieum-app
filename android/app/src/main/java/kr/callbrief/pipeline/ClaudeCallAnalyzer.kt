@@ -43,7 +43,7 @@ internal data class ClaudeCallRequest(
     val sameDayCompany:List<PastCall> =emptyList(),
     /** Check items finished or merged in the last [CallRecordStore.DONE_BLOCK_DAYS] days (v4.2 r23-7, was 30): not to be made
      * again; the same job finished earlier and promised again is a new one (rule 12). */
-    val recentlyDone:List<String> =emptyList(),
+    val recentlyDone:List<DoneItem> =emptyList(),
     /** Name of a person (as in [personNames]) to what is known of them: "△△철강 과장, 오인식 김민서 김민숙". */
     val personDetails:Map<String,String> =emptyMap(),
     /** Other people who answered the same phone number before (an office number), by name. */
@@ -58,6 +58,8 @@ internal data class ClaudeCallRequest(
         val empty get()=listOf(name,company,role).all { it.isNullOrBlank() }
     }
     data class CallLogView(val phoneBookName:String?,val direction:String?,val startTime:String,val durationMs:Long)
+    /** r23 review 2: a finished check item of [recentlyDone] and its company (null: unknown). */
+    data class DoneItem(val title:String,val company:String?=null)
     /** [asked]: the day it was asked for (YYYY-MM-DD), [company] the company it belongs to. From the call that made it (design C5),
      * each only when stored: [owner] "me", "them" or "unknown", [person] that call's counterpart by the name the screens show
      * (not the ledger id), [quote] the evidence text (masked and cut to [QUOTE_HEAD] when sent). */
@@ -250,7 +252,7 @@ internal class ClaudeCallAnalyzer {
 [체크할 일]
 10. tasks는 사용자가 나중에 "됐는지 확인할 일" 목록입니다. 사용자는 부장이라 상대에게 일을 시키는 경우가 많습니다. 상대가 하기로 한 약속(owner "them")과 사용자가 하기로 한 약속(owner "me") 모두 넣으세요. 상대가 할 일의 title은 "견적서 회신 확인"처럼 무엇을 했는지 확인하는 꼴로 짧게 쓰세요. title에 사람 이름이나 호칭(김민수 과장, 소장님)을 넣지 마세요. 화면이 그 일의 상대 이름을 따로 보여 줍니다.
 11. "~하겠다", "~하기로 했다", "~보내드리겠다"처럼 정해진 것만 certainty "sure"로 만드세요. "~해 볼게요", "알아볼게요", "검토해 보겠습니다"는 certainty "tentative"로 하고 title을 "회신 확인"처럼 쓰세요. "~하면 좋겠다", "~일 것 같다"는 만들지 마세요. 상대가 '확인해 보고 연락드릴게요', '여쭤보고 말씀드릴게요'라고 하면 tentative이고 title은 '○○ 회신 확인'입니다. 사용자가 '알아보고 연락드릴게요'라고 하면 owner 'me', tentative입니다.
-12. 체크할 일을 정하는 순서: (1) [열린 체크할 일]에 같은 업체의 같은 대상(문서 이름, 공정, 회차)이 있으면 op "update"와 그 taskId를 쓰세요. 새 날짜가 분명할 때만 due를 쓰고 아니면 null로 두세요(기존 날짜가 유지됩니다). update는 대상이 같고 '날짜', '수량', '방법' 중 하나가 바뀌었을 때만 씁니다. 같은 대상에 대해 다시 말하기만 했으면 아무것도 내지 마세요. (2) 이번 통화에서 그 일이 끝났다고 누군가 말했으면 op "done_suggested"로 제안만 하세요(quote는 끝났다고 말한 부분). 일이 끝났다고 스스로 결정하지 마세요. (3) 둘 다 아니면 "create"(taskId null). 같은 일에 update와 create를 함께 내지 마세요. 회차나 날짜가 다른 일(11/5 타설과 11/12 타설)은 새 일입니다. taskId는 메시지에 있는 것만 쓸 수 있습니다. 기록 하나에서 tasks는 5개까지입니다. [최근 끝낸 체크할 일]은 끝낸 지 3일 안의 일입니다. 거기 있는 일과 같은 일이 다시 나오면 같은 일로 보고 만들지 마세요. 끝낸 지 3일이 넘은 일(목록에 없는 일)과 같은 제목의 일이 이번 통화에서 다시 약속되면 새 체크할 일로 만드세요(매주, 매달 하는 일). tasks의 company에는 그 일이 속한 업체 이름을 [이름 목록]의 표기로 쓰고 모르면 null로 두세요. [열린 체크할 일]의 각 항목에는 taskId, title, due, status, company와 함께 askedOn(요청한 날), owner(그때 정한 맡는 쪽), person(요청한 통화 상대 이름), quote(그때 근거 원문의 앞 40자)가 있을 수 있고, 없는 키는 알 수 없다는 뜻입니다.
+12. 체크할 일을 정하는 순서: (1) [열린 체크할 일]에 같은 업체의 같은 대상(문서 이름, 공정, 회차)이 있으면 op "update"와 그 taskId를 쓰세요. 새 날짜가 분명할 때만 due를 쓰고 아니면 null로 두세요(기존 날짜가 유지됩니다). update는 대상이 같고 '날짜', '수량', '방법' 중 하나가 바뀌었을 때만 씁니다. 같은 대상에 대해 다시 말하기만 했으면 아무것도 내지 마세요. (2) 이번 통화에서 그 일이 끝났다고 누군가 말했으면 op "done_suggested"로 제안만 하세요(quote는 끝났다고 말한 부분). 일이 끝났다고 스스로 결정하지 마세요. (3) 둘 다 아니면 "create"(taskId null). 같은 일에 update와 create를 함께 내지 마세요. 회차나 날짜가 다른 일(11/5 타설과 11/12 타설)은 새 일입니다. taskId는 메시지에 있는 것만 쓸 수 있습니다. 기록 하나에서 tasks는 5개까지입니다. [최근 끝낸 체크할 일]은 끝낸 지 3일 안의 일이고, 업체를 아는 일은 제목 뒤 괄호에 업체를 적었습니다. 거기 있는 일과 같은 업체의 같은 일이 다시 나오면 같은 일로 보고 만들지 마세요(업체가 적혀 있지 않으면 같은 업체로 봅니다). 끝낸 지 3일이 넘은 일(목록에 없는 일)과 같은 제목의 일이 이번 통화에서 다시 약속되면 새 체크할 일로 만드세요(매주, 매달 하는 일). tasks의 company에는 그 일이 속한 업체 이름을 [이름 목록]의 표기로 쓰고 모르면 null로 두세요. [열린 체크할 일]의 각 항목에는 taskId, title, due, status, company와 함께 askedOn(요청한 날), owner(그때 정한 맡는 쪽), person(요청한 통화 상대 이름), quote(그때 근거 원문의 앞 40자)가 있을 수 있고, 없는 키는 알 수 없다는 뜻입니다.
 
 [이름]
 13. counterpart에는 이번 통화 상대의 personName, companyName, role, isStaff(우리 회사 직원이면 true, 이때 companyName은 null)를 씁니다. 자막이나 [이름 목록]에서 확인되지 않으면 null로 두고, 자막과 [이름 목록]에 없는 이름은 절대 지어내지 마세요. counterpartName과 counterpartCompany에는 같은 값을 넣습니다. 호칭(과장, 소장, 님)은 이름에 붙이지 말고 role에 씁니다.
@@ -331,7 +333,8 @@ internal class ClaudeCallAnalyzer {
             fun person(n:String)=r.personDetails[n]?.let { "$n($it)" } ?: n
             append("[이름 목록] 업체: ").append(companies.joinToString(", ").ifEmpty { "없음" }).append(" / 사람: ").append(people.joinToString(", ") { person(it) }.ifEmpty { "없음" })
             if(r.sameDayCompany.isNotEmpty()) append("\n[같은 날 같은 업체의 다른 기록]").append(pastCalls(r.sameDayCompany,5))
-            if(r.recentlyDone.isNotEmpty()) append("\n[최근 끝낸 체크할 일] ").append(r.recentlyDone.take(15).joinToString(", ") { clip(it,60) })
+            // r23 review 2: with the item's company as [이름 목록] writes it, when known: "제목(업체)".
+            if(r.recentlyDone.isNotEmpty()) append("\n[최근 끝낸 체크할 일] ").append(r.recentlyDone.take(15).joinToString(", ") { d -> clip(d.title,60)+(d.company?.let { "(${clip(it,30)})" } ?: "") })
             if(r.recentTexts.isNotBlank()) append("\n\n[이 상대와 최근 7일 업무 문자]\n<texts>\n").append(maskNumbers(r.recentTexts)).append("\n</texts>")
             append("\n\n<transcript>\n").append(maskNumbers(r.transcript)).append("\n</transcript>")
         }

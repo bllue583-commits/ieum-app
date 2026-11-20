@@ -36,14 +36,21 @@ class GradleLogTailTest(unittest.TestCase):
         pat = "github_pat_" + "A1b2" * 20
         self.assertEqual("| key *** end", g.safe("key " + pat + " end"))
         self.assertEqual("| ***", g.safe("ghp_" + "x" * 36))
-        self.assertEqual("| a *** b", g.safe("a gho_abc123 b"))
-        self.assertEqual("| ***", g.safe("a" * 40))
-        self.assertEqual("| " + "a" * 39, g.safe("a" * 39))
+        self.assertEqual("| a gho_abc123 b", g.safe("a gho_abc123 b"), "too short to be a token")
+        self.assertEqual("| ***", g.safe("Ab1" * 14))
         # A token past the 500-character cut is masked too, and its first part never shows.
-        line = "x " * 240 + "ghp_" + "Z" * 36
-        self.assertNotIn("ZZZZ", g.safe(line)); self.assertNotIn("ghp_", g.safe(line))
-        self.assertEqual("| > Task :app:compileReleaseKotlin FAILED", g.safe("> Task :app:compileReleaseKotlin FAILED"))
+        line = "x " * 240 + "ghp_" + "Z9" * 18
+        self.assertNotIn("Z9Z9", g.safe(line)); self.assertNotIn("ghp_", g.safe(line))
         self.assertTrue(all("ghp_" not in l for l in g.report("ghp_" + "Q" * 36 + "\n* What went wrong:\nx")))
+
+    def test_names_paths_and_shas_stay(self):
+        for keep in ("> Task :app:compileReleaseKotlin FAILED",
+                     "R23ReviewTest > aDeadRunIsNeverMoreThanNineMinutesAndNoSignOfLifeIsNothing FAILED",
+                     "kr.callbrief.pipeline.R16OneTest.theLedgerRollsDaysAndCountsRunsSkipsAndPieces",
+                     "commit 3aa4b6627c84f35277ea9decab2e2eb0958b5c52",
+                     "/home/runner/work/ieum-app/android/app/build/intermediates/compile_and_runtime_not_namespaced_r_class_jar",
+                     "a" * 60):
+            self.assertEqual("| " + keep, g.safe(keep), keep)
 
     def test_overlapping_marks_join(self):
         lines = ["x"] * 50

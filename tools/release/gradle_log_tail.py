@@ -10,8 +10,16 @@ import sys
 
 MARK = "* What went wrong:"
 # r23 review: anything that looks like a token is masked before a line is cut or printed (GitHub masks only the secrets it
-# knows): GitHub tokens, and any run of 40 or more letters, digits and underscores.
-TOKEN = re.compile(r"github_pat_[A-Za-z0-9_]+|gh[opsur]_[A-Za-z0-9]+|[A-Za-z0-9_]{40,}")
+# knows): GitHub tokens, and (review 2, narrower) a run of 40 or more letters, digits and underscores that mixes digits,
+# capitals and small letters. Long test names, paths and lower-case hex SHAs stay readable.
+GITHUB = re.compile(r"\bgithub_pat_\w{20,}|\bgh[pousr]_\w{36,}")
+LONG = re.compile(r"\b\w{40,}\b")
+
+
+def _secretish(m):
+    w = m.group(0)
+    mixed = any(c.isdigit() for c in w) and any(c.isupper() for c in w) and any(c.islower() for c in w)
+    return "***" if mixed else w
 BEFORE, AFTER, TAIL = 5, 25, 80
 
 
@@ -29,7 +37,7 @@ def wrong_blocks(lines, before=BEFORE, after=AFTER):
 
 
 def mask(line):
-    return TOKEN.sub("***", line)
+    return LONG.sub(_secretish, GITHUB.sub("***", line))
 
 
 def safe(line):

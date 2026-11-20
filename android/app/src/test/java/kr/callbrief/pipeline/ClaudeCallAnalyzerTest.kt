@@ -76,6 +76,16 @@ class ClaudeCallAnalyzerTest {
         assertFalse("promises section is gone",sys.contains("promises"))
     }
 
+    /** r23 review 2: the finished items go to the request with their company when known, and rule 12 reads them so. */
+    @Test fun recentlyDoneCarriesTheCompany() {
+        val r=ClaudeCallRequest("말","2026-11-20 10:00 (금)","김과장",60_000,emptyList(),emptyList(),
+            recentlyDone=listOf(ClaudeCallRequest.DoneItem("주간 안전 점검표 제출","△△철강"),ClaudeCallRequest.DoneItem("도면 받기")))
+        assertTrue(ClaudeCallAnalyzer.userMessage(r).contains("[최근 끝낸 체크할 일] 주간 안전 점검표 제출(△△철강), 도면 받기"))
+        val sys=ClaudeCallAnalyzer.SYSTEM
+        listOf("업체를 아는 일은 제목 뒤 괄호에 업체를 적었습니다","같은 업체의 같은 일이 다시 나오면","업체가 적혀 있지 않으면 같은 업체로 봅니다",
+            "끝낸 지 3일이 넘은 일(목록에 없는 일)과 같은 제목의 일이 이번 통화에서 다시 약속되면 새 체크할 일로").forEach { assertTrue(it,sys.contains(it)) }
+    }
+
     @Test fun rulesV4CarryTheNewWordingWithTheKeptExceptions() {
         val sys=ClaudeCallAnalyzer.SYSTEM
         assertEquals(10,ClaudeCallAnalyzer.PROMPT_VERSION)

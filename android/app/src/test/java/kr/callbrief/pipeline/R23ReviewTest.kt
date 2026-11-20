@@ -55,12 +55,21 @@ class R23ReviewTest {
         val hb=PowerText.heartbeat(y,base+20*minute).getJSONObject("today").getJSONObject("battery")
         assertEquals(1,hb.getInt("killedRuns"));assertEquals(3,hb.getInt("killedMin"))
     }
-    @Test fun aDeadRunIsNeverMoreThanNineMinutesAndNoSignOfLifeIsNothing() {
+    @Test fun aDeadRunIsNeverMoreThanNineMinutesAndDyingInAPieceCountsItsExpectedTime() {
         var o=PowerStats.noteBatteryAlive(PowerStats.noteBatteryStart(null,base),base+30*minute)
         assertEquals(TranscriptionPower.SELF_END_MS,PowerStats.settleDead(o,base+40*minute).getJSONObject("today").getJSONObject("battery").getLong("ms"))
-        o=PowerStats.noteBatteryStart(null,base)
+        // r23 review 2: dead in its first piece (expected 4 minutes): 4 minutes, not 0.
+        o=PowerStats.noteBatteryAlive(PowerStats.noteBatteryStart(null,base),base,4*minute)
         val x=PowerStats.settleDead(o,base+40*minute)
-        assertEquals(0L,x.getJSONObject("today").getJSONObject("battery").getLong("ms"));assertEquals(1,x.getJSONObject("today").getJSONObject("battery").getInt("killedRuns"))
+        assertEquals(4*minute,x.getJSONObject("today").getJSONObject("battery").getLong("ms"));assertEquals(1,x.getJSONObject("today").getJSONObject("battery").getInt("killedRuns"))
+        // The piece's end puts the real time back (here earlier than expected).
+        val y=PowerStats.noteBatteryAlive(o,base+2*minute)
+        assertEquals(2*minute,PowerStats.settleDead(y,base+40*minute).getJSONObject("today").getJSONObject("battery").getLong("ms"))
+        // The expectation is capped too.
+        val z=PowerStats.noteBatteryAlive(PowerStats.noteBatteryStart(null,base),base+minute,60*minute)
+        assertEquals(TranscriptionPower.SELF_END_MS,PowerStats.settleDead(z,base+40*minute).getJSONObject("today").getJSONObject("battery").getLong("ms"))
+        // Only the start mark (no piece begun): nothing.
+        assertEquals(0L,PowerStats.settleDead(PowerStats.noteBatteryStart(null,base),base+40*minute).getJSONObject("today").getJSONObject("battery").getLong("ms"))
         // A run that ended as usual leaves nothing to book.
         val done=PowerStats.noteRun(PowerStats.noteBatteryStart(null,base),base+4*minute,PowerPolicy.Mode.BATTERY,4*minute,60_000,null)
         assertFalse(done.has("batteryRunStartMs"));assertFalse(done.has("batteryRunAliveMs"))
@@ -102,6 +111,25 @@ class R23ReviewTest {
         assertEquals(0,PowerStats.userYields(o,null))
         o=PowerStats.noteStop(o,base,"user")
         assertEquals(1,PowerText.heartbeat(o,base).getJSONObject("today").getJSONObject("stopReasons").getInt("user"))
+    }
+
+    /** r23 review 2: a finished piece ends the stops in a row (the user's and the plug's). */
+    @Test fun aFinishedPieceEndsTheStreaks() {
+        var o=PowerStats.noteUserYield(PowerStats.noteUserYield(null,"r1"),"r1")
+        o=PowerStats.noteStreak(PowerStats.noteStreak(o,"plugDrop","r1"),"plugDrop","r1")
+        assertEquals(2,PowerStats.userYields(o,"r1"));assertEquals(PowerPolicy.PLUG_DROP_STOPS,PowerStats.streak(o,"plugDrop","r1"))
+        o=PowerStats.clearStreaks(PowerStats.notePiece(o,100_000,120_000,4,false,base))
+        assertEquals(0,PowerStats.userYields(o,"r1"));assertEquals(0,PowerStats.streak(o,"plugDrop","r1"))
+        assertEquals(1,PowerStats.userYields(PowerStats.noteUserYield(o,"r1"),"r1"))
+    }
+    /** r23 review 2: the mid-piece check looks at the plug itself and the debounce only, and never stops on an unknown plug. */
+    @Test fun thePlugIsGoneOnlyWhenPhysicallyOutPastTheDebounce() {
+        val t=base
+        assertFalse("plugged, even with the charge going down",PowerPolicy.plugGone(snap("usb"),t,t))
+        assertFalse("out for a minute",PowerPolicy.plugGone(snap(),t-minute,t))
+        assertTrue("out for 3 minutes",PowerPolicy.plugGone(snap(),t-3*minute,t))
+        assertTrue("never seen plugged",PowerPolicy.plugGone(snap(),0,t))
+        assertFalse("the phone told nothing",PowerPolicy.plugGone(snap().copy(plugKnown=false),t-3*minute,t))
     }
 
     @Test fun theOldNoticeChannelIsDeleted() {

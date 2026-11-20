@@ -179,6 +179,8 @@ internal class CallTranscriptionRunner(
         fun started() {}
         /** r23 review: a piece of [audioMs] begins now and is expected to take [expectedMs] (no margin). */
         fun pieceStart(audioMs:Long,expectedMs:Long) {}
+        /** r23 review 2: the piece under way ended without being finished (an error or a stop). */
+        fun pieceAborted() {}
         /** v3.7 r17-3: a recording's text is begun (claimed), for the heartbeat's trace[].textStartS. */
         fun begun(recordingId:String) {}
         companion object { val NONE=object:Events {} }
@@ -251,7 +253,7 @@ internal class CallTranscriptionRunner(
                     val session=shared ?: run { val t=now();transcriber.open(file,stopped).also { shared=it;events.modelLoad(now()-t) } }
                     session.transcribe(pcm,stopped)
                 } catch(e:Exception) {
-                    pieceWorkMs+=now()-began;workStart=0L
+                    pieceWorkMs+=now()-began;workStart=0L;events.pieceAborted()
                     closeShared() // a handle that was cancelled or failed is not used again (W3)
                     if(stopped()){events.killed(now()-began);stop(stallId)} // cancel() ends the native run with an error
                     // r12-8 A4: the native run ended by its own deadline (not a stop): a whole piece is halved next time.
@@ -260,7 +262,7 @@ internal class CallTranscriptionRunner(
                     throw e
                 }
             pieceWorkMs+=now()-began;workStart=0L
-            if(stopped()){events.killed(now()-began);closeShared();stop(stallId)} // a piece cut short is not kept
+            if(stopped()){events.pieceAborted();events.killed(now()-began);closeShared();stop(stallId)} // a piece cut short is not kept
             events.piece(now()-began,audioMs,first && coldStart)
             val shifted=raw.map { it.copy(startMs=it.startMs+offset,endMs=it.endMs+offset) } // v3.3: uncertain numbers go along
             store.savePart(key,partId,shifted);pieces++;recordingPieces++;doneAudioMs+=audioMs;return shifted
@@ -481,10 +483,12 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
         var pieceBegan=0L;var pieceExpect=0L;var recording:String?=null
         val battery=run.mode==PowerPolicy.Mode.BATTERY
         val events=object:CallTranscriptionRunner.Events {
-            override fun piece(ms:Long,audioMs:Long,cold:Boolean) { pieceBegan=0L;savePower(settings) { o -> val x=PowerStats.notePiece(o,ms,audioMs,threads,cold,plugged=!battery)
+            // r23 review 2: a finished piece ends the stops in a row of the user and of the plug.
+            override fun piece(ms:Long,audioMs:Long,cold:Boolean) { pieceBegan=0L;savePower(settings) { o -> val x=PowerStats.clearStreaks(PowerStats.notePiece(o,ms,audioMs,threads,cold,plugged=!battery))
                 if(battery) PowerStats.noteBatteryAlive(x,System.currentTimeMillis()) else x } }
             override fun pieceStart(audioMs:Long,expectedMs:Long) { pieceExpect=expectedMs;pieceBegan=System.currentTimeMillis()
-                if(battery) savePower(settings) { PowerStats.noteBatteryAlive(it,pieceBegan) } }
+                if(battery) savePower(settings) { PowerStats.noteBatteryAlive(it,pieceBegan,expectedMs) } }
+            override fun pieceAborted() { pieceBegan=0L }
             override fun started() { if(run.mode==PowerPolicy.Mode.BATTERY) { val t=System.currentTimeMillis();ownStart=t;savePower(settings) { PowerStats.noteBatteryStart(it,t) } } }
             override fun killed(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"killedChunkMs",ms) } }
             override fun deadline(ms:Long) { savePower(settings) { PowerStats.add(it,System.currentTimeMillis(),"deadlineMs",ms) } }
@@ -506,7 +510,8 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                     savePower(settings) { PowerStats.notePlug(it,s,t) }
                     val o=power(settings);val b=PowerStats.budget(o,s,t)
                     val began0=pieceBegan
-                    if(began0>0 && !PowerPolicy.plugged(s,b,t)) {
+                    // r23 review 2: the plug physically out past the debounce only; the same piece stopped twice runs on.
+                    if(began0>0 && PowerPolicy.plugGone(s,o.optLong("lastPluggedMs",0),t) && PowerStats.streak(o,"plugDrop",recording)<PowerPolicy.PLUG_DROP_STOPS) {
                         val tail=t-o.optLong("lastPluggedMs",t).coerceAtMost(t)
                         if(!PowerPolicy.plugDropFits(b,tail,began0+pieceExpect-t)) { plugDropStop=true;runCatching { engine?.cancel() } }
                     }
@@ -545,7 +550,7 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                 watch?.interrupt()
                 val end=System.currentTimeMillis()
                 if(userStop()) savePower(settings) { o -> val x=PowerStats.noteStop(o,end,"user");if(pass.state=="YIELD") PowerStats.noteUserYield(x,recording) else x }
-                if(plugDropStop) savePower(settings) { PowerStats.add(it,end,"plugDropStops") }
+                if(plugDropStop) savePower(settings) { PowerStats.noteStreak(PowerStats.add(it,end,"plugDropStops"),"plugDrop",recording) }
                 noteRun(settings,began,pass.state)
                 if(runner.startedPieces>0) {
                     val endSnap=BatterySnapshot.read(storage)
@@ -574,7 +579,12 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                 }
                 Result.success()
             } }
-        } catch(_:Exception) { watch?.interrupt();noteRun(settings,began,"ERROR");if(runAttemptCount<3)Result.retry() else Result.failure() }
+        } catch(_:Exception) {
+            noteRun(settings,began,"ERROR")
+            // r23 review 2: a battery run that began a piece and ended with an error is an ended run, not a dead one.
+            if(battery && ownStart!=null) { val t=System.currentTimeMillis();savePower(settings) { PowerStats.noteRun(it,t,PowerPolicy.Mode.BATTERY,t-now,0,null) } }
+            if(runAttemptCount<3)Result.retry() else Result.failure()
+        } finally { watch?.interrupt() }
     }
 
     /** v4.2 r23-2: the stop under way came from the user (the app stopped from the task manager), not the piece. */

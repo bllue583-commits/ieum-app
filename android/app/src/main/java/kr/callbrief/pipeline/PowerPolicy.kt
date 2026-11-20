@@ -86,6 +86,8 @@ internal data class BatterySnapshot(
     val chargeUah:Long?=null,
     /** µA ([BatteryManager.BATTERY_PROPERTY_CURRENT_NOW]); sign and unit differ between phones, recorded only. */
     val currentUa:Long?=null,
+    /** r23 review 2: false when the phone told nothing of the plug (neither the battery broadcast nor BatteryManager). */
+    val plugKnown:Boolean=true,
 ) {
     val isPlugged get()=plugged!="none"
     companion object {
@@ -108,7 +110,7 @@ internal data class BatterySnapshot(
             val charge=runCatching { bm?.getLongProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER) }.getOrNull()?.takeIf { it>0 && it!=Long.MIN_VALUE }
             val current=runCatching { bm?.getLongProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW) }.getOrNull()?.takeIf { it!=Long.MIN_VALUE && it!=0L }
             return BatterySnapshot(pct.coerceIn(0,100),plugged,status,runCatching { pm?.isPowerSaveMode==true }.getOrDefault(false),thermal,headroom,temp,
-                inCall(context),runCatching { pm?.isInteractive==true }.getOrDefault(false),charge,current)
+                inCall(context),runCatching { pm?.isInteractive==true }.getOrDefault(false),charge,current,plugKnown=i!=null || bm!=null)
         }
         private fun inCall(context:Context):Boolean {
             if(context.checkSelfPermission(android.Manifest.permission.READ_PHONE_STATE)!=android.content.pm.PackageManager.PERMISSION_GRANTED) return false
@@ -175,6 +177,14 @@ internal object PowerPolicy {
     /** r23 review (r23-1 completed): a plugged-in run whose plug went away mid-piece finishes that piece only when the day's
      * battery budget holds what it used already, the time on battery since the plug went ([tailMs]) and what the piece is
      * still expected to take ([remainingMs]). Not a switch (v4.0's UnplugStop): the budget decides. */
+    /** r23 review 2: the plug is gone for the mid-piece check: physically out ([BatterySnapshot.isPlugged]) for longer than
+     * the debounce. Not [levelFalling] (a charge going down is left to the check between pieces), and never when the phone
+     * did not tell. */
+    fun plugGone(s:BatterySnapshot,lastPluggedMs:Long,now:Long)=s.plugKnown && !s.isPlugged &&
+        !(lastPluggedMs>0 && now-lastPluggedMs in 0 until TranscriptionPower.PLUG_DEBOUNCE_MS)
+    /** r23 review 2: a piece stopped this many times in a row for the plug going away runs to its end the next time (a
+     * wireless pad put on and taken off often must not make the same piece again and again). */
+    const val PLUG_DROP_STOPS=2
     fun plugDropFits(b:PowerBudget,tailMs:Long,remainingMs:Long)=
         b.batteryRunMs+tailMs.coerceAtLeast(0)+remainingMs.coerceAtLeast(0)<=TranscriptionPower.BATTERY_BUDGET_MS
     /** The battery budget is used up: [TranscriptionPower.BATTERY_BUDGET_MIN] minutes, or [TranscriptionPower.BATTERY_BUDGET_PCT]% of the battery.
@@ -447,13 +457,21 @@ internal object PowerStats {
     const val LEVEL_DROP_PCT=2
     /** A battery run began a piece (written before it, cleared by [noteRun]): a run the process died in still counts. */
     fun noteBatteryStart(old:JSONObject?,now:Long):JSONObject { val o=copy(old);o.put("batteryRunStartMs",now).put("batteryRunAliveMs",now);return o }
-    /** r23 review: the user's yields in a row of the recording [rid] ([TranscriptionStops.USER_YIELDS]); 0 for another one. */
-    fun userYields(o:JSONObject?,rid:String?):Int { val u=o?.optJSONObject("userYield") ?: return 0
+    /** r23 review: stops in a row of one piece of the recording [rid] under [key] ("userYield": the user's yields,
+     * [TranscriptionStops.USER_YIELDS]; "plugDrop": stops for the plug, [PowerPolicy.PLUG_DROP_STOPS]); 0 for another
+     * recording. r23 review 2: back to 0 once a piece is finished ([clearStreaks]). */
+    fun streak(o:JSONObject?,key:String,rid:String?):Int { val u=o?.optJSONObject(key) ?: return 0
         return if(rid!=null && u.optString("rid")==rid) u.optInt("n",0) else 0 }
-    fun noteUserYield(old:JSONObject?,rid:String?):JSONObject { val o=copy(old);if(rid==null) return o
-        o.put("userYield",JSONObject().put("rid",rid).put("n",userYields(o,rid)+1));return o }
-    /** r23 review: the battery run was alive now (written at each piece's start and end), for [deadMs]. */
-    fun noteBatteryAlive(old:JSONObject?,now:Long):JSONObject { val o=copy(old);if(o.optLong("batteryRunStartMs",0)>0) o.put("batteryRunAliveMs",now);return o }
+    fun noteStreak(old:JSONObject?,key:String,rid:String?):JSONObject { val o=copy(old);if(rid==null) return o
+        o.put(key,JSONObject().put("rid",rid).put("n",streak(o,key,rid)+1));return o }
+    fun clearStreaks(old:JSONObject?):JSONObject { val o=copy(old);o.remove("userYield");o.remove("plugDrop");return o }
+    fun userYields(o:JSONObject?,rid:String?)=streak(o,"userYield",rid)
+    fun noteUserYield(old:JSONObject?,rid:String?)=noteStreak(old,"userYield",rid)
+    /** r23 review: the battery run was alive at [now] (a piece's end: the real time), for [deadMs]. r23 review 2: at a piece's
+     * start [expectedMs] is added (the piece is taken as run to its expected end if the process dies in it; [deadMs] keeps
+     * the 9-minute cap), so a run that dies in its first piece is no 0 minutes. */
+    fun noteBatteryAlive(old:JSONObject?,now:Long,expectedMs:Long=0):JSONObject { val o=copy(old)
+        if(o.optLong("batteryRunStartMs",0)>0) o.put("batteryRunAliveMs",now+expectedMs.coerceIn(0L,TranscriptionPower.SELF_END_MS));return o }
     /** A battery run's start mark this old without its end: the process died in it (the user closing the app from the recent
      * list kills it with the run). */
     fun dead(open:Long,now:Long)=now-open>=TranscriptionPower.SELF_END_MS+2*60_000L
