@@ -1386,7 +1386,7 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
             AND record_id NOT IN (SELECT record_id FROM call_record_log)""").single().long("n") ?: 0).toInt() // after [matchRecords] filled what it could
         val day=clock()-86_400_000L
         var stats:FirstPass.MatchStats?=null
-        val paired=FirstPass.match(open.map { it.r },free) { stats=it }
+        val paired=FirstPass.match(open.map { it.r },free,clock()) { stats=it }
         // r12-7 (user 11/5): a record whose file name gave only a phone-book name and that found no entry still gets that
         // person's number when the stored call log knows exactly one number under that name; then the ledger can hold it.
         var byPhoneBook=0

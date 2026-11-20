@@ -97,13 +97,20 @@ internal object FirstPass {
                           /** v4.1 r22-1: pairs made by the person in the file name in the usual window although the lengths
                            * disagree (the only entry of that person there), and for each record still left "length", the
                            * recording's length minus the nearest in-window entry's in signed 15 s bins from -120 to 120 s. */
-                          val byPartyLength:Int=0,val lengthGapSec:Map<String,Int> =emptyMap()) {
+                          val byPartyLength:Int=0,val lengthGapSec:Map<String,Int> =emptyMap(),
+                          /** v4.2 r23-3: for each record still left "length", its recording length ([recLenBin]) and its age
+                           * ([ageBin]); for each record left "noCandidate", its age. Every bin is always there (0 when none). */
+                          val lengthRecLenSec:Map<String,Int> =emptyMap(),val lengthAgeDays:Map<String,Int> =emptyMap(),
+                          val noCandidateAgeDays:Map<String,Int> =emptyMap()) {
         fun reasons()=JSONObject().put("noTime",noTime).put("noCandidate",noCandidate).put("length",length).put("nameNull",nameNull)
             .put("nameDiffers",nameDiffers).put("numberDiffers",numberDiffers).put("several",several).put("matched",matched).put("byEnd",byEnd)
             .put("missGapMin",JSONObject().apply { missGapMin.forEach { (k,v) -> put(k,v) } })
             .put("missGapHour",JSONObject().apply { missGapHour.forEach { (k,v) -> put(k,v) } }).put("byParty",byParty)
             .put("records24h",records24h).put("open24h",open24h).put("byPhoneBook",byPhoneBook).put("byPartyLength",byPartyLength)
             .put("lengthGapSec",JSONObject().apply { lengthGapSec.forEach { (k,v) -> put(k,v) } })
+            .put("lengthBy",JSONObject().put("recLenSec",bins(REC_LEN_BINS,lengthRecLenSec)).put("ageDays",bins(AGE_BINS,lengthAgeDays)))
+            .put("noCandidateBy",JSONObject().put("ageDays",bins(AGE_BINS,noCandidateAgeDays)))
+        private fun bins(keys:List<String>,m:Map<String,Int>)=JSONObject().apply { keys.forEach { put(it,m[it] ?: 0) } }
         /** The stored JSON with this pass added: "last" is this pass's reasons (the records still waiting are counted again
          * every pass, so they are not summed), "matched", "byEnd" and "gapSec" add up over all passes, "runs" counts passes.
          * "missGapMin" is this pass's distribution (the same waiting records come back every pass, like "last"). */
@@ -117,6 +124,13 @@ internal object FirstPass {
                 .put("missGapMin",JSONObject().apply { missGapMin.forEach { (k,v) -> put(k,v) } }).toString()
         }
     }
+    /** v4.2 r23-3: the recording-length bins of a record left "length": 0 (length unknown), under 60 s, under 180 s, 180 s and
+     * more. The heartbeat's keys are letters and digits only ([PhoneStatus.code]): lt60 = "<60", ge180 = ">=180". */
+    val REC_LEN_BINS=listOf("0","lt60","lt180","ge180")
+    fun recLenBin(durationMs:Long)=when { durationMs<=0 -> "0";durationMs<60_000L -> "lt60";durationMs<180_000L -> "lt180";else -> "ge180" }
+    /** v4.2 r23-3: the age bins of a record (now minus the recording's start): le1 = "<=1" day, le7 = "<=7", gt7 = ">7". */
+    val AGE_BINS=listOf("le1","le7","gt7")
+    fun ageBin(ageMs:Long)=when { ageMs<=86_400_000L -> "le1";ageMs<=7*86_400_000L -> "le7";else -> "gt7" }
     /** [MatchStats.missGapMin] key of a noCandidate record with no answered entry within [MISS_RANGE_MS]. */
     const val MISS_FAR="far"
     /** r12-7: [MatchStats.missGapMin] key of a record from before [FROM_MS]: the call log is read from 10/1 only, so such a
@@ -169,7 +183,7 @@ internal object FirstPass {
      * pair by time alone after the named ones, a pair outside the window after both), and the best pairs are taken first
      * across all recordings and entries, each recording and each entry once (review B14). [stats] gets why each recording did
      * or did not pair. */
-    fun match(records:List<RecordForMatch>,log:List<LogEntry>,stats:((MatchStats)->Unit)?=null):Map<String,LogEntry> {
+    fun match(records:List<RecordForMatch>,log:List<LogEntry>,now:Long=System.currentTimeMillis(),stats:((MatchStats)->Unit)?=null):Map<String,LogEntry> {
         class Fit(val r:RecordForMatch,val e:LogEntry,val score:Double)
         val answeredLog=log.filter { answered(it) }.sortedBy { it.startMs }
         val starts=LongArray(answeredLog.size) { answeredLog[it].startMs }
@@ -247,11 +261,15 @@ internal object FirstPass {
             for(r in records) { if(r.recordId in out || why[r.recordId]!="length") continue
                 val near=between(r.startedMs-120_000L,r.startedMs+60_000L).minByOrNull { kotlin.math.abs(r.startedMs-it.startMs) } ?: continue
                 val bin=(Math.floorDiv(r.durationMs-near.durationMs,15_000L)*15).coerceIn(-120,120).toString();lengthGaps[bin]=(lengthGaps[bin] ?: 0)+1 }
+            // v4.2 r23-3: is a record left "length" one of unknown length, or an old one; how old are the "noCandidate" ones?
+            fun binsOf(reason:String,bin:(RecordForMatch)->String)=records.filter { it.recordId !in out && why[it.recordId]==reason }.groupingBy(bin).eachCount()
+            val ageOf={ r:RecordForMatch -> ageBin(now-r.startedMs) }
             stats(MatchStats(noCandidate=counts["noCandidate"] ?: 0,length=counts["length"] ?: 0,nameNull=counts["nameNull"] ?: 0,nameDiffers=counts["nameDiffers"] ?: 0,
                 numberDiffers=counts["numberDiffers"] ?: 0,several=counts["several"] ?: 0,matched=out.size,gapSec=gaps,missGapMin=miss,
                 byEnd=records.count { r -> out[r.recordId]?.let { byEnd(r,it) }==true },missGapHour=hours,
                 byParty=records.count { r -> out[r.recordId]?.let { !inWindow(r.startedMs,it.startMs) }==true },
-                byPartyLength=records.count { it.recordId in out && it.recordId in lengthOnly },lengthGapSec=lengthGaps))
+                byPartyLength=records.count { it.recordId in out && it.recordId in lengthOnly },lengthGapSec=lengthGaps,
+                lengthRecLenSec=binsOf("length") { recLenBin(it.durationMs) },lengthAgeDays=binsOf("length",ageOf),noCandidateAgeDays=binsOf("noCandidate",ageOf)))
         }
         return out
     }
