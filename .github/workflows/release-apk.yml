@@ -132,6 +132,10 @@ jobs:
           python3 run_gradle.py --log release-build.log :app:assembleRelease
           cp android/app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/ieum.apk"
           rm -f "$RUNNER_TEMP/ieum.p12"
+      - name: Gradle log on failure
+        # v4.2 r23-4: why gradle failed, to the console only (GitHub masks secrets there, not in an uploaded file); no env.
+        if: failure()
+        run: python3 tools/release/gradle_log_tail.py evidence/release-build.log
       # Key rotation (DESIGN_V7 4.2, tools/rotate_signing_key.sh): only when the repository variable IEUM_ROTATE is 1.
       # Otherwise this step does nothing and the APK keeps exactly the old key and fingerprint.
       # The lineage is the mailbox's app/signing-lineage.bin; only when there is none yet (the first rotated release) it is made

@@ -99,6 +99,10 @@ jobs:
           export ANDROID_SDK_ROOT="$ANDROID_HOME"
           # r18-lock: the phone gets the release build type from v3.8: its Kotlin and its vital lint (what assembleRelease runs) here too.
           python3 run_gradle.py --log ci-gradle.log :core:test :app:testDebugUnitTest :app:lintDebug :app:lintVitalRelease
+      - name: Gradle log on failure
+        # v4.2 r23-4: why gradle failed, to the console only (GitHub masks secrets there, not in an uploaded file); no env.
+        if: failure()
+        run: python3 tools/release/gradle_log_tail.py evidence/ci-gradle.log
       - name: Summarize results
         if: always()
         run: |
