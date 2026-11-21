@@ -362,6 +362,8 @@ internal object PhoneStatus {
         UseStats.flush(app,now)
         DbStore.flush(app) // v3.8 r18: capacity refusals seen by this process
         val s=kr.callbrief.SecureSettings(app).snapshot()
+        // v4.3 r24-3: the battery budget in force as stored (the heartbeat's power.budgetMin and budgetSrc).
+        runCatching { TranscriptionPower.load(s) }
         // Review #10, #11: the queue since 10/1 by the time each row entered it (not the call time), new and old apart.
         val store=StatusLights.read(app,s,now)
         val q=store.queue ?: StatusLights.Queue()

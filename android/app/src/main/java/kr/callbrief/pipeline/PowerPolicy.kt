@@ -15,10 +15,28 @@ import java.time.ZoneId
 internal object TranscriptionPower {
     /** Battery runs only from this charge up (2.4). Below it the queue waits for the charger. */
     const val BATTERY_MIN_PCT=40
-    /** A day's battery budget: this many minutes of runs that started a piece, or this share of the battery, whichever comes first. */
-    const val BATTERY_BUDGET_MIN=20
-    const val BATTERY_BUDGET_MS=BATTERY_BUDGET_MIN*60_000L
+    /** A day's battery budget: this many minutes of runs that started a piece, or this share of the battery, whichever comes first.
+     * v4.3 r24-3 (DESIGN_V8 6-4): the minutes come from the mailbox's app/config.json `power.budgetMin` (a whole number
+     * [BUDGET_MIN_LOW]..[BUDGET_MIN_HIGH], kept in settings [PipelineSettingsKeys.POWER_BUDGET_MIN] as last read), else
+     * [DEFAULT_BUDGET_MIN]. [load] puts the stored value in force (a transcription run, the heartbeat, the settings screen read it). */
+    const val DEFAULT_BUDGET_MIN=20
+    const val BUDGET_MIN_LOW=10
+    const val BUDGET_MIN_HIGH=60
+    @Volatile var budgetMin:Int=DEFAULT_BUDGET_MIN;private set
+    /** "config" when [budgetMin] came from the mailbox's config, else "default" (the heartbeat's `power.budgetSrc`). */
+    val budgetSrc:String get()=if(fromConfig) "config" else "default"
+    @Volatile private var fromConfig=false
+    val BATTERY_BUDGET_MIN:Int get()=budgetMin
+    val BATTERY_BUDGET_MS:Long get()=budgetMin*60_000L
     const val BATTERY_BUDGET_PCT=5
+    /** [v] as a budget: a whole number in range, else null (a string, a fraction, out of range: the default holds). */
+    fun validBudget(v:Any?):Int? = when(v) {
+        is Int -> v;is Long -> v.toInt().takeIf { it.toLong()==v };is Double -> v.toInt().takeIf { it.toDouble()==v };else -> null
+    }?.takeIf { it in BUDGET_MIN_LOW..BUDGET_MIN_HIGH }
+    /** Puts the stored budget ([PipelineSettingsKeys.POWER_BUDGET_MIN] in the settings [s]) in force. */
+    fun load(s:JSONObject?) { val v=validBudget(s?.opt(PipelineSettingsKeys.POWER_BUDGET_MIN));budgetMin=v ?: DEFAULT_BUDGET_MIN;fromConfig=v!=null }
+    /** Host tests: the default again. */
+    internal fun resetBudgetForHost() { budgetMin=DEFAULT_BUDGET_MIN;fromConfig=false }
     /** Battery runs at least this far apart (heat, and no "every call starts it at once" loop). */
     const val BATTERY_RUN_GAP_MS=30*60_000L
     /** "Today, short" on battery: calls of this length (from the call log, else estimated from the file size). */
@@ -170,7 +188,7 @@ internal object PowerPolicy {
     /** v4.2 r23-1: one whole piece as [PowerBudget.pieceMs] says, else at the default speed (5 minutes). r23 review: never above
      * half the budget, so one median that jumped does not starve the battery runs for the day. */
     fun pieceMs(b:PowerBudget)=(b.pieceMs.takeIf { it>0 } ?: PowerPolicy.splitExpectMs(PipelineAudioMath.MAX_CHUNK_MS,null)).coerceAtMost(PIECE_CAP_MS)
-    const val PIECE_CAP_MS=TranscriptionPower.BATTERY_BUDGET_MS/2
+    val PIECE_CAP_MS:Long get()=TranscriptionPower.BATTERY_BUDGET_MS/2
     /** r23 review: the expected time of the first piece of a short call of [lenMs] (a battery run takes those only): its own
      * windows, at most a whole piece's. */
     fun shortPieceMs(lenMs:Long,rate:Double?)=PowerPolicy.splitExpectMs(lenMs.coerceIn(1L,PipelineAudioMath.MAX_CHUNK_MS),rate)

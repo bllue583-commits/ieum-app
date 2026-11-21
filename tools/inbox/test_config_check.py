@@ -16,7 +16,7 @@ class ConfigCheckTest(unittest.TestCase):
         cfg = {"bench": {"on": True, "candidates": ["b", "c"], "calls": 20, "run": 1},
                "samples": {"on": True, "calls": 12, "maxMinutes": 40}}
         self.assertEqual(cc.problems(cfg), [])
-        self.assertEqual(cc.summary(cfg), "bench=on samples=on")
+        self.assertEqual(cc.summary(cfg), "bench=on samples=on budgetMin=20")
 
     def test_a_string_true_is_refused_because_the_phone_reads_it_as_off(self):
         self.assertTrue(cc.problems({"bench": {"on": "true"}}))
@@ -34,7 +34,17 @@ class ConfigCheckTest(unittest.TestCase):
 
     def test_an_empty_object_is_valid_and_off(self):
         self.assertEqual(cc.problems({}), [])
-        self.assertEqual(cc.summary({}), "bench=off samples=off")
+        self.assertEqual(cc.summary({}), "bench=off samples=off budgetMin=20")
+
+    def test_the_battery_budget(self):
+        # v4.3 r24-3: a whole number 10..60; the phone takes anything else as 20, so the copy step refuses it.
+        self.assertEqual(cc.problems({"power": {"budgetMin": 40}}), [])
+        self.assertEqual(cc.summary({"power": {"budgetMin": 40}}), "bench=off samples=off budgetMin=40")
+        self.assertEqual(cc.problems({"power": {}}), [])
+        for bad in (5, 100, "40", 40.5, True, None):
+            self.assertTrue(cc.problems({"power": {"budgetMin": bad}}), bad)
+        self.assertTrue(cc.problems({"power": {"budget": 40}}))
+        self.assertTrue(cc.problems({"power": 40}))
 
 
 if __name__ == "__main__":

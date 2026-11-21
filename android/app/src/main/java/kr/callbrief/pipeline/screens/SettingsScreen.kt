@@ -380,6 +380,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         // v3.6 (DESIGN_V6 3.2, r16-2): the battery, in one line. v4.1 r22-3: its switch "충전 중에만" is gone (user 11/19).
         sub("글자로 바꾸기")
         val now=System.currentTimeMillis()
+        runCatching { TranscriptionPower.load(s) } // v4.3 r24-3: "한도 n분" as the config says
         body.addView(CallUi.text(a,PowerText.settingsLine(PowerText.batteryMinToday(PowerText.ledger(s),now)),CallUi.BODY).apply { tag="power_line";fontFeatureSettings="tnum" })
 
         sub("알림 시각")

@@ -214,6 +214,9 @@ object PipelineSettingsKeys {
      * (today/prev runs and minutes on battery and plugged in, the battery budget, skips, killed/yield ms, model loads, piece
      * speed, the last battery snapshot, plug debounce and level samples, and the power-waiting queue). Numbers and codes only. */
     const val TRANSCRIPTION_POWER="transcriptionPower"
+    /** v4.3 r24-3: the day's battery budget in minutes from the mailbox's app/config.json `power.budgetMin` (10..60), kept
+     * as last read; absent: the default ([TranscriptionPower.DEFAULT_BUDGET_MIN]). */
+    const val POWER_BUDGET_MIN="powerBudgetMin"
 
     // ---- v3.7 r17-1 (DESIGN_V7 3.1 T5) ----
     // ---- v3.7 r17-2 (DESIGN_V7 3.2 M3): the morning report's coverage. ----

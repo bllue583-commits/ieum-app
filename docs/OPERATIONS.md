@@ -255,6 +255,8 @@ v3.4(11/6)부터 워치독은 Actions가 아니라 두 예약 작업 안에서 �
 
 **켜는 법:** 우편함(ieum-inbox) 기본 브랜치에 `app/config.json`을 둔다. 직접 쓰지 않고 **앱 저장소의 `ops/inbox-config.json`을 고쳐 `feature/lean-calls`에 push**한다(`[skip ci]`를 넣지 말 것) — `inbox-config` 워크플로가 `tools/inbox/config_check.py`로 검사한 뒤(문자열 "true", 오타 난 키, 범위 밖 숫자는 거절) 우편함으로 옮긴다. 이 파일에는 스위치만 있고 통화 정보는 없다. 폰은 하트비트(매시간 틱) 때 이 파일을 한 번 읽는다. 파일이 없거나(404) JSON이 깨졌거나 블록이 없으면 **꺼짐**(기본). 네트워크 오류면 그 시간에는 아무것도 바꾸지 않는다. 켜고 끄는 데 폰을 만질 일은 없다.
 
+**하루 배터리 예산 (v4.3 r24-3):** 같은 파일에 `"power": {"budgetMin": 40}`을 두면 폰이 하트비트 때 같이 읽어 그날부터 배터리로 글자로 바꾸는 하루 한도(분)로 쓴다. 정수 10~60만 받고(검사기가 거절), 없거나 범위 밖·문자열이면 20분. 네트워크 오류면 마지막 값 유지. 조각 예상 상한(예산의 절반)과 충전기 꼬리 판단, 설정 화면의 "한도 n분"도 같은 값. 하트비트 `power.budgetMin`(지금 쓰는 값), `power.budgetSrc`(`default`/`config`). 채점 6번의 25분은 그대로라 40분 주는 6번 미충족으로 적는다.
+
 ```json
 {"bench":{"on":true,"candidates":["b","c"],"calls":20,"run":1},
  "samples":{"on":true,"calls":12,"maxMinutes":40}}

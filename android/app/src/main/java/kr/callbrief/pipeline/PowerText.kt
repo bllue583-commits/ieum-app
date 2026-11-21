@@ -118,6 +118,8 @@ internal object PowerText {
         o.put("waiting",JSONObject().put("n",w.n).put("oldestMin",w.oldestMs?.let { ((now-it)/60_000).coerceAtLeast(0) } ?: JSONObject.NULL))
         // v4.1 r22-3: the switch is gone; the key stays, always false, for readers of older heartbeats.
         o.put("chargingOnly",false)
+        // v4.3 r24-3: the battery budget in force (minutes) and where it came from ("default" or "config").
+        o.put("budgetMin",TranscriptionPower.BATTERY_BUDGET_MIN).put("budgetSrc",TranscriptionPower.budgetSrc)
         return o
     }
 }

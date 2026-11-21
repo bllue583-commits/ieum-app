@@ -20,7 +20,7 @@ def problems(cfg):
     if not isinstance(cfg, dict):
         return ["top level must be an object"]
     for k in cfg:
-        if k not in ("bench", "samples"):
+        if k not in ("bench", "samples", "power"):
             out.append(f"unknown block: {k}")
     b = cfg.get("bench")
     if b is not None:
@@ -60,12 +60,27 @@ def problems(cfg):
                 out.append("samples.calls must be 1..30")
             if "maxMinutes" in s and not _int(s["maxMinutes"], 1, 120):
                 out.append("samples.maxMinutes must be 1..120")
+    # v4.3 r24-3: the day's battery budget in minutes (absent: 20). The phone takes anything else as the default.
+    p = cfg.get("power")
+    if p is not None:
+        if not isinstance(p, dict):
+            out.append("power must be an object")
+        else:
+            for k in p:
+                if k != "budgetMin":
+                    out.append(f"power: unknown key {k}")
+            if "budgetMin" in p and not _int(p["budgetMin"], 10, 60):
+                out.append("power.budgetMin must be a whole number 10..60")
     return out
+
+
+DEFAULT_BUDGET_MIN = 20
 
 
 def summary(cfg):
     b, s = cfg.get("bench") or {}, cfg.get("samples") or {}
-    return "bench=%s samples=%s" % ("on" if b.get("on") is True else "off", "on" if s.get("on") is True else "off")
+    budget = (cfg.get("power") or {}).get("budgetMin", DEFAULT_BUDGET_MIN)
+    return "bench=%s samples=%s budgetMin=%d" % ("on" if b.get("on") is True else "off", "on" if s.get("on") is True else "off", budget)
 
 
 def main(argv):

@@ -431,6 +431,8 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
         val model=PipelineModelManager(storage)
         if(model.verifiedModelFile()==null){PipelineModelDownloadWork.enqueue(applicationContext);return Result.success()}
         val settings=SecureSettings(storage)
+        // v4.3 r24-3: the day's battery budget as the mailbox's config last said.
+        runCatching { TranscriptionPower.load(settings.snapshot()) }
         val now=System.currentTimeMillis()
         val start=BatterySnapshot.read(storage)
         val cores=CpuSet.readAllowed()
