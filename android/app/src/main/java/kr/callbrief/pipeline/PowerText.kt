@@ -49,7 +49,9 @@ internal object PowerText {
     }
 
     // ---- words (DESIGN_V6 3.2) ----
-    fun settingsLine(minToday:Long)="배터리를 아끼려고 긴 녹음은 충전 중에 글자로 바꿔요. 오늘 배터리로 ${minToday}분 썼어요(한도 ${TranscriptionPower.BATTERY_BUDGET_MIN}분)"
+    fun settingsLine(minToday:Long,budgetMin:Int=TranscriptionPower.BATTERY_BUDGET_MIN)="배터리를 아끼려고 긴 녹음은 충전 중에 글자로 바꿔요. 오늘 배터리로 ${minToday}분 썼어요(한도 ${budgetMin}분)"
+    /** r24 review 8: the budget the ledger kept for that day ([d]), else the one in force now. */
+    fun dayBudget(d:JSONObject?):Int = TranscriptionPower.validBudget(d?.opt("budgetMin")) ?: TranscriptionPower.BATTERY_BUDGET_MIN
     fun nowLine(n:Int)="녹음 ${n}개는 충전기에 꽂으면 글자로 바꿔요"
     fun lightLong(n:Int)="녹음 ${n}개가 이틀째 충전을 기다려요. 밤에 충전기에 꽂아 두면 정리돼요"
     fun lightGreen(n:Int)="충전하면 ${n}개를 바꿔요"
@@ -75,7 +77,7 @@ internal object PowerText {
             // r23 review: battery runs the process died in, and the minutes counted for them (until last seen alive).
             .put("killedRuns",n(b,"killedRuns")).put("killedMin",n(b,"killedMs")/60_000))
         o.put("plugged",JSONObject().put("runs",n(p,"runs")).put("ms",n(p,"ms")).put("min",n(p,"min")).put("audioMin",n(p,"audioMin")))
-        o.put("budgetMin",TranscriptionPower.BATTERY_BUDGET_MIN)
+        o.put("budgetMin",dayBudget(d))
         o.put("budgetHit",d?.optString("budgetHit")?.takeIf { it=="min" || it=="pct" } ?: "none")
         DAY_COUNTS.forEach { o.put(it,n(d,it)) }
         // r23 review: minutes on battery after the plug went away in a plugged-in run (part of battery.min).

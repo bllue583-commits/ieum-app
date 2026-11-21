@@ -322,7 +322,8 @@ internal object PowerStats {
         }
         return o
     }
-    private fun today(o:JSONObject,day:Int)=roll(o,day).getJSONObject("today")
+    /** r24 review 8: every write to the day keeps the battery budget in force then (`budgetMin`), so a past day says its own. */
+    private fun today(o:JSONObject,day:Int)=roll(o,day).getJSONObject("today").also { it.put("budgetMin",TranscriptionPower.BATTERY_BUDGET_MIN) }
     private fun inc(o:JSONObject,k:String,v:Long=1) { o.put(k,o.optLong(k,0)+v) }
     private fun sub(o:JSONObject,k:String)=o.optJSONObject(k) ?: JSONObject().also { o.put(k,it) }
 

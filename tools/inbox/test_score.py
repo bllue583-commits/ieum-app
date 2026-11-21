@@ -226,6 +226,13 @@ class CardReachV5Test(unittest.TestCase):
         d = self.daily({"calls": 10, "drawn": 5, "fallback": 0, "fallbackShown": 5, "ignored": 0, "off": 0})
         self.assertEqual(0.5, score.item_call_card(self.cfg3, self.window, ASOF, d)["value"]["reach"])
 
+    def test_fallback_seen_comes_first_r24(self):
+        # 폰이 센 fallbackSeen이 있으면 fallbackShown(잠금 화면 곁 알림도 섞임) 대신 그것으로
+        d = self.daily({"calls": 10, "drawn": 2, "fallback": 8, "fallbackShown": 8, "fallbackSeen": 6, "ignored": 0, "off": 0})
+        self.assertEqual(0.8, score.item_call_card(self.cfg3, self.window, ASOF, d)["value"]["reach"])
+        d = self.daily({"calls": 10, "drawn": 2, "fallback": 8, "fallbackShown": 0, "fallbackSeen": 8, "ignored": 0, "off": 0})
+        self.assertEqual(1.0, score.item_call_card(self.cfg3, self.window, ASOF, d)["value"]["reach"])
+
     def test_old_heartbeats_count_drawn_only(self):
         d = self.daily({"calls": 10, "drawn": 2, "fallback": 8, "ignored": 0, "off": 0})
         r = score.item_call_card(self.cfg3, self.window, ASOF, d)

@@ -274,6 +274,21 @@ class WatchdogTest(unittest.TestCase):
         # An old phone (noPermission only) keeps the 3.
         self.assertEqual([], titles(phone=phone(callCard={"today": {"noPermission": 2}})))
 
+    def test_call_card_a_notice_that_showed_is_no_issue_r24(self):
+        # r24 review 2: a notice instead of the card is fine; only a call where neither showed opens the issue.
+        seen = lambda **t: {"day": 20261121, "recent": [], "today": dict({"drawn": 0}, **t)}
+        self.assertEqual([], titles(phone=phone(callCard=seen(fallback=6, fallbackSeen=6, fallbackShown=6))))
+        self.assertEqual([w.T_CARD_PERMISSION], titles(phone=phone(callCard=seen(fallback=6, fallbackSeen=5, fallbackShown=6))))
+        body = problems(phone=phone(callCard=seen(fallback=6, fallbackSeen=4)))[0]["body"]
+        self.assertIn("카드도 알림도 보이지 않은 통화 2번", body)
+        # Without fallbackSeen (v4.1, v4.2): shown and muted.
+        self.assertEqual([], titles(phone=phone(callCard=seen(fallback=6, fallbackShown=6, fallbackMuted=0))))
+        self.assertEqual([w.T_CARD_PERMISSION], titles(phone=phone(callCard=seen(fallback=6, fallbackShown=6, fallbackMuted=1))))
+        self.assertEqual([w.T_CARD_PERMISSION], titles(phone=phone(callCard=seen(fallback=6, fallbackShown=5))))
+        self.assertEqual([w.T_CARD_PERMISSION], titles(phone=phone(callCard=seen(fallback=3, unconfirmed=1, fallbackShown=3))))
+        # Neither key: the old rule (one fallback is an issue).
+        self.assertEqual([w.T_CARD_PERMISSION], titles(phone=phone(callCard=seen(fallback=1))))
+
     def test_exempted_bucket_is_no_cause(self):
         body = problems(phone=phone(atMs=NOW - 20 * H, standbyBucket="EXEMPTED"))[0]["body"]
         self.assertNotIn("EXEMPTED", body)

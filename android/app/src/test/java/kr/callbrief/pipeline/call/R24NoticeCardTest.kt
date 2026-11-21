@@ -199,4 +199,107 @@ class R24NoticeCardTest:ProtectedTextHostTestBase() {
         wall+=day
         assertFalse(CardStats.heartbeat(SecureSettings(app).snapshot(),wall)!!.getJSONObject("today").has(CardStats.NOTICE_MS))
     }
+
+    // ---- r24 review ----
+    private fun alertsOnce(n:Notification)=n.flags and Notification.FLAG_ONLY_ALERT_ONCE!=0
+    @Test fun theFirstNoticeOfTheCallAlertsLaterDrawingsDoNot() {
+        ring();CallCardOverlay.awaitIdle();shadowOf(Looper.getMainLooper()).idle()
+        assertFalse("the first one comes up as a heads-up",alertsOnce(notices.single()))
+        settle(50) // the second drawing step posts it again
+        assertTrue("the redrawing does not alert again",alertsOnce(notices.single()))
+        idle()
+        ring();CallCardOverlay.awaitIdle();shadowOf(Looper.getMainLooper()).idle()
+        assertFalse("a new call alerts again",alertsOnce(notices.single()))
+        idle()
+    }
+    @Test fun aSlotChangeDuringTheCallLeavesNoNoticeBehind() {
+        var up=false;CallCardOverlay.serviceUp={ up }
+        ring();settle(50)
+        assertNotNull(nm.getNotification(CallCardOverlay.NOTICE_TAG,CallCardOverlay.NOTICE_ID))
+        up=true // the service came up: the notice moves into its slot
+        CallCardOverlay.show(app,null,CallSession.State.OFFHOOK);settle(50)
+        assertNull("the old slot went",nm.getNotification(CallCardOverlay.NOTICE_TAG,CallCardOverlay.NOTICE_ID))
+        assertEquals(CallCardOverlay.CHANNEL,nm.getNotification(null,CallCardService.NOTIFICATION_ID).channelId)
+        up=false // and went again
+        CallCardOverlay.show(app,null,CallSession.State.RINGING);settle(50)
+        assertNull("the service's slot went",nm.getNotification(null,CallCardService.NOTIFICATION_ID))
+        assertNotNull(nm.getNotification(CallCardOverlay.NOTICE_TAG,CallCardOverlay.NOTICE_ID))
+        idle();assertTrue(nm.allNotifications.isEmpty())
+    }
+    @Test fun theCheckTurningNoAfterTheCardWasSeenBringsTheNotice() {
+        draw=true
+        ring();settle(50);settle(CallCardOverlay.HIDDEN_AFTER_MS)
+        assertEquals(1,windows.size);assertTrue(notices.isEmpty())
+        draw=false
+        CallCardOverlay.show(app,null,CallSession.State.OFFHOOK);settle(50)
+        assertEquals("the notice, though the card was seen once",1,notices.size)
+        idle();assertTrue(notices.isEmpty())
+        // A drawn call keeps one card and no notice (unchanged).
+        draw=true;ring();settle(50);settle(CallCardOverlay.HIDDEN_AFTER_MS)
+        CallCardOverlay.show(app,null,CallSession.State.OFFHOOK);settle(50)
+        assertTrue(notices.isEmpty());idle()
+    }
+    @Test fun aWindowThatStopsBeingVisibleLooksAgain() {
+        draw=true
+        ring();settle(50);settle(CallCardOverlay.HIDDEN_AFTER_MS)
+        val v=windows.single();assertTrue(notices.isEmpty())
+        draw=false
+        v.dispatchWindowVisibilityChanged(android.view.View.VISIBLE);v.dispatchWindowVisibilityChanged(android.view.View.INVISIBLE);settle()
+        assertEquals(1,notices.size)
+        idle()
+    }
+    /** The check hops worker -> main -> worker: drain both a few times. */
+    private fun drain() { repeat(3) { settle() } }
+    @Test fun aCallNotDrawnWhoseNoticeWasFoundUpIsCountedOnce() {
+        var seenCount=0;var shown=true
+        CallCardOverlay.onFallbackSeen={ seenCount++ };CallCardOverlay.noticeCheck={ _,_ -> shown }
+        ring();settle(50);settle(CallCardOverlay.NOTICE_CHECK_MS+100);drain()
+        assertEquals(1,seenCount)
+        settle(CallCardOverlay.NOTICE_CHECK_MS*3);idle();assertEquals("once per call",1,seenCount)
+        // The notice not found: not counted.
+        shown=false;ring();settle(50);settle(CallCardOverlay.NOTICE_CHECK_MS+100);drain();idle()
+        assertEquals(1,seenCount)
+        // Drawn with the notice beside it (the lock): not counted.
+        shown=true;draw=true;CallCardOverlay.locked={ true }
+        ring();settle(50);settle(CallCardOverlay.NOTICE_CHECK_MS+100);drain()
+        CallCardOverlay.locked={ false };app.sendBroadcast(android.content.Intent(android.content.Intent.ACTION_USER_PRESENT));settle(CallCardOverlay.HIDDEN_AFTER_MS+100)
+        assertEquals(CardStats.DRAWN,synchronized(verdicts) { verdicts.last() }.result)
+        idle();assertEquals(1,seenCount)
+        // The count itself goes to today's callCard.
+        CardStats.fallbackSeen(app);CardStats.awaitIdle()
+        assertEquals(1,CardStats.read(SecureSettings(app).snapshot()).getJSONObject("today").getInt(CardStats.FALLBACK_SEEN))
+    }
+    @Test fun theTapHasItsOwnActionAndOnlyTheAppsIdsOpenAPerson() {
+        ring();settle()
+        val sent=android.content.Intent(shadowOf(notices.single().contentIntent).savedIntent)
+        assertEquals(CallCardOverlay.TAP_ACTION,sent.action)
+        idle()
+        for(bad in listOf("../x","pe_","pe_a b","x".repeat(10),"pe_"+"a".repeat(62))) {
+            val i=MainActivity.intent(app,Screen.HOME).putExtra(MainActivity.EXTRA_PERSON_ID,bad)
+            val a=Robolectric.buildActivity(MainActivity::class.java,i).setup().get()
+            assertEquals(bad,Screen.HOME,a.screen);assertNull(bad,a.person.personId);a.finish()
+        }
+        assertTrue(MainActivity.PERSON_ID.matches("pe_"+"0123456789abcdef".repeat(2)))
+    }
+    @Test fun linesAreNotCutInsideAnAmountOrAPairAndTheWorkStays() {
+        assertEquals("대금은",CallCardView.Content.cut("대금은 1,200,000원",8))
+        assertEquals("가나다라마바",CallCardView.Content.cut("가나다라마바1,200,000원 입금",10))
+        val pair="가나다라마바사아자\uD83D\uDE00끝"
+        val cut=CallCardView.Content.cut(pair,10)
+        assertFalse(cut,Character.isHighSurrogate(cut.last()))
+        // No open item, only the last call: the work under way stays in the notice.
+        ContactCards.write(app,mapOf(key to card(emptyList()).copy(issues=listOf(ContactCard.IssueLine("골조 공사","진행")))),replaceAll=true)
+        ring();settle()
+        val lines=big(notices.single())
+        assertEquals(2,lines.size);assertTrue(lines[1],lines[1].startsWith("진행 중인 일: 골조"))
+        idle()
+        // A number nothing is known about: the title and the line differ.
+        SecureSettings(app).update { it.put(CallCardOverlay.KEY_UNKNOWN,true) }
+        CallCardOverlay.logLine={ _,_ -> "3일 전 통화, 30일간 2번" }
+        CallSession.onPhoneState(app,TelephonyManager.EXTRA_STATE_RINGING,"010-7777-8888");CallCardOverlay.show(app,"010-7777-8888",CallSession.State.RINGING);settle(50)
+        val u=notices.single()
+        assertEquals(CallCardView.Content.UNKNOWN,title(u));assertEquals("3일 전 통화, 30일간 2번",line(u))
+        assertEquals(listOf("3일 전 통화, 30일간 2번"),big(u))
+        idle()
+    }
 }

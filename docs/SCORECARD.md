@@ -16,7 +16,7 @@
 | --- | --- | --- | --- | --- |
 | 1 | 아침 보고 완전성 | 어제 통화(녹음 대상, 개인 제외) 중 보고에 들어간 비율 ≥ 95%, 평일 10일 중 9일 | 하트비트 `report.coverage`(v3.7부터), 그 전은 보고서 `head.calls` ÷ 대조표의 연결 20초 이상 통화(어림) | 빠진 통화가 있는 보고는 수첩보다 나쁘다(믿고 덜 기억함) |
 | 2 | 적시성 | 통화 끝→결과 적용 p50 ≤ 180분, p90 ≤ 1,200분, 9/10일 | 하트비트 `latency.day`(그날 통화만, v3.7부터), 그 전은 7일 이동값 `latency` | "저녁이면 잊는다"가 문제이므로 같은 날 안에 |
-| 3 | 통화 카드 (v5) | 14일 합 도달률 (**drawn**(창이 실제로 그려진 통화; v3.6.1 전에는 shown+locked) + 대체 알림이 실제로 뜬 통화 `fallbackShown`(안 그려진 통화 `fallback+unconfirmed` 수까지만)) ÷ (calls−ignored−off) ≥ 95%(통화 30건 이상). `fallbackShown`이 없는 옛 하트비트의 날은 그려진 것만. 옛 식(그려진 것만)의 값은 `reference_v4`로 계속 출력. 벨→카드 p50 ≤ 1,000ms, 콜드 p50 ≤ 1,500ms, FGS 거부 0 | 하트비트 `callCard.today`(날짜별) | 이 앱에서 가장 강한 기능(사건 단서) |
+| 3 | 통화 카드 (v5) | 14일 합 도달률 (**drawn**(창이 실제로 그려진 통화; v3.6.1 전에는 shown+locked) + 대체 알림이 실제로 뜬 통화(폰이 통화 단위로 센 `fallbackSeen`이 있으면 그것, 없으면 `fallbackShown`; 안 그려진 통화 `fallback+unconfirmed` 수까지만)) ÷ (calls−ignored−off) ≥ 95%(통화 30건 이상). `fallbackShown`이 없는 옛 하트비트의 날은 그려진 것만. 옛 식(그려진 것만)의 값은 `reference_v4`로 계속 출력. 벨→카드 p50 ≤ 1,000ms, 콜드 p50 ≤ 1,500ms, FGS 거부 0 | 하트비트 `callCard.today`(날짜별) | 이 앱에서 가장 강한 기능(사건 단서) |
 | 4 | 약속 추출 | 정답지 통화 30건·숫자 40개 이상에서 재현율 ≥ 0.90, 정밀도 ≥ 0.85, 숫자 정확 일치 ≥ 0.98 | `status/gold-commit.json`(`commitRecall`, `commitPrecision`, `numberExact`, `commitCalls`, `commitNumbers`) | 체크할 일이 빠지거나 틀리면 앱의 존재 이유가 없다 |
 | 5 | 자막 정확도 | 정답지 20분 이상에서 글자 오류율 ≤ 15%, 숫자 ≥ 95%, 이름·업체 ≥ 90% | `status/gold-transcript.json`(`cer`, `numberAcc`, `nameAcc`, `transcriptMinutes`) | 추출의 입력. 실녹음으로 잰 적이 없다 |
 | 6 | 배터리 | 배터리 실행 ≤ 25분/일(9/10일), 배터리 화면의 이음 비중 ≤ 10%(1회 확인) | 하트비트 `power.prev.battery.min`, `status/survey.json` `batterySharePct` | 11/7 사고(60%)의 재발 방지 |

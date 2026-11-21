@@ -100,3 +100,23 @@ class R24BudgetConfigTest:ProtectedTextHostTestBase() {
     /** A power ledger whose today has [ms] of battery runs. */
     private fun JSONObjectOf(ms:Long)=org.json.JSONObject().put("today",org.json.JSONObject().put("day",PowerPolicy.day(base)).put("battery",org.json.JSONObject().put("ms",ms)))
 }
+
+/** r24 review 8: a day's battery line says the budget kept for that day in the ledger, else the one in force now. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk=[35])
+class R24DayBudgetTest {
+    private val base=java.time.ZonedDateTime.of(2026,11,21,14,0,0,0,TranscriptionPower.KST).toInstant().toEpochMilli()
+    @After fun done() { TranscriptionPower.resetBudgetForHost() }
+    @Test fun eachDayKeepsItsOwnBudget() {
+        TranscriptionPower.load(org.json.JSONObject().put(PipelineSettingsKeys.POWER_BUDGET_MIN,40))
+        val o=PowerStats.noteRun(null,base,PowerPolicy.Mode.BATTERY,60_000L,60_000L,null)
+        assertEquals(40,o.getJSONObject("today").getInt("budgetMin"))
+        TranscriptionPower.resetBudgetForHost() // the next day back to 20
+        val next=PowerStats.noteRun(o,base+86_400_000L,PowerPolicy.Mode.BATTERY,60_000L,60_000L,null)
+        val beat=PowerText.heartbeat(next,base+86_400_000L)
+        assertEquals(20,beat.getJSONObject("today").getInt("budgetMin"))
+        assertEquals("yesterday says its own",40,beat.getJSONObject("prev").getInt("budgetMin"))
+        assertEquals(40,PowerText.dayBudget(o.getJSONObject("today")));assertEquals(20,PowerText.dayBudget(null))
+        assertTrue(PowerText.settingsLine(3,40).endsWith("(한도 40분)"))
+    }
+}

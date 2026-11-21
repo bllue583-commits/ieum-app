@@ -58,12 +58,18 @@ internal class CallCardView(context:Context):LinearLayout(context) {
             issue?.let { "진행 중인 일: $it" })
         /** v4.3 r24-1: the notice's title, "김민수 대표, 탄탄이엔씨" (the screen rules allow no middle dot). */
         fun noticeTitle():String = listOfNotNull(name,company).joinToString(", ")
-        /** v4.3 r24-1: the folded notice's one line: the card's first line (the open item that matters most, or the last call). */
-        fun noticeText():String = first+if(firstUnsure) ", $UNSURE" else ""
+        /** v4.3 r24-1: the folded notice's one line: the card's first line (the open item that matters most, or the last call).
+         * r24 review 7: a number nothing is known about says what the call log says of it (its title is already [UNKNOWN]). */
+        fun noticeText():String = if(unknown) who ?: first else first+if(firstUnsure) ", $UNSURE" else ""
         /** v4.3 r24-1: the open notice's lines: the open check items (at most [NOTICE_TASKS], the one that matters most first),
          * then the last call's line with its day. A card without either (a thin card, an unknown number, ongoing work only)
          * keeps the card's own lines ([noticeLines]). */
-        fun noticeBody():List<String> = (noticeTasks+listOfNotNull(lastCall)).ifEmpty { noticeLines() }
+        fun noticeBody():List<String> = when {
+            unknown -> listOf(noticeText())
+            // r24 review 7: no open item, only the last call: the work under way stays.
+            noticeTasks.isEmpty() && lastCall!=null -> listOfNotNull(lastCall,issue?.let { "진행 중인 일: $it" })
+            else -> (noticeTasks+listOfNotNull(lastCall)).ifEmpty { noticeLines() }
+        }
         /** v4.3 r24-1: under the title of the open notice, "체크할 일 외 2개" when there are more than [NOTICE_TASKS]. */
         fun noticeSummary():String? = if(noticeMore>0) "체크할 일 외 ${noticeMore}개" else null
         /** What the locked screen may show when the user allows it ("잠금 화면에서도 이름과 한 줄 보기", DESIGN_V4 3.1-5): the name
@@ -97,7 +103,13 @@ internal class CallCardView(context:Context):LinearLayout(context) {
             fun cut(t:String,max:Int):String {
                 val s=t.replace(Regex("\\s+")," ").trim().trimEnd('.','!','?','。',',')
                 if(s.length<=max) return s
-                val at=s.lastIndexOf(' ',max).takeIf { it>=max/2 } ?: max
+                var at=s.lastIndexOf(' ',max).takeIf { it>=max/2 } ?: max
+                // r24 review 7: never inside a surrogate pair, nor inside an amount's digits and commas (cut before it).
+                if(at in 1 until s.length) {
+                    if(Character.isLowSurrogate(s[at])) at--
+                    fun num(ch:Char)=ch.isDigit() || ch==',' || ch=='.'
+                    if(num(s[at]) && num(s[at-1])) { var k=at;while(k>0 && num(s[k-1])) k--;if(k>0) at=k }
+                }
                 return s.substring(0,at).trim().trimEnd(',')
             }
             /** A number nothing is known about (only when the user asked for those; the settings switch says the same). */
@@ -333,7 +345,10 @@ internal class CallCardView(context:Context):LinearLayout(context) {
     }
 
     override fun onAttachedToWindow() { super.onAttachedToWindow();windowVisible=windowVisibility==VISIBLE }
-    override fun onWindowVisibilityChanged(visibility:Int) { super.onWindowVisibilityChanged(visibility);windowVisible=visibility==VISIBLE }
+    /** r24 review 4: the window went from visible to not visible (the overlay looks again at what to show). */
+    var onHidden:()->Unit={}
+    override fun onWindowVisibilityChanged(visibility:Int) { super.onWindowVisibilityChanged(visibility);val was=windowVisible;windowVisible=visibility==VISIBLE
+        if(was && !windowVisible) runCatching { onHidden() } }
     override fun dispatchDraw(canvas:android.graphics.Canvas) { super.dispatchDraw(canvas);if(windowVisible && isAttachedToWindow) seen=true }
 
     override fun onMeasure(widthSpec:Int,heightSpec:Int) {

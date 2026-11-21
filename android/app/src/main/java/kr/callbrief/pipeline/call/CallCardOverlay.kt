@@ -241,9 +241,16 @@ internal object CallCardOverlay {
     private fun forgetCall() { closed=false;openedByHand=false;told=false;toldNoNumber=false;loading=false;key=null;content=null;stripY=null;shownAt=0L;generation++
         main.removeCallbacks(judgeLater);addedAt=0L;canDrawAtAdd=true;lockedAtAdd=false;addError=null;windowGone=false;judged=false;seenOnce=false;probed=null;coldAtAdd=false;outAtAdd=false
         main.removeCallbacks(retryLater);hiddenPending=false;retries=0;retrying=false;lastFail=null;fails="";failScreenOn=null;failState=null;spare=null
-        noticeTold=false }
-    /** v4.3 r24-1: [onNotice] was told for this call. */
+        noticeTold=false;seen=Seen() }
+    /** v4.3 r24-1: [onNotice] was told for this call (also: the first notice of the call may alert, r24 review 1). */
     private var noticeTold=false
+    /** r24 review 5: this call was not drawn (a fallback or unconfirmed verdict) and its notice was found up: counted once as
+     * [CardStats.FALLBACK_SEEN]. One object per call, so a check that comes back after the call ended still counts for it. */
+    private class Seen { var notDrawn=false;var noticeFound=false;var told=false }
+    private var seen=Seen()
+    private fun seenNow(c:Context,s:Seen) { if(s.notDrawn && s.noticeFound && !s.told) { s.told=true;worker.execute { runCatching { onFallbackSeen(c) }.onFailure(::warn) } } }
+    /** r24 review 5: a call not drawn whose notice was seen. Replaceable in host tests. */
+    @Volatile internal var onFallbackSeen:(Context)->Unit={ c -> CardStats.fallbackSeen(c) }
 
     private fun showNow(c:Context,phoneKey:String?,to:CallSession.State) {
         app=c
@@ -322,7 +329,8 @@ internal object CallCardOverlay {
             isLocked -> { notice(c,data);waitForUnlock(c) }
             // v3.6.1 fix (review, critical): added while the check said no, the window may be hidden by the system without the
             // view hearing of it: the notice stays until the call ends, seen or not.
-            !canDrawAtAdd || !draw && !seenOnce -> notice(c,data)
+            // r24 review 4: the check saying no now (also after the card was seen once): the notice, whatever was seen before.
+            !canDrawAtAdd || !draw -> notice(c,data)
             // The second try after a hidden window: the notice stays until that window is seen.
             retrying && !seenOnce -> notice(c,data)
             noticeUp -> cancelNotice(c)
@@ -409,6 +417,7 @@ internal object CallCardOverlay {
     @Volatile private var exitRead:Pair<Int,Long>?=null;@Volatile private var exitDone=false
     private fun exitOnce(c:Context):Pair<Int,Long>? { if(!exitDone) { exitRead=runCatching { lastExit(c) }.getOrNull();exitDone=true };return exitRead }
     private fun verdict(c:Context,result:String,cause:String,drawMs:Long?) {
+        if(result==CardStats.FALLBACK || result==CardStats.UNCONFIRMED) { val s=seen;s.notDrawn=true;seenNow(c,s) }
         val after=runCatching { canDraw(c) }.getOrNull()
         val base=CardStats.Attempt(result,cause,canDrawAtAdd,after,null,lockedAtAdd,coldAtAdd,drawMs,(addError ?: lastFail?.takeIf { it.startsWith("addView:") }).takeIf { result!=CardStats.DRAWN },outAtAdd,
             retries=retries,fails=fails.ifEmpty { null },screenOn=failScreenOn,callState=failState)
@@ -449,6 +458,8 @@ internal object CallCardOverlay {
             maxHeightPx=maxHeight(c,this)
             onCollapse={ collapse() };onExpand={ expand();runCatching { onExpanded(c) } };onClose={ close() }
             onMoveBy={ dy -> moveBy(dy) };onMoveEnd={ savePosition() }
+            // r24 review 4: a window that stops being visible during the call: the notice when the check now says no or the lock is on.
+            onHidden={ main.post { runCatching { val x=app;if(x!=null && view===this && !closed && content!=null && state!=CallSession.State.IDLE) place(x) }.onFailure(::warn) } }
             if(nameOnly) showName(data) else showAll(data)
         }
         val side=CallUi.dp(c,12)
@@ -549,7 +560,7 @@ internal object CallCardOverlay {
         place(c);view?.let { v -> content?.let { if(!v.complete) v.showAll(it) } };relayout();afterState()
     }
     /** The heads-up notice of [data] (also what r11-1's service may show as its own notice). */
-    fun buildNotice(c:Context,data:CallCardView.Content):Notification {
+    fun buildNotice(c:Context,data:CallCardView.Content,alertOnce:Boolean=true):Notification {
         val m=c.getSystemService(NotificationManager::class.java)
         m?.createNotificationChannel(NotificationChannel(CHANNEL,CHANNEL_NAME,NotificationManager.IMPORTANCE_HIGH).apply {
             setSound(null,null);enableVibration(false);setShowBadge(false);lockscreenVisibility=Notification.VISIBILITY_PRIVATE })
@@ -558,7 +569,7 @@ internal object CallCardOverlay {
         val title=data.noticeTitle()
         val big=Notification.BigTextStyle().setBigContentTitle(title).bigText(data.noticeBody().joinToString("\n"))
         data.noticeSummary()?.let { big.setSummaryText(it) }
-        return Notification.Builder(c,CHANNEL).setSmallIcon(R.drawable.ic_stat_ieum).setColor(accent(c)).setOnlyAlertOnce(true)
+        return Notification.Builder(c,CHANNEL).setSmallIcon(R.drawable.ic_stat_ieum).setColor(accent(c)).setOnlyAlertOnce(alertOnce)
             .setContentTitle(title).setContentText(data.noticeText())
             .setStyle(big)
             // Kept: no Samsung paper says how it treats a call-category notice of another app during a call (DESIGN_V8 6-3, r24-1).
@@ -568,6 +579,8 @@ internal object CallCardOverlay {
             .setPublicVersion(publicNotice(c,data,lockDetail(c)))
             .build()
     }
+    /** r24 review 6: the action of the notice's tap ([tapIntent]). */
+    const val TAP_ACTION="kr.callbrief.CALL_CARD"
     /** v4.3 r24-1: the app's accent (light set: the notice shade is the phone's own). */
     private fun accent(c:Context):Int { CallUi.applyTheme(c);return CallUi.ACCENT }
     /** v4.3 r24-1: what a tap on the notice opens: the person's page when the card has a person ([MainActivity.EXTRA_PERSON_ID]),
@@ -578,6 +591,7 @@ internal object CallCardOverlay {
             // Always put (empty without a person): the one PendingIntent is updated in place, and no person of an earlier call may stay.
             .putExtra(kr.callbrief.pipeline.MainActivity.EXTRA_PERSON_ID,data.personId ?: "")
             .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            .setAction(TAP_ACTION) // r24 review 6: its own PendingIntent, never matched with another notice's
         return android.app.PendingIntent.getActivity(c,NOTICE_ID,i,android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE)
     }
     /** "잠금 화면에서도 이름과 한 줄 보기" ([KEY_LOCK_DETAIL], on unless the user turned it off). */
@@ -595,30 +609,38 @@ internal object CallCardOverlay {
             worker.execute { runCatching { CardStats.fallbackNotice(c,false,true) } };return } // v4.1 r22-2: muted
         runCatching {
             val m=c.getSystemService(NotificationManager::class.java) ?: return
-            val n=buildNotice(c,data)
+            // r24 review 1: the call's first notice may alert (a heads-up; the channel has no sound or vibration), later
+            // drawings of it do not: an update with "only alert once" may not come up as a heads-up again.
+            val n=buildNotice(c,data,alertOnce=noticeTold)
+            val merge=runCatching { serviceUp() }.getOrDefault(false)
+            // r24 review 3: the slot changed during the call (the service came or went): the old one goes first, so no
+            // ongoing notice is left behind when the call ends.
+            if(noticeUp && noticeMerged!=merge) cancelNotice(c)
             // One notice while the service runs: the card's takes the service's slot (4.2-1).
-            if(runCatching { serviceUp() }.getOrDefault(false)) { m.notify(CallCardService.NOTIFICATION_ID,n);noticeMerged=true }
+            if(merge) { m.notify(CallCardService.NOTIFICATION_ID,n);noticeMerged=true }
             else { m.notify(NOTICE_TAG,NOTICE_ID,n);noticeMerged=false }
             noticeUp=true
             // v4.3 r24-1: the first notice of this call: the time from the call's start (CardStats knows it).
             if(!noticeTold) { noticeTold=true;worker.execute { runCatching { onNotice(c) }.onFailure(::warn) } }
             // v4.1 r22-2: a second later, whether the notice is really up and whether it could be heard (counts only).
-            val merged=noticeMerged
-            main.postDelayed({ worker.execute { runCatching { noticeCheck(c,merged) }.onFailure(::warn) } },NOTICE_CHECK_MS)
+            val merged=noticeMerged;val s=seen
+            main.postDelayed({ worker.execute { runCatching { if(noticeCheck(c,merged)) main.post { s.noticeFound=true;seenNow(c,s) } }.onFailure(::warn) } },NOTICE_CHECK_MS)
         }.onFailure(::warn)
     }
     /** v4.1 r22-2: how long after posting the fallback notice it is looked for among the active ones. */
     const val NOTICE_CHECK_MS=1_000L
     /** v4.1 r22-2: the fallback notice found among this app's active notices, and notices off or the card's channel below
      * high importance (no heads-up: the person may never see it). Nothing is changed in the settings. Replaceable in host tests. */
-    private val defaultNoticeCheck:(Context,Boolean)->Unit={ c,merged ->
+    private val defaultNoticeCheck:(Context,Boolean)->Boolean={ c,merged ->
         val m=c.getSystemService(NotificationManager::class.java)
         val shown=m?.activeNotifications?.any { if(merged) it.id==CallCardService.NOTIFICATION_ID else it.id==NOTICE_ID && it.tag==NOTICE_TAG }==true
         val channel=m?.getNotificationChannel(CHANNEL) // the card's notice is in its own channel also in the service's slot
         val muted=m==null || !m.areNotificationsEnabled() || channel!=null && channel.importance<NotificationManager.IMPORTANCE_HIGH
         CardStats.fallbackNotice(c,shown,muted)
+        shown
     }
-    @Volatile internal var noticeCheck:(Context,Boolean)->Unit=defaultNoticeCheck
+    /** Returns whether the notice was found up (r24 review 5). */
+    @Volatile internal var noticeCheck:(Context,Boolean)->Boolean=defaultNoticeCheck
     private fun cancelNotice(c:Context) {
         runCatching {
             val m=c.getSystemService(NotificationManager::class.java) ?: return@runCatching
@@ -687,6 +709,6 @@ internal object CallCardOverlay {
         drawnNow={ it.seen };addWindow={ wm,v,p -> wm.addView(v,p) };probe={ c -> runCatching { CardProbe.read(c) }.getOrNull() }
         onVerdict={ c,a -> CardStats.verdict(c,a) };onFailure={ c,code -> CardStats.failure(c,code) }
         screenOn={ c -> c.getSystemService(android.os.PowerManager::class.java)?.isInteractive!=false };lastExit={ c -> CardProbe.lastExit(c) }
-        exitRead=null;exitDone=false;noticeCheck=defaultNoticeCheck;onNotice={ c -> CardStats.noticeShown(c) }
+        exitRead=null;exitDone=false;noticeCheck=defaultNoticeCheck;onNotice={ c -> CardStats.noticeShown(c) };onFallbackSeen={ c -> CardStats.fallbackSeen(c) }
     }
 }

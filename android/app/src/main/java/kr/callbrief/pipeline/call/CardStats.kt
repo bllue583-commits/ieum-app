@@ -60,7 +60,10 @@ internal object CardStats {
     /** Every count the heartbeat carries (zeros when missing). */
     val KINDS=listOf(CALLS,SHOWN,SHOWN_OUTGOING,ELIGIBLE_OUTGOING,NO_CARD,THIN,NO_NUMBER,NO_NUMBER_IN,NO_NUMBER_OUT,NO_ROLE,
         IGNORED,OFF,LOCKED,COLD,FGS_REFUSED,NO_PERMISSION,NO_NOTIFY,EXPANDED,CLOSED_UNDER_2S,DRAWN,FALLBACK,HIDDEN,UNCONFIRMED,RETRIED,
-        FLIP_CALLS,DENIED_AT_START,DENIED_AT_END,FALLBACK_SHOWN,FALLBACK_MUTED,NOTICE_TAPS)
+        FLIP_CALLS,DENIED_AT_START,DENIED_AT_END,FALLBACK_SHOWN,FALLBACK_MUTED,NOTICE_TAPS,FALLBACK_SEEN)
+    /** r24 review 5: calls whose card was not drawn (a fallback or unconfirmed verdict) and whose notice was found up: the
+     * calls where the notice was the card. A notice beside a drawn card (the locked screen) is not counted. */
+    const val FALLBACK_SEEN="fallbackSeen"
     /** v4.3 r24-1: the app opened from the card's notice ([noticeTap]); today's time from a call's start to its first card
      * notice, the median in ms ([noticeShown], the heartbeat's `today.noticeMs`; kept as `today.noticeSamples`). */
     const val NOTICE_TAPS="noticeTaps";const val NOTICE_MS="noticeMs";const val NOTICE_SAMPLES="noticeSamples"
@@ -256,6 +259,7 @@ internal object CardStats {
         write(context,emptyMap(),null,noticeMs=ms)
     }
     /** v4.3 r24-1: the app was opened by a tap on the card's notice ([kr.callbrief.pipeline.MainActivity]). */
+    fun fallbackSeen(context:Context) { write(context,mapOf(FALLBACK_SEEN to 1),null) }
     fun noticeTap(context:Context) { write(context,mapOf(NOTICE_TAPS to 1),null) }
     /** Every call state the service sees ([CallCardService.follow]), with its verdict [reason]: [CallCardService.SHOW],
      * [NO_NUMBER], [NO_CARD], [CallCardService.IGNORED], [CallCardService.OFF], [CallCardService.WAITING] or null. IDLE ends the

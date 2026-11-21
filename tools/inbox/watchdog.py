@@ -783,13 +783,22 @@ def evaluate(now_ms, phone, last_run, inbox_oldest_ms, inbox_count, version=None
         # its side only) is on the not-drawn side too.
         if np is not None and count("unconfirmed"):
             np += count("unconfirmed")
-        if np is not None and np >= limit:
+        # r24 review 2 (v4.3): a notice instead of the card is the card now (DESIGN_V8 6-3). Only calls where neither showed
+        # are an issue: the phone's `fallbackSeen` (not drawn, its notice found up), else `fallbackShown` and `fallbackMuted`.
+        unseen = np
+        if np is not None and count("fallback") is not None:
+            if count("fallbackSeen") is not None:
+                unseen = max(0, np - count("fallbackSeen"))
+            elif count("fallbackShown") is not None:
+                unseen = max(0, np - count("fallbackShown")) + (count("fallbackMuted") or 0)
+        if unseen is not None and unseen >= limit:
             drawn = count("drawn")
             got = drawn if drawn is not None else ms(today, "shown")
             causes = card_causes(card)
             moments = card_today_causes(card)
             retried = count("retried")
-            add(T_CARD_PERMISSION, f"하루에 {np}번 통화 카드 대신 알림으로 보여 드렸어요 (기준 {limit}번). "
+            seen_words = f" 그중 카드도 알림도 보이지 않은 통화 {unseen}번." if unseen != np else ""
+            add(T_CARD_PERMISSION, f"하루에 {np}번 통화 카드 대신 알림으로 보여 드렸어요 (기준 {limit}번).{seen_words} "
                 f"카드가 뜬 횟수: {got}번" + (f"(다시 붙여서 뜬 통화 {retried}번)" if retried else "") + ".\n\n"
                 "추정 원인: 통화 순간에 카드 창을 띄우지 못했어요(원인 코드는 하트비트 callCard.recent, callCard.today.causes)."
                 + (f" 최근 원인 코드: {causes}." if causes else "")

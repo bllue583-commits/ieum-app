@@ -55,6 +55,7 @@ class MainActivity:ComponentActivity() {
         const val EXTRA_FROM_NOTICE="fromNotice"
         /** v4.3 r24-1: the person page to open (the call card's notice), and that the Intent came from the call card's notice. */
         const val EXTRA_PERSON_ID="personId";const val EXTRA_FROM_CALL_CARD="fromCallCard"
+        internal val PERSON_ID=Regex("pe_[A-Za-z0-9]{1,61}")
         internal fun intent(c:Context,screen:Screen,dayMs:Long?=null,callId:String?=null)=Intent(c,MainActivity::class.java)
             .putExtra(EXTRA_SCREEN,screen.name).putExtra(EXTRA_FROM_NOTICE,true).apply { dayMs?.let { putExtra(EXTRA_DAY_MS,it) };callId?.let { putExtra(EXTRA_CALL_ID,it) } }
         /** The host of the KakaoTalk message buttons (kakao<app key>://kakaolink?screen=…&dayMs=…, AndroidManifest). */
@@ -177,8 +178,10 @@ class MainActivity:ComponentActivity() {
         if(i!=null && (i.getBooleanExtra(EXTRA_FROM_NOTICE,false) || i.getBooleanExtra("install_update",false))) { i.removeExtra(EXTRA_FROM_NOTICE);UseStats.add(UseStats.NOTIF_TAP) }
         // v4.3 r24-1: the call card's notice: counted, and its person's page (back goes where the app was), else its screen.
         if(i!=null && i.getBooleanExtra(EXTRA_FROM_CALL_CARD,false)) { i.removeExtra(EXTRA_FROM_CALL_CARD);runCatching { kr.callbrief.pipeline.call.CardStats.noticeTap(this) } }
-        i?.getStringExtra(EXTRA_PERSON_ID)?.takeIf { it.isNotBlank() }?.let { id ->
-            i.removeExtra(EXTRA_PERSON_ID);i.removeExtra(EXTRA_SCREEN);i.removeExtra(EXTRA_CALL_ID);i.removeExtra(EXTRA_DAY_MS)
+        // r24 review 6: only an id of the app's own form ("pe_" and letters or digits, at most 64); anything else is ignored.
+        val asked=i?.getStringExtra(EXTRA_PERSON_ID);i?.removeExtra(EXTRA_PERSON_ID)
+        if(i!=null) asked?.takeIf { PERSON_ID.matches(it) }?.let { id ->
+            i.removeExtra(EXTRA_SCREEN);i.removeExtra(EXTRA_CALL_ID);i.removeExtra(EXTRA_DAY_MS)
             if(screen!=Screen.PERSON) { personFrom=screen;personFromY=0 }
             person.show(id);switchTo(Screen.PERSON,enter=false);return true
         }

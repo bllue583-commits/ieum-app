@@ -210,7 +210,11 @@ def card_reach(window, asof, daily):
         if base <= 0:
             continue
         # v5: 대체 알림이 실제로 뜬 통화(v4.1부터 fallbackShown)도 닿은 것으로
-        notice = min(today.get("fallbackShown", 0), missed) if "drawn" in today and "fallbackShown" in today else 0
+        # r24 검토 5: 폰이 통화 단위로 센 fallbackSeen(안 그려진 통화 중 알림이 실제로 확인된 수)이 있으면 그것을 쓴다
+        if "drawn" in today and "fallbackSeen" in today:
+            notice = min(today.get("fallbackSeen", 0), missed)
+        else:
+            notice = min(today.get("fallbackShown", 0), missed) if "drawn" in today and "fallbackShown" in today else 0
         reach = min(got + notice, base)
         calls, reached, latest = calls + base, reached + reach, card
         drawn_only += min(got, base)
