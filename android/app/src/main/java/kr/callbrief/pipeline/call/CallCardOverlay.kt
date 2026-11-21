@@ -61,7 +61,14 @@ import java.util.concurrent.TimeUnit
  *   window parameters, only while the call still rings or is under way and the card was not closed; the notice stays up in
  *   between. Seen on a later try: [CardStats.DRAWN] with [CAUSE_OK_RETRY] and [CardStats.RETRIED]. Every failure moment goes to
  *   [CardStats.failure] as one cause code ([failCode]: what failed, the overlay check, the raw app-op mode, a cold process,
- *   the lock, the screen, and on a cold process how the last one ended). */
+ *   the lock, the screen, and on a cold process how the last one ended).
+ * - v4.3 r24-1 (DESIGN_V8 6-3): Samsung's Telecom denies the overlay app-op of apps from unknown sources while a phone call goes on,
+ *   so a window put up while the check says no is refused (`add:BadToken:d0`) every time, also 0.6 s and 2 s later (the
+ *   watched phone: `unconfirmed` 0 in every call so far, i.e. a window was never seen while the check said no). Now a call
+ *   whose check says no when the card is first put up gets no window and no later try: the notice at once ([CAUSE_DENIED]).
+ *   A later try is left only for a window that failed while the check said yes. The notice is the card where the card may not
+ *   be drawn: the card's title and first line, its open check items (at most three) and the last call's line with its day,
+ *   silent, and a tap opens the person's page (else the check list) without touching the call ([tapIntent]). */
 internal object CallCardOverlay {
     const val CHANNEL="ieum.calls.card"
     const val CHANNEL_NAME="이음 통화 카드"
@@ -106,6 +113,8 @@ internal object CallCardOverlay {
     const val RETRY_HIDDEN_MS=HIDDEN_AFTER_MS
     /** Added while the screen was locked and never seen until the call ended (the notice was beside it). */
     const val CAUSE_HIDDEN_LOCKED="hiddenLocked"
+    /** v4.3 r24-1: the overlay check said no when the card was first put up: no window, the notice at once (a fallback). */
+    const val CAUSE_DENIED="denied"
     /** Told once per call when the window was put up: [SHOWN] (added, unlocked), [LOCKED] (added while locked, the notice beside
      * it), [NO_PERMISSION] (the overlay check said no then, or the window could not be added: the notice), [NO_NUMBER] or
      * [NO_CARD]. Counted in [CardStats] (settings CARD_STATS, the heartbeat's callCard); v3.6.1: as told, nothing read again. */
@@ -134,6 +143,8 @@ internal object CallCardOverlay {
     @Volatile internal var onFailure:(Context,String)->Unit={ c,code -> CardStats.failure(c,code) }
     /** v4.0 r21-2: the screen is on ([android.os.PowerManager.isInteractive]). Replaceable in host tests. */
     @Volatile internal var screenOn:(Context)->Boolean={ c -> c.getSystemService(android.os.PowerManager::class.java)?.isInteractive!=false }
+    /** v4.3 r24-1: the card's notice was posted for the first time in this call (once per call). Replaceable in host tests. */
+    @Volatile internal var onNotice:(Context)->Unit={ c -> CardStats.noticeShown(c) }
     /** v4.0 r21-2: how this app's last process ended (reason, epoch ms), read once a process on the card's thread. Replaceable in host tests. */
     @Volatile internal var lastExit:(Context)->Pair<Int,Long>?={ c -> CardProbe.lastExit(c) }
 
@@ -229,7 +240,10 @@ internal object CallCardOverlay {
     fun hide():Unit = onMain { removeAll();forgetCall();state=CallSession.State.IDLE }
     private fun forgetCall() { closed=false;openedByHand=false;told=false;toldNoNumber=false;loading=false;key=null;content=null;stripY=null;shownAt=0L;generation++
         main.removeCallbacks(judgeLater);addedAt=0L;canDrawAtAdd=true;lockedAtAdd=false;addError=null;windowGone=false;judged=false;seenOnce=false;probed=null;coldAtAdd=false;outAtAdd=false
-        main.removeCallbacks(retryLater);hiddenPending=false;retries=0;retrying=false;lastFail=null;fails="";failScreenOn=null;failState=null;spare=null }
+        main.removeCallbacks(retryLater);hiddenPending=false;retries=0;retrying=false;lastFail=null;fails="";failScreenOn=null;failState=null;spare=null
+        noticeTold=false }
+    /** v4.3 r24-1: [onNotice] was told for this call. */
+    private var noticeTold=false
 
     private fun showNow(c:Context,phoneKey:String?,to:CallSession.State) {
         app=c
@@ -301,7 +315,8 @@ internal object CallCardOverlay {
         val data=content ?: return
         val draw=runCatching { canDraw(c) }.getOrDefault(false)
         val isLocked=runCatching { locked(c) }.getOrDefault(false)
-        if(view==null && !windowGone) addCard(c,data,nameOnly,draw,isLocked)
+        // v4.3 r24-1: the check says no (Samsung's in-call restriction, DESIGN_V8 6-3): no window, the notice at once.
+        if(view==null && !windowGone) { if(draw) addCard(c,data,nameOnly,draw,isLocked) else deny(c,isLocked) }
         when {
             view==null -> notice(c,data)
             isLocked -> { notice(c,data);waitForUnlock(c) }
@@ -312,6 +327,21 @@ internal object CallCardOverlay {
             retrying && !seenOnce -> notice(c,data)
             noticeUp -> cancelNotice(c)
         }
+    }
+    /** v4.3 r24-1: the overlay check says no as the window is due: none is added (it would be refused, DESIGN_V8 6-3) and none
+     * is tried later; the notice shows ([place]) and the call is told at once as a fallback, [CAUSE_DENIED] (or, on a later try
+     * after a failure with the check saying yes, that failure's cause). */
+    private fun deny(c:Context,isLocked:Boolean) {
+        canDrawAtAdd=false;lockedAtAdd=isLocked
+        if(!retrying) { coldAtAdd=runCatching { CardStats.callCold() }.getOrDefault(false);outAtAdd=outgoing() }
+        windowGone=true;spare=null
+        main.removeCallbacks(retryLater)
+        if(judged) return
+        judged=true
+        val cause=if(hiddenPending) lastFail ?: CAUSE_DENIED else CAUSE_DENIED
+        hiddenPending=false
+        Log.i(LOG,"card not drawn: the check says no")
+        verdict(c,CardStats.FALLBACK,cause,null)
     }
     /** v3.6.1 (K1, K2): what became of the window, once per call: at [HIDDEN_AFTER_MS] after it was added, or sooner when it goes
      * ([ending]). Seen: drawn (the notice put up for a check that said no goes). Not seen in time: hidden, the window goes and the
@@ -361,7 +391,8 @@ internal object CallCardOverlay {
             onFailure(c,failCode(cause,draw,p?.mode ?: -1,cold,lock,on,if(cold) exitOnce(c) else null,System.currentTimeMillis(),p?.raw ?: -1,p?.update,p?.installer))
         }.onFailure(::warn) }
         val live=state==CallSession.State.RINGING || state==CallSession.State.OFFHOOK
-        if(retries<RETRY_DELAYS_MS.size && live && !closed && content!=null) {
+        // v4.3 r24-1: tried again only while the check says yes (a window it refuses is refused again, DESIGN_V8 6-3).
+        if(draw && retries<RETRY_DELAYS_MS.size && live && !closed && content!=null) {
             hiddenPending=true;windowGone=true
             main.removeCallbacks(retryLater);main.postDelayed(retryLater,RETRY_DELAYS_MS[retries])
         } else { judged=true;hiddenPending=false;verdict(c,CardStats.FALLBACK,cause,null) }
@@ -522,14 +553,32 @@ internal object CallCardOverlay {
         val m=c.getSystemService(NotificationManager::class.java)
         m?.createNotificationChannel(NotificationChannel(CHANNEL,CHANNEL_NAME,NotificationManager.IMPORTANCE_HIGH).apply {
             setSound(null,null);enableVibration(false);setShowBadge(false);lockscreenVisibility=Notification.VISIBILITY_PRIVATE })
-        val lines=data.noticeLines()
-        return Notification.Builder(c,CHANNEL).setSmallIcon(R.drawable.ic_stat_ieum).setOnlyAlertOnce(true)
-            .setContentTitle(data.name).setContentText(lines.firstOrNull() ?: "이음 통화 카드")
-            .setStyle(Notification.BigTextStyle().setBigContentTitle(data.name).bigText(lines.joinToString("\n")))
+        // v4.3 r24-1: the card's order. Folded: the title and the first line; open: the open items, then the last call. Big
+        // text, not an inbox: an inbox cuts every line with an ellipsis (the user's rule: nothing cut off), big text wraps.
+        val title=data.noticeTitle()
+        val big=Notification.BigTextStyle().setBigContentTitle(title).bigText(data.noticeBody().joinToString("\n"))
+        data.noticeSummary()?.let { big.setSummaryText(it) }
+        return Notification.Builder(c,CHANNEL).setSmallIcon(R.drawable.ic_stat_ieum).setColor(accent(c)).setOnlyAlertOnce(true)
+            .setContentTitle(title).setContentText(data.noticeText())
+            .setStyle(big)
+            // Kept: no Samsung paper says how it treats a call-category notice of another app during a call (DESIGN_V8 6-3, r24-1).
             .setCategory(Notification.CATEGORY_CALL).setOngoing(true).setLocalOnly(true).setShowWhen(false)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .setContentIntent(tapIntent(c,data))
             .setPublicVersion(publicNotice(c,data,lockDetail(c)))
             .build()
+    }
+    /** v4.3 r24-1: the app's accent (light set: the notice shade is the phone's own). */
+    private fun accent(c:Context):Int { CallUi.applyTheme(c);return CallUi.ACCENT }
+    /** v4.3 r24-1: what a tap on the notice opens: the person's page when the card has a person ([MainActivity.EXTRA_PERSON_ID]),
+     * else the check list; counted as [CardStats.NOTICE_TAPS] ([MainActivity.EXTRA_FROM_CALL_CARD]). The call is not touched:
+     * the app comes in front of the call screen, the call goes on. */
+    internal fun tapIntent(c:Context,data:CallCardView.Content):android.app.PendingIntent {
+        val i=kr.callbrief.pipeline.MainActivity.intent(c,kr.callbrief.pipeline.Screen.TASKS).putExtra(kr.callbrief.pipeline.MainActivity.EXTRA_FROM_CALL_CARD,true)
+            // Always put (empty without a person): the one PendingIntent is updated in place, and no person of an earlier call may stay.
+            .putExtra(kr.callbrief.pipeline.MainActivity.EXTRA_PERSON_ID,data.personId ?: "")
+            .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        return android.app.PendingIntent.getActivity(c,NOTICE_ID,i,android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE)
     }
     /** "잠금 화면에서도 이름과 한 줄 보기" ([KEY_LOCK_DETAIL], on unless the user turned it off). */
     const val KEY_LOCK_DETAIL=kr.callbrief.pipeline.PipelineSettingsKeys.LOCK_SCREEN_DETAIL
@@ -537,7 +586,7 @@ internal object CallCardOverlay {
     /** What the locked screen shows of the notice (DESIGN_V4 3.1-5, 1.3 #9). With [detail]: the name, the company and one check
      * item ([CallCardView.Content.publicText]: no number, no amount, nothing of the call's words). Without: no name, no summary. */
     internal fun publicNotice(c:Context,data:CallCardView.Content,detail:Boolean):Notification {
-        val b=Notification.Builder(c,CHANNEL).setSmallIcon(R.drawable.ic_stat_ieum)
+        val b=Notification.Builder(c,CHANNEL).setSmallIcon(R.drawable.ic_stat_ieum).setColor(accent(c))
         return if(detail) b.setContentTitle(data.publicTitle()).setContentText(data.publicText() ?: "잠금을 풀면 카드가 보여요").build()
         else b.setContentTitle("이음 통화 카드").setContentText("잠금을 풀면 카드가 보여요").build()
     }
@@ -551,6 +600,8 @@ internal object CallCardOverlay {
             if(runCatching { serviceUp() }.getOrDefault(false)) { m.notify(CallCardService.NOTIFICATION_ID,n);noticeMerged=true }
             else { m.notify(NOTICE_TAG,NOTICE_ID,n);noticeMerged=false }
             noticeUp=true
+            // v4.3 r24-1: the first notice of this call: the time from the call's start (CardStats knows it).
+            if(!noticeTold) { noticeTold=true;worker.execute { runCatching { onNotice(c) }.onFailure(::warn) } }
             // v4.1 r22-2: a second later, whether the notice is really up and whether it could be heard (counts only).
             val merged=noticeMerged
             main.postDelayed({ worker.execute { runCatching { noticeCheck(c,merged) }.onFailure(::warn) } },NOTICE_CHECK_MS)
@@ -636,6 +687,6 @@ internal object CallCardOverlay {
         drawnNow={ it.seen };addWindow={ wm,v,p -> wm.addView(v,p) };probe={ c -> runCatching { CardProbe.read(c) }.getOrNull() }
         onVerdict={ c,a -> CardStats.verdict(c,a) };onFailure={ c,code -> CardStats.failure(c,code) }
         screenOn={ c -> c.getSystemService(android.os.PowerManager::class.java)?.isInteractive!=false };lastExit={ c -> CardProbe.lastExit(c) }
-        exitRead=null;exitDone=false;noticeCheck=defaultNoticeCheck
+        exitRead=null;exitDone=false;noticeCheck=defaultNoticeCheck;onNotice={ c -> CardStats.noticeShown(c) }
     }
 }

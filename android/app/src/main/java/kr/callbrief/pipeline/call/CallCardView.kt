@@ -38,7 +38,12 @@ internal class CallCardView(context:Context):LinearLayout(context) {
      * screen may show ([publicText]). */
     data class Content(val name:String,val first:String,val rank:Int,val who:String?,val firstUnsure:Boolean=false,
                        val task:String?=null,val taskUnsure:Boolean=false,val moreTasks:Int=0,val issue:String?=null,
-                       val company:String?=null,val publicTask:String?=null,val unknown:Boolean=false,val thin:Boolean=false) {
+                       val company:String?=null,val publicTask:String?=null,val unknown:Boolean=false,val thin:Boolean=false,
+                       /** v4.3 r24-1: what the notice adds to the card (the notice is the card where the card may not be drawn,
+                        * DESIGN_V8 6-3): the open check items in the card's order, at most [NOTICE_TASKS] ([noticeTasks], each
+                        * with where it stands), how many more there are ([noticeMore]), the last call's line with its day
+                        * ([lastCall]: "11/20 통화: …") and the person the notice opens ([personId]). */
+                       val noticeTasks:List<String> =emptyList(),val noticeMore:Int=0,val lastCall:String?=null,val personId:String?=null) {
         /** There is a summary or a piece of work to keep in view during the call: without one the card goes at OFFHOOK
          * instead of folding into a strip (4.2-2). */
         val hasBody:Boolean get()=rank in RANK_DUE..RANK_ONGOING
@@ -51,6 +56,16 @@ internal class CallCardView(context:Context):LinearLayout(context) {
             who?.let { w -> if(w.startsWith("$name, ")) w.removePrefix("$name, ") else if(w==name) null else w },
             task?.let { taskLine(it,taskUnsure,moreTasks) },
             issue?.let { "진행 중인 일: $it" })
+        /** v4.3 r24-1: the notice's title, "김민수 대표, 탄탄이엔씨" (the screen rules allow no middle dot). */
+        fun noticeTitle():String = listOfNotNull(name,company).joinToString(", ")
+        /** v4.3 r24-1: the folded notice's one line: the card's first line (the open item that matters most, or the last call). */
+        fun noticeText():String = first+if(firstUnsure) ", $UNSURE" else ""
+        /** v4.3 r24-1: the open notice's lines: the open check items (at most [NOTICE_TASKS], the one that matters most first),
+         * then the last call's line with its day. A card without either (a thin card, an unknown number, ongoing work only)
+         * keeps the card's own lines ([noticeLines]). */
+        fun noticeBody():List<String> = (noticeTasks+listOfNotNull(lastCall)).ifEmpty { noticeLines() }
+        /** v4.3 r24-1: under the title of the open notice, "체크할 일 외 2개" when there are more than [NOTICE_TASKS]. */
+        fun noticeSummary():String? = if(noticeMore>0) "체크할 일 외 ${noticeMore}개" else null
         /** What the locked screen may show when the user allows it ("잠금 화면에서도 이름과 한 줄 보기", DESIGN_V4 3.1-5): the name
          * as the title, then the company and one check item, without numbers, amounts or anything of the call's words. */
         fun publicTitle():String = name
@@ -65,6 +80,12 @@ internal class CallCardView(context:Context):LinearLayout(context) {
             const val FIRST_CHARS=2*LINE_CHARS
             /** One line for the check item and the ongoing work. */
             const val ROW_CHARS=14
+            /** v4.3 r24-1: the notice names at most this many open items; each of its lines keeps to about [NOTICE_CHARS] letters
+             * (cut at a space, as on the card, never with an ellipsis). */
+            const val NOTICE_TASKS=3
+            const val NOTICE_CHARS=30
+            /** v4.3 r24-1: the notice's day of the last call ("11/20"), KST. */
+            fun dayWords(ms:Long):String { val d=CallRecordStore.kstDay(ms);return "${d.monthValue}/${d.dayOfMonth}" }
             /** A due date this close (days) or past makes an item the first line; a summary this recent (days) comes before work under way. */
             const val DUE_DAYS=7L
             const val SUMMARY_DAYS=14L
@@ -156,6 +177,7 @@ internal class CallCardView(context:Context):LinearLayout(context) {
                 }
                 val calls30=if(thin!=null) maxOf(thin.calls30,card.calls30d) else card.calls30d
                 if(thin!=null) return Content(name,thinLine(card.lastCallMs,calls30,now),RANK_THIN,null,thin=true)
+                val personId=person?.personId?.takeIf { it.isNotBlank() }
                 // The second line: who, their company (when the name is a person's), how long ago the last call was.
                 val who=listOfNotNull(name,companyName.takeIf { person!=null },ago(card.lastCallMs,now)).joinToString(", ")
                 val tasks=ordered(card.openTasks,now)
@@ -175,9 +197,14 @@ internal class CallCardView(context:Context):LinearLayout(context) {
                 val next=rest.firstOrNull()
                 // Rows 3 and 4 keep to one line: the title only (its due date is the first line's business).
                 val issue=(if(usedIssue) issues.drop(1) else issues).firstOrNull()?.let { cut(it,ROW_CHARS) }
+                // v4.3 r24-1: the notice's lines: the open items in the same order, then the last call (whatever its age) with its day.
+                val noticeTasks=tasks.take(NOTICE_TASKS).map { t -> taskWords(t,now,NOTICE_CHARS)+if(unsure(t)) ", $UNSURE" else "" }
+                val lastCall=card.recent.filter { it.kind=="통화" && safe(it.summaryFirst)!=null }.maxByOrNull { it.atMs }
+                    ?.let { r -> "${dayWords(r.atMs)} 통화: "+cut(safe(r.summaryFirst)!!,NOTICE_CHARS)+if(r.unsure) ", $UNSURE" else "" }
                 // The badge takes the room of about four letters.
                 return Content(name,first,rank,who,unsure,next?.let { cut(safe(CallUi.clean(it.title))!!,if(unsure(it)) ROW_CHARS-4 else ROW_CHARS) },next?.let(::unsure)==true,
-                    (rest.size-1).coerceAtLeast(0),issue,companyName.takeIf { person!=null },tasks.firstOrNull()?.let { safe(it.title) })
+                    (rest.size-1).coerceAtLeast(0),issue,companyName.takeIf { person!=null },tasks.firstOrNull()?.let { safe(it.title) },
+                    noticeTasks=noticeTasks,noticeMore=(tasks.size-NOTICE_TASKS).coerceAtLeast(0),lastCall=lastCall,personId=personId)
             }
             /** A number without a card (only when the user asked for those): what the phone's call log says of it, if anything. */
             fun unknown(logLine:String?)=Content(UNKNOWN,UNKNOWN,RANK_UNKNOWN,safe(logLine) ?: "통화기록에 없는 번호예요",unknown=true)

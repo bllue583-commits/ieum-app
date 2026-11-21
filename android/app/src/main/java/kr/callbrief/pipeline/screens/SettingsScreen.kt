@@ -723,6 +723,8 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         val overlay=CallCardAsk.overlayAllowed(a)
         body.addView(CallUi.text(a,if(overlay) "허용됨 ✓  전화가 오면 통화 화면 위에 이음 카드를 보여 드려요." else "허용하면 전화가 올 때 통화 화면 위에 상대와 지난 통화, 체크할 일을 보여 드려요.",
             CallUi.BODY,overlay,if(overlay) CallUi.OK else CallUi.INK).apply { tag="card_overlay_state" })
+        // v4.3 r24-1 (DESIGN_V8 6-3): during a call the phone may not let the card be drawn; then the notice is the card.
+        body.addView(aside("카드를 그릴 수 없는 통화에서는 같은 내용을 알림으로 보여 드려요.").apply { tag="card_notice_note" })
         if(!overlay) body.addView(button("카드 보기 허용") { CallCardAsk.openOverlaySettings(a) }.apply { tag="card_overlay_allow" })
         body.addView(CallUi.divider(a))
         body.addView(switchRow("card_incoming_switch",s.optBoolean(PipelineSettingsKeys.CARD_INCOMING,true),PipelineSettingsKeys.CARD_INCOMING) { "전화 올 때" })

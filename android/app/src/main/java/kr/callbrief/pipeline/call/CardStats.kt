@@ -60,7 +60,10 @@ internal object CardStats {
     /** Every count the heartbeat carries (zeros when missing). */
     val KINDS=listOf(CALLS,SHOWN,SHOWN_OUTGOING,ELIGIBLE_OUTGOING,NO_CARD,THIN,NO_NUMBER,NO_NUMBER_IN,NO_NUMBER_OUT,NO_ROLE,
         IGNORED,OFF,LOCKED,COLD,FGS_REFUSED,NO_PERMISSION,NO_NOTIFY,EXPANDED,CLOSED_UNDER_2S,DRAWN,FALLBACK,HIDDEN,UNCONFIRMED,RETRIED,
-        FLIP_CALLS,DENIED_AT_START,DENIED_AT_END,FALLBACK_SHOWN,FALLBACK_MUTED)
+        FLIP_CALLS,DENIED_AT_START,DENIED_AT_END,FALLBACK_SHOWN,FALLBACK_MUTED,NOTICE_TAPS)
+    /** v4.3 r24-1: the app opened from the card's notice ([noticeTap]); today's time from a call's start to its first card
+     * notice, the median in ms ([noticeShown], the heartbeat's `today.noticeMs`; kept as `today.noticeSamples`). */
+    const val NOTICE_TAPS="noticeTaps";const val NOTICE_MS="noticeMs";const val NOTICE_SAMPLES="noticeSamples"
     /** v4.1 r22-2: calls whose overlay check said yes when the call began, no at a failure of the window during it, and yes
      * again when it ended (the permission itself is not off: something refuses it only during the call); calls where it said
      * no at the start or at the end. */
@@ -245,6 +248,15 @@ internal object CardStats {
             if(inc.isNotEmpty()) write(context,inc,null)
         }
     }
+    /** v4.3 r24-1: the card's notice went up for the first time in this call ([CallCardOverlay]): the time since the call's
+     * first state (the receiver's), kept among today's samples. Nothing when the call's start is not known. */
+    fun noticeShown(context:Context) {
+        val at=elapsed()
+        val ms=synchronized(lock) { startAt?.let { (at-it).coerceAtLeast(0) } } ?: return
+        write(context,emptyMap(),null,noticeMs=ms)
+    }
+    /** v4.3 r24-1: the app was opened by a tap on the card's notice ([kr.callbrief.pipeline.MainActivity]). */
+    fun noticeTap(context:Context) { write(context,mapOf(NOTICE_TAPS to 1),null) }
     /** Every call state the service sees ([CallCardService.follow]), with its verdict [reason]: [CallCardService.SHOW],
      * [NO_NUMBER], [NO_CARD], [CallCardService.IGNORED], [CallCardService.OFF], [CallCardService.WAITING] or null. IDLE ends the
      * call: then `calls` and what is only known at the end (no number, ignored, off, a call going out) are counted. */
@@ -318,11 +330,11 @@ internal object CardStats {
     }
 
     private fun write(context:Context,inc:Map<String,Int>,sample:Pair<Long,Boolean>?,entry:JSONObject?=null,causes:Map<String,Int> =emptyMap(),
-                      okAt:Long?=null,failAt:Long?=null) {
+                      okAt:Long?=null,failAt:Long?=null,noticeMs:Long?=null) {
         val app=context.applicationContext ?: context
         val now=clock()
         val open=ContactCards.lastOpenMs.takeIf { it>=0 }
-        writer.execute { runCatching { SecureSettings(app).update { s -> s.put(PipelineSettingsKeys.CARD_STATS,add(read(s),inc,now,sample,open,entry,causes,okAt,failAt)) } }
+        writer.execute { runCatching { SecureSettings(app).update { s -> s.put(PipelineSettingsKeys.CARD_STATS,add(read(s),inc,now,sample,open,entry,causes,okAt,failAt,noticeMs)) } }
             .onFailure { Log.w(TAG,"not counted: ${it.javaClass.simpleName}") } }
     }
 
@@ -341,7 +353,7 @@ internal object CardStats {
      * time (ms, cold) kept among the newest [SAMPLES]; [cardOpenMs] the last card file open; [entry] one more `recent` call (the
      * newest [RECENT] kept). */
     fun add(stats:JSONObject,inc:Map<String,Int>,now:Long,sample:Pair<Long,Boolean>?=null,cardOpenMs:Long?=null,entry:JSONObject?=null,
-            causes:Map<String,Int> =emptyMap(),okAt:Long?=null,failAt:Long?=null):JSONObject {
+            causes:Map<String,Int> =emptyMap(),okAt:Long?=null,failAt:Long?=null,noticeMs:Long?=null):JSONObject {
         val out=clean(stats)
         val today=day(now)
         val same=stats.optInt("day",0)==today
@@ -359,6 +371,9 @@ internal object CardStats {
         if(failAt!=null && !t.has(FIRST_FAIL_HM)) { val z=Instant.ofEpochMilli(failAt).atZone(KST);t.put(FIRST_FAIL_HM,z.hour*100+z.minute)
             lastOk?.let { t.put(OK_BEFORE_MS,it) } }
         (okAt ?: lastOk)?.let { out.put(LAST_OK_MS,it) }
+        // v4.3 r24-1: today's call-start-to-notice times (a new day starts them from nothing), the newest [SAMPLES].
+        val ns=numbers(old?.optJSONArray(NOTICE_SAMPLES)).toMutableList();noticeMs?.let { ns+=it }
+        if(ns.isNotEmpty()) t.put(NOTICE_SAMPLES,JSONArray(ns.takeLast(SAMPLES)))
         out.put("day",today).put("today",t)
         for(name in listOf("ring","ringCold")) {
             val kept=numbers(stats.optJSONArray(name)).toMutableList()
@@ -415,6 +430,8 @@ internal object CardStats {
         val t=clean(if(day==stored) st.optJSONObject("today") ?: JSONObject() else JSONObject())
         if(day==stored) causesOf(st.optJSONObject("today")).takeIf { it.length()>0 }?.let { t.put(CAUSES,it) }
         if(day==stored) st.optJSONObject("today")?.let { o -> for(k in listOf(FIRST_FAIL_HM,OK_BEFORE_MS)) (o.opt(k) as? Number)?.let { t.put(k,it.toLong()) } }
+        // v4.3 r24-1: the median only (a number), not the samples.
+        if(day==stored) numbers(st.optJSONObject("today")?.optJSONArray(NOTICE_SAMPLES)).takeIf { it.isNotEmpty() }?.let { t.put(NOTICE_MS,summary(it).getLong("p50")) }
         installedMs?.takeIf { it>0 }?.let { t.put(INSTALLED_MS,it) }
         val out=clean(st).put("day",day).put("today",t)
         out.put("ringToCardMs",summary(numbers(st.optJSONArray("ring")))).put("ringToCardMsCold",summary(numbers(st.optJSONArray("ringCold"))))
