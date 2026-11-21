@@ -42,8 +42,10 @@ internal object TranscriptionPower {
     /** "Today, short" on battery: calls of this length (from the call log, else estimated from the file size). */
     const val SHORT_MIN_MS=20_000L
     const val SHORT_MAX_MS=3*60_000L
-    /** A plug that dropped out for less than this still counts as plugged in (wireless pads). */
-    const val PLUG_DEBOUNCE_MS=2*60_000L
+    /** A plug that dropped out for less than this still counts as plugged in (wireless pads). v4.3 r24-5 (DESIGN_V8 6-4): 2
+     * minutes -> 60 s: each time the phone came off the charger a plugged-in run went on 2 to 3 minutes on the battery (11/20,
+     * 11/21: 3 minutes a day). With the mid-piece look every 20 s, a pad's drop of up to 40 s is never taken for gone. */
+    const val PLUG_DEBOUNCE_MS=60_000L
     /** Hot: thermal headroom at least this, or the last piece this many times the cold median, or the battery this warm (0.1 °C). */
     const val HOT_HEADROOM=0.85f
     const val HOT_RATIO=1.5

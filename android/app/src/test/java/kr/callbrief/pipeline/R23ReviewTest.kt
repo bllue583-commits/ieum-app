@@ -126,7 +126,9 @@ class R23ReviewTest {
     @Test fun thePlugIsGoneOnlyWhenPhysicallyOutPastTheDebounce() {
         val t=base
         assertFalse("plugged, even with the charge going down",PowerPolicy.plugGone(snap("usb"),t,t))
-        assertFalse("out for a minute",PowerPolicy.plugGone(snap(),t-minute,t))
+        // v4.3 r24-5: the debounce is 60 s (it was 2 minutes).
+        assertFalse("out for 50 s",PowerPolicy.plugGone(snap(),t-50_000,t))
+        assertTrue("out for a minute",PowerPolicy.plugGone(snap(),t-minute,t))
         assertTrue("out for 3 minutes",PowerPolicy.plugGone(snap(),t-3*minute,t))
         assertTrue("never seen plugged",PowerPolicy.plugGone(snap(),0,t))
         assertFalse("the phone told nothing",PowerPolicy.plugGone(snap().copy(plugKnown=false),t-3*minute,t))

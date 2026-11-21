@@ -120,7 +120,9 @@ class R16OneTest:ProtectedTextHostTestBase() {
         for(st in listOf("notCharging","full")) assertEquals(PowerPolicy.Mode.PLUGGED,run(PowerPolicy.decide(snap(pct=85,plugged="ac",status=st),PowerBudget(),base)).mode)
     }
     @Test fun aPlugAwayForUnderTwoMinutesStillCounts() {
-        assertEquals(PowerPolicy.Mode.PLUGGED,run(PowerPolicy.decide(snap(pct=30),PowerBudget(lastPluggedMs=base-90_000),base)).mode)
+        // v4.3 r24-5: the debounce is 60 s now (it was 2 minutes).
+        assertEquals(PowerPolicy.Mode.PLUGGED,run(PowerPolicy.decide(snap(pct=30),PowerBudget(lastPluggedMs=base-50_000),base)).mode)
+        assertEquals("low",wait(PowerPolicy.decide(snap(pct=30),PowerBudget(lastPluggedMs=base-90_000),base)).reason)
         assertEquals("low",wait(PowerPolicy.decide(snap(pct=30),PowerBudget(lastPluggedMs=base-3*minute),base)).reason)
     }
     @Test fun aPlugThatLetsTheChargeFallFollowsTheBatteryRules() {
