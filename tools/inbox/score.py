@@ -187,10 +187,13 @@ def item_timeliness(cfg, window, days, daily):
 
 
 def card_reach(window, asof, daily):
-    """통화 카드가 그려진 통화 수와 분모(최근 14일의 날짜별 today 묶음 합): 3번과 10번(v4)이 같은 식을 쓴다.
-    (그려진 수, 통화 수, 날짜별 값, 마지막 callCard, fgsRefused 합)."""
+    """통화 화면에서 맥락이 보인 통화 수와 분모(최근 14일의 날짜별 today 묶음 합): 3번과 10번이 같은 식을 쓴다.
+    채점표 v5(11/21): 분자는 카드가 그려졌거나 대체 알림이 실제로 뜬 통화 — drawn + min(fallbackShown, fallback+unconfirmed)
+    (잠금 화면에서 그려진 통화의 곁 알림이 두 번 세지지 않게 알림은 안 그려진 통화 수까지만). fallbackShown이 없는 옛
+    하트비트의 날은 그려진 것만. 옛 식(그려진 것만)은 참고로 함께 돌려준다.
+    (닿은 수, 통화 수, 날짜별 값, 마지막 callCard, fgsRefused 합, 그려진 것만 센 수)."""
     since = asof - dt.timedelta(days=window["calendar_days"])
-    calls = reached = refused = 0
+    calls = reached = refused = drawn_only = 0
     per_day, latest = {}, None
     for day, beat in sorted(daily.items()):
         card = beat.get("callCard") or {}
@@ -206,14 +209,18 @@ def card_reach(window, asof, daily):
         base = max(today.get("calls", 0) - today.get("ignored", 0) - today.get("off", 0), got + missed)
         if base <= 0:
             continue
-        calls, reached, latest = calls + base, reached + min(got, base), card
-        per_day[day.isoformat()] = {"reached": min(got, base), "of": base, "noPermission": today.get("noPermission", 0)}
-    return reached, calls, per_day, latest, refused
+        # v5: 대체 알림이 실제로 뜬 통화(v4.1부터 fallbackShown)도 닿은 것으로
+        notice = min(today.get("fallbackShown", 0), missed) if "drawn" in today and "fallbackShown" in today else 0
+        reach = min(got + notice, base)
+        calls, reached, latest = calls + base, reached + reach, card
+        drawn_only += min(got, base)
+        per_day[day.isoformat()] = {"reached": reach, "drawn": min(got, base), "of": base, "noPermission": today.get("noPermission", 0)}
+    return reached, calls, per_day, latest, refused, drawn_only
 
 
 def item_call_card(cfg, window, asof, daily):
-    """3. 통화 카드: 최근 14일의 날짜별 today 묶음 합."""
-    reached, calls, per_day, latest, refused = card_reach(window, asof, daily)
+    """3. 통화 카드(v5: 통화 화면에서 맥락이 보였는가 — 카드 또는 실제로 뜬 대체 알림): 최근 14일의 날짜별 today 묶음 합."""
+    reached, calls, per_day, latest, refused, drawn_only = card_reach(window, asof, daily)
     if calls < cfg["min_calls"] or latest is None:
         return result(False, per_day, f"통화 {calls}건(기준 {cfg['min_calls']}건 이상)")
     reach = reached / calls
@@ -221,7 +228,8 @@ def item_call_card(cfg, window, asof, daily):
     cold = (latest.get("ringToCardMsCold") or {}).get("p50")
     ok = (reach >= cfg["min_reach"] and ring is not None and ring <= cfg["ring_p50_max_ms"]
           and (cold is None or cold <= cfg["cold_p50_max_ms"]) and refused == 0)
-    return result(ok, {"reach": round(reach, 3), "calls": calls, "ringP50": ring, "coldP50": cold, "days": per_day},
+    return result(ok, {"reach": round(reach, 3), "calls": calls, "ringP50": ring, "coldP50": cold, "days": per_day,
+                       "reference_v4": {"drawn": drawn_only, "reach": round(drawn_only / calls, 3)}},
                   f"도달 {reached}/{calls}")
 
 
@@ -399,9 +407,10 @@ def item_use(cfg, window, asof, daily, survey):
     weeks = span / 7
     sent, of = kakao_count(window, asof, daily, weekdays_only=True)
     need = sum(1 for i in range(span) if (since + dt.timedelta(days=i)).weekday() < 5)
-    reached, calls, _, _, _ = card_reach(window, asof, daily)
+    reached, calls, _, _, _, drawn_only = card_reach(window, asof, daily)
     value = {"kakaoWeekdays": {"sent": sent, "of": of, "ratio": round(min(1.0, sent / of), 3) if of else None},
-             "card": {"reached": reached, "of": calls, "ratio": round(reached / calls, 3) if calls else None},
+             "card": {"reached": reached, "of": calls, "ratio": round(reached / calls, 3) if calls else None,
+                      "reference_v4": {"drawn": drawn_only, "ratio": round(drawn_only / calls, 3) if calls else None}},
              "sus": (survey or {}).get("sus"), "veryDisappointed": (survey or {}).get("veryDisappointed"),
              "reference": {"daysSeen": seen, "openDaysPerWeek": round(open_days / weeks, 1), "taskDonePerWeek": round(done / weeks, 1)}}
     if of < need:

@@ -179,11 +179,57 @@ class UseV4Test(unittest.TestCase):
         r = score.item_use(self.cfg, self.window, ASOF, d, self.survey)
         self.assertFalse(r["pass"]); self.assertIn("통화 14건", r["reason"])
 
-    def test_the_card_says_v4(self):
+    def test_the_card_says_v5(self):
         with open(os.path.join(os.path.dirname(os.path.abspath(score.__file__)), "scorecard.json"), encoding="utf-8") as handle:
             card = json.load(handle)
-        self.assertEqual(4, card["version"])
+        self.assertEqual(5, card["version"])
+        self.assertEqual(0.95, card["items"]["3_call_card"]["min_reach"])
+        self.assertEqual(0.95, card["items"]["10_use_and_satisfaction"]["min_card_reach"])
         self.assertEqual(80, card["items"]["10_use_and_satisfaction"]["min_sus"])
+
+
+class CardReachV5Test(unittest.TestCase):
+    """채점표 v5(11/21): 3번과 10번의 분자는 카드가 그려졌거나 대체 알림이 실제로 뜬 통화. 문턱 95%는 그대로, 옛 식은 참고."""
+    window = {"weekdays": 10, "min_pass_days": 9, "calendar_days": 14}
+    cfg3 = {"min_reach": 0.95, "min_calls": 30, "ring_p50_max_ms": 1000, "cold_p50_max_ms": 1500}
+    cfg10 = UseV4Test.cfg
+
+    def daily(self, today):
+        out = {}
+        for i in range(16, 0, -1):
+            day = ASOF - dt.timedelta(days=i)
+            b = beat(day, True, kakao={"on": True, "sent": 17 - i})
+            b["callCard"]["today"] = dict(today)
+            out[day] = b
+        return out
+
+    def test_a_shown_fallback_notice_counts(self):
+        # 10통화 중 2통화만 그려지고 8통화는 대체 알림이 실제로 떴다(삼성 제한): v5는 닿음, 옛 식은 20%.
+        d = self.daily({"calls": 10, "drawn": 2, "fallback": 8, "fallbackShown": 8, "ignored": 0, "off": 0})
+        r = score.item_call_card(self.cfg3, self.window, ASOF, d)
+        self.assertTrue(r["pass"], r["reason"]); self.assertEqual(1.0, r["value"]["reach"])
+        self.assertEqual({"drawn": 28, "reach": 0.2}, r["value"]["reference_v4"])
+        u = score.item_use(self.cfg10, self.window, ASOF, d, UseV4Test.survey)
+        self.assertTrue(u["pass"], u["reason"]); self.assertEqual(1.0, u["value"]["card"]["ratio"])
+        self.assertEqual({"drawn": 28, "ratio": 0.2}, u["value"]["card"]["reference_v4"])
+
+    def test_a_notice_that_did_not_show_does_not(self):
+        d = self.daily({"calls": 10, "drawn": 2, "fallback": 8, "fallbackShown": 7, "ignored": 0, "off": 0})
+        r = score.item_call_card(self.cfg3, self.window, ASOF, d)
+        self.assertFalse(r["pass"]); self.assertEqual(0.9, r["value"]["reach"])
+
+    def test_the_notice_beside_a_drawn_card_is_not_counted_twice(self):
+        # 잠금 화면: 그려진 창 곁에도 알림이 뜬다. 알림은 안 그려진 통화 수(fallback+unconfirmed)까지만.
+        d = self.daily({"calls": 10, "drawn": 9, "fallback": 1, "fallbackShown": 5, "ignored": 0, "off": 0})
+        r = score.item_call_card(self.cfg3, self.window, ASOF, d)
+        self.assertEqual(1.0, r["value"]["reach"])
+        d = self.daily({"calls": 10, "drawn": 5, "fallback": 0, "fallbackShown": 5, "ignored": 0, "off": 0})
+        self.assertEqual(0.5, score.item_call_card(self.cfg3, self.window, ASOF, d)["value"]["reach"])
+
+    def test_old_heartbeats_count_drawn_only(self):
+        d = self.daily({"calls": 10, "drawn": 2, "fallback": 8, "ignored": 0, "off": 0})
+        r = score.item_call_card(self.cfg3, self.window, ASOF, d)
+        self.assertFalse(r["pass"]); self.assertEqual(0.2, r["value"]["reach"])
 
 
 class SecurityReasonTest(unittest.TestCase):
