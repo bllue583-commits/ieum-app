@@ -57,7 +57,9 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
                                   * today's recordings (call records and recordings still waiting for their text or failed). */
                                  val summarized:Int=0,
                                  /** v3.9 r20-1: the call card is a required setup step on this phone ([CallCardAsk.cardRequired]). */
-                                 val cardRequired:Boolean=false)
+                                 val cardRequired:Boolean=false,
+                                 /** v4.4 r25-2: today's board from the morning report ([HomeBoard]); null: no report today, or nothing on it. */
+                                 val board:kr.callbrief.pipeline.report.MorningBoard.Board?=null)
     /** [audioMinutesLeft]: how long the recordings still to transcribe are, together. [lowBattery]: not charging and under half
      * the battery, so old recordings wait ([FirstPass.powerOk]). [stalled]: nothing came back for [FirstPass.STALL_MS], so no
      * new batch goes up (design C7). Either one shows the "잠시 쉬고 있어요" line (#20). */
@@ -75,6 +77,10 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
         /** v3.5 r15-0: the story's line guard (its words are already whole sentences within [TodayStory.MAX_CHARS]). */
         const val STORY_LINES=7
         /** "먼저 볼 체크할 일" (design G3, review #17): the open to-dos asked for today and the ones asking for a check, those first. */
+        /** v4.4 r25-2: the board of today's report as the phone fetched it at 05:30; null without one or when it is empty. */
+        internal fun board(s:org.json.JSONObject,today:java.time.LocalDate)=runCatching {
+            s.optString(kr.callbrief.pipeline.report.ReportFetch.REPORT_BODY).takeIf { it.isNotBlank() }?.let { org.json.JSONObject(it) }
+                ?.takeIf { it.optString("day")==today.toString() }?.let { kr.callbrief.pipeline.report.MorningBoard.read(it,today) } }.getOrNull()?.takeIf { !it.isEmpty }
         internal fun firstLook(open:List<OpenItem>,today:java.time.LocalDate)=
             TaskActions.ordered(open).filter { it.status=="needs_confirmation" || (it.createdMs>0 && CallRecordStore.kstDay(it.createdMs)==today) }
         /** The memo list's words when today has calls but none is sorted out yet. */
@@ -171,6 +177,8 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
     /** [지금 업데이트] is checking the file and copying it into the install session. */
     private var updating=false
     private val ticker=android.os.Handler(android.os.Looper.getMainLooper())
+    /** v4.4 r25-2: the board's folds that were opened (kept while the app runs, so a new reading does not close them). */
+    private val boardOpened=mutableSetOf<String>()
     private var tick:Runnable?=null
 
     override fun enter() { load() }
@@ -250,7 +258,7 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
             granted(android.Manifest.permission.READ_SMS),granted(android.Manifest.permission.READ_CALL_LOG),granted(android.Manifest.permission.READ_PHONE_STATE),
             null,first,NotifyAsk.blocked(a),mm.partFile.path,people,
             CallCardAsk.overlayAllowed(a),true /* v3.4 (4.1-1): no role step */,installStep(a),gapBanner(a)?.text?.takeIf { it.isNotBlank() },updateState(a),partBytes,story,TodayStory.summarized(calls),
-            cardRequired=CallCardAsk.cardRequired(a,s))
+            cardRequired=CallCardAsk.cardRequired(a,s),board=board(s,today))
     }
 
     /** While a new version or the voice model is coming, home looks every second whether it now needs the person (the update
@@ -326,6 +334,9 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
                 onWrong={ row -> TaskActions.wrong(a,item,row) { load() } },
                 personId=item.recordId?.let(s.people::get)).apply { tag="home_task_${item.id}" }
         },inset=16).apply { tag="home_tasks" })
+
+        // v4.4 r25-2: the morning tidy's board (the same blocks as the web view, in its order), right after the to-dos.
+        s.board?.let { HomeBoard.add(a,body,it,CallUi.today(),boardOpened) }
 
         // Today's call memos: who, when, one sentence. Tap a memo for the whole call. With no call today the story line above
         // already says so; while today's calls are being turned into text the memo card says that (review #18).

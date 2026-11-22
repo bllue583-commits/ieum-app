@@ -43,11 +43,14 @@ class ReportPageTest(unittest.TestCase):
         self.assertNotIn("…", text)
         self.assertIn("prefers-color-scheme: dark", text)
         self.assertIn("width=device-width", text)
-        self.assertIn("나머지는 이음에서", text)
+        self.assertIn("더 많은 내용은 앱에서 볼 수 있어요", text)
         for tag in ("important", "confirm", "request", "regular", "optional"):
             self.assertIn(f"--t-{tag}", text)
+        # v4.4 r25-2: "waiting" is a block of the board now (r.waiting), never a tag.
         for gone in ("urgent", "waiting"):
-            self.assertNotIn(gone, text)
+            self.assertNotIn(f"--t-{gone}", text)
+            self.assertNotIn(f'{gone}:"', text)
+        self.assertNotIn("urgent", text)
 
     def test_pack_is_base64url_without_padding(self):
         d = pack(SAMPLE)
@@ -74,6 +77,34 @@ class ReportPageTest(unittest.TestCase):
     def test_failed_calls_line_only_when_there_are_some(self):
         # v4.0 r21 review L9: head.failedCalls (the phone's webData) shows one line, only when it is above 0.
         self.assertIn('if(h.failedCalls>0)p.appendChild(el("p","note","어제 글자로 못 바꾼 통화가 "+h.failedCalls+"건 있어요"));', page())
+
+    def test_board_blocks_in_order(self):
+        # v4.4 r25-2: 오늘 챙길 일, then the board (전화할 곳, 답을 기다리는 중, 이번 주 일정), 진행 중, 확인 필요, 끝났는지 확인할 일,
+        # 어제 정리, 뒤늦게 정리된 통화, 어제와 달라진 것; with none of the new blocks the page is as it was.
+        text = page()
+        order = ['"오늘 챙길 일"', '"전화할 곳"', '"답을 기다리는 중"', 'weekBlock(r.week', '"진행 중"', '"확인 필요"', '"끝났는지 확인할 일"',
+                 '"어제 정리"', '"뒤늦게 정리된 통화"', '"어제와 달라진 것"']
+        at = [text.index(o, text.index("var blocks=[")) for o in order]
+        self.assertEqual(sorted(at), at)
+        self.assertIn('if(!days.length)return null;', text)
+        self.assertIn('warn&&days>7', text)
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_the_page_decodes_a_board(self):
+        board = dict(SAMPLE, calls=[{"who": "박하늘 과장", "company": "가나건설", "what": "거푸집 반입 시간", "since": "11/12"}],
+                     waiting=[{"who": "최서준 대리", "company": "다라전기", "what": "배선 견적서", "since": "11/3", "days": 10, "unsure": True}],
+                     week=[{"date": "2026-11-13", "label": "11/13(금)", "near": "오늘", "items": ["3층 슬래브 타설"]}],
+                     doneCheck=[{"what": "안전 교육 일지", "who": "본사"}], changed=["철근 반입 11/16으로 바뀜"])
+        block = re.search(r"/\* DECODE:BEGIN.*?\*/(.*?)/\* DECODE:END \*/", page(), re.S).group(1)
+        if subprocess.run(["node", "-e", "process.stdout.write(String(typeof DecompressionStream))"],
+                          capture_output=True, text=True, timeout=30).stdout != "function":
+            self.skipTest("node has no DecompressionStream")
+        with tempfile.TemporaryDirectory() as tmp:
+            script = os.path.join(tmp, "decode.js")
+            with open(script, "w", encoding="utf-8") as f:
+                f.write(block + "\ndecodeReport(process.argv[2]).then(r=>process.stdout.write(JSON.stringify(r)));\n")
+            out = subprocess.run(["node", script, pack(board)], capture_output=True, text=True, timeout=30)
+        self.assertEqual(board, json.loads(out.stdout))
 
 
 if __name__ == "__main__":

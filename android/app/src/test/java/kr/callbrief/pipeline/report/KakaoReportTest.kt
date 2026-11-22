@@ -703,7 +703,7 @@ class KakaoReportTest:ProtectedTextHostTestBase() {
         val long=report((1..8).map { i -> y("업체$i 담당자",line(i,1)) },(1..10).map { i -> tg(line(i,2),"request",who="업체$i") },
             (1..3).map { line(it,3) },(1..3).map { line(it,4) to "업체$it" }).let { withV8(it,0,(1..5).map { i -> y("업체$i",line(i,5)) }) }
         val cut=KakaoReport.webUrl(base,long,false)!!
-        assertTrue(cut.length<=KakaoReport.WEB_MAX)
+        assertTrue(cut.substringAfter("#d=").length<=KakaoReport.WEB_FRAGMENT_MAX)
         val shown=JSONObject(KakaoReport.unpackWeb(cut.substringAfter("#d=")))
         assertTrue(shown.getBoolean("cut"));assertTrue("late gives way first",shown.getJSONArray("late").length()<5)
         // On the bubbles: [웹으로 보기] with that address.
@@ -759,5 +759,104 @@ class KakaoReportTest:ProtectedTextHostTestBase() {
         assertNull(KakaoReport.send(app,tagged(8),KakaoReport.SOURCE_ROUTINE))
         assertTrue(fake.sent[0] is KakaoReport.Message.Feed);assertTrue(fake.sent.none { it is KakaoReport.Message.ListCard })
         assertEquals("picture",settings().getString(KakaoReport.LAST_STYLE))
+    }
+
+    // ---- v4.4 r25-2: the board (tidy.md v12) in the web view, its cut, the header's tail and the heartbeat ----
+    private val firms=listOf("가나건설","다라전기","마바설비","사아철강","자차레미콘","카타도장","파하조경","거너창호","더러방수","머버타일")
+    private val people=listOf("박하늘 과장","최서준 대리","이도윤 소장","정하린 부장","한지우 실장","오세린 대리","윤태오 과장","강민재 팀장","서유나 주임","임도현 기사")
+    private val works=listOf("거푸집 반입 시간","배선 자재 견적서","수정 도면","레미콘 배합표","도장 샘플","조경 수목 목록","창호 제작 일정","방수 시험 성적서","타일 시공 범위","안전 교육 명단")
+    /** A board as big as 11/22's (7 to call, 14 waiting, 5 days of the week, 20 issues), every word made up. */
+    private fun withBoard(r:JSONObject,calls:Int=7,waiting:Int=14,days:Int=5,issues:Int=20,changed:Int=5,done:Int=3)=r.apply {
+        put("calls",JSONArray((0 until calls).map { i -> JSONObject().put("who",people[i%10]).put("company",firms[i%10])
+            .put("what","${works[(i+3)%10]} 다시 묻기, 회신 약속 확인").put("since","11/${(i%9)+10}") }))
+        put("waiting",JSONArray((0 until waiting).map { i -> JSONObject().put("who",people[(i+2)%10]).put("company",firms[(i+5)%10])
+            .put("what","${works[i%10]} 보내 주기로 함").put("since","11/${(i%20)+1}").put("days",19-i) }))
+        put("week",JSONArray((0 until days).map { d -> JSONObject().put("date",day.plusDays(d.toLong()).toString())
+            .put("items",JSONArray((0..d%3).map { k -> "${firms[(d+k)%10]} ${works[(d*3+k)%10]} 현장 반입" })) }))
+        put("inProgress",JSONArray((0 until issues).map { i -> JSONObject().put("what","${(i%7)+2}층 ${works[i%10]} 협의")
+            .put("status","${firms[(i+1)%10]} 회신 대기, 다음 주 결정 예정").put("days",(i*3)%25+1).apply { if(i==2) put("unsure",true) } }))
+        put("doneCheck",JSONArray((0 until done).map { i -> JSONObject().put("what","${works[(i+6)%10]} 제출").put("who",firms[i]) }))
+        put("changed",JSONArray((0 until changed).map { i -> "${firms[(i+4)%10]} ${works[(i+1)%10]} 날짜가 11/${25+i%5}로 바뀜" }))
+    }
+    @Test fun aV11ReportGivesTheSameWebDataAsBefore() {
+        val d=KakaoReport.webData(tagged(8),false)
+        assertEquals(setOf("v","day","label","phone","head","today","inProgress","check","yesterday","late").filter { d.has(it) }.toSet(),d.keys().asSequence().toSet())
+        assertEquals("{\"what\":\"타설 일정 조정\"}",d.getJSONArray("inProgress").getJSONObject(0).toString())
+        val b=MorningBoard.read(tagged(8),day)
+        assertTrue(b.calls.isEmpty() && b.waiting.isEmpty() && b.week.isEmpty() && b.doneCheck.isEmpty() && b.changed.isEmpty())
+        assertEquals(0,KakaoReport.read(tagged(8),false).waiting)
+    }
+    @Test fun theBoardIsReadAndABrokenBlockIsDroppedAlone() {
+        val r=withBoard(tagged(8))
+        val b=MorningBoard.read(r,day)
+        assertEquals(7,b.calls.size);assertEquals("가나건설 박하늘 과장",b.calls[0].name);assertEquals("11/10",b.calls[0].since)
+        assertEquals(14,b.waiting.size);assertEquals(19,b.waiting[0].days);assertEquals(listOf(19,18),b.waiting.take(2).map { it.days })
+        assertEquals(5,b.week.size);assertEquals(day,b.week[0].date);assertEquals(20,b.inProgress.size);assertTrue(b.inProgress[2].unsure)
+        assertEquals("가나건설 회신 대기, 다음 주 결정 예정".replace("가나건설",firms[1]),b.inProgress[0].status);assertEquals(5,b.changed.size)
+        // One block of the wrong shape, a row without words, a day out of the week, a wait out of order: only those go.
+        r.put("week",JSONObject().put("date",day.toString()))
+        r.getJSONArray("calls").put(0,JSONObject().put("who","빈 줄"))
+        r.getJSONArray("waiting").put(JSONObject().put("who","늦게 넣은").put("what","견적").put("since","11/6").put("days",30))
+        r.getJSONArray("waiting").put(JSONObject().put("who","이상한 날").put("what","도면").put("since","어제").put("days","사흘"))
+        r.put("changed","바뀐 것")
+        val broken=MorningBoard.read(r,day)
+        assertTrue(broken.week.isEmpty());assertTrue(broken.changed.isEmpty());assertEquals(6,broken.calls.size);assertEquals(20,broken.inProgress.size)
+        assertEquals("oldest first",30,broken.waiting[0].days);assertNull(broken.waiting.last().days);assertEquals(16,broken.waiting.size)
+        val week=withBoard(tagged(2)).apply { put("week",JSONArray(listOf(JSONObject().put("date",day.minusDays(1).toString()).put("items",JSONArray(listOf("어제 일"))),
+            JSONObject().put("date",day.plusDays(7).toString()).put("items",JSONArray(listOf("다음 주 일"))),
+            JSONObject().put("date",day.plusDays(2).toString()).put("items",JSONArray((1..9).map { "모레 일 $it" }+listOf(""))),
+            JSONObject().put("date",day.toString()).put("items",JSONArray(listOf("오늘 일","010-1234-5678 연락")))))) }
+        val w=MorningBoard.read(week,day).week
+        assertEquals(listOf(day,day.plusDays(2)),w.map { it.date });assertEquals(MorningBoard.WEEK_ITEMS,w[1].items.size)
+        assertFalse("masked",phone.containsMatchIn(w[0].items.joinToString()))
+        assertEquals("오늘",MorningBoard.near(day,day));assertEquals("내일",MorningBoard.near(day.plusDays(1),day));assertEquals("",MorningBoard.near(day.plusDays(2),day))
+        assertNull(MorningBoard.read(null,day).calls.firstOrNull())
+    }
+    @Test fun theWebViewCarriesTheBoardAndCutsTheLeastNeededFirst() {
+        val base="https://example.github.io/ieum-app/report/"
+        val r=withBoard(withV8(tagged(10),0,(1..2).map { y("업체$it","늦게 정리됨") }))
+        val full=KakaoReport.web(base,r,false,Int.MAX_VALUE)!!
+        val capped=KakaoReport.web(base,r,false)!!
+        println("R25_MEASURE full=${full.length} capped=${capped.length} cut=${capped.cut} v11=${KakaoReport.web(base,withV8(tagged(10),0,(1..2).map { y("업체$it","늦게 정리됨") }),false,Int.MAX_VALUE)!!.length}")
+        assertEquals(0,full.cut)
+        val d=JSONObject(KakaoReport.unpackWeb(full.url.substringAfter("#d=")))
+        assertEquals(7,d.getJSONArray("calls").length());assertEquals(14,d.getJSONArray("waiting").length());assertEquals(19,d.getJSONArray("waiting").getJSONObject(0).getInt("days"))
+        assertEquals("오늘",d.getJSONArray("week").getJSONObject(0).getString("near"));assertEquals("11/7(토)",d.getJSONArray("week").getJSONObject(0).getString("label"))
+        assertEquals(20,d.getJSONArray("inProgress").length());assertTrue(d.getJSONArray("inProgress").getJSONObject(2).getBoolean("unsure"))
+        // Just over: only 달라진 것 gives way.
+        val one=KakaoReport.web(base,r,false,full.length-1)!!
+        val od=JSONObject(KakaoReport.unpackWeb(one.url.substringAfter("#d=")))
+        assertEquals(1,one.cut);assertTrue(od.getBoolean("cut"));assertTrue(od.getJSONArray("changed").length()<5)
+        assertEquals(20,od.getJSONArray("inProgress").length());assertEquals(2,od.getJSONArray("late").length())
+        // Far under: the order of WEB_CUTS (changed, late, yesterday, the back of 진행 중 down to 3, the newest waits down to 5).
+        val small=KakaoReport.web(base,r,false,full.length*8/10)!!
+        val sd=JSONObject(KakaoReport.unpackWeb(small.url.substringAfter("#d=")))
+        assertEquals(0,sd.getJSONArray("changed").length());assertEquals(0,sd.getJSONArray("late").length());assertEquals(0,sd.getJSONArray("yesterday").length())
+        assertTrue(sd.getJSONArray("inProgress").length()>=3);assertEquals(10,sd.getJSONArray("today").length());assertEquals(7,sd.getJSONArray("calls").length())
+        if(sd.getJSONArray("waiting").length()<14) assertEquals("the inProgress back went first",3,sd.getJSONArray("inProgress").length())
+        assertEquals("the oldest waits stay",19,sd.getJSONArray("waiting").getJSONObject(0).getInt("days"))
+        assertTrue(small.length<=full.length*8/10)
+        // The default cap.
+        assertTrue(capped.length<=KakaoReport.WEB_FRAGMENT_MAX)
+    }
+    @Test fun theFirstHeaderTellsTheAwaitedAnswersWhenThereIsRoom() {
+        assertEquals("11/23(월) 챙길 일 10개 · 기다리는 답 14건",KakaoReport.firstHeader("11/23(월)",10,0,14))
+        assertEquals("the failed calls first","11/23(월) 챙길 일 10개 · 어제 글자로 못 바꾼 통화 2건",KakaoReport.firstHeader("11/23(월)",10,2,14))
+        assertEquals("11/23(월) 챙길 일 10개",KakaoReport.firstHeader("11/23(월)",10,0,0))
+        for(f in listOf(0,1,100)) for(w in listOf(0,1,20)) for(label in listOf("1/1(월)","12/31(목)"))
+            assertTrue(KakaoReport.length(KakaoReport.firstHeader(label,100,f,w))<=KakaoReport.HEADER_MAX)
+        val c=KakaoReport.list(KakaoReport.read(withBoard(tagged(8)),false),"11/7(토)",0,null)
+        assertEquals("11/7(토) 챙길 일 8개 · 기다리는 답 14건",c[0].header);assertEquals("11/7(토) 챙길 일 이어서 · 외 2개",c[1].header)
+    }
+    @Test fun theHeartbeatTellsTheWebLengthAndTheCut() = runBlocking {
+        val base="https://example.github.io/ieum-app/report/"
+        KakaoReport.webBase={ base }
+        listOn(ListSender())
+        assertNull(KakaoReport.send(app,withBoard(tagged(8)),KakaoReport.SOURCE_ROUTINE))
+        val s=settings()
+        val len=s.getLong(KakaoReport.LAST_WEB_LEN);assertTrue(len in 1..KakaoReport.WEB_FRAGMENT_MAX.toLong())
+        val k=PhoneStatus.build(PhoneStatus.Input(1_000L,"v4.4",1070,0,null,5,6,"READY","","",12,v35=PhoneStatus.v35(s))).getJSONObject("kakao")
+        assertEquals(len,k.getLong("webLen"));assertEquals(s.getLong(KakaoReport.LAST_WEB_CUT),k.getLong("webCut"))
+        assertEquals(0L,PhoneStatus.build(PhoneStatus.Input(1_000L,"v4.4",1070,0,null,5,6,"READY","","",12,v35=PhoneStatus.v35(JSONObject()))).getJSONObject("kakao").getLong("webLen"))
     }
 }

@@ -53,7 +53,9 @@ object KakaoReport {
         /** v3.7 (user 11/12): the whole report as texts to read inside KakaoTalk ([chat]); what goes out by default. */
         val chat:List<Message.Text> = emptyList(),
         /** r18 (user 11/13): the to-dos as list bubbles (1 or 2; empty when there are fewer than two to-dos). */
-        val list:List<Message.ListCard> = emptyList())
+        val list:List<Message.ListCard> = emptyList(),
+        /** v4.4 r25-2: the web view the bubbles carry (its fragment's length and how many blocks gave up lines), null without one. */
+        val web:Web?=null)
     /** Sending seam (real Kakao SDK in the app, a fake in tests and device-test). Returns null on success, else an error code.
      * [uploadImage] returns the uploaded image's URL (null, or a thrown [Failure] with its code, when it did not go up). */
     interface Sender {
@@ -181,7 +183,9 @@ object KakaoReport {
                                /** r18: the to-dos for the list bubbles, sorted by [TAGS] (stable), 10 at most. */
                                val items:List<ListItem> =emptyList(),
                                /** v4.0 r21-1: yesterday's calls whose text could not be made (head.failedCalls, recounted by the phone right before the send). */
-                               val failed:Int=0)
+                               val failed:Int=0,
+                               /** v4.4 r25-2: answers awaited (tidy.md v12 `waiting`, 20 at most), for the first bubble's header. */
+                               val waiting:Int=0)
     private val WEEK=arrayOf("월","화","수","목","금","토","일")
     /** "11/7(금)". */
     internal fun dayLabel(d:LocalDate)="${d.monthValue}/${d.dayOfMonth}(${WEEK[d.dayOfWeek.value-1]})"
@@ -220,7 +224,7 @@ object KakaoReport {
             when { what.isEmpty() -> who.ifEmpty { null };who.isEmpty() -> what;else -> clean("$who: $what") } }
         fun n(key:String,fallback:Int)=head.optInt(key,-1).takeIf { it>=0 } ?: fallback
         return Report(day,n("calls",yesterday.size),n("newChecks",0),n("todayChecks",today.size),yesterday,today,inProgress,check,phoneFallback,
-            n("pendingCalls",0),late,items,n("failedCalls",0))
+            n("pendingCalls",0),late,items,n("failedCalls",0),MorningBoard.read(o,day).waiting.size)
     }
     // ---- r18 (user 11/13): the list report ----
     /** The five tags (tidy.md v9 9-1), in the order they are shown; the thumbnails are res/drawable-nodpi/kakao_tag_<tag>.png. */
@@ -250,10 +254,20 @@ object KakaoReport {
         var at=0
         return sizes.mapIndexed { i,n ->
             val items=r.items.subList(at,at+n);at+=n
-            val header=if(i==0) "$label 챙길 일 ${total}개"+failedTag(r.failed) else "$label 챙길 일 이어서"+(if(total>shown) LIST_DOT+"외 ${total-shown}개" else "")
+            val header=if(i==0) firstHeader(label,total,r.failed,r.waiting) else "$label 챙길 일 이어서"+(if(total>shown) LIST_DOT+"외 ${total-shown}개" else "")
             Message.ListCard(header,items,TASKS_LINK,webUrl,if(custom && n==5) templateId else 0)
         }
     }
+    /** The list bubble's header holds this many characters (the longest so far: "11/30(일) 챙길 일 10개 · 어제 글자로 못 바꾼 통화 100건"). */
+    const val HEADER_MAX=39
+    /** "11/23(월) 챙길 일 10개", then one tail: the calls whose text could not be made first (r21-1), else v4.4 r25-2
+     * " · 기다리는 답 14건" when answers are awaited; a tail that would pass [HEADER_MAX] is left out. */
+    internal fun firstHeader(label:String,total:Int,failed:Int,waiting:Int):String {
+        val head="$label 챙길 일 ${total}개"
+        val tail=failedTag(failed).ifEmpty { waitingTag(waiting) }
+        return if(length(head+tail)<=HEADER_MAX) head+tail else head
+    }
+    internal fun waitingTag(n:Int)=if(n>0) "${LIST_DOT}기다리는 답 ${n}건" else ""
     /** The arguments of the user's own template (docs/OPERATIONS.md): H, T1 to T5, D1 to D5, I1 to I5, WEB (the web view's path
      * after the domain, "" without one). */
     internal fun customArgs(c:Message.ListCard):Map<String,String> {
@@ -266,9 +280,17 @@ object KakaoReport {
     /** "https://a.github.io/ieum-app/report/#d=…" to "ieum-app/report/#d=…" (the console's link is "https://a.github.io/${WEB}"). */
     // ---- r18: the web view (docs/report/index.html). The report never goes to a server: the page is static and the report
     // (masked like every bubble) rides in the URL's fragment, which the browser does not send. ----
-    /** The longest web view URL; longer, the last blocks give up lines (뒤늦게 정리된 통화, 어제 정리, 확인 필요, 진행 중,
-     * then 챙길 일) and the page says the rest is in the app. */
-    const val WEB_MAX=4000
+    /** v4.4 r25-2: the longest fragment (the `#d=` data, the template argument WEB's tail). Longer, blocks give up lines, the
+     * less needed first ([WEB_CUTS]), and the page says the rest is in the app. One constant, so the coordinator can set it
+     * from what Kakao takes (before r25 the cap was 4,000 on the whole address). */
+    const val WEB_FRAGMENT_MAX=3500
+    /** Which block gives up lines, in order, and how many it keeps at that step: first 달라진 것, 뒤늦게 정리된 통화, 어제 정리,
+     * 진행 중인 일 after its first 3 and 답을 기다리는 중 after its 5 oldest (the most recent waits go first); then, if it still does
+     * not fit, 끝났는지 확인할 일, 확인 필요, the rest of 진행 중, 이번 주 일정 from its last day, 기다리는 중, 전화할 곳 and 챙길 일. */
+    internal val WEB_CUTS=listOf("changed" to 0,"late" to 0,"yesterday" to 0,"inProgress" to 3,"waiting" to 5,
+        "doneCheck" to 0,"check" to 0,"inProgress" to 0,"week" to 0,"waiting" to 0,"calls" to 0,"today" to 0)
+    /** A built web view: the address, its fragment's length and how many blocks gave up lines (heartbeat kakao.webLen, kakao.webCut). */
+    data class Web(val url:String,val length:Int,val cut:Int)
     /** The masked report for the page: day, head counts, every block's fields (cleaned), the to-dos sorted by tag. */
     internal fun webData(o:JSONObject,phone:Boolean):JSONObject {
         val head=o.optJSONObject("head") ?: JSONObject()
@@ -283,11 +305,13 @@ object KakaoReport {
             today.put(JSONObject().put("what",what).put("who",clean(t.optString("who"))).put("since",clean(t.optString("since")))
                 .put("status",clean(t.optString("status"))).put("tag",tag)) }
         val day=runCatching { LocalDate.parse(o.optString("day")) }.getOrElse { CallRecordStore.kstDay(clock()) }
+        val board=MorningBoard.read(o,day)
         return JSONObject().put("v",1).put("day",day.toString()).put("label",dayLabel(day)).put("phone",phone)
             .put("head",JSONObject().put("calls",n("calls")).put("newChecks",n("newChecks")).put("todayChecks",n("todayChecks"))
                 .put("issues",n("issues")).put("pendingCalls",n("pendingCalls")).put("failedCalls",n("failedCalls")))
-            .put("today",today).put("inProgress",arr("inProgress",3,listOf("what"))).put("check",arr("check",3,listOf("what","who")))
+            .put("today",today).put("inProgress",MorningBoard.webIssues(board)).put("check",arr("check",3,listOf("what","who")))
             .put("yesterday",arr("yesterday",8,listOf("who","what"))).put("late",arr("late",LATE_ITEMS,listOf("who","what")))
+            .also { MorningBoard.putWeb(it,board,day) }
     }
     /** zlib deflate, then base64url without padding (the page undoes it with DecompressionStream("deflate")). */
     internal fun packWeb(json:String):String {
@@ -309,17 +333,18 @@ object KakaoReport {
             return out.toString("UTF-8")
         } finally { i.end() }
     }
-    /** The web view's URL for [o] under [base] ("https://…/report/"), [WEB_MAX] at most; null without a base. */
-    internal fun webUrl(base:String,o:JSONObject,phone:Boolean):String? {
+    /** The web view's URL for [o] under [base] ("https://…/report/"), its fragment [WEB_FRAGMENT_MAX] at most; null without a base. */
+    internal fun webUrl(base:String,o:JSONObject,phone:Boolean):String? = web(base,o,phone)?.url
+    internal fun web(base:String,o:JSONObject,phone:Boolean,max:Int=WEB_FRAGMENT_MAX):Web? {
         if(base.isBlank()) return null
         val d=webData(o,phone)
-        fun url()=base+"#d="+packWeb(d.toString())
-        var u=url()
-        for(k in listOf("late","yesterday","check","inProgress","today")) {
-            val a=d.getJSONArray(k)
-            while(u.length>WEB_MAX && a.length()>0) { a.remove(a.length()-1);d.put("cut",true);u=url() }
+        var f=packWeb(d.toString())
+        val cut=mutableSetOf<String>()
+        for((k,keep) in WEB_CUTS) {
+            val a=d.optJSONArray(k) ?: continue
+            while(f.length>max && a.length()>keep) { a.remove(a.length()-1);cut+=k;d.put("cut",true);f=packWeb(d.toString()) }
         }
-        return u.takeIf { it.length<=WEB_MAX }
+        return if(f.length<=max) Web(base+"#d="+f,f.length,cut.size) else null
     }
     internal fun webPath(url:String):String { val rest=url.substringAfter("://","");val i=rest.indexOf('/');return if(i<0) "" else rest.substring(i+1) }
     /** v3.7 r17-2 (M3): "어제 통화 14건을 정리했어요. 9건은 아직 글자로 바꾸는 중이에요" (no second sentence when nothing waits). */
@@ -360,7 +385,8 @@ object KakaoReport {
     fun compose(report:JSONObject,phoneFallback:Boolean=false,picture:Boolean=true,templateId:Long=0,webBase:String=""):Composed {
         val r=read(report,phoneFallback)
         val label=dayLabel(r.day)
-        val cards=list(r,label,templateId,if(r.items.size>=2) webUrl(webBase,report,phoneFallback) else null)
+        val web=if(r.items.size>=2) web(webBase,report,phoneFallback) else null
+        val cards=list(r,label,templateId,web?.url)
         if(phoneFallback) {
             // 1절: no report from the night's tidy: one text only, from what the phone has.
             val head=listOfNotNull("[이음 아침 보고] $label (새벽 정리 없이 폰에서 만든 보고)",
@@ -368,12 +394,12 @@ object KakaoReport {
                 r.failed.takeIf { it>0 }?.let { "어제 ${FAILED_WORDS}가 ${it}건 있어요" },"오늘 챙길 일 ${r.todayChecks}개")
             val items=numbered(r.today.take(TODAY_TEXT_ITEMS)).ifEmpty { listOf("새로 챙길 일 없음") }
             val more=(r.today.size-TODAY_TEXT_ITEMS).coerceAtLeast(0)
-            return Composed(null,Message.Text(fit(head,items,more=more).first,TASKS_LINK),emptyList(),list=cards)
+            return Composed(null,Message.Text(fit(head,items,more=more).first,TASKS_LINK),emptyList(),list=cards,web=web)
         }
         val feed=if(!picture) null else runCatching { render(report,appContext) }.onFailure { Log.w(TAG,"report not drawn: ${it.javaClass.simpleName}") }.getOrNull()
             ?.takeIf { it.size<=MAX_PNG }
             ?.let { Message.Feed(it,"[이음 아침 보고] $label",headLine(r)+"\n"+countsLine(r),callsLink(r.day)) }
-        return Composed(feed,todayText(r,label),fallback(r,label),chat(r,label),cards)
+        return Composed(feed,todayText(r,label),fallback(r,label),chat(r,label),cards,web)
     }
     // ---- v3.7 (user 11/12): the whole report as texts, read inside KakaoTalk ----
     private class Block(val title:String,val items:List<String>)
@@ -597,6 +623,8 @@ object KakaoReport {
         val now=clock()
         fun noteStyle(o:JSONObject) {
             if(out.sent>0) o.put(LAST_STYLE,out.style).put(LAST_CARDS,out.cards).put(LAST_WEB,out.web)
+                // v4.4 r25-2: the web view that was built for the bubbles (whether Kakao took it is LAST_WEB).
+                .put(LAST_WEB_LEN,if(useList) made.web?.length ?: 0 else 0).put(LAST_WEB_CUT,if(useList) made.web?.cut ?: 0 else 0)
                 .put(LAST_TAGS,JSONObject().apply { TAGS.forEach { put(it,tags[it] ?: 0) } }.toString())
             // Review fix: a test send ([지금 보내 보기]) does not add to the running count.
             if(out.listFallback>0 && !test) o.put(LIST_FALLBACK,o.optLong(LIST_FALLBACK,0)+out.listFallback)
@@ -640,6 +668,8 @@ object KakaoReport {
      * thumbnails uploaded to Kakao ({tag:{url,atMs}}, a JSON text). */
     const val LAST_STYLE="kakaoLastStyle";const val LAST_CARDS="kakaoLastCards";const val LIST_FALLBACK="kakaoListFallback"
     const val LAST_WEB="kakaoLastWeb";const val LAST_TAGS="kakaoLastTags";const val TAG_IMAGES="kakaoTagImages"
+    /** v4.4 r25-2: heartbeat `kakao.webLen` (the last report's fragment length) and `kakao.webCut` (blocks that gave up lines). */
+    const val LAST_WEB_LEN="kakaoLastWebLen";const val LAST_WEB_CUT="kakaoLastWebCut"
     /** A thumbnail goes up again after this many days (Kakao keeps an image uploaded for a default template 100 days). */
     const val TAG_IMAGE_DAYS=10L
     private const val DAY_MS=86_400_000L
