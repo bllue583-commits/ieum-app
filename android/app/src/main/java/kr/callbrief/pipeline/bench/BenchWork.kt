@@ -348,6 +348,8 @@ internal object Bench {
         runCatching { PowerConfig.apply(settings,text) }
         // v4.4 r25 review: the web view's fragment cap rides on it too.
         runCatching { KakaoConfig.apply(settings,text) }
+        // v4.5 r26-1: the site of the forecast (no phone location: the coordinates are written in the config).
+        runCatching { kr.callbrief.pipeline.report.SiteConfig.apply(settings,text) }
         val snap=settings.snapshot()
         val (oldBench,oldSamples)=config(snap)
         val changed=oldBench!=bench || oldSamples!=sample

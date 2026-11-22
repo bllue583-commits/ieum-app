@@ -71,7 +71,9 @@ internal object PhoneStatus {
         /** v4.1 r22-1: `privacy{keptByName, keptByLink, uploadedUnlinked}` ([privacy]), counts only. */
         val privacy:JSONObject?=null,
         /** v4.1 r22-4: `selfCheck{day, shown[code]}` ([selfCheck]): the self-check notices shown that day, codes only. */
-        val selfCheck:JSONObject?=null)
+        val selfCheck:JSONObject?=null,
+        /** v4.5 r26-1: `weather{ok, ageH, days, cautions, err}` ([kr.callbrief.pipeline.report.Weather.heartbeat]), numbers and codes only. */
+        val weather:JSONObject?=null)
     /** v3.7 r17-3 (DESIGN_V7 3.3, SCORECARD): [latency] goes into `latency` beside the 7-day numbers ({segments{endToText,
      * textToUpload,uploadToApplied}, day{p50Min,p90Min,n,waiting}, over7d}); [window14] into `transcription.window14`
      * {created,failed,failedPermanent,days}; [coverage] is `report.coverage` ([kr.callbrief.pipeline.report.ReportCoverage.snapshot])
@@ -209,6 +211,7 @@ internal object PhoneStatus {
         o.put("feedback",TaskFeedback.heartbeat(i.feedback?.let { JSONObject().put(TaskFeedback.KEY,it) }))
         o.put("privacy",i.privacy ?: JSONObject.NULL)
         o.put("selfCheck",i.selfCheck ?: JSONObject.NULL)
+        o.put("weather",i.weather ?: JSONObject.NULL)
         return o
     }
     /** v3.7 r17-3: the scorecard's blocks. `use` and `report.coverage` always (null inside until known), the rest when known. */
@@ -403,7 +406,8 @@ internal object PhoneStatus {
             v37 = runCatching { v37(app,s,now) }.onFailure { Log.w(TAG,"v3.7 numbers not read: ${it.javaClass.simpleName}") }.getOrDefault(V37()),
             security = runCatching { security(s) }.getOrNull(),certUnknown = UpdateCert.unknownCount(s),
             bench = kr.callbrief.pipeline.bench.Bench.heartbeat(s),samples = kr.callbrief.pipeline.bench.Samples.heartbeat(s),
-            feedback = TaskFeedback.heartbeat(s),privacy = privacy(s),selfCheck = selfCheck(s))
+            feedback = TaskFeedback.heartbeat(s),privacy = privacy(s),selfCheck = selfCheck(s),
+            weather = runCatching { kr.callbrief.pipeline.report.Weather.heartbeat(s,now) }.getOrNull())
     }
     /** v4.1 r22-4: the day and codes [SelfCheckNotices] keeps for its once-a-day rule, as they are (codes only: A-Z, 0-9, _). */
     internal fun selfCheck(s:JSONObject):JSONObject=JSONObject()

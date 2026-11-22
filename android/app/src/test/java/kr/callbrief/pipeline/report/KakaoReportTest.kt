@@ -56,6 +56,8 @@ class KakaoReportTest:ProtectedTextHostTestBase() {
         KakaoReport.senderFactory={ fake }
         KakaoReport.coverageOf={ _,_,_ -> null } // the report's own count unless a test sets one
         ReportFetch.scheduler={ _,p -> plans+=p }
+        // v4.5 r26-1: the morning's forecast never reaches the network in a test (here: no answer, the report goes without it).
+        Weather.sourceFactory={ object:Weather.Source { override fun get(url:String)=Weather.Response(503,null) } }
         link(true)
         // The tests below this line were written for the picture report (v3.5 to v3.6); the chat report's own tests turn it off.
         SecureSettings(app).update { it.put(KakaoReport.PICTURE,true) }
@@ -64,6 +66,7 @@ class KakaoReportTest:ProtectedTextHostTestBase() {
         KakaoReport.appKey={ kr.callbrief.BuildConfig.KAKAO_APP_KEY };KakaoReport.pause={ kotlinx.coroutines.delay(it) }
         KakaoReport.clock={ System.currentTimeMillis() };ReportFetch.clock={ System.currentTimeMillis() }
         KakaoReport.senderFactory=null;ReportFetch.sourceFactory=null;ReportFetch.scheduler=null;KakaoReport.linker=null;KakaoReport.coverageOf=null
+        Weather.sourceFactory=null
         KakaoReport.listTemplateId={ kr.callbrief.BuildConfig.KAKAO_LIST_TEMPLATE_ID };KakaoReport.webBase={ kr.callbrief.BuildConfig.KAKAO_WEB_BASE }
         KakaoReport.tagPng=realTagPng
     }

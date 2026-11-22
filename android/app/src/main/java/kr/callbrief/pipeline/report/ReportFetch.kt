@@ -121,7 +121,7 @@ object ReportFetch {
         val last=attempt>=TRIES.lastIndex
         when(val f=fetch(app,day)) {
             is Fetch.Found -> {
-                val e=KakaoReport.send(app,f.report,KakaoReport.SOURCE_ROUTINE)
+                val e=KakaoReport.send(app,withWeather(app,f.report,day),KakaoReport.SOURCE_ROUTINE)
                 return when {
                     e==null || e==KakaoReport.ALREADY_SENT -> Outcome.SENT
                     // Nothing went (a network fault): the next try sends it again; a token error waits for a new link.
@@ -133,11 +133,19 @@ object ReportFetch {
                 if(!last) return Outcome.RETRY_LATER
                 // 06:00 and still no report from the night's tidy: the phone's own short report (DESIGN_V5 1절).
                 if(f is Fetch.Failed) Log.w(TAG,"report not read (${f.code}): phone report")
-                val e=KakaoReport.send(app,phoneReport(app,day),KakaoReport.SOURCE_PHONE)
+                val e=KakaoReport.send(app,withWeather(app,phoneReport(app,day),day),KakaoReport.SOURCE_PHONE)
                 return if(e==null || e==KakaoReport.ALREADY_SENT) Outcome.PHONE_SENT else Outcome.PHONE_FAILED
             }
         }
     }
+
+    /** v4.5 r26-1: the week's forecast, fetched here once a morning (right before the send: the report is in hand and the
+     * network is up), rides with the report to the web view and the texts; the kept report body stays as read. Any failure
+     * gives the report as it is (the weather never holds or stops the morning report). */
+    internal suspend fun withWeather(app:Context,report:JSONObject,day:LocalDate):JSONObject = try {
+        val cast=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { Weather.forReport(app,clock()) }
+        Weather.attach(report,cast).also { Weather.noteUse(app,it,day) }
+    } catch(e:kotlinx.coroutines.CancellationException) { throw e } catch(e:Exception) { Log.w(TAG,"no weather: ${e.javaClass.simpleName}");report }
 
     // ---- reading report/<day>.json ----
     internal fun path(day:LocalDate)="report/$day.json"

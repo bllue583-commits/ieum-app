@@ -35,7 +35,9 @@ internal object MorningBoard {
     data class Line(val what:String,val who:String)
     data class Board(val calls:List<Person> =emptyList(),val waiting:List<Person> =emptyList(),val week:List<Day> =emptyList(),
                      val inProgress:List<Issue> =emptyList(),val check:List<Line> =emptyList(),val doneCheck:List<Line> =emptyList(),
-                     val changed:List<String> =emptyList()) {
+                     val changed:List<String> =emptyList(),
+                     /** v4.5 r26-2: the forecast sent with the report ([Weather.attach]) or, on home, the one kept on the phone. */
+                     val weather:Weather.Cast?=null) {
         val isEmpty:Boolean get()=calls.isEmpty() && waiting.isEmpty() && week.isEmpty() && inProgress.isEmpty() && check.isEmpty() &&
             doneCheck.isEmpty() && changed.isEmpty()
     }
@@ -81,7 +83,7 @@ internal object MorningBoard {
             val what=text(c,"what").ifEmpty { return@mapNotNull null };Line(what,text(c,"who")) }.take(max)
         val changed=(o.opt("changed") as? JSONArray)?.let { a -> (0 until a.length()).mapNotNull { (a.opt(it) as? String)?.let(::clean)?.takeIf { s -> s.isNotEmpty() } } }
             ?.take(CHANGED_MAX) ?: emptyList()
-        return Board(calls,waiting,week,inProgress,lines("check",CHECK_MAX),lines("doneCheck",DONE_CHECK_MAX),changed)
+        return Board(calls,waiting,week,inProgress,lines("check",CHECK_MAX),lines("doneCheck",DONE_CHECK_MAX),changed,Weather.fromJson(o.opt("weather")))
     }
 
     /** "오늘", "내일" or "" for [date] seen from [day]. */
@@ -95,10 +97,29 @@ internal object MorningBoard {
             p.days?.let { put("days",it) };if(p.unsure) put("unsure",true) }
         if(b.calls.isNotEmpty()) out.put("calls",JSONArray().apply { b.calls.forEach { put(person(it)) } })
         if(b.waiting.isNotEmpty()) out.put("waiting",JSONArray().apply { b.waiting.forEach { put(person(it)) } })
+        val wx=b.weather
         if(b.week.isNotEmpty()) out.put("week",JSONArray().apply { b.week.forEach { d ->
-            put(JSONObject().put("date",d.date.toString()).put("label",KakaoReport.dayLabel(d.date)).put("near",near(d.date,day)).put("items",JSONArray(d.items))) } })
+            put(JSONObject().put("date",d.date.toString()).put("label",KakaoReport.dayLabel(d.date)).put("near",near(d.date,day)).put("items",JSONArray(d.items))
+                .apply {
+                    // v4.5 r26-2: the day's forecast as numbers (x) and its caution kinds (k); the page writes the words.
+                    val c=wx ?: return@apply
+                    val w=c.day(d.date) ?: return@apply
+                    val next=c.day(d.date.plusDays(1))
+                    put(WEB_WEATHER,Weather.webX(w,next))
+                    Weather.kinds(d.items,w,next).takeIf { it.isNotEmpty() }?.let { put(WEB_KINDS,JSONArray(it)) }
+                }) } })
+        if(wx!=null && b.week.any { wx.day(it.date)!=null }) out.put(WEB_LABEL,clean(wx.site.label))
         if(b.doneCheck.isNotEmpty()) out.put("doneCheck",JSONArray().apply { b.doneCheck.forEach { put(JSONObject().put("what",it.what).put("who",it.who)) } })
         if(b.changed.isNotEmpty()) out.put("changed",JSONArray(b.changed))
+    }
+    /** v4.5 r26-2: the web view's weather keys (short: every character rides in the address). */
+    const val WEB_WEATHER="x";const val WEB_KINDS="k";const val WEB_LABEL="wl"
+    /** The fragment cap's last step ([KakaoReport.WEB_CUTS] "wx"): the weather goes after everything else. */
+    internal fun dropWeather(d:JSONObject):Boolean {
+        var cut=d.remove(WEB_LABEL)!=null
+        d.optJSONArray("week")?.let { a -> for(i in 0 until a.length()) a.optJSONObject(i)?.let { e ->
+            if(e.remove(WEB_WEATHER)!=null) cut=true;if(e.remove(WEB_KINDS)!=null) cut=true } }
+        return cut
     }
     /** inProgress as the web view had it (v4.3: {what}), with status, days and unsure only when there are some. */
     internal fun webIssues(b:Board)=JSONArray().apply { b.inProgress.forEach { i ->

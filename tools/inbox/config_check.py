@@ -6,6 +6,7 @@ silently means "off", so the copy step refuses anything the phone would not unde
 Usage: config_check.py <file>   (exit 0 and one summary line when fine, exit 1 with the reasons otherwise)
 """
 import json
+import re
 import sys
 
 CANDIDATES = {"a", "b", "c"}
@@ -20,7 +21,7 @@ def problems(cfg):
     if not isinstance(cfg, dict):
         return ["top level must be an object"]
     for k in cfg:
-        if k not in ("bench", "samples", "power", "kakao"):
+        if k not in ("bench", "samples", "power", "kakao", "site"):
             out.append(f"unknown block: {k}")
     b = cfg.get("bench")
     if b is not None:
@@ -82,7 +83,29 @@ def problems(cfg):
                     out.append(f"kakao: unknown key {k}")
             if "webMax" in kk and not _int(kk["webMax"], 1000, 6000):
                 out.append("kakao.webMax must be a whole number 1000..6000")
+    # v4.5 r26-1: the forecast's site (absent: near Incheon City Hall). The phone takes anything else as the default.
+    st = cfg.get("site")
+    if st is not None:
+        if not isinstance(st, dict):
+            out.append("site must be an object")
+        else:
+            for k in st:
+                if k not in ("lat", "lon", "label"):
+                    out.append(f"site: unknown key {k}")
+            if not _num(st.get("lat"), 33, 39):
+                out.append("site.lat must be a number 33..39")
+            if not _num(st.get("lon"), 124, 132):
+                out.append("site.lon must be a number 124..132")
+            if "label" in st and not (isinstance(st["label"], str) and LABEL.fullmatch(st["label"].strip() or "-")):
+                out.append("site.label must be 1..12 Korean or Latin letters")
     return out
+
+
+LABEL = re.compile(r"[가-힣A-Za-z ]{1,12}")
+
+
+def _num(v, lo, hi):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and v == v and lo <= v <= hi
 
 
 DEFAULT_BUDGET_MIN = 20
@@ -93,7 +116,9 @@ def summary(cfg):
     b, s = cfg.get("bench") or {}, cfg.get("samples") or {}
     budget = (cfg.get("power") or {}).get("budgetMin", DEFAULT_BUDGET_MIN)
     web = (cfg.get("kakao") or {}).get("webMax", DEFAULT_WEB_MAX)
-    return "bench=%s samples=%s budgetMin=%d webMax=%d" % ("on" if b.get("on") is True else "off", "on" if s.get("on") is True else "off", budget, web)
+    site = cfg.get("site")
+    where = "default" if not site else "%s,%s" % (site.get("lat"), site.get("lon"))
+    return "bench=%s samples=%s budgetMin=%d webMax=%d site=%s" % ("on" if b.get("on") is True else "off", "on" if s.get("on") is True else "off", budget, web, where)
 
 
 def main(argv):
