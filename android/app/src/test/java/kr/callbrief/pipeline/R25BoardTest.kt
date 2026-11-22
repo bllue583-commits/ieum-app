@@ -25,6 +25,7 @@ import org.robolectric.annotation.SQLiteMode
 @Config(sdk=[35],shadows=[ShadowTextKeys::class,ShadowTextKeys.ExistingApprovedSettings::class,ShadowTextAtomicFile::class])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class R25BoardTest:ProtectedTextHostTestBase() {
+    private val app get()=org.robolectric.RuntimeEnvironment.getApplication()
     private fun views(v:View):List<View> =listOf(v)+if(v is ViewGroup)(0 until v.childCount).flatMap { views(v.getChildAt(it)) } else emptyList()
     private fun tag(a:android.app.Activity,t:String)=a.window.decorView.findViewWithTag<View>(t)
     private fun settle(check:()->Boolean) { repeat(400) { shadowOf(Looper.getMainLooper()).idle();if(check())return;Thread.sleep(10) };fail("UI did not settle") }
@@ -85,5 +86,38 @@ class R25BoardTest:ProtectedTextHostTestBase() {
         assertNull(HomeScreen.board(JSONObject().put(ReportFetch.REPORT_BODY,JSONObject().put("day",today.toString()).put("inProgress",JSONArray()).toString()),today))
         assertNull(HomeScreen.board(JSONObject().put(ReportFetch.REPORT_BODY,"{broken"),today))
         assertEquals(4,HomeScreen.board(JSONObject().put(ReportFetch.REPORT_BODY,report().toString()),today)!!.calls.size)
+    }
+
+    // ---- v4.4 r25-3: old to-dos do not pile up in front of the person (nothing is closed, the store stays as it is) ----
+    @Test fun onlyRecentAndReportedToDosStayOpenTheRestFold() {
+        val day=86_400_000L;val now=System.currentTimeMillis()
+        fun item(id:String,at:Long,status:String="open",callMs:Long?=null)=OpenItem(id,id,"",status,1,"",null,createdMs=at,callMs=callMs)
+        val all=listOf(item("new",now),item("six",now-6*day),item("eight",now-8*day),item("old_check",now-20*day,"needs_confirmation"),
+            item("old_reported",now-30*day),item("old_talked",now-30*day,callMs=now-2*day),item("unknown",0))
+        val (open,past)=TasksScreen.split(all,listOf("old_reported"),today)
+        assertEquals(setOf("new","six","old_reported","old_talked"),open.map { it.id }.toSet())
+        assertEquals("newest first",listOf("eight","old_check","unknown"),past.map { it.id })
+        assertEquals(listOf("b","a"),TasksScreen.reportIds(JSONObject().put("today",JSONArray(listOf(JSONObject().put("id","b"),JSONObject().put("id","a"),JSONObject().put("id","b"),JSONObject())))))
+        assertTrue(TasksScreen.reportIds(null).isEmpty())
+        val a=launchMain(Screen.TASKS)
+        val groups=a.tasks.groups(open,listOf("old_reported","missing","six"))
+        assertEquals(TasksScreen.REPORT_GROUP,groups[0].first);assertEquals("in the report's order",listOf("old_reported","six"),groups[0].second.map { it.id })
+        assertTrue(groups.drop(1).none { g -> g.second.any { it.id=="old_reported" || it.id=="six" } })
+    }
+    @Test fun theTaskListFoldsWhatIsOlderThanAWeek() {
+        PreviewSeed.ensure(app)
+        val before=CallRecordStore(app).use { it.openItems().size }
+        val old=System.currentTimeMillis()-9*86_400_000L
+        val oldIds=(1..3).map { i -> CallRecordStore(app) { old }.use { it.addUserItem("지난주 일 $i") }!! }
+        val newId=CallRecordStore(app).use { it.addUserItem("오늘 적은 일") }!!
+        val a=launchMain(Screen.TASKS)
+        settle { tag(a,"task_add")!=null && tag(a,"task_$newId")!=null }
+        assertTrue(tag(a,"task_$newId").isShown)
+        oldIds.forEach { assertNull(tag(a,"task_$it")?.takeIf { v -> v.isShown }) }
+        val fold=tag(a,"tasks_old") as TextView
+        assertTrue(fold.text.toString(),Regex("지난 일 \\d+개 보기 ›").matches(fold.text.toString()))
+        fold.performClick();shadowOf(Looper.getMainLooper()).idle()
+        oldIds.forEach { assertTrue(tag(a,"task_$it").isShown) }
+        assertEquals("nothing closed",before+4,CallRecordStore(app).use { it.openItems().size })
     }
 }

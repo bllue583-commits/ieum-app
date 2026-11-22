@@ -72,9 +72,31 @@ internal class TasksScreen(a:MainActivity):AppScreen(a) {
     private var items:List<OpenItem> =emptyList()
     private var done:List<OpenItem> =emptyList()
     private var companies:List<String> =emptyList()
+    /** v4.4 r25-3: this morning's to-dos by id, in the report's order. */
+    private var reportIds:List<String> =emptyList()
     /** The list was read at least once (so it can be drawn at once when the screen comes back, and read again behind it). */
     private var loaded=false
-    private companion object { const val CHECK_GROUP="끝났는지 확인해 주세요";const val LATER_GROUP="그전에 요청한 일" }
+    internal companion object {
+        const val CHECK_GROUP="끝났는지 확인해 주세요";const val LATER_GROUP="그전에 요청한 일"
+        /** v4.4 r25-3: the to-dos of this morning's report, first and in the report's order. */
+        const val REPORT_GROUP="오늘 아침 보고에 든 일"
+        /** v4.4 r25-3: open by default only what was asked for or talked about in the last this many days, or is in this morning's
+         * report; the rest folds into one "지난 일 n개 보기" (nothing is closed or deleted, the store is as it was). */
+        const val RECENT_DAYS=7L
+        /** When the to-do was last heard of: its request, or the call it came from (the store keeps no later mention time). */
+        fun heardMs(i:OpenItem)=maxOf(i.createdMs,i.callMs ?: 0L)
+        /** Shown open, and folded away: in this morning's report or heard of within [RECENT_DAYS] days (KST days) stays open. */
+        fun split(all:List<OpenItem>,reportIds:List<String>,today:java.time.LocalDate):Pair<List<OpenItem>,List<OpenItem>> {
+            val from=today.minusDays(RECENT_DAYS-1)
+            val (open,past)=all.partition { it.id in reportIds || (heardMs(it)>0 && !CallRecordStore.kstDay(heardMs(it)).isBefore(from)) }
+            return open to past.sortedByDescending(::heardMs)
+        }
+        /** The ids of this morning's to-dos (report today[]), in its order; empty without today's report. */
+        fun reportIds(report:org.json.JSONObject?):List<String> {
+            val t=report?.optJSONArray("today") ?: return emptyList()
+            return (0 until t.length()).mapNotNull { t.optJSONObject(it)?.optString("id")?.takeIf { id -> id.isNotBlank() } }.distinct()
+        }
+    }
     /** Rows drawn at once; the rest follow in parts of this size (review #28: hundreds of open items). */
     internal val FIRST_ROWS=30
 
@@ -92,31 +114,33 @@ internal class TasksScreen(a:MainActivity):AppScreen(a) {
 
     private fun load() {
         a.lifecycleScope.launch {
+            val ids=withContext(Dispatchers.IO) { runCatching { reportIds(kr.callbrief.pipeline.report.ReportFetch.today(a)) }.getOrDefault(emptyList()) }
             val result=withContext(Dispatchers.IO) { runCatching { kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(a)).let { s ->
                 val open=s.openItems()
                 people=runCatching { s.personIdsOf(open.mapNotNull { it.recordId }) }.getOrDefault(emptyMap())
                 Triple(open,runCatching { s.doneItems(System.currentTimeMillis()-7*86_400_000L) }.getOrDefault(emptyList()),
                     runCatching { s.companies().map { it.name } }.getOrDefault(emptyList())) } } }
             if(!live())return@launch
-            result.onSuccess { (i,d,c) -> items=i;done=d;companies=c;loaded=true }
+            result.onSuccess { (i,d,c) -> items=i;done=d;companies=c;reportIds=ids;loaded=true }
             render(result.isSuccess)
         }
     }
 
-    /** Grouped by when they were asked for, newest first; ones the AI thinks are finished come first for a check. */
-    internal fun groups(all:List<OpenItem>):List<Pair<String,List<OpenItem>>> {
+    /** Grouped by when they were asked for, newest first; ones the AI thinks are finished come first for a check. v4.4 r25-3:
+     * before them, the to-dos of this morning's report ([ids]) in the report's order. */
+    internal fun groups(all:List<OpenItem>,ids:List<String> =emptyList()):List<Pair<String,List<OpenItem>>> {
         val today=CallUi.today()
         fun day(i:OpenItem)=CallRecordStore.kstDay(i.createdMs)
-        val check=all.filter { it.status=="needs_confirmation" }
-        val rest=(all-check.toSet()).sortedByDescending { it.createdMs }
-        return listOf(CHECK_GROUP to check,"오늘 요청한 일" to rest.filter { day(it)==today },
+        val byId=all.associateBy { it.id }
+        val inReport=ids.mapNotNull(byId::get)
+        val others=all-inReport.toSet()
+        val check=others.filter { it.status=="needs_confirmation" }
+        val rest=(others-check.toSet()).sortedByDescending { it.createdMs }
+        return listOf(REPORT_GROUP to inReport,CHECK_GROUP to check,"오늘 요청한 일" to rest.filter { day(it)==today },
             "어제 요청한 일" to rest.filter { day(it)==today.minusDays(1) },LATER_GROUP to rest.filter { day(it)<today.minusDays(1) })
             .filter { it.second.isNotEmpty() }
     }
 
-    /** Asked for more than this many days ago: folded into one "오래된 일 n개 보기" line. */
-    internal val OLD_DAYS=14L
-    internal fun isOld(i:OpenItem)=CallRecordStore.kstDay(i.createdMs)<CallUi.today().minusDays(OLD_DAYS)
     /** The person of each item's call, by record id: "김민수 님" opens their page (v2.8). */
     @Volatile private var people:Map<String,String> =emptyMap()
     private fun taskView(item:OpenItem,check:Boolean)=CheckRows.row(a,item,status=if(check) "" else item.status,
@@ -150,20 +174,20 @@ internal class TasksScreen(a:MainActivity):AppScreen(a) {
         // The first rows are drawn now; the rest of every group follows a part at a time, in the same sheets.
         val later=ArrayList<Triple<LinearLayout,Boolean,List<OpenItem>>>()
         var budget=FIRST_ROWS
-        for((name,list) in groups(items)) {
+        // v4.4 r25-3: open only this morning's to-dos and what was heard of in the last 7 days; the rest (11/22: 307 open,
+        // half of them over 8 days old, never marked done) folds into one line at the end, newest first. Nothing is closed.
+        val (recent,past)=split(items,reportIds,CallUi.today())
+        for((name,shown) in groups(recent,reportIds)) {
             val check=name==CHECK_GROUP
-            // The oldest requests fold away so the list starts with what is recent.
-            val old=if(name==LATER_GROUP) list.filter(::isOld) else emptyList()
-            val shown=list-old.toSet()
-            body.addView(CallUi.section(a,name,"${list.size}개"))
-            if(shown.isNotEmpty()) {
-                val now=shown.take(budget.coerceAtLeast(0));budget-=now.size
-                val sheet=CallUi.list(a,now.map { taskView(it,check) },inset=16).apply { this.tag="tasks_list_$name" }
-                body.addView(sheet)
-                if(now.size<shown.size) later+=Triple(sheet,check,shown.drop(now.size))
-            }
-            if(old.isNotEmpty()) body.addView(fold("오래된 일 ${old.size}개 보기 ›","tasks_old") { old.map { taskView(it,false) } })
+            body.addView(CallUi.section(a,name,"${shown.size}개"))
+            val now=shown.take(budget.coerceAtLeast(0));budget-=now.size
+            val sheet=CallUi.list(a,now.map { taskView(it,check) },inset=16).apply { this.tag="tasks_list_$name" }
+            body.addView(sheet)
+            if(now.size<shown.size) later+=Triple(sheet,check,shown.drop(now.size))
         }
+        if(items.isNotEmpty() && recent.isEmpty()) body.addView(CallUi.card(a).apply { tag="tasks_recent_none"
+            addView(CallUi.text(a,"최근 7일에 생긴 체크할 일은 없어요.",CallUi.BODY,color=CallUi.SUBTLE)) })
+        if(past.isNotEmpty()) body.addView(fold("지난 일 ${past.size}개 보기 ›","tasks_old") { past.map { taskView(it,it.status=="needs_confirmation") } })
         // Finished in the last 7 days (to look at, not to change), and the user's own items.
         if(done.isNotEmpty()) {
             body.addView(CallUi.gap(a,16))

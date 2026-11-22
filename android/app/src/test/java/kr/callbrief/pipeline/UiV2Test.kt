@@ -275,7 +275,7 @@ class UiV2Test:ProtectedTextHostTestBase() {
         settle { tag(a,"tasks_done")!=null }
         assertNull("old row stays folded away",tag(a,"task_$oldId")?.takeIf { it.isShown })
         val fold=tag(a,"tasks_old") as TextView
-        assertEquals("오래된 일 1개 보기 ›",fold.text.toString())
+        assertTrue(fold.text.toString(),Regex("지난 일 \\d+개 보기 ›").matches(fold.text.toString())) // v4.4 r25-3: older than 7 days fold
         assertEquals("끝낸 일 보기 (7일) ›",(tag(a,"tasks_done") as TextView).text.toString())
         assertNotNull(tag(a,"task_add"))
         assertTrue(texts(a).any { it.text.toString().endsWith("개 남았어요") })
