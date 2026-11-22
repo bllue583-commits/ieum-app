@@ -16,6 +16,21 @@ def good():
             "check": [{"what": "13층/30층 중 어느 쪽인지", "who": "△△철강"}]}
 
 
+def board():
+    """good() with the v12 sections (tidy.md 9-1, r25-1); every name and number made up."""
+    r = good()
+    r["inProgress"] = [{"what": "철근 단가 재견적", "status": "업체 회신 대기, 금요일 계약 예정", "days": 12},
+                       {"what": "3층 슬래브 타설", "days": 3, "unsure": True}, {"what": "옛 형식 한 줄"}]
+    r["calls"] = [{"who": "박하늘 과장", "company": "가나건설", "what": "거푸집 반입 시간 다시 묻기", "since": "11/5"},
+                  {"who": "이도윤", "what": "견적 회신 독촉", "since": "어제", "unsure": True}]
+    r["waiting"] = [{"who": "박하늘 과장", "company": "가나건설", "what": "수정 도면", "since": "10/20", "days": 18},
+                    {"who": "최서준 대리", "company": "다라전기", "what": "배선 자재 견적서", "since": "11/4", "days": 3}]
+    r["week"] = [{"date": "2026-11-07", "items": ["3층 슬래브 타설", "철근 반입 오전"]}, {"date": "2026-11-10", "items": ["소방 검사"]}]
+    r["doneCheck"] = [{"what": "안전 교육 일지 제출", "who": "본사"}]
+    r["changed"] = ["철근 반입 11/9로 바뀜", "새 일 2건"]
+    return r
+
+
 class ReportCheckTest(unittest.TestCase):
     def assertBreaks(self, report, *fragments):
         got = rc.check(report)
@@ -40,8 +55,113 @@ class ReportCheckTest(unittest.TestCase):
         r["yesterday"] = [{"who": f"업체{i}", "what": "자재 입고"} for i in range(9)]
         self.assertBreaks(r, "yesterday: 9줄 (최대 8줄)")
         r = good()
-        r["inProgress"] = [{"what": "공정 진행"}] * 4
-        self.assertBreaks(r, "inProgress: 4줄 (최대 3줄)")
+        r["inProgress"] = [{"what": "공정 진행"}] * 26
+        self.assertBreaks(r, "inProgress: 26줄 (최대 25줄)")
+
+    def test_v12_board_passes_and_v11_still_passes(self):
+        self.assertEqual([], rc.check(board()))
+        self.assertEqual([], rc.check(good()), "every v12 key is optional")
+        r = board()
+        r.update(calls=[], waiting=[], week=[], doneCheck=[], changed=[])
+        self.assertEqual([], rc.check(r))
+
+    def test_v12_limits(self):
+        r = board()
+        r["calls"] = [{"who": "박하늘", "what": "전화", "since": "어제"}] * 11
+        self.assertBreaks(r, "calls: 11줄 (최대 10줄)")
+        r = board()
+        r["waiting"] = [{"who": "박하늘", "what": "도면", "since": "어제", "days": 1}] * 21
+        self.assertBreaks(r, "waiting: 21줄 (최대 20줄)")
+        r = board()
+        r["changed"] = ["바뀐 것"] * 7
+        self.assertBreaks(r, "changed: 7줄 (최대 6줄)")
+        r = board()
+        r["week"][0]["items"] = ["일정"] * 7
+        self.assertBreaks(r, "week[0].items: 7줄 (최대 6줄)")
+        r = board()
+        r["week"] = [{"date": f"2026-11-{d:02d}", "items": ["일정"]} for d in range(7, 15)]
+        self.assertBreaks(r, "week: 8일 (최대 7일)", "week[7].date: 보고 날짜부터 7일 안이 아님")
+
+    def test_v12_shapes(self):
+        r = board()
+        r["waiting"][0]["days"] = "18일째"
+        self.assertBreaks(r, "waiting[0].days: 정수가 아님")
+        r = board()
+        del r["waiting"][1]["days"]
+        self.assertBreaks(r, "waiting[1].days: 빠짐")
+        r = board()
+        r["inProgress"][0]["days"] = True
+        self.assertBreaks(r, "inProgress[0].days: 정수가 아님")
+        r = board()
+        r["inProgress"][0]["days"] = -1
+        self.assertBreaks(r, "inProgress[0].days: 0 이상의 정수가 아님")
+        r = board()
+        r["calls"][0]["unsure"] = "yes"
+        self.assertBreaks(r, "calls[0].unsure: 참/거짓이 아님")
+        r = board()
+        r["calls"][0]["since"] = "지난주"
+        self.assertBreaks(r, "calls[0].since: 날짜 표현이 아님")
+        r = board()
+        r["calls"][0]["phone"] = "x"
+        self.assertBreaks(r, "calls[0].phone: 모르는 키")
+        r = board()
+        r["week"] = {"2026-11-07": ["타설"]}
+        self.assertBreaks(r, "week: 배열이 아님")
+        r = board()
+        r["week"][0]["date"] = "11/7"
+        self.assertBreaks(r, "week[0].date: YYYY-MM-DD 형식이 아님")
+        r = board()
+        r["week"][1]["date"] = "2026-11-07"
+        self.assertBreaks(r, "week[1].date: 날짜순이 아님")
+        r = board()
+        r["week"][1]["items"] = []
+        self.assertBreaks(r, "week[1].items: 비어 있음")
+        r = board()
+        r["week"][0]["date"] = "2026-11-06"
+        self.assertBreaks(r, "week[0].date: 보고 날짜부터 7일 안이 아님")
+        r = board()
+        r["changed"] = [{"what": "바뀜"}]
+        self.assertBreaks(r, "changed[0]: 문자열이 아님")
+
+    def test_v12_waiting_oldest_first(self):
+        r = board()
+        r["waiting"].reverse()
+        self.assertBreaks(r, "waiting: 오래된 것부터가 아님")
+
+    def test_v12_doubt_is_a_flag_not_a_tail(self):
+        for section, key in (("calls", "what"), ("waiting", "what"), ("inProgress", "status")):
+            r = board()
+            r[section][0][key] = "철근 13톤 (숫자 확인 필요)"
+            self.assertBreaks(r, f"{section}[0].{key}: 확인 필요 꼬리 대신 unsure:true")
+        r = board()
+        r["calls"][0]["what"] = "견적 금액 (확인 필요)"
+        self.assertBreaks(r, "calls[0].what: 확인 필요 꼬리")
+
+    def test_v12_text_rules_and_lines(self):
+        r = board()
+        r["changed"][0] = "도면 회신 010-1234-5678"
+        self.assertBreaks(r, "changed[0]: 전화번호로 보이는 숫자")
+        r = board()
+        r["week"][0]["items"][0] = "타설 · 반입"
+        self.assertBreaks(r, "week[0].items[0]: 가운데 점이나 말줄임표")
+        r = board()
+        r["waiting"][0]["what"] = "도면 보내 준대요"
+        self.assertBreaks(r, "waiting[0].what: 해요체")
+        r = board()
+        r["calls"][0]["what"] = "가" * (60 - len("가나건설 박하늘 과장: ") - len(" (11/5)") + 1)
+        self.assertBreaks(r, "calls[0]: 한 줄 61자")
+        r["calls"][0]["what"] = r["calls"][0]["what"][1:]
+        self.assertEqual([], rc.check(r))
+        r = board()
+        r["inProgress"][0]["status"] = "가" * 60
+        self.assertBreaks(r, "inProgress[0]: 한 줄")
+        r = board()
+        r["changed"][0] = "가" * 61
+        self.assertBreaks(r, "changed[0]: 한 줄 61자")
+        # Names are not held to the report style ("김하늘 대리님이요" is not a sentence ending).
+        r = board()
+        r["calls"][0]["company"] = "가나건설이에요"
+        self.assertEqual([], rc.check(r))
 
     def test_line_over_sixty(self):
         r = good()

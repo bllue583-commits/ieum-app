@@ -148,7 +148,7 @@ class RoutineDocTest {
         val section=prompt.substring(nineOne,ten)
         // The format of DESIGN_V5 1절: every key the phone reads (r15-1 KakaoReport.compose).
         val format=JSONObject(section.substringAfter("```json\n").substringBefore("\n```"))
-        assertEquals(listOf("day","generatedMs","tidyRev","head","yesterday","today","inProgress","check","late"),format.keys().asSequence().toList())
+        assertEquals(listOf("day","generatedMs","tidyRev","head","yesterday","today","inProgress","check","late","calls","waiting","week","doneCheck","changed"),format.keys().asSequence().toList())
         assertEquals(listOf("calls","newChecks","todayChecks","issues","pendingCalls","failedCalls"),format.getJSONObject("head").keys().asSequence().toList())
         assertEquals(listOf("who","what"),format.getJSONArray("late").getJSONObject(0).keys().asSequence().toList())
         assertEquals(listOf("who","what"),format.getJSONArray("yesterday").getJSONObject(0).keys().asSequence().toList())
@@ -157,7 +157,7 @@ class RoutineDocTest {
         listOf("`report/YYYY-MM-DD.json`","한국 시각 오늘","state의 records","매시간 결과 요약","업체(업체가 없으면 사람) 단위로 묶어",
             "약속, 금액, 날짜가 있는 줄을 먼저 두고 최대 8줄","개인 통화(business가 false)는 넣지 않는다","빈 배열 `[]`",
             "오늘과 어제 요청한 것(createdMs)과 확인 필요(status가 needs_confirmation)를 먼저","최대 10줄","\"오늘 요청\", \"어제 요청\", \"3일 전 요청\"",
-            "흔적이 없으면 빈 문자열 `\"\"`","완료 처리는 하지 않는다","어제 움직임이 있던 것 먼저 최대 3줄","한 줄 60자",
+            "흔적이 없으면 빈 문자열 `\"\"`","완료 처리는 하지 않는다","어제 움직임이 있던 것 먼저 최대 25줄","한 줄 60자",
             "가운데 점, 말줄임표, 영어 상태값","\"기한\", \"지남\"","\"까지\"로 끝나는 기한 표현","전화번호는 절대 넣지 않는다",
             "python3 tools/report_check.py report/YYYY-MM-DD.json --state tidy/state.json","30일 넘게 지난 report 파일은 `git rm` 한다",
             "10번의 \"tidy\" 커밋에 함께 넣는다").forEach { assertTrue(it,section.contains(it)) }
@@ -180,8 +180,20 @@ class RoutineDocTest {
         listOf("tag` 순서(important, confirm, request, regular, optional)","근거가 없으면 이것(기본값)","기한(due)이 오늘이거나 지난 일",
             "숫자나 대상이 애매해 되물어야 하는 일","매주, 매월 반복되는","하면 좋지만 안 해도 당장 문제없는 일","이 다섯 부호 말고는 쓰지 않는다").forEach { assertTrue(it,section.contains(it)) }
         assertFalse("8 lines no more",section.contains("최근인 것부터 최대 8줄"))
-        listOf("urgent","waiting").forEach { assertFalse("no $it tag",section.contains("`$it`")) }
+        // v12: `waiting` is a section key now; as a tag it would be written "`waiting`(".
+        listOf("urgent","waiting").forEach { assertFalse("no $it tag",section.contains("`$it`(")) }
         assertTrue(File(doc().parentFile,"self-report.md").readText().contains("reportWritten"))
+        // v12 (r25-1): the briefing's sections as structure, taken from the same choice as briefing.md (one judgment, not two).
+        assertEquals(listOf("what","status","days"),format.getJSONArray("inProgress").getJSONObject(0).keys().asSequence().toList())
+        assertEquals(listOf("who","company","what","since"),format.getJSONArray("calls").getJSONObject(0).keys().asSequence().toList())
+        assertEquals(listOf("who","company","what","since","days"),format.getJSONArray("waiting").getJSONObject(0).keys().asSequence().toList())
+        assertEquals(listOf("date","items"),format.getJSONArray("week").getJSONObject(0).keys().asSequence().toList())
+        assertEquals(listOf("what","who"),format.getJSONArray("doneCheck").getJSONObject(0).keys().asSequence().toList())
+        assertEquals("",format.getJSONArray("changed").getString(0))
+        listOf("briefing.md의 같은 절을 쓸 때 정한 항목을 그대로 구조로 옮긴다","따로 다시 고르거나 판단하지 않는다","최대 10줄","최대 20줄, 오래된 것부터",
+            "오늘부터 7일 안의 날만","하루 최대 6줄","최대 6줄","`\"unsure\":true`","\"(숫자 확인 필요)\" 같은 꼬리를 붙이지 않고",
+            "`calls`와 `waiting`은 \"company who: what (since)\"").forEach { assertTrue(it,section.contains(it)) }
+        assertTrue(head.contains("옛 폰(v4.3)은 모르는 키를 건너뛰고"))
     }
 
     /** v3.1: the watchdog compares the routine's self-reported promptVersion with version.json's tidyVersion (the head line), so the
@@ -216,8 +228,8 @@ class RoutineDocTest {
          * v9: DESIGN_V7 3.3, r17-0, mail removed, same result keys; v10: r23-7, rule 12 on jobs finished more than 3 days ago). */
         const val DOC_VERSION=10
         /** The version docs/routines/tidy.md is at (v7: DESIGN_V5 2.2, r15-2, the morning report; v8: DESIGN_V7 3.2, r17-2; v9: r18, today[].tag and 10 lines;
-         * v10: r20, wrong[]; v11: r21-1, pending.yesterdayFailed and head.failedCalls). */
-        const val TIDY_VERSION=11
+         * v10: r20, wrong[]; v11: r21-1, pending.yesterdayFailed and head.failedCalls; v12: r25-1, the briefing's sections in the report). */
+        const val TIDY_VERSION=12
         /** True once ClaudeCallAnalyzer (r13-1's file) carries the doc's version (the orchestrator's integration step). */
         val codeAtDocVersion get()=ClaudeCallAnalyzer.PROMPT_VERSION>=DOC_VERSION
         /** Both routines find the inbox repository the same way. */

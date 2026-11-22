@@ -13,31 +13,48 @@ v3.9 r20 (tidy.md v10): with --state, a today[] line whose id is in the state's 
 [틀렸어요]; ids or {id, ...} objects) fails too. A missing or unreadable state file is no failure (an old phone sends none).
 v4.0 r21-1 (tidy.md v11): head.failedCalls (yesterday's calls whose text could not be made; optional, so a v10 report passes).
 With --state, a head.failedCalls that is not the state's pending.yesterdayFailed (0 when the state has none) fails too.
+v4.4 r25-1 (tidy.md v12): the briefing's sections as structure, all optional (a v11 report passes): calls[] (10), waiting[] (20,
+oldest first by days), week[] ({date, items[]} from the report's day on for 7 days, 6 lines a day, in date order), doneCheck[]
+(10), changed[] (strings, 6); inProgress[] up to 25 with status and days. A doubtful line carries unsure:true instead of a
+"(숫자 확인 필요)" tail in its text.
 """
 import json, os, re, sys
 
 LINE_MAX = 60
-LIMITS = {"yesterday": 8, "today": 10, "inProgress": 3, "check": 3, "late": 5}
+LIMITS = {"yesterday": 8, "today": 10, "inProgress": 25, "check": 3, "late": 5, "calls": 10, "waiting": 20, "doneCheck": 10}
+# v4.4 r25-1: the sections that are not a list of objects.
+WEEK_DAYS, WEEK_ITEMS, CHANGED_MAX = 7, 6, 6
 HEAD_KEYS = ("calls", "newChecks", "todayChecks", "issues")
 TOP_KEYS = ("day", "generatedMs", "tidyRev", "head", "yesterday", "today", "inProgress", "check")
 # v3.7 (DESIGN_V7 3.2 M3, M4; tidy.md v8): head.pendingCalls and late[]. Optional, so a v7 report (before the routine moves to
 # v8 on the release day) still passes; when present they are checked like the rest.
 HEAD_OPTIONAL = ("pendingCalls", "failedCalls")
-TOP_OPTIONAL = ("late",)
+TOP_OPTIONAL = ("late", "calls", "waiting", "week", "doneCheck", "changed")
 # r18 (tidy.md v9, user 11/13): today[].tag, one of five in this order (the KakaoTalk list's thumbnails). Optional, so a v8
 # report (before the routine moves to v9 on the release day) still passes; the phone reads a missing tag as confirm or request.
 TAGS = ("important", "confirm", "request", "regular", "optional")
 MAX_IMPORTANT = 3
-ITEM_OPTIONAL = {"today": {"tag": str}}
+ITEM_OPTIONAL = {"today": {"tag": str}, "inProgress": {"status": str, "days": int, "unsure": bool},
+                 "calls": {"company": str, "unsure": bool}, "waiting": {"company": str, "unsure": bool}}
 ITEM_KEYS = {
     "yesterday": {"who": str, "what": str},
     "today": {"id": str, "what": str, "who": str, "since": str, "status": str, "check": bool},
     "inProgress": {"what": str},
     "check": {"what": str, "who": str},
     "late": {"who": str, "what": str},
+    "calls": {"who": str, "what": str, "since": str},
+    "waiting": {"who": str, "what": str, "since": str, "days": int},
+    "doneCheck": {"what": str, "who": str},
 }
 # Fields that must not be empty (the rest may be "").
-REQUIRED_TEXT = {"yesterday": ("who", "what"), "today": ("id", "what", "since"), "inProgress": ("what",), "check": ("what",), "late": ("who", "what")}
+REQUIRED_TEXT = {"yesterday": ("who", "what"), "today": ("id", "what", "since"), "inProgress": ("what",), "check": ("what",), "late": ("who", "what"),
+                 "calls": ("what", "since"), "waiting": ("what", "since"), "doneCheck": ("what",)}
+# v4.4 r25-1: when it was last talked about, or when it was promised ("11/18", "어제").
+CONTACT_RE = re.compile(r"^(오늘|어제|그제|\d{1,2}/\d{1,2})$")
+# A doubt goes in unsure:true, not as a tail of the text ("(숫자 확인 필요)", "(확인 필요)").
+UNSURE_TAIL_RE = re.compile(r"\(\s*(숫자|금액|날짜|대상|수량)?\s*확인\s*필요\s*\)\s*$")
+UNSURE_SECTIONS = ("calls", "waiting", "inProgress")
+TYPE_WORDS = {str: "문자열이", bool: "참/거짓이", int: "정수가"}
 
 DAY_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
 SINCE_RE = re.compile(r"^(오늘|어제|그제|\d{1,3}일 전|\d{1,2}주 전|\d{1,2}/\d{1,2}) 요청$")
@@ -106,7 +123,14 @@ def line_of(section, item):
     if section == "today":
         extra = [x for x in (item.get("who"), item.get("since"), item.get("status")) if isinstance(x, str) and x]
         return item.get("what", "") + (f" ({', '.join(extra)})" if extra else "")
-    if section == "check":
+    if section in ("calls", "waiting"):
+        name = " ".join(x for x in (item.get("company"), item.get("who")) if isinstance(x, str) and x)
+        since = item.get("since")
+        return (f"{name}: " if name else "") + item.get("what", "") + (f" ({since})" if isinstance(since, str) and since else "")
+    if section == "inProgress":
+        status = item.get("status")
+        return item.get("what", "") + (f": {status}" if isinstance(status, str) and status else "")
+    if section in ("check", "doneCheck"):
         who = item.get("who")
         return item.get("what", "") + (f" ({who})" if isinstance(who, str) and who else "")
     return item.get("what", "")
@@ -114,6 +138,91 @@ def line_of(section, item):
 
 def is_int(v):
     return isinstance(v, int) and not isinstance(v, bool)
+
+
+def of_type(v, t):
+    return is_int(v) if t is int else isinstance(v, t)
+
+
+def check_week(report, day):
+    """week[] (v4.4 r25-1): [{date, items[]}] from the report's day on for WEEK_DAYS days, in date order, 1 to WEEK_ITEMS lines."""
+    import datetime
+    out = []
+    week = report["week"]
+    if not isinstance(week, list):
+        return ["week: 배열이 아님"]
+    if len(week) > WEEK_DAYS:
+        out.append(f"week: {len(week)}일 (최대 {WEEK_DAYS}일)")
+    start = None
+    if isinstance(day, str) and DAY_RE.match(day):
+        try:
+            start = datetime.date.fromisoformat(day)
+        except ValueError:
+            start = None
+    last = None
+    for i, d in enumerate(week):
+        p = f"week[{i}]"
+        if not isinstance(d, dict):
+            out.append(f"{p}: 객체가 아님")
+            continue
+        for k in d:
+            if k not in ("date", "items"):
+                out.append(f"{p}.{k}: 모르는 키")
+        date = d.get("date")
+        when = None
+        if not isinstance(date, str) or not DAY_RE.match(date):
+            out.append(f"{p}.date: YYYY-MM-DD 형식이 아님")
+        else:
+            try:
+                when = datetime.date.fromisoformat(date)
+            except ValueError:
+                out.append(f"{p}.date: 없는 날짜")
+        if when is not None:
+            if start is not None and not (start <= when < start + datetime.timedelta(days=WEEK_DAYS)):
+                out.append(f"{p}.date: 보고 날짜부터 {WEEK_DAYS}일 안이 아님")
+            if last is not None and when <= last:
+                out.append(f"{p}.date: 날짜순이 아님(같은 날은 한 묶음)")
+            last = when
+        items = d.get("items")
+        if not isinstance(items, list):
+            out.append(f"{p}.items: 배열이 아님")
+            continue
+        if not items:
+            out.append(f"{p}.items: 비어 있음(일정이 없는 날은 넣지 않음)")
+        if len(items) > WEEK_ITEMS:
+            out.append(f"{p}.items: {len(items)}줄 (최대 {WEEK_ITEMS}줄)")
+        for j, line in enumerate(items):
+            q = f"{p}.items[{j}]"
+            if not isinstance(line, str):
+                out.append(f"{q}: 문자열이 아님")
+                continue
+            if not line.strip():
+                out.append(f"{q}: 비어 있음")
+            out += text_problems(q, line)
+            if len(line) > LINE_MAX:
+                out.append(f"{q}: 한 줄 {len(line)}자 (최대 {LINE_MAX}자)")
+    return out
+
+
+def check_changed(report):
+    """changed[] (v4.4 r25-1): up to CHANGED_MAX lines of text."""
+    out = []
+    changed = report["changed"]
+    if not isinstance(changed, list):
+        return ["changed: 배열이 아님"]
+    if len(changed) > CHANGED_MAX:
+        out.append(f"changed: {len(changed)}줄 (최대 {CHANGED_MAX}줄)")
+    for i, line in enumerate(changed):
+        p = f"changed[{i}]"
+        if not isinstance(line, str):
+            out.append(f"{p}: 문자열이 아님")
+            continue
+        if not line.strip():
+            out.append(f"{p}: 비어 있음")
+        out += text_problems(p, line)
+        if len(line) > LINE_MAX:
+            out.append(f"{p}: 한 줄 {len(line)}자 (최대 {LINE_MAX}자)")
+    return out
 
 
 def check(report, file_day=None):
@@ -170,13 +279,25 @@ def check(report, file_day=None):
                 if k not in item:
                     out.append(f"{p}.{k}: 빠짐")
                     ok = False
-                elif not isinstance(item[k], t):
-                    out.append(f"{p}.{k}: {'참/거짓' if t is bool else '문자열'}이 아님")
+                elif not of_type(item[k], t):
+                    out.append(f"{p}.{k}: {TYPE_WORDS[t]} 아님")
                     ok = False
             optional = ITEM_OPTIONAL.get(section, {})
             for k in item:
                 if k not in shape and k not in optional:
                     out.append(f"{p}.{k}: 모르는 키")
+                elif k in optional and not of_type(item[k], optional[k]):
+                    out.append(f"{p}.{k}: {TYPE_WORDS[optional[k]]} 아님")
+                    ok = False
+            if "days" in item and is_int(item["days"]) and item["days"] < 0:
+                out.append(f"{p}.days: 0 이상의 정수가 아님")
+            if section in ("calls", "waiting") and isinstance(item.get("since"), str) and item["since"].strip() \
+                    and not CONTACT_RE.match(item["since"]):
+                out.append(f"{p}.since: 날짜 표현이 아님('11/18', '어제', '오늘')")
+            if section in UNSURE_SECTIONS:
+                for k in ("what", "status"):
+                    if isinstance(item.get(k), str) and UNSURE_TAIL_RE.search(item[k]):
+                        out.append(f"{p}.{k}: 확인 필요 꼬리 대신 unsure:true")
             if section == "today" and "tag" in item:
                 if item["tag"] not in TAGS:
                     out.append(f"{p}.tag: 분류 부호가 아님({', '.join(TAGS)})")
@@ -186,7 +307,7 @@ def check(report, file_day=None):
                     out.append(f"{p}.{k}: 비어 있음")
             for k, v in item.items():
                 if isinstance(v, str) and k not in ("id", "tag"):
-                    out += text_problems(f"{p}.{k}", v, style=k != "who")
+                    out += text_problems(f"{p}.{k}", v, style=k not in ("who", "company"))
             if section == "today" and isinstance(item.get("id"), str) and has_phone(item["id"]):
                 out.append(f"{p}.id: 전화번호로 보이는 숫자")
             if section == "today" and isinstance(item.get("since"), str) and item["since"].strip() and not SINCE_RE.match(item["since"]):
@@ -195,6 +316,15 @@ def check(report, file_day=None):
                 n = len(line_of(section, item))
                 if n > LINE_MAX:
                     out.append(f"{p}: 한 줄 {n}자 (최대 {LINE_MAX}자)")
+    if "week" in report:
+        out += check_week(report, day)
+    if "changed" in report:
+        out += check_changed(report)
+    waiting = report.get("waiting")
+    if isinstance(waiting, list):
+        days = [w["days"] for w in waiting if isinstance(w, dict) and is_int(w.get("days"))]
+        if any(a < b for a, b in zip(days, days[1:])):
+            out.append("waiting: 오래된 것부터가 아님(days가 큰 것부터)")
     today = report.get("today")
     if isinstance(today, list):
         ranks = [TAGS.index(t["tag"]) for t in today if isinstance(t, dict) and t.get("tag") in TAGS]
