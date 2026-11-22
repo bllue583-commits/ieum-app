@@ -4,6 +4,7 @@ import android.view.Gravity
 import android.view.View
 import android.widget.LinearLayout
 import kr.callbrief.pipeline.report.MorningBoard
+import kr.callbrief.pipeline.report.Weather
 import java.time.LocalDate
 
 /** v4.4 r25-2: the morning tidy's board on home, under "먼저 볼 체크할 일", read from today's report as the phone fetched it at
@@ -22,15 +23,22 @@ internal object HomeBoard {
 
     /** Adds the board's blocks to [body]; [opened] keeps the folds that were opened (it outlives one drawing). */
     fun add(a:MainActivity,body:LinearLayout,b:MorningBoard.Board,day:LocalDate,opened:MutableSet<String>) {
-        body.addView(CallUi.meta(a,BASIS,CallUi.PAGE_CAPTION).apply { tag=TAG_PREFIX+"basis";setPadding(CallUi.dp(a,4),CallUi.dp(a,20),0,0) })
+        if(!b.isEmpty) body.addView(CallUi.meta(a,BASIS,CallUi.PAGE_CAPTION).apply { tag=TAG_PREFIX+"basis";setPadding(CallUi.dp(a,4),CallUi.dp(a,20),0,0) })
         block(a,body,"calls","전화할 곳",b.calls.map { p -> { person(a,p,null) } },opened)
         block(a,body,"waiting","답을 기다리는 중",b.waiting.map { p -> { person(a,p,p.days) } },opened)
         val near=b.week.filter { !it.date.isAfter(day.plusDays(1)) }.take(FIRST_DAYS)
-        if(near.isNotEmpty()) {
+        // v4.5 r26-2: today's and tomorrow's weather heads the block even on a day without a schedule (site work starts there).
+        val wx=b.weather
+        val nearLine=Weather.nearLine(wx,day)
+        val weekShown=near.isNotEmpty() || nearLine!=null
+        if(weekShown) {
             body.addView(CallUi.section(a,"이번 주 일정").apply { tag=TAG_PREFIX+"week_head" })
             val sheet=CallUi.card(a).apply { tag=TAG_PREFIX+"week" }
-            near.forEachIndexed { i,d -> sheet.addView(dayView(a,d,day,i==0)) }
+            nearLine?.let { sheet.addView(CallUi.text(a,it,CallUi.BODY,false,CallUi.SUBTLE).apply { tag=TAG_PREFIX+"weather"
+                if(near.isNotEmpty()) setPadding(0,0,0,CallUi.dp(a,14)) }) }
+            near.forEachIndexed { i,d -> sheet.addView(dayView(a,d,day,i==0,wx)) }
             body.addView(sheet)
+            if(wx!=null) body.addView(source(a,wx,TAG_PREFIX+"week_source"))
         }
         val later=b.week-near.toSet()
         val rest=b.inProgress.isNotEmpty() || b.check.isNotEmpty() || b.doneCheck.isNotEmpty() || b.changed.isNotEmpty() || later.isNotEmpty()
@@ -38,8 +46,9 @@ internal object HomeBoard {
         body.addView(fold(a,"$MORE ›",TAG_PREFIX+"more",opened) {
             val box=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
             if(later.isNotEmpty()) {
-                box.addView(CallUi.section(a,if(near.isEmpty()) "이번 주 일정" else "이번 주 일정, 그 뒤").apply { tag=TAG_PREFIX+"later_head" })
-                box.addView(CallUi.card(a).apply { tag=TAG_PREFIX+"later";later.forEachIndexed { i,d -> addView(dayView(a,d,day,i==0)) } })
+                box.addView(CallUi.section(a,if(!weekShown) "이번 주 일정" else "이번 주 일정, 그 뒤").apply { tag=TAG_PREFIX+"later_head" })
+                box.addView(CallUi.card(a).apply { tag=TAG_PREFIX+"later";later.forEachIndexed { i,d -> addView(dayView(a,d,day,i==0,wx)) } })
+                if(wx!=null && later.any { wx.day(it.date)!=null }) box.addView(source(a,wx,TAG_PREFIX+"later_source"))
             }
             block(a,box,"progress","진행 중인 일",b.inProgress.map { i -> { issue(a,i) } },opened)
             block(a,box,"check","확인 필요",b.check.map { c -> { line(a,c.what,c.who) } },opened)
@@ -105,16 +114,26 @@ internal object HomeBoard {
     }
     private fun issue(a:MainActivity,i:MorningBoard.Issue)=twoLines(a,i.what,i.status,i.days,i.unsure)
     private fun line(a:MainActivity,what:String,who:String)=twoLines(a,what,who,null,false)
-    /** One day of 이번 주 일정: "오늘 11/22(일)" (오늘 and 내일 in the accent), then its lines. */
-    private fun dayView(a:MainActivity,d:MorningBoard.Day,day:LocalDate,first:Boolean)=LinearLayout(a).apply {
+    /** "날씨 Open-Meteo, 인천 기준" under a block that shows the forecast (CC BY 4.0). */
+    private fun source(a:MainActivity,wx:Weather.Cast,tag:String)=CallUi.meta(a,Weather.source(wx.site),CallUi.PAGE_CAPTION).apply {
+        this.tag=tag;setPadding(CallUi.dp(a,4),CallUi.dp(a,6),0,0) }
+    /** One day of 이번 주 일정: "오늘 11/22(일)" (오늘 and 내일 in the accent) and v4.5 its weather ("비 70%  -1°/6°"), then its
+     * lines, then at most two caution lines of forecast facts ([Weather.cautions]) in amber. */
+    private fun dayView(a:MainActivity,d:MorningBoard.Day,day:LocalDate,first:Boolean,wx:Weather.Cast?=null)=LinearLayout(a).apply {
         orientation=LinearLayout.VERTICAL;tag="board_day_${d.date}"
         if(!first) setPadding(0,CallUi.dp(a,14),0,0)
         val near=MorningBoard.near(d.date,day)
         val head=LinearLayout(a).apply { orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL }
         if(near.isNotEmpty()) head.addView(CallUi.text(a,near,CallUi.BODY,true,CallUi.ACCENT),LinearLayout.LayoutParams(-2,-2).apply { marginEnd=CallUi.dp(a,8) })
         head.addView(CallUi.text(a,kr.callbrief.pipeline.report.KakaoReport.dayLabel(d.date),CallUi.BODY,near.isEmpty(),if(near.isEmpty()) CallUi.INK else CallUi.SUBTLE))
+        val w=wx?.day(d.date)
+        val weather=w?.let(Weather::headLine)
+        weather?.let { head.addView(CallUi.text(a,it,CallUi.BODY,false,CallUi.SUBTLE).apply { tag="board_day_weather";fontFeatureSettings="tnum" },
+            LinearLayout.LayoutParams(-2,-2).apply { marginStart=CallUi.dp(a,10) }) }
         addView(head)
         d.items.forEach { addView(CallUi.text(a,it,CallUi.BODY).apply { tag="board_day_item";setPadding(CallUi.dp(a,12),CallUi.dp(a,4),0,0) }) }
-        contentDescription=(listOf(near,kr.callbrief.pipeline.report.KakaoReport.dayLabel(d.date)).filter { it.isNotEmpty() }+d.items).joinToString(", ")
+        val cautions=if(wx==null) emptyList() else Weather.cautionsOf(wx,d)
+        cautions.forEach { addView(CallUi.meta(a,it,CallUi.AMBER).apply { tag="board_day_caution";setPadding(CallUi.dp(a,12),CallUi.dp(a,6),0,0) }) }
+        contentDescription=(listOf(near,kr.callbrief.pipeline.report.KakaoReport.dayLabel(d.date),weather ?: "").filter { it.isNotEmpty() }+d.items+cautions).joinToString(", ")
     }
 }

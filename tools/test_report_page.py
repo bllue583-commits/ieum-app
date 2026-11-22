@@ -120,5 +120,43 @@ class ReportPageTest(unittest.TestCase):
         self.assertEqual(board, json.loads(out.stdout))
 
 
+    def test_weather_rides_with_the_week_and_is_optional(self):
+        # v4.5 r26-2: a day's forecast as numbers (x) and caution kinds (k), the site's name (wl); an old fragment has none
+        # and the page draws the week as before. The source line only when a day showed weather.
+        text = page()
+        self.assertIn('weekBlock(r.week||[],r.wl)', text)
+        self.assertIn('var wx=wxHead(d.x);if(wx)', text)
+        self.assertIn('if(shown)s.appendChild(el("p","src","날씨 Open-Meteo, "+(site||"인천")+" 기준"));', text)
+        self.assertIn('(Array.isArray(d.k)?d.k:[]).slice(0,2)', text)
+        self.assertNotRegex(text, r"[\U0001F300-\U0001FAFF\u2600-\u27BF]", "no emoji")
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_the_page_writes_the_phones_words(self):
+        # The same sentences as Weather.kt (R26WeatherTest pins those): the head, the 30% line, snow, whole degrees, the
+        # cold line with KCS 14 20 40's words, rain at 60 and gusts.
+        block = re.search(r"/\* WX:BEGIN.*?\*/(.*?)/\* WX:END \*/", page(), re.S).group(1)
+        cases = [
+            ("wxHead([3,29,0,2.2,9.4,5,6,null])", "흐림  2°/9°"),
+            ("wxHead([61,70,12,-1,6,3,12,-2])", "비 70%  -1°/6°"),
+            ("wxHead([73,70,1,-3,1,-1,4,null])", "눈 70%  -3°/1°"),
+            ("wxHead([0,0,0,-0.4,0.5,0,1,null])", "맑음  0°/1°"),
+            ("wxHead([95,10,0,null,null,0,1,null])", "뇌우"),
+            ("String(wxHead(null))", "null"),
+            ("wxCaution(1,[61,70,12,-1,6,3,12,-2])", "일평균 3℃, 다음 날 최저 -2℃ 예상 (한중 콘크리트 기준: 일평균 4℃ 이하 또는 타설 뒤 24시간 최저 0℃ 이하)"),
+            ("wxCaution(1,[3,10,0,1,9,4.4,6,-0.5])", "일평균 4.4℃, 다음 날 최저 -0.5℃ 예상 (한중 콘크리트 기준: 일평균 4℃ 이하 또는 타설 뒤 24시간 최저 0℃ 이하)"),
+            ("wxCaution(2,[61,60,12,-1,6,3,12,-2])", "비 올 확률 60%, 예상 강수 12mm"),
+            ("wxCaution(2,[71,80,3.5,-1,6,3,12,null])", "눈 올 확률 80%, 예상 강수 3.5mm"),
+            ("wxCaution(3,[3,10,0,1,9,4,10,null])", "순간풍속 10m/s 예상"),
+            ("String(wxCaution(9,[3,10,0,1,9,4,10,null]))", "null"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            script = os.path.join(tmp, "wx.js")
+            with open(script, "w", encoding="utf-8") as f:
+                f.write(block + "\nprocess.stdout.write(JSON.stringify([" + ",".join(c for c, _ in cases) + "]));\n")
+            out = subprocess.run(["node", script], capture_output=True, text=True, timeout=30)
+        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertEqual([e for _, e in cases], json.loads(out.stdout))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -185,7 +185,9 @@ object KakaoReport {
                                /** v4.0 r21-1: yesterday's calls whose text could not be made (head.failedCalls, recounted by the phone right before the send). */
                                val failed:Int=0,
                                /** v4.4 r25-2: answers awaited (tidy.md v12 `waiting`, 20 at most), for the first bubble's header. */
-                               val waiting:Int=0)
+                               val waiting:Int=0,
+                               /** v4.5 r26-2: "오늘 흐림 2°/9°, 내일 비 70% -1°/6°" from the forecast sent with the report ("" without one). */
+                               val weather:String="")
     private val WEEK=arrayOf("월","화","수","목","금","토","일")
     /** "11/7(금)". */
     internal fun dayLabel(d:LocalDate)="${d.monthValue}/${d.dayOfMonth}(${WEEK[d.dayOfWeek.value-1]})"
@@ -226,8 +228,9 @@ object KakaoReport {
             val who=clean(y.optString("who"));val what=clean(y.optString("what"))
             when { what.isEmpty() -> who.ifEmpty { null };who.isEmpty() -> what;else -> clean("$who: $what") } }
         fun n(key:String,fallback:Int)=head.optInt(key,-1).takeIf { it>=0 } ?: fallback
+        val board=MorningBoard.read(o,day)
         return Report(day,n("calls",yesterday.size),n("newChecks",0),n("todayChecks",today.size),yesterday,today,inProgress,check,phoneFallback,
-            n("pendingCalls",0),late,items,n("failedCalls",0),MorningBoard.read(o,day).waiting.size)
+            n("pendingCalls",0),late,items,n("failedCalls",0),board.waiting.size,Weather.nearLine(board.weather,day) ?: "")
     }
     // ---- r18 (user 11/13): the list report ----
     /** The five tags (tidy.md v9 9-1), in the order they are shown; the thumbnails are res/drawable-nodpi/kakao_tag_<tag>.png. */
@@ -301,7 +304,9 @@ object KakaoReport {
      * 진행 중인 일 after its first 3 and 답을 기다리는 중 after its 5 oldest (the most recent waits go first); then, if it still does
      * not fit, 끝났는지 확인할 일, 확인 필요, the rest of 진행 중, 이번 주 일정 from its last day, 기다리는 중, 전화할 곳 and 챙길 일. */
     internal val WEB_CUTS=listOf("changed" to 0,"late" to 0,"yesterday" to 0,"inProgress" to 3,"waiting" to 5,
-        "doneCheck" to 0,"check" to 0,"inProgress" to 0,"week" to 0,"waiting" to 0,"calls" to 0,"today" to 0)
+        "doneCheck" to 0,"check" to 0,"inProgress" to 0,"week" to 0,"waiting" to 0,"calls" to 0,"today" to 0,WEB_CUT_WEATHER to 0)
+    /** v4.5 r26-2: the last step, the forecast numbers of the days still there (small and worth keeping). */
+    const val WEB_CUT_WEATHER="wx"
     /** A built web view: the address, its fragment's length and how many blocks gave up lines (heartbeat kakao.webLen, kakao.webCut). */
     data class Web(val url:String,val length:Int,val cut:Int)
     /** The masked report for the page: day, head counts, every block's fields (cleaned), the to-dos sorted by tag. */
@@ -354,6 +359,10 @@ object KakaoReport {
         var f=packWeb(d.toString())
         val cut=mutableSetOf<String>()
         for((k,keep) in WEB_CUTS) {
+            if(k==WEB_CUT_WEATHER) {
+                if(f.length>max && MorningBoard.dropWeather(d)) { cut+=k;d.put("cut",true);f=packWeb(d.toString()) }
+                continue
+            }
             val a=d.optJSONArray(k) ?: continue
             while(f.length>max && a.length()>keep) { a.remove(a.length()-1);cut+=k;d.put("cut",true);f=packWeb(d.toString()) }
         }
@@ -406,7 +415,7 @@ object KakaoReport {
             // 1절: no report from the night's tidy: one text only, from what the phone has.
             val head=listOfNotNull("[이음 아침 보고] $label (새벽 정리 없이 폰에서 만든 보고)",
                 r.pending.takeIf { it>0 }?.let { "어제 통화 ${it}건은 아직 글자로 바꾸는 중이에요" },
-                r.failed.takeIf { it>0 }?.let { "어제 ${FAILED_WORDS}가 ${it}건 있어요" },"오늘 챙길 일 ${r.todayChecks}개")
+                r.failed.takeIf { it>0 }?.let { "어제 ${FAILED_WORDS}가 ${it}건 있어요" },"오늘 챙길 일 ${r.todayChecks}개",r.weather.ifEmpty { null })
             val items=numbered(r.today.take(TODAY_TEXT_ITEMS)).ifEmpty { listOf("새로 챙길 일 없음") }
             val more=(r.today.size-TODAY_TEXT_ITEMS).coerceAtLeast(0)
             return Composed(null,Message.Text(fit(head,items,more=more).first,TASKS_LINK),emptyList(),list=cards,web=web)
@@ -425,7 +434,7 @@ object KakaoReport {
      * equally long blocks the later one first, so the to-dos stay longest). Only the last text has the [BUTTON] (to the
      * to-dos); the others have [NO_LINK]. */
     internal fun chat(r:Report,label:String):List<Message.Text> {
-        val head=listOf("[이음 아침 보고] $label",headLine(r),countsLine(r))
+        val head=listOf("[이음 아침 보고] $label",headLine(r),countsLine(r))+listOfNotNull(r.weather.ifEmpty { null })
         val blocks=listOf(Block("오늘 챙길 일",numbered(r.today)),Block("진행 중",r.inProgress.map { "· $it" }),
             Block("확인 필요",r.check.map { "· $it" }),
             Block("어제 정리",numbered(r.yesterday).ifEmpty { if(r.calls>0) emptyList() else listOf("어제 업무 통화 없음") }),

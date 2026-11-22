@@ -80,9 +80,15 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
         const val STORY_LINES=7
         /** "먼저 볼 체크할 일" (design G3, review #17): the open to-dos asked for today and the ones asking for a check, those first. */
         /** v4.4 r25-2: the board of today's report as the phone fetched it at 05:30; null without one or when it is empty. */
-        internal fun board(s:org.json.JSONObject,today:java.time.LocalDate)=runCatching {
-            s.optString(kr.callbrief.pipeline.report.ReportFetch.REPORT_BODY).takeIf { it.isNotBlank() }?.let { org.json.JSONObject(it) }
-                ?.takeIf { it.optString("day")==today.toString() }?.let { kr.callbrief.pipeline.report.MorningBoard.read(it,today) } }.getOrNull()?.takeIf { !it.isEmpty }
+        /** v4.5 r26-2: with the forecast kept on the phone ([kr.callbrief.pipeline.report.Weather.usable]); a day with nothing on
+         * the board but today's or tomorrow's weather still gives a board (home shows that line under 이번 주 일정). */
+        internal fun board(s:org.json.JSONObject,today:java.time.LocalDate,nowMs:Long=System.currentTimeMillis()):kr.callbrief.pipeline.report.MorningBoard.Board? {
+            val b=runCatching { s.optString(kr.callbrief.pipeline.report.ReportFetch.REPORT_BODY).takeIf { it.isNotBlank() }?.let { org.json.JSONObject(it) }
+                ?.takeIf { it.optString("day")==today.toString() }?.let { kr.callbrief.pipeline.report.MorningBoard.read(it,today) } }.getOrNull()
+            val wx=runCatching { kr.callbrief.pipeline.report.Weather.usable(s,nowMs) }.getOrNull()
+            val out=(b ?: kr.callbrief.pipeline.report.MorningBoard.Board()).copy(weather=wx)
+            return out.takeIf { !it.isEmpty || kr.callbrief.pipeline.report.Weather.nearLine(wx,today)!=null }
+        }
         internal fun firstLook(open:List<OpenItem>,today:java.time.LocalDate)=
             TaskActions.ordered(open).filter { it.status=="needs_confirmation" || (it.createdMs>0 && CallRecordStore.kstDay(it.createdMs)==today) }
         /** The memo list's words when today has calls but none is sorted out yet. */

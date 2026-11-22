@@ -68,6 +68,11 @@ details.more summary:after{content:"";width:7px;height:7px;border-right:2px soli
 details.more[open] summary{display:none}
 details.more ul li:first-child{border-top:1px solid var(--line);padding-top:10px}
 details.more .day:first-of-type{border-top:1px solid var(--line);padding-top:12px}
+/* v4.5 r26-2: the forecast beside a day's date ("비 70%  -1°/6°"), the forecast facts under its lines, and the source. */
+.dayhead .wx{color:var(--sub);font-size:15px;white-space:pre;font-variant-numeric:tabular-nums}
+.caution{color:var(--t-confirm);font-size:15px;font-weight:600;margin:4px 0 0 14px}
+.src{color:var(--sub);font-size:13px;margin:12px 0 0}
+details.more .day ul li:first-child{border-top:0;padding-top:3px}
 </style>
 </head>
 <body>
@@ -87,6 +92,30 @@ async function decodeReport(d){
   return JSON.parse(await new Response(stream).text());
 }
 /* DECODE:END */
+/* WX:BEGIN (tools/test_report_page.py runs this block in node; the same words as the phone's Weather.kt) */
+/* x: [weather_code, rain chance %, rain mm, min, max, mean, gust m/s, next day's min]; k: caution kinds (1 cold, 2 rain, 3 wind). */
+var COLD_RULE="한중 콘크리트 기준: 일평균 4℃ 이하 또는 타설 뒤 24시간 최저 0℃ 이하";
+function wxN(v){return typeof v==="number"&&isFinite(v)}
+function wxSky(c){if(!wxN(c))return null;if(c===0||c===1)return "맑음";if(c===2)return "구름";if(c===3||c===45||c===48)return "흐림";
+  if(c>=51&&c<=67)return "비";if((c>=71&&c<=77)||c===85||c===86)return "눈";if(c>=80&&c<=82)return "소나기";if(c>=95&&c<=99)return "뇌우";return null}
+function wxSnow(c){return wxN(c)&&((c>=71&&c<=77)||c===85||c===86)}
+function wxDeg(v){var r=Math.round(v);return String(r===0?0:r)}
+function wxNum(v){var r=Math.round(v*10)/10,w=Math.round(r);return Math.abs(r-w)<1e-9?String(w===0?0:w):r.toFixed(1)}
+function wxHead(x){
+  if(!Array.isArray(x))return null;
+  var a=wxN(x[1])&&x[1]>=30?(wxSnow(x[0])?"눈":"비")+" "+x[1]+"%":wxSky(x[0]);
+  var t=wxN(x[3])&&wxN(x[4])?wxDeg(x[3])+"°/"+wxDeg(x[4])+"°":null;
+  return [a,t].filter(Boolean).join("  ")||null;
+}
+function wxCaution(k,x){
+  if(!Array.isArray(x))return null;
+  if(k===1){var p=[wxN(x[5])?"일평균 "+wxNum(x[5])+"℃":null,wxN(x[7])?"다음 날 최저 "+wxNum(x[7])+"℃":null].filter(Boolean);
+    return p.length?p.join(", ")+" 예상 ("+COLD_RULE+")":null}
+  if(k===2&&wxN(x[1]))return (wxSnow(x[0])?"눈":"비")+" 올 확률 "+x[1]+"%"+(wxN(x[2])?", 예상 강수 "+wxNum(x[2])+"mm":"");
+  if(k===3&&wxN(x[6]))return "순간풍속 "+wxNum(x[6])+"m/s 예상";
+  return null;
+}
+/* WX:END */
 function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e}
 var SHOW=5;
 /* The rows after the first [n] of a block, behind "m개 더 보기" (opened, the line goes and the rows stay). */
@@ -111,7 +140,7 @@ function dayRow(li,main,sub,days,unsure,warn){
   li.appendChild(row);
 }
 function who(x){return [x.company,x.who].filter(Boolean).join(" ")}
-function weekBlock(days){
+function weekBlock(days,site){
   if(!days.length)return null;
   var n=0;days.forEach(function(d){n+=(d.items||[]).length});
   var s=el("section"),h2=el("h2",null,"이번 주 일정");if(n>1)h2.appendChild(el("span","n",String(n)));s.appendChild(h2);
@@ -119,11 +148,16 @@ function weekBlock(days){
     var box=el("div","day"),head=el("div","dayhead");
     if(d.near){head.appendChild(el("b","near",d.near));head.appendChild(el("span",null,d.label||d.date))}
     else head.appendChild(el("b",null,d.label||d.date));
-    box.appendChild(head);var ul=el("ul");(d.items||[]).forEach(function(t){ul.appendChild(el("li",null,t))});box.appendChild(ul);into.appendChild(box);
+    var wx=wxHead(d.x);if(wx){head.appendChild(el("span","wx",wx));shown=true}
+    box.appendChild(head);var ul=el("ul");(d.items||[]).forEach(function(t){ul.appendChild(el("li",null,t))});box.appendChild(ul);
+    (Array.isArray(d.k)?d.k:[]).slice(0,2).forEach(function(k){var c=wxCaution(k,d.x);if(c)box.appendChild(el("p","caution",c))});
+    into.appendChild(box);
   }
+  var shown=false;
   /* Today, tomorrow and the day after shown; the other days behind "n일 더 보기". */
   days.slice(0,3).forEach(function(d){day(s,d)});
   if(days.length>3)more(s,days.length-3,"일",function(dd){days.slice(3).forEach(function(d){day(dd,d)})});
+  if(shown)s.appendChild(el("p","src","날씨 Open-Meteo, "+(site||"인천")+" 기준"));
   return s;
 }
 function show(r){
@@ -149,7 +183,7 @@ function show(r){
       dayRow(li,name||x.what,[name?x.what:"",x.since?"마지막 연락 "+x.since:""].filter(Boolean).join(", "),null,x.unsure)}),
     list("답을 기다리는 중",r.waiting||[],function(li,x){var name=who(x);
       dayRow(li,name||x.what,[name?x.what:"",x.since?x.since+" 약속":""].filter(Boolean).join(", "),x.days,x.unsure,true)}),
-    weekBlock(r.week||[]),
+    weekBlock(r.week||[],r.wl),
     list("진행 중",r.inProgress||[],function(li,x){if(x.status||typeof x.days==="number"||x.unsure)dayRow(li,x.what,x.status,x.days,x.unsure);else line(li,x.what)}),
     list("확인 필요",r.check||[],function(li,x){line(li,x.what,x.who)}),
     list("끝났는지 확인할 일",r.doneCheck||[],function(li,x){line(li,x.what,x.who)}),
