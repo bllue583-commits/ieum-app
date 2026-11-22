@@ -22,6 +22,7 @@ import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import kotlinx.coroutines.async
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
@@ -141,11 +142,25 @@ object ReportFetch {
 
     /** v4.5 r26-1: the week's forecast, fetched here once a morning (right before the send: the report is in hand and the
      * network is up), rides with the report to the web view and the texts; the kept report body stays as read. Any failure
-     * gives the report as it is (the weather never holds or stops the morning report). */
+     * gives the report as it is (the weather never holds or stops the morning report).
+     * r26-3 (review): the fetch runs as its own job ([weatherScope]); this waits [WEATHER_WAIT_MS] at most (a slow name lookup
+     * is not covered by the client's timeouts) and goes on without weather. A late answer is still kept for home and the next
+     * day; the report already went without it. */
     internal suspend fun withWeather(app:Context,report:JSONObject,day:LocalDate):JSONObject = try {
-        val cast=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { Weather.forReport(app,clock()) }
+        val now=clock()
+        val job=weatherScope.async { Weather.forReport(app,now) }
+        val cast=kotlinx.coroutines.coroutineScope {
+            val timer=async { weatherWait(WEATHER_WAIT_MS);null }
+            kotlinx.coroutines.selects.select<Weather.Cast?> { job.onAwait { it };timer.onAwait { it } }.also { timer.cancel() }
+        }
         Weather.attach(report,cast).also { Weather.noteUse(app,it,day) }
-    } catch(e:kotlinx.coroutines.CancellationException) { throw e } catch(e:Exception) { Log.w(TAG,"no weather: ${e.javaClass.simpleName}");report }
+    } catch(e:kotlinx.coroutines.CancellationException) { throw e } catch(e:Throwable) { Log.w(TAG,"no weather: ${e.javaClass.simpleName}");report }
+    /** The longest the morning report waits for its forecast. */
+    const val WEATHER_WAIT_MS=10_000L
+    /** Its own scope: a fetch still running when the wait ends goes on there and never holds the report's work. */
+    private val weatherScope=kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()+kotlinx.coroutines.Dispatchers.IO)
+    /** The wait; tests give a virtual one (no test waits ten real seconds). */
+    @Volatile internal var weatherWait:suspend (Long)->Unit={ kotlinx.coroutines.delay(it) }
 
     // ---- reading report/<day>.json ----
     internal fun path(day:LocalDate)="report/$day.json"

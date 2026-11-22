@@ -186,7 +186,7 @@ object KakaoReport {
                                val failed:Int=0,
                                /** v4.4 r25-2: answers awaited (tidy.md v12 `waiting`, 20 at most), for the first bubble's header. */
                                val waiting:Int=0,
-                               /** v4.5 r26-2: "오늘 흐림 2°/9°, 내일 비 70% -1°/6°" from the forecast sent with the report ("" without one). */
+                               /** v4.5 r26-2 (r26-3: today only): "오늘 흐림 2°/9°" from the forecast sent with the report ("" without one). */
                                val weather:String="")
     private val WEEK=arrayOf("월","화","수","목","금","토","일")
     /** "11/7(금)". */
@@ -230,7 +230,7 @@ object KakaoReport {
         fun n(key:String,fallback:Int)=head.optInt(key,-1).takeIf { it>=0 } ?: fallback
         val board=MorningBoard.read(o,day)
         return Report(day,n("calls",yesterday.size),n("newChecks",0),n("todayChecks",today.size),yesterday,today,inProgress,check,phoneFallback,
-            n("pendingCalls",0),late,items,n("failedCalls",0),board.waiting.size,Weather.nearLine(board.weather,day) ?: "")
+            n("pendingCalls",0),late,items,n("failedCalls",0),board.waiting.size,Weather.todayLine(board.weather,day) ?: "")
     }
     // ---- r18 (user 11/13): the list report ----
     /** The five tags (tidy.md v9 9-1), in the order they are shown; the thumbnails are res/drawable-nodpi/kakao_tag_<tag>.png. */

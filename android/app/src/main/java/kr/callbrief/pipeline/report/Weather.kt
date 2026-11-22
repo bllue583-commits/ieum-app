@@ -50,6 +50,12 @@ internal object Weather {
     const val DAYS_KEY="weatherDays";const val CAUTIONS_KEY="weatherCautions"
     /** The mailbox's app/config.json `site` as last read ([SiteConfig]); absent: [DEFAULT_SITE]. */
     const val SITE_KEY="weatherSite"
+    const val SEOUL_OFFSET_S=32400
+    /** Units that are plainly not ℃, mm or m/s (lower case). */
+    val OTHER_UNITS=setOf("°f","f","mph","inch","in","kn","kt","km/h","kmh")
+    /** r26-3: a failed fetch is not tried again within this (only the try's time is kept, [TRY_KEY]). */
+    const val RETRY_GAP_MS=30*60_000L
+    const val TRY_KEY="weatherTryMs"
     const val ERR_TIMEOUT="timeout";const val ERR_HTTP="http";const val ERR_PARSE="parse";const val ERR_NONE="none"
 
     // ---- the thresholds and words (one place; R26WeatherTest pins them) ----
@@ -63,10 +69,18 @@ internal object Weather {
     /** Gusts from this (m/s) under a day with lifting or unloading. */
     const val GUST=10.0
     const val CAUTIONS_MAX=2
-    const val COLD_RULE="한중 콘크리트 기준: 일평균 4℃ 이하 또는 타설 뒤 24시간 최저 0℃ 이하"
+    /** r26-3: the criterion's own words, written once beside the source line on a day with a cold line ([COLD_SHORT] in the line). */
+    const val COLD_RULE="한중 콘크리트 기준: 일평균 4℃ 이하 또는 타설 후 24시간 최저 0℃ 이하"
+    const val COLD_SHORT="한중 콘크리트 기준 해당"
+    /** Cold concrete: a line with one of these and none of [INDOOR_WORDS]. */
     val CONCRETE_WORDS=listOf("타설","콘크리트","레미콘","양생","몰탈","미장","버림")
-    val WET_WORDS=CONCRETE_WORDS+listOf("도장","방수","실링","외부","지붕","판넬","용접")
-    val LIFT_WORDS=listOf("크레인","양중","상차","하차","반입","철골","데크","판넬","지붕")
+    /** r26-3 (review): rain only for work that is outside (no 미장, 양생, a bare 방수 or 도장: 계약서 도장 is a seal). */
+    val WET_WORDS=listOf("타설","레미콘","버림","도장 작업","외벽 도장","도장공사","도장 공사","외부 도장","외부 비계","외벽","외부 마감",
+        "외벽 방수","옥상 방수","지붕","실링","판넬","용접")
+    /** r26-3: lifting only (반입, 상차, 하차 are deliveries, not lifts). */
+    val LIFT_WORDS=listOf("크레인","양중","철골","데크","판넬","지붕","비계")
+    /** A line with one of these is indoor work: no rain or cold line for it. */
+    val INDOOR_WORDS=listOf("내부","실내")
     /** The web view's caution kinds ([webKinds]); the page writes the same sentences from the numbers. */
     const val KIND_COLD=1;const val KIND_RAIN=2;const val KIND_WIND=3
 
@@ -122,15 +136,16 @@ internal object Weather {
      * ℃, mm, % or m/s, or a time zone other than Seoul. Values that are null stay missing. */
     fun parse(body:String?,atMs:Long,site:Site):Cast? = runCatching {
         val o=JSONObject(body ?: return null)
-        o.opt("timezone")?.let { if(it!="Asia/Seoul") return null }
+        // r26-3: Seoul's dates by name or by offset (+9 h); another offset would put the days on the wrong dates.
+        val offset=(o.opt("utc_offset_seconds") as? Number)?.toInt()
+        val tz=o.opt("timezone") as? String
+        if(tz!=null && tz!="Asia/Seoul" && offset!=SEOUL_OFFSET_S) return null
+        if(tz==null && offset!=null && offset!=SEOUL_OFFSET_S) return null
         val daily=o.optJSONObject("daily") ?: return null
-        val units=o.optJSONObject("daily_units") ?: return null
-        val want=mapOf("temperature_2m_min" to "°C","temperature_2m_max" to "°C","temperature_2m_mean" to "°C",
-            "precipitation_sum" to "mm","wind_gusts_10m_max" to "m/s","precipitation_probability_max" to "%")
-        for((k,u) in want) if(units.has(k) && units.opt(k)!=u) return null
-        if(listOf("temperature_2m_min","temperature_2m_max","wind_gusts_10m_max").any { daily.has(it) && !units.has(it) }) return null
+        val units=o.optJSONObject("daily_units")
         val time=daily.optJSONArray("time") ?: return null
-        fun col(k:String)=daily.opt(k) as? JSONArray
+        // r26-3: a column in a plainly other unit (°F, mph, inch, kn, km/h) is left empty; an unknown spelling is taken.
+        fun col(k:String)=(daily.opt(k) as? JSONArray)?.takeIf { (units?.opt(k) as? String)?.trim()?.lowercase() !in OTHER_UNITS }
         fun num(a:JSONArray?,i:Int)=(a?.opt(i) as? Number)?.toDouble()?.takeIf { it.isFinite() }
         val code=col("weather_code");val pop=col("precipitation_probability_max");val mm=col("precipitation_sum")
         val lo=col("temperature_2m_min");val hi=col("temperature_2m_max");val mean=col("temperature_2m_mean");val gust=col("wind_gusts_10m_max")
@@ -170,8 +185,10 @@ internal object Weather {
     private fun kstDay(ms:Long)=Instant.ofEpochMilli(ms).atZone(CallRecordStore.KST).toLocalDate()
     /** What one morning does: the kept forecast when it was fetched today for this site (no second fetch the same day); else a
      * fetch, kept when it reads; when it does not, the kept one while [fresh]. [save] gets what to keep (cast or null, code). */
-    internal fun decide(kept:Cast?,site:Site,nowMs:Long,fetch:()->Pair<Cast?,String>,save:(Cast?,String)->Unit):Cast? {
+    internal fun decide(kept:Cast?,site:Site,nowMs:Long,fetch:()->Pair<Cast?,String>,lastTryMs:Long=0,save:(Cast?,String)->Unit):Cast? {
         if(kept!=null && kept.site==site && kept.atMs<=nowMs && kstDay(kept.atMs)==kstDay(nowMs)) return kept
+        // r26-3: a try within the last 30 minutes failed (else the kept one would be today's): no new try yet.
+        if(lastTryMs in (nowMs-RETRY_GAP_MS+1)..nowMs) return kept?.takeIf { fresh(it,site,nowMs) }
         val (got,err)=fetch()
         save(got,if(got!=null) ERR_NONE else err)
         return got ?: kept?.takeIf { fresh(it,site,nowMs) }
@@ -189,7 +206,9 @@ internal object Weather {
         val st=SecureSettings(CallPipelineStartup.storage(app))
         val s=runCatching { st.snapshot() }.getOrNull()
         val site=siteIn(s)
-        decide(fromJson(s?.opt(CAST_KEY)),site,nowMs,{ fetch(site,nowMs,(sourceFactory ?: ::okSource)()) }) { c,err ->
+        decide(fromJson(s?.opt(CAST_KEY)),site,nowMs,{
+            runCatching { st.update { it.put(TRY_KEY,nowMs) } }
+            fetch(site,nowMs,(sourceFactory ?: ::okSource)()) },s?.optLong(TRY_KEY,0) ?: 0) { c,err ->
             runCatching { st.update { o -> if(c!=null) o.put(CAST_KEY,toJson(c).toString());o.put(ERR_KEY,err) } } }
     } catch(e:Exception) { Log.w(TAG,"no forecast: ${e.javaClass.simpleName}");null }
 
@@ -246,27 +265,34 @@ internal object Weather {
         return listOfNotNull(c.day(today)?.let(::short)?.let { "오늘 $it" },c.day(today.plusDays(1))?.let(::short)?.let { "내일 $it" })
             .joinToString(", ").ifEmpty { null }
     }
+    /** r26-3: the texts' line, today only: "오늘 흐림 2°/9°". */
+    fun todayLine(c:Cast?,today:LocalDate):String? = c?.day(today)?.let(::short)?.let { "오늘 $it" }
     /** "날씨 Open-Meteo, 인천 기준" (CC BY 4.0's attribution). */
     fun source(site:Site)="날씨 Open-Meteo, ${site.label} 기준"
     /** "3", "-2", "4.4" (one decimal only when it is not whole). */
     fun num(v:Double):String { val r=Math.round(v*10)/10.0
         return if(abs(r-Math.rint(r))<1e-9) Math.rint(r).toInt().let { if(it==0) 0 else it }.toString() else String.format(Locale.ROOT,"%.1f",r) }
 
-    private fun has(items:List<String>,words:List<String>)=items.any { i -> words.any { i.contains(it) } }
+    private fun has(items:List<String>,words:List<String>,outdoor:Boolean=false)=items.any { i ->
+        words.any { i.contains(it) } && !(outdoor && INDOOR_WORDS.any { i.contains(it) }) }
     /** The caution kinds of a day with [items] ([KIND_COLD], [KIND_RAIN], [KIND_WIND]), [CAUTIONS_MAX] at most, in that order. */
     fun kinds(items:List<String>,d:Day,next:Day?):List<Int> {
         val out=mutableListOf<Int>()
-        val concrete=has(items,CONCRETE_WORDS)
+        val concrete=has(items,CONCRETE_WORDS,outdoor=true)
         if(concrete && ((d.tmean!=null && d.tmean<=COLD_MEAN) || (next?.tmin!=null && next.tmin<=FROST_MIN))) out+=KIND_COLD
-        if(has(items,WET_WORDS) && d.pop!=null && d.pop>=POP_CAUTION) out+=KIND_RAIN
+        if(has(items,WET_WORDS,outdoor=true) && d.pop!=null && d.pop>=POP_CAUTION) out+=KIND_RAIN
         if(has(items,LIFT_WORDS) && d.gust!=null && d.gust>=GUST) out+=KIND_WIND
         return out.take(CAUTIONS_MAX)
     }
     /** The caution lines of a day: forecast facts only (no "하지 마세요"). */
     fun cautions(items:List<String>,d:Day,next:Day?):List<String> = kinds(items,d,next).map { k -> when(k) {
-        KIND_COLD -> listOfNotNull(d.tmean?.let { "일평균 ${num(it)}℃" },next?.tmin?.let { "다음 날 최저 ${num(it)}℃" }).joinToString(", ")+" 예상 ($COLD_RULE)"
+        // r26-3: only the numbers that meet the criterion; its words go once beside the source line ([COLD_RULE]).
+        KIND_COLD -> listOfNotNull(d.tmean?.takeIf { it<=COLD_MEAN }?.let { "일평균 ${num(it)}℃" },
+            next?.tmin?.takeIf { it<=FROST_MIN }?.let { "다음 날 최저 ${num(it)}℃" }).joinToString(", ")+" 예상 ($COLD_SHORT)"
         KIND_RAIN -> (if(snowy(d.code)) "눈" else "비")+" 올 확률 ${d.pop}%"+(d.mm?.let { ", 예상 강수 ${num(it)}mm" } ?: "")
         else -> "순간풍속 ${num(d.gust ?: 0.0)}m/s 예상" } }
+    /** r26-3: the day has the cold line (then [COLD_RULE] is written once beside the source line). */
+    fun hasCold(c:Cast?,day:MorningBoard.Day):Boolean = c?.day(day.date)?.let { KIND_COLD in kinds(day.items,it,c.day(day.date.plusDays(1))) } ?: false
     fun cautionsOf(c:Cast,day:MorningBoard.Day):List<String> = c.day(day.date)?.let { cautions(day.items,it,c.day(day.date.plusDays(1))) } ?: emptyList()
 
     // ---- the web view's numbers (MorningBoard.putWeb): x [code,pop,mm,tmin,tmax,tmean,gust,nextMin], k the kinds ----

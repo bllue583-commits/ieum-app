@@ -72,6 +72,7 @@ details.more .day:first-of-type{border-top:1px solid var(--line);padding-top:12p
 .dayhead .wx{color:var(--sub);font-size:15px;white-space:pre;font-variant-numeric:tabular-nums}
 .caution{color:var(--t-confirm);font-size:15px;font-weight:600;margin:4px 0 0 14px}
 .src{color:var(--sub);font-size:13px;margin:12px 0 0}
+.src.rule{margin-top:2px}
 details.more .day ul li:first-child{border-top:0;padding-top:3px}
 </style>
 </head>
@@ -94,7 +95,7 @@ async function decodeReport(d){
 /* DECODE:END */
 /* WX:BEGIN (tools/test_report_page.py runs this block in node; the same words as the phone's Weather.kt) */
 /* x: [weather_code, rain chance %, rain mm, min, max, mean, gust m/s, next day's min]; k: caution kinds (1 cold, 2 rain, 3 wind). */
-var COLD_RULE="한중 콘크리트 기준: 일평균 4℃ 이하 또는 타설 뒤 24시간 최저 0℃ 이하";
+var COLD_RULE="한중 콘크리트 기준: 일평균 4℃ 이하 또는 타설 후 24시간 최저 0℃ 이하";
 function wxN(v){return typeof v==="number"&&isFinite(v)}
 function wxSky(c){if(!wxN(c))return null;if(c===0||c===1)return "맑음";if(c===2)return "구름";if(c===3||c===45||c===48)return "흐림";
   if(c>=51&&c<=67)return "비";if((c>=71&&c<=77)||c===85||c===86)return "눈";if(c>=80&&c<=82)return "소나기";if(c>=95&&c<=99)return "뇌우";return null}
@@ -109,8 +110,8 @@ function wxHead(x){
 }
 function wxCaution(k,x){
   if(!Array.isArray(x))return null;
-  if(k===1){var p=[wxN(x[5])?"일평균 "+wxNum(x[5])+"℃":null,wxN(x[7])?"다음 날 최저 "+wxNum(x[7])+"℃":null].filter(Boolean);
-    return p.length?p.join(", ")+" 예상 ("+COLD_RULE+")":null}
+  if(k===1){var p=[wxN(x[5])&&x[5]<=4?"일평균 "+wxNum(x[5])+"℃":null,wxN(x[7])&&x[7]<=0?"다음 날 최저 "+wxNum(x[7])+"℃":null].filter(Boolean);
+    return p.length?p.join(", ")+" 예상 (한중 콘크리트 기준 해당)":null}
   if(k===2&&wxN(x[1]))return (wxSnow(x[0])?"눈":"비")+" 올 확률 "+x[1]+"%"+(wxN(x[2])?", 예상 강수 "+wxNum(x[2])+"mm":"");
   if(k===3&&wxN(x[6]))return "순간풍속 "+wxNum(x[6])+"m/s 예상";
   return null;
@@ -150,14 +151,16 @@ function weekBlock(days,site){
     else head.appendChild(el("b",null,d.label||d.date));
     var wx=wxHead(d.x);if(wx){head.appendChild(el("span","wx",wx));shown=true}
     box.appendChild(head);var ul=el("ul");(d.items||[]).forEach(function(t){ul.appendChild(el("li",null,t))});box.appendChild(ul);
-    (Array.isArray(d.k)?d.k:[]).slice(0,2).forEach(function(k){var c=wxCaution(k,d.x);if(c)box.appendChild(el("p","caution",c))});
+    (Array.isArray(d.k)?d.k:[]).slice(0,2).forEach(function(k){var c=wxCaution(k,d.x);if(c){box.appendChild(el("p","caution",c));if(k===1)cold=true}});
     into.appendChild(box);
   }
-  var shown=false;
+  var shown=false,cold=false;
   /* Today, tomorrow and the day after shown; the other days behind "n일 더 보기". */
   days.slice(0,3).forEach(function(d){day(s,d)});
   if(days.length>3)more(s,days.length-3,"일",function(dd){days.slice(3).forEach(function(d){day(dd,d)})});
   if(shown)s.appendChild(el("p","src","날씨 Open-Meteo, "+(site||"인천")+" 기준"));
+  /* r26-3: the cold criterion's words once, only when a day has the cold line. */
+  if(cold)s.appendChild(el("p","src rule",COLD_RULE));
   return s;
 }
 function show(r){

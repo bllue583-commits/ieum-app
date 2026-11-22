@@ -3,6 +3,7 @@ package kr.callbrief.pipeline
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
+import android.widget.LinearLayout
 import android.widget.TextView
 import kotlinx.coroutines.runBlocking
 import kr.callbrief.ProtectedTextHostTestBase
@@ -100,10 +101,18 @@ class R26WeatherTest:ProtectedTextHostTestBase() {
         // Missing values stay missing; the day stays.
         val holes=Weather.parse(answer(day,listOf(listOf(null,null,null,1.0,5.0,null,null))),at530,site)!!.day(day)!!
         assertNull(holes.code);assertNull(holes.pop);assertEquals("1°/5°",Weather.headLine(holes))
-        // Another unit (Fahrenheit, km/h), another time zone, no daily, empty arrays, broken JSON: no forecast.
-        assertNull(Weather.parse(answer(day,listOf(listOf(0,0,0,1,5,3,4)),units().put("temperature_2m_max","°F")),at530,site))
-        assertNull(Weather.parse(answer(day,listOf(listOf(0,0,0,1,5,3,4)),units().put("wind_gusts_10m_max","km/h")),at530,site))
-        assertNull(Weather.parse(answer(day,listOf(listOf(0,0,0,1,5,3,4)),tz="GMT"),at530,site))
+        // r26-3: a plainly other unit empties that column only; an unknown spelling is taken; no units at all is taken.
+        val f=Weather.parse(answer(day,listOf(listOf(0,0,0,1,5,3,4)),units().put("temperature_2m_max","°F").put("wind_gusts_10m_max","km/h")),at530,site)!!.day(day)!!
+        assertNull(f.tmax);assertNull(f.gust);assertEquals(1.0,f.tmin!!,0.0);assertNull("no max, no temps",Weather.temps(f))
+        for(u in listOf("mph","kn")) assertNull(u,Weather.parse(answer(day,listOf(listOf(0,0,0,1,5,3,4)),units().put("wind_gusts_10m_max",u)),at530,site)!!.day(day)!!.gust)
+        assertNull(Weather.parse(answer(day,listOf(listOf(0,0,2,1,5,3,4)),units().put("precipitation_sum","inch")),at530,site)!!.day(day)!!.mm)
+        assertEquals(4.0,Weather.parse(answer(day,listOf(listOf(0,0,0,1,5,3,4)),units().put("wind_gusts_10m_max","m s-1")),at530,site)!!.day(day)!!.gust!!,0.0)
+        val bare=JSONObject(answer(day,listOf(listOf(0,0,0,1,5,3,4))));bare.remove("daily_units")
+        assertEquals(5.0,Weather.parse(bare.toString(),at530,site)!!.day(day)!!.tmax!!,0.0)
+        // Seoul by name or by its +9 h offset; another offset is refused (the dates would be wrong).
+        assertNotNull(Weather.parse(answer(day,listOf(listOf(0,0,0,1,5,3,4)),tz="GMT+9"),at530,site))
+        val utc=JSONObject(answer(day,listOf(listOf(0,0,0,1,5,3,4)),tz="GMT")).put("utc_offset_seconds",0)
+        assertNull(Weather.parse(utc.toString(),at530,site))
         assertNull(Weather.parse(answer(day,emptyList()),at530,site))
         assertNull(Weather.parse("{\"daily\":{}}",at530,site))
         assertNull(Weather.parse("{broken",at530,site));assertNull(Weather.parse(null,at530,site))
@@ -140,10 +149,12 @@ class R26WeatherTest:ProtectedTextHostTestBase() {
         assertEquals(listOf(Weather.KIND_COLD),Weather.kinds(pour,d(tmean=4.0),next(3.0)))
         assertEquals("4.1 is not cold",emptyList<Int>(),Weather.kinds(pour,d(tmean=4.1),next(0.1)))
         assertEquals("next day's 0.0 is",listOf(Weather.KIND_COLD),Weather.kinds(pour,d(tmean=8.0),next(0.0)))
-        assertEquals("일평균 3℃, 다음 날 최저 -2℃ 예상 (한중 콘크리트 기준: 일평균 4℃ 이하 또는 타설 뒤 24시간 최저 0℃ 이하)",
-            Weather.cautions(pour,d(tmean=3.0),next(-2.0)).single())
-        assertEquals("일평균 4.4℃, 다음 날 최저 -0.5℃ 예상 (${Weather.COLD_RULE})",Weather.cautions(listOf("레미콘 입고"),d(tmean=4.4),next(-0.5)).single())
-        assertEquals("no next day","일평균 2℃ 예상 (${Weather.COLD_RULE})",Weather.cautions(listOf("버림 콘크리트"),d(tmean=2.0),null).single())
+        // r26-3: only the numbers that meet the criterion, and the short words; the criterion itself goes beside the source.
+        assertEquals("일평균 2.5℃, 다음 날 최저 -2℃ 예상 (한중 콘크리트 기준 해당)",Weather.cautions(pour,d(tmean=2.5),next(-2.0)).single())
+        assertEquals("다음 날 최저 -0.5℃ 예상 (한중 콘크리트 기준 해당)",Weather.cautions(listOf("레미콘 입고"),d(tmean=4.4),next(-0.5)).single())
+        assertEquals("일평균 3.1℃ 예상 (한중 콘크리트 기준 해당)",Weather.cautions(pour,d(tmean=3.1),next(2.0)).single())
+        assertEquals("no next day","일평균 2℃ 예상 (한중 콘크리트 기준 해당)",Weather.cautions(listOf("버림 콘크리트"),d(tmean=2.0),null).single())
+        assertEquals("한중 콘크리트 기준: 일평균 4℃ 이하 또는 타설 후 24시간 최저 0℃ 이하",Weather.COLD_RULE)
         assertTrue("no concrete word, no line",Weather.kinds(listOf("안전 교육"),d(tmean=-5.0,pop=90,gust=20.0),next(-9.0)).isEmpty())
     }
     @Test fun rainAndWindAreForecastFactsAtSixtyAndTen() {
@@ -151,17 +162,34 @@ class R26WeatherTest:ProtectedTextHostTestBase() {
         assertTrue(Weather.kinds(paint,d(pop=59),null).isEmpty())
         assertEquals("비 올 확률 60%, 예상 강수 12mm",Weather.cautions(paint,d(pop=60,mm=12.0),null).single())
         assertEquals("눈 올 확률 80%, 예상 강수 3.5mm",Weather.cautions(listOf("지붕 방수"),d(code=71,pop=80,mm=3.5),null).single())
-        val lift=listOf("철골 자재 반입")
+        val lift=listOf("철골 세우기")
         assertTrue(Weather.kinds(lift,d(gust=9.9),null).isEmpty())
         assertEquals("순간풍속 10m/s 예상",Weather.cautions(lift,d(gust=10.0),null).single())
         // At most two a day: cold first, then rain; the wind waits.
-        val many=Weather.cautions(listOf("타설","판넬 반입"),d(tmean=1.0,pop=90,mm=20.0,gust=15.0),next(-3.0))
+        val many=Weather.cautions(listOf("타설","판넬 설치"),d(tmean=1.0,pop=90,mm=20.0,gust=15.0),next(-3.0))
         assertEquals(2,many.size);assertTrue(many[0].startsWith("일평균"));assertTrue(many[1].startsWith("비 올 확률 90%"))
         // No directive words anywhere.
         (many+Weather.cautions(lift,d(gust=12.0),null)).forEach { assertFalse(it,Regex("마세요|하세요|금지|중지").containsMatchIn(it)) }
         assertEquals(listOf("타설","콘크리트","레미콘","양생","몰탈","미장","버림"),Weather.CONCRETE_WORDS)
-        assertEquals(Weather.CONCRETE_WORDS+listOf("도장","방수","실링","외부","지붕","판넬","용접"),Weather.WET_WORDS)
-        assertEquals(listOf("크레인","양중","상차","하차","반입","철골","데크","판넬","지붕"),Weather.LIFT_WORDS)
+        assertEquals(listOf("타설","레미콘","버림","도장 작업","외벽 도장","도장공사","도장 공사","외부 도장","외부 비계","외벽","외부 마감",
+            "외벽 방수","옥상 방수","지붕","실링","판넬","용접"),Weather.WET_WORDS)
+        assertEquals(listOf("크레인","양중","철골","데크","판넬","지붕","비계"),Weather.LIFT_WORDS)
+        assertEquals(listOf("내부","실내"),Weather.INDOOR_WORDS)
+    }
+    @Test fun theReviewsSevenLines() {
+        // r26-3 (review): made-up schedule lines that must, and must not, get a line.
+        fun lines(item:String,day:Weather.Day,nx:Weather.Day?=null)=Weather.cautions(listOf(item),day,nx)
+        assertEquals(emptyList<String>(),lines("계약서 도장 받기",d(pop=80,mm=10.0)))
+        assertEquals(emptyList<String>(),lines("외부 업체 입장",d(pop=80,mm=10.0)))
+        assertEquals(emptyList<String>(),lines("내부 미장",d(pop=80,mm=10.0,tmean=2.0),next(-3.0)))
+        assertEquals(emptyList<String>(),lines("실내 방수",d(pop=80,mm=10.0)))
+        assertEquals(emptyList<String>(),lines("자재 반입",d(gust=14.0)))
+        assertEquals(listOf("비 올 확률 70%, 예상 강수 6mm"),lines("외벽 도장 작업",d(pop=70,mm=6.0)))
+        assertEquals(listOf("일평균 3℃ 예상 (한중 콘크리트 기준 해당)"),lines("3층 슬래브 타설",d(tmean=3.0),next(1.0)))
+        assertEquals(listOf("순간풍속 12m/s 예상"),lines("타워크레인 양중",d(gust=12.0)))
+        // 미장, 양생 and a bare 방수 get no rain line; 옥상 방수 does.
+        assertEquals(emptyList<String>(),lines("2층 양생",d(pop=90)))
+        assertEquals(listOf("비 올 확률 90%, 예상 강수 0mm"),lines("옥상 방수",d(pop=90)))
     }
 
     // ---- which forecast, and the quiet failures ----
@@ -224,7 +252,8 @@ class R26WeatherTest:ProtectedTextHostTestBase() {
         // The texts (when the list does not go) carry today's and tomorrow's one line; the list's header stays.
         val r=JSONObject(report.toString()).let { Weather.attach(it,Weather.usable(settings(),at)) }
         val chat=KakaoReport.compose(r,picture=false).chat
-        assertEquals("오늘 흐림 2°/9°, 내일 비 70% -1°/6°",chat[0].text.lines()[3])
+        // r26-3: the texts carry today only.
+        assertEquals("오늘 흐림 2°/9°",chat[0].text.lines()[3])
         assertFalse(card.header.contains("°"))
         // A second try the same day asks nothing.
         assertEquals(at,Weather.forReport(app,at+2*h)!!.atMs);assertEquals(1,src.asked.size)
@@ -303,7 +332,8 @@ class R26WeatherTest:ProtectedTextHostTestBase() {
         val texts=views(tomorrow).filterIsInstance<TextView>()
         assertEquals("비 70%  -1°/6°",texts.single { it.tag=="board_day_weather" }.text.toString())
         val cautions=texts.filter { it.tag=="board_day_caution" }.map { it.text.toString() }
-        assertEquals(listOf("일평균 3℃, 다음 날 최저 -2℃ 예상 (${Weather.COLD_RULE})","비 올 확률 70%, 예상 강수 12mm"),cautions)
+        assertEquals(listOf("일평균 3℃, 다음 날 최저 -2℃ 예상 (한중 콘크리트 기준 해당)","비 올 확률 70%, 예상 강수 12mm"),cautions)
+        assertEquals(Weather.COLD_RULE,(tag(a,HomeBoard.TAG_PREFIX+"week_source_rule") as TextView).text.toString())
         assertEquals(CallUi.AMBER,texts.first { it.tag=="board_day_caution" }.currentTextColor)
         assertNotNull(tag(a,HomeBoard.TAG_PREFIX+"weather"))
         // The later day sits in the fold with its own source line.
@@ -314,6 +344,66 @@ class R26WeatherTest:ProtectedTextHostTestBase() {
         val all=views(a.window.decorView).filterIsInstance<TextView>()
         assertTrue(all.none { it.text.contains('·') || it.text.contains('…') })
         assertTrue(all.filter { it !is android.widget.Button }.all { it.textSize/it.resources.displayMetrics.scaledDensity>=((it.getTag(kr.callbrief.R.id.ui_min_sp) as? Float) ?: 18f)-0.01f })
+    }
+    @Test fun aFailedFetchWaitsThirtyMinutes() {
+        var fetched=0
+        val fail={ fetched++;null to Weather.ERR_TIMEOUT }
+        assertNull(Weather.decide(null,site,at530,fail,lastTryMs=at530-29*60_000L) { _,_ -> });assertEquals(0,fetched)
+        assertNull(Weather.decide(null,site,at530,fail,lastTryMs=at530-30*60_000L) { _,_ -> });assertEquals(1,fetched)
+        // Through the settings: the try's time is kept, a second morning try within 30 minutes asks nothing.
+        val src=FakeSource { Weather.Response(500,null) };Weather.sourceFactory={ src }
+        assertNull(Weather.forReport(app,at530));assertEquals(at530,settings().getLong(Weather.TRY_KEY))
+        assertNull(Weather.forReport(app,at530+20*60_000L));assertEquals(1,src.asked.size)
+        assertNull(Weather.forReport(app,at530+31*60_000L));assertEquals(2,src.asked.size)
+    }
+    @Test fun aSlowLookupDoesNotHoldTheReport() = runBlocking {
+        // A fetch that would take 30 s (blocked until released); the wait is virtual: it asks for 10 s and returns at once.
+        val release=java.util.concurrent.CountDownLatch(1)
+        Weather.sourceFactory={ FakeSource { release.await(60,java.util.concurrent.TimeUnit.SECONDS);Weather.Response(200,week()) } }
+        val waited=mutableListOf<Long>()
+        ReportFetch.weatherWait={ waited+=it }
+        try {
+            val report=JSONObject().put("day",day.toString())
+            val started=System.nanoTime()
+            val out=ReportFetch.withWeather(app,report,day)
+            assertTrue("well under the real 30 s",(System.nanoTime()-started)/1_000_000L<5_000L)
+            assertEquals(listOf(ReportFetch.WEATHER_WAIT_MS),waited);assertEquals(10_000L,ReportFetch.WEATHER_WAIT_MS)
+            assertFalse("went without weather",out.has("weather"))
+            // The late answer is kept for home; the report that went is as it was.
+            release.countDown()
+            var kept:JSONObject?=null
+            repeat(200) { if(kept==null) { kept=settings().optString(Weather.CAST_KEY).takeIf { it.isNotEmpty() }?.let(::JSONObject);if(kept==null) Thread.sleep(25) } }
+            assertNotNull(kept);assertFalse(out.has("weather"))
+            // A fetch that throws an Error: the report as it is, nothing thrown.
+            ReportFetch.weatherWait={ kotlinx.coroutines.delay(it) }
+            SecureSettings(app).update { it.remove(Weather.CAST_KEY);it.remove(Weather.TRY_KEY) }
+            Weather.sourceFactory={ FakeSource { throw OutOfMemoryError("made up") } }
+            assertSame(report,ReportFetch.withWeather(app,report,day))
+        } finally { release.countDown();ReportFetch.weatherWait={ kotlinx.coroutines.delay(it) } }
+    }
+    @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    @Config(qualifiers="w412dp-h915dp")
+    @Test fun theDayHeadKeepsTheWeatherOnOneLineAtLargeLetters() {
+        val today=CallUi.today();val now=System.currentTimeMillis()
+        val c=Weather.parse(answer(today,(0 until 8).map { listOf(81,70,12.5,-10.4,-2.2,-5.0,6.0) }),now,site)!!
+        val r=JSONObject().put("day",today.toString()).put("week",JSONArray(listOf(JSONObject().put("date",today.toString()).put("items",JSONArray(listOf("거푸집 설치"))))))
+        val s=JSONObject().put(ReportFetch.REPORT_BODY,r.toString()).put(Weather.CAST_KEY,Weather.toJson(c).toString())
+        for(scale in listOf(1.0f,2.0f)) {
+            RuntimeEnvironment.setFontScale(scale)
+            try {
+                val a=home(HomeScreen.board(s,today,now))
+                val dayView=tag(a,"board_day_$today") as ViewGroup
+                val w=views(dayView).single { it.tag=="board_day_weather" } as TextView
+                assertEquals("비 70%  -10°/-2°",w.text.toString())
+                assertEquals("scale $scale: one line",1,w.lineCount)
+                val row=w.parent as WrapRow
+                val date=row.getChildAt(0)
+                val overlap=row.orientation==LinearLayout.HORIZONTAL && w.left<date.right || row.orientation==LinearLayout.VERTICAL && w.top<date.bottom
+                assertFalse("scale $scale: no overlap",overlap)
+                if(scale==2.0f) assertEquals("under the date at 2x",LinearLayout.VERTICAL,row.orientation)
+                if(scale==1.0f) assertEquals("beside the date at 1x",LinearLayout.HORIZONTAL,row.orientation)
+            } finally { RuntimeEnvironment.setFontScale(1.0f) }
+        }
     }
     @Test fun theHeartbeatHasTheWeatherBlockNumbersAndCodesOnly() {
         val hb=Weather.heartbeat(JSONObject(),at530)

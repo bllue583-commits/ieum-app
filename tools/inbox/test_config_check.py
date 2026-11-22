@@ -63,6 +63,8 @@ class ConfigCheckTest(unittest.TestCase):
         self.assertEqual(cc.problems(good), [])
         self.assertEqual(cc.summary(good), "bench=off samples=off budgetMin=20 webMax=2000 site=37.39,126.64")
         self.assertEqual(cc.problems({"site": {"lat": 37, "lon": 127}}), [])
+        # r26-3: a null label is no label (the phone says "현장").
+        self.assertEqual(cc.problems({"site": {"lat": 37, "lon": 127, "label": None}}), [])
         for bad in ({"lat": 40.1, "lon": 126.6}, {"lat": 37.4, "lon": 133}, {"lat": "37.4", "lon": 126.6}, {"lat": True, "lon": 126.6},
                     {"lat": 37.4}, {"lat": 37.4, "lon": 126.6, "label": "아주아주긴현장이름이에요열셋"},
                     {"lat": 37.4, "lon": 126.6, "label": "현장#1"}, {"lat": 37.4, "lon": 126.6, "label": ""},

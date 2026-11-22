@@ -128,6 +128,8 @@ class ReportPageTest(unittest.TestCase):
         self.assertIn('var wx=wxHead(d.x);if(wx)', text)
         self.assertIn('if(shown)s.appendChild(el("p","src","날씨 Open-Meteo, "+(site||"인천")+" 기준"));', text)
         self.assertIn('(Array.isArray(d.k)?d.k:[]).slice(0,2)', text)
+        # r26-3: the criterion's words once under the source, only with a cold line.
+        self.assertIn('if(cold)s.appendChild(el("p","src rule",COLD_RULE));', text)
         self.assertNotRegex(text, r"[\U0001F300-\U0001FAFF\u2600-\u27BF]", "no emoji")
 
     @unittest.skipUnless(shutil.which("node"), "node is not installed")
@@ -142,8 +144,10 @@ class ReportPageTest(unittest.TestCase):
             ("wxHead([0,0,0,-0.4,0.5,0,1,null])", "맑음  0°/1°"),
             ("wxHead([95,10,0,null,null,0,1,null])", "뇌우"),
             ("String(wxHead(null))", "null"),
-            ("wxCaution(1,[61,70,12,-1,6,3,12,-2])", "일평균 3℃, 다음 날 최저 -2℃ 예상 (한중 콘크리트 기준: 일평균 4℃ 이하 또는 타설 뒤 24시간 최저 0℃ 이하)"),
-            ("wxCaution(1,[3,10,0,1,9,4.4,6,-0.5])", "일평균 4.4℃, 다음 날 최저 -0.5℃ 예상 (한중 콘크리트 기준: 일평균 4℃ 이하 또는 타설 뒤 24시간 최저 0℃ 이하)"),
+            ("wxCaution(1,[61,70,12,-1,6,2.5,12,-2])", "일평균 2.5℃, 다음 날 최저 -2℃ 예상 (한중 콘크리트 기준 해당)"),
+            ("wxCaution(1,[3,10,0,1,9,4.4,6,-0.5])", "다음 날 최저 -0.5℃ 예상 (한중 콘크리트 기준 해당)"),
+            ("wxCaution(1,[3,10,0,1,9,3.1,6,2])", "일평균 3.1℃ 예상 (한중 콘크리트 기준 해당)"),
+            ("COLD_RULE", "한중 콘크리트 기준: 일평균 4℃ 이하 또는 타설 후 24시간 최저 0℃ 이하"),
             ("wxCaution(2,[61,60,12,-1,6,3,12,-2])", "비 올 확률 60%, 예상 강수 12mm"),
             ("wxCaution(2,[71,80,3.5,-1,6,3,12,null])", "눈 올 확률 80%, 예상 강수 3.5mm"),
             ("wxCaution(3,[3,10,0,1,9,4,10,null])", "순간풍속 10m/s 예상"),

@@ -96,7 +96,7 @@ def problems(cfg):
                 out.append("site.lat must be a number 33..39")
             if not _num(st.get("lon"), 124, 132):
                 out.append("site.lon must be a number 124..132")
-            if "label" in st and not (isinstance(st["label"], str) and LABEL.fullmatch(st["label"].strip() or "-")):
+            if st.get("label") is not None and not (isinstance(st["label"], str) and LABEL.fullmatch(st["label"].strip() or "-")):
                 out.append("site.label must be 1..12 Korean or Latin letters")
     return out
 
