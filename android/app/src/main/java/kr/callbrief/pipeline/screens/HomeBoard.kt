@@ -6,33 +6,47 @@ import android.widget.LinearLayout
 import kr.callbrief.pipeline.report.MorningBoard
 import java.time.LocalDate
 
-/** v4.4 r25-2: the morning tidy's board on home, under "먼저 볼 체크할 일", in the web view's order: 전화할 곳, 답을 기다리는 중,
- * 이번 주 일정, 진행 중인 일, 확인 필요, 끝났는지 확인할 일, 어제와 달라진 것. Read from today's report as the phone fetched it
- * at 05:30 ([kr.callbrief.pipeline.report.ReportFetch.REPORT_BODY]); an empty block is not drawn, no report draws nothing.
- * A long block shows its first rows and folds the rest into one line that opens in place (no new screen, no new tab). */
+/** v4.4 r25-2: the morning tidy's board on home, under "먼저 볼 체크할 일", read from today's report as the phone fetched it at
+ * 05:30 ([kr.callbrief.pipeline.report.ReportFetch.REPORT_BODY]); an empty block is not drawn, no report draws nothing.
+ * r25 review: a small "오늘 아침 보고 기준" over it; open by default only 전화할 곳, 답을 기다리는 중 and 이번 주 일정 (today and
+ * tomorrow), three rows each (the rest of a block opens in place); 진행 중인 일, 확인 필요, 끝났는지 확인할 일 and 어제와 달라진 것
+ * wait behind one "아침 현황 더 보기" at the end. No new screen, no new tab. */
 internal object HomeBoard {
     /** Rows shown before "외 n개 더 보기". */
     const val FIRST_ROWS=3
     /** 이번 주 일정: the days shown before the fold (today and tomorrow come first). */
     const val FIRST_DAYS=2
     const val TAG_PREFIX="home_board_"
+    const val BASIS="오늘 아침 보고 기준"
+    const val MORE="아침 현황 더 보기"
 
     /** Adds the board's blocks to [body]; [opened] keeps the folds that were opened (it outlives one drawing). */
     fun add(a:MainActivity,body:LinearLayout,b:MorningBoard.Board,day:LocalDate,opened:MutableSet<String>) {
+        body.addView(CallUi.meta(a,BASIS,CallUi.PAGE_CAPTION).apply { tag=TAG_PREFIX+"basis";setPadding(CallUi.dp(a,4),CallUi.dp(a,20),0,0) })
         block(a,body,"calls","전화할 곳",b.calls.map { p -> { person(a,p,null) } },opened)
         block(a,body,"waiting","답을 기다리는 중",b.waiting.map { p -> { person(a,p,p.days) } },opened)
-        if(b.week.isNotEmpty()) {
-            body.addView(CallUi.section(a,"이번 주 일정","${b.week.sumOf { it.items.size }}개").apply { tag=TAG_PREFIX+"week_head" })
+        val near=b.week.filter { !it.date.isAfter(day.plusDays(1)) }.take(FIRST_DAYS)
+        if(near.isNotEmpty()) {
+            body.addView(CallUi.section(a,"이번 주 일정").apply { tag=TAG_PREFIX+"week_head" })
             val sheet=CallUi.card(a).apply { tag=TAG_PREFIX+"week" }
-            b.week.take(FIRST_DAYS).forEachIndexed { i,d -> sheet.addView(dayView(a,d,day,i==0)) }
-            val rest=b.week.drop(FIRST_DAYS)
-            if(rest.isNotEmpty()) sheet.addView(fold(a,"다른 날 ${rest.size}일 더 보기 ›",TAG_PREFIX+"week_more",opened) { rest.map { dayView(a,it,day,false) } })
+            near.forEachIndexed { i,d -> sheet.addView(dayView(a,d,day,i==0)) }
             body.addView(sheet)
         }
-        block(a,body,"progress","진행 중인 일",b.inProgress.map { i -> { issue(a,i) } },opened)
-        block(a,body,"check","확인 필요",b.check.map { c -> { line(a,c.what,c.who) } },opened)
-        block(a,body,"done","끝났는지 확인할 일",b.doneCheck.map { c -> { line(a,c.what,c.who) } },opened)
-        block(a,body,"changed","어제와 달라진 것",b.changed.map { c -> { line(a,c,"") } },opened)
+        val later=b.week-near.toSet()
+        val rest=b.inProgress.isNotEmpty() || b.check.isNotEmpty() || b.doneCheck.isNotEmpty() || b.changed.isNotEmpty() || later.isNotEmpty()
+        if(!rest) return
+        body.addView(fold(a,"$MORE ›",TAG_PREFIX+"more",opened) {
+            val box=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
+            if(later.isNotEmpty()) {
+                box.addView(CallUi.section(a,if(near.isEmpty()) "이번 주 일정" else "이번 주 일정, 그 뒤").apply { tag=TAG_PREFIX+"later_head" })
+                box.addView(CallUi.card(a).apply { tag=TAG_PREFIX+"later";later.forEachIndexed { i,d -> addView(dayView(a,d,day,i==0)) } })
+            }
+            block(a,box,"progress","진행 중인 일",b.inProgress.map { i -> { issue(a,i) } },opened)
+            block(a,box,"check","확인 필요",b.check.map { c -> { line(a,c.what,c.who) } },opened)
+            block(a,box,"done","끝났는지 확인할 일",b.doneCheck.map { c -> { line(a,c.what,c.who) } },opened)
+            block(a,box,"changed","어제와 달라진 것",b.changed.map { c -> { line(a,c,"") } },opened)
+            listOf(box)
+        })
     }
 
     /** One block: the heading with its count, the first [FIRST_ROWS] rows in one sheet, the rest behind one quiet line. */

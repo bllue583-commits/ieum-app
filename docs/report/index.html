@@ -59,6 +59,15 @@ main{padding-bottom:calc(40px + env(safe-area-inset-bottom))}
 .day ul li{padding:3px 0 3px 14px;border-top:0;position:relative}
 .day ul li:before{content:"";position:absolute;left:2px;top:.75em;width:5px;height:5px;border-radius:50%;background:var(--sub)}
 .changed li{padding:8px 0}
+/* r25 review (사용성): a long block shows its first rows; the rest opens with "n개 더 보기" (details/summary, no script). */
+.basis{color:var(--sub);font-size:15px;margin:10px 2px 0}
+details.more{margin-top:2px}
+details.more summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:6px;color:var(--accent);font-size:16px;font-weight:600;padding:12px 0 2px;border-top:1px solid var(--line);margin-top:10px;-webkit-tap-highlight-color:transparent}
+details.more summary::-webkit-details-marker{display:none}
+details.more summary:after{content:"";width:7px;height:7px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(45deg);margin:-3px 0 0 4px;transition:transform .15s}
+details.more[open] summary{display:none}
+details.more ul li:first-child{border-top:1px solid var(--line);padding-top:10px}
+details.more .day:first-of-type{border-top:1px solid var(--line);padding-top:12px}
 </style>
 </head>
 <body>
@@ -79,11 +88,18 @@ async function decodeReport(d){
 }
 /* DECODE:END */
 function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e}
-function list(title,rows,draw,empty){
+var SHOW=5;
+/* The rows after the first [n] of a block, behind "m개 더 보기" (opened, the line goes and the rows stay). */
+function more(s,n,label,fill){var d=el("details","more");d.appendChild(el("summary",null,n+label+" 더 보기"));fill(d);s.appendChild(d)}
+function list(title,rows,draw,empty,all){
   if(!rows.length&&!empty)return null;
   var s=el("section"),h2=el("h2",null,title);if(rows.length>1)h2.appendChild(el("span","n",String(rows.length)));s.appendChild(h2);
   if(!rows.length){s.appendChild(el("p","empty",empty));return s}
-  var ul=el("ul");rows.forEach(function(r){var li=el("li");draw(li,r);ul.appendChild(li)});s.appendChild(ul);return s;
+  var n=all?rows.length:Math.min(rows.length,SHOW);
+  function fill(box,part){var ul=el("ul");part.forEach(function(r){var li=el("li");draw(li,r);ul.appendChild(li)});box.appendChild(ul)}
+  fill(s,rows.slice(0,n));
+  if(rows.length>n)more(s,rows.length-n,"개",function(d){fill(d,rows.slice(n))});
+  return s;
 }
 function line(li,main,sub){li.appendChild(el("div","what",main));if(sub)li.appendChild(el("div","sub",sub))}
 /* v4.4 r25-2: a row with "n일째" on the right (a wait of more than 7 days in amber) and the "확인 필요" mark after the main words. */
@@ -99,12 +115,15 @@ function weekBlock(days){
   if(!days.length)return null;
   var n=0;days.forEach(function(d){n+=(d.items||[]).length});
   var s=el("section"),h2=el("h2",null,"이번 주 일정");if(n>1)h2.appendChild(el("span","n",String(n)));s.appendChild(h2);
-  days.forEach(function(d){
+  function day(into,d){
     var box=el("div","day"),head=el("div","dayhead");
     if(d.near){head.appendChild(el("b","near",d.near));head.appendChild(el("span",null,d.label||d.date))}
     else head.appendChild(el("b",null,d.label||d.date));
-    box.appendChild(head);var ul=el("ul");(d.items||[]).forEach(function(t){ul.appendChild(el("li",null,t))});box.appendChild(ul);s.appendChild(box);
-  });
+    box.appendChild(head);var ul=el("ul");(d.items||[]).forEach(function(t){ul.appendChild(el("li",null,t))});box.appendChild(ul);into.appendChild(box);
+  }
+  /* Today, tomorrow and the day after shown; the other days behind "n일 더 보기". */
+  days.slice(0,3).forEach(function(d){day(s,d)});
+  if(days.length>3)more(s,days.length-3,"일",function(dd){days.slice(3).forEach(function(d){day(dd,d)})});
   return s;
 }
 function show(r){
@@ -115,6 +134,7 @@ function show(r){
   [["오늘 챙길 일",h.todayChecks||0,"key"],["새 체크",h.newChecks||0,""],["어제 통화",h.calls||0,""]].forEach(function(x){
     var c=el("div","stat"+(x[2]?" "+x[2]:""));c.appendChild(el("b",null,String(x[1])));c.appendChild(el("span",null,x[0]));stats.appendChild(c)});
   p.appendChild(stats);
+  if(r.label||r.day)p.appendChild(el("p","basis",(r.label||r.day)+" 아침 보고 기준"));
   if(!(h.calls>0))p.appendChild(el("p","note","어제 정리한 통화가 없어요"));
   if(h.pendingCalls>0)p.appendChild(el("p","note","통화 "+h.pendingCalls+"건은 아직 글자로 바꾸는 중이에요"));
   if(h.failedCalls>0)p.appendChild(el("p","note","어제 글자로 못 바꾼 통화가 "+h.failedCalls+"건 있어요"));
@@ -124,7 +144,7 @@ function show(r){
       var row=el("div","row"),tag=TAGS[t.tag]?t.tag:"request",chip=el("span","tag",TAGS[tag]);
       chip.style.background="var(--t-"+tag+")";row.appendChild(chip);
       var body=el("div");line(body,t.what,[t.since,t.who,t.status].filter(Boolean).join(", "));row.appendChild(body);li.appendChild(row);
-    },"새로 챙길 일 없음"),
+    },"새로 챙길 일 없음",true),
     list("전화할 곳",r.calls||[],function(li,x){var name=who(x);
       dayRow(li,name||x.what,[name?x.what:"",x.since?"마지막 연락 "+x.since:""].filter(Boolean).join(", "),null,x.unsure)}),
     list("답을 기다리는 중",r.waiting||[],function(li,x){var name=who(x);

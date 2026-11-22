@@ -74,6 +74,8 @@ internal class TasksScreen(a:MainActivity):AppScreen(a) {
     private var companies:List<String> =emptyList()
     /** v4.4 r25-3: this morning's to-dos by id, in the report's order. */
     private var reportIds:List<String> =emptyList()
+    /** r25 review: every open to-do counted ([CallRecordStore.openCount]); [items] stops at [CallRecordStore.OPEN_LIMIT]. */
+    private var openTotal=-1
     /** The list was read at least once (so it can be drawn at once when the screen comes back, and read again behind it). */
     private var loaded=false
     internal companion object {
@@ -85,10 +87,17 @@ internal class TasksScreen(a:MainActivity):AppScreen(a) {
         const val RECENT_DAYS=7L
         /** When the to-do was last heard of: its request, or the call it came from (the store keeps no later mention time). */
         fun heardMs(i:OpenItem)=maxOf(i.createdMs,i.callMs ?: 0L)
-        /** Shown open, and folded away: in this morning's report or heard of within [RECENT_DAYS] days (KST days) stays open. */
+        /** r25 review: a to-do due today or tomorrow, or past its day, stays open when it was asked for within this many days. */
+        const val DUE_RECENT_DAYS=14L
+        private fun dueDay(i:OpenItem)=runCatching { java.time.LocalDate.parse(i.due.trim().take(10)) }.getOrNull()
+        /** Shown open, and folded away. Open: in this morning's report, heard of within [RECENT_DAYS] days (KST days), asking for
+         * a check (needs_confirmation, the "끝났는지 확인해 주세요" group that was always shown), or due by tomorrow and asked
+         * for within [DUE_RECENT_DAYS] days. */
         fun split(all:List<OpenItem>,reportIds:List<String>,today:java.time.LocalDate):Pair<List<OpenItem>,List<OpenItem>> {
-            val from=today.minusDays(RECENT_DAYS-1)
-            val (open,past)=all.partition { it.id in reportIds || (heardMs(it)>0 && !CallRecordStore.kstDay(heardMs(it)).isBefore(from)) }
+            val from=today.minusDays(RECENT_DAYS-1);val dueFrom=today.minusDays(DUE_RECENT_DAYS-1)
+            fun since(ms:Long,day:java.time.LocalDate)=ms>0 && !CallRecordStore.kstDay(ms).isBefore(day)
+            val (open,past)=all.partition { i -> i.id in reportIds || since(heardMs(i),from) || i.status=="needs_confirmation" ||
+                (dueDay(i)?.let { !it.isAfter(today.plusDays(1)) } == true && since(i.createdMs,dueFrom)) }
             return open to past.sortedByDescending(::heardMs)
         }
         /** The ids of this morning's to-dos (report today[]), in its order; empty without today's report. */
@@ -116,7 +125,8 @@ internal class TasksScreen(a:MainActivity):AppScreen(a) {
         a.lifecycleScope.launch {
             val ids=withContext(Dispatchers.IO) { runCatching { reportIds(kr.callbrief.pipeline.report.ReportFetch.today(a)) }.getOrDefault(emptyList()) }
             val result=withContext(Dispatchers.IO) { runCatching { kr.callbrief.IeumApplication.store(CallPipelineStartup.storage(a)).let { s ->
-                val open=s.openItems()
+                val open=s.openItems(ids)
+                openTotal=runCatching { s.openCount() }.getOrDefault(-1)
                 people=runCatching { s.personIdsOf(open.mapNotNull { it.recordId }) }.getOrDefault(emptyMap())
                 Triple(open,runCatching { s.doneItems(System.currentTimeMillis()-7*86_400_000L) }.getOrDefault(emptyList()),
                     runCatching { s.companies().map { it.name } }.getOrDefault(emptyList())) } } }
@@ -146,12 +156,26 @@ internal class TasksScreen(a:MainActivity):AppScreen(a) {
     private fun taskView(item:OpenItem,check:Boolean)=CheckRows.row(a,item,status=if(check) "" else item.status,
         onDone={ row -> TaskActions.complete(a,item,row) { load() } },personId=item.recordId?.let(people::get),
         onWrong={ row -> TaskActions.wrong(a,item,row) { load() } }).apply { tag="task_${item.id}" }
+    /** r25 review: "지난 일" can be hundreds of rows: the first [FIRST_ROWS] at once, the rest a part per frame (same drawing only). */
+    private fun pastRows(past:List<OpenItem>):(LinearLayout)->Unit = { holder ->
+        val gen=drawing
+        val sheet=CallUi.list(a,past.take(FIRST_ROWS).map { taskView(it,it.status=="needs_confirmation") },inset=16).apply { tag="tasks_old_list" }
+        holder.addView(sheet)
+        val queue=ArrayDeque(past.drop(FIRST_ROWS))
+        fun next() {
+            if(gen!=drawing || !live()) return
+            CallUi.addRows(a,sheet,(0 until FIRST_ROWS).mapNotNull { queue.removeFirstOrNull() }.map { taskView(it,it.status=="needs_confirmation") },inset=16)
+            if(queue.isNotEmpty()) body.post { next() }
+        }
+        if(queue.isNotEmpty()) body.post { next() }
+    }
     /** A folded line that opens in place: [label] is a quiet link, the rows below it appear when it is tapped. */
-    private fun fold(label:String,tag:String,rows:()->List<View>):View {
+    private fun fold(label:String,tag:String,rows:()->List<View>):View = foldWith(label,tag) { holder -> holder.addView(CallUi.list(a,rows(),inset=16)) }
+    private fun foldWith(label:String,tag:String,fill:(LinearLayout)->Unit):View {
         val box=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL }
         val holder=LinearLayout(a).apply { orientation=LinearLayout.VERTICAL;visibility=View.GONE;this.tag=tag+"_rows" }
         var built=false
-        fun build() { if(!built) { built=true;holder.addView(CallUi.list(a,rows(),inset=16)) } }
+        fun build() { if(!built) { built=true;fill(holder) } }
         if(tag in opened) { build();holder.visibility=View.VISIBLE }
         box.addView(CallUi.linkButton(a,label) {
             build()
@@ -169,7 +193,7 @@ internal class TasksScreen(a:MainActivity):AppScreen(a) {
         body.removeAllViews();drawing++
         if(!ok && !loaded) { CallUi.band(body,"체크할 일");CallUi.retryCard(body,"체크할 일을 읽지 못했어요. 다시 불러와 주세요.") { enter() };return }
         if(!ok) Toast.makeText(a,"새로 읽지 못해서 전에 읽은 목록을 보여드려요.",Toast.LENGTH_SHORT).show()
-        CallUi.band(body,"체크할 일","${items.size}개 남았어요")
+        CallUi.band(body,"체크할 일","${maxOf(openTotal,items.size)}개 남았어요")
         if(items.isEmpty()) body.addView(CallUi.card(a).apply { addView(CallUi.text(a,"체크할 일이 없어요.",CallUi.SUMMARY,color=CallUi.OK)) })
         // The first rows are drawn now; the rest of every group follows a part at a time, in the same sheets.
         val later=ArrayList<Triple<LinearLayout,Boolean,List<OpenItem>>>()
@@ -187,7 +211,7 @@ internal class TasksScreen(a:MainActivity):AppScreen(a) {
         }
         if(items.isNotEmpty() && recent.isEmpty()) body.addView(CallUi.card(a).apply { tag="tasks_recent_none"
             addView(CallUi.text(a,"최근 7일에 생긴 체크할 일은 없어요.",CallUi.BODY,color=CallUi.SUBTLE)) })
-        if(past.isNotEmpty()) body.addView(fold("지난 일 ${past.size}개 보기 ›","tasks_old") { past.map { taskView(it,it.status=="needs_confirmation") } })
+        if(past.isNotEmpty()) body.addView(foldWith("지난 일 ${past.size}개 보기 ›","tasks_old",pastRows(past)))
         // Finished in the last 7 days (to look at, not to change), and the user's own items.
         if(done.isNotEmpty()) {
             body.addView(CallUi.gap(a,16))

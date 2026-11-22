@@ -55,8 +55,8 @@ class ReportCheckTest(unittest.TestCase):
         r["yesterday"] = [{"who": f"업체{i}", "what": "자재 입고"} for i in range(9)]
         self.assertBreaks(r, "yesterday: 9줄 (최대 8줄)")
         r = good()
-        r["inProgress"] = [{"what": "공정 진행"}] * 26
-        self.assertBreaks(r, "inProgress: 26줄 (최대 25줄)")
+        r["inProgress"] = [{"what": "공정 진행"}] * 21
+        self.assertBreaks(r, "inProgress: 21줄 (최대 20줄)")
 
     def test_v12_board_passes_and_v11_still_passes(self):
         self.assertEqual([], rc.check(board()))
@@ -122,6 +122,30 @@ class ReportCheckTest(unittest.TestCase):
         r = board()
         r["changed"] = [{"what": "바뀜"}]
         self.assertBreaks(r, "changed[0]: 문자열이 아님")
+
+    def test_review_since_days_and_week_words(self):
+        # r25 review: an unknown date stays as "" (the line is not dropped), the days follow the dates, a promise ahead is no wait.
+        r = board()
+        r["calls"][0]["since"] = ""
+        r["waiting"][1]["since"] = ""
+        self.assertEqual([], rc.check(r))
+        r = board()
+        r["waiting"][1]["days"] = 4
+        self.assertBreaks(r, "waiting[1].days: 보고 날짜에서 약속한 날짜를 뺀 날 수(3)와 다름")
+        r = board()
+        r["waiting"][1].update(since="11/9", days=0)
+        self.assertBreaks(r, "waiting[1].since: 약속한 날이 아직 오지 않음")
+        r = board()
+        r["waiting"][1].update(since="오늘", days=0)
+        self.assertEqual([], rc.check(r))
+        r = board()
+        r["waiting"] = [{"who": "박하늘", "what": "견적", "since": "12/20", "days": 322}]
+        self.assertEqual([], rc.check(r), "a later month/day far ahead is last year's")
+        r = board()
+        r["week"][0]["items"][0] = "구조 검토서 제출 기한"
+        self.assertEqual([], rc.check(r))
+        r["changed"][0] = "제출 기한 바뀜"
+        self.assertBreaks(r, "changed[0]: 금지어 '기한'")
 
     def test_v12_waiting_oldest_first(self):
         r = board()

@@ -18,7 +18,7 @@ internal object MorningBoard {
     const val WAITING_MAX=20
     const val WEEK_DAYS=7
     const val WEEK_ITEMS=6
-    const val IN_PROGRESS_MAX=25
+    const val IN_PROGRESS_MAX=20
     const val CHECK_MAX=3
     const val DONE_CHECK_MAX=10
     const val CHANGED_MAX=6
@@ -41,6 +41,8 @@ internal object MorningBoard {
     }
 
     private fun clean(s:String?)=KakaoReport.clean(s)
+    /** r25 review L: a text field, "" for null or anything that is not text (JSONObject.optString would give "null"). */
+    internal fun text(o:JSONObject,key:String)=clean(o.opt(key) as? String)
     private fun objects(o:JSONObject,key:String):List<JSONObject> {
         val a=o.opt(key) as? JSONArray ?: return emptyList()
         return (0 until a.length()).mapNotNull { a.opt(it) as? JSONObject }
@@ -54,8 +56,8 @@ internal object MorningBoard {
     private fun unsure(o:JSONObject)=o.opt("unsure")==true
 
     private fun people(o:JSONObject,key:String,max:Int,withDays:Boolean):List<Person> = objects(o,key).mapNotNull { p ->
-        val what=clean(p.optString("what")).ifEmpty { return@mapNotNull null }
-        Person(clean(p.optString("who")),clean(p.optString("company")),what,clean(p.optString("since")),if(withDays) days(p) else null,unsure(p))
+        val what=text(p,"what").ifEmpty { return@mapNotNull null }
+        Person(text(p,"who"),text(p,"company"),what,text(p,"since"),if(withDays) days(p) else null,unsure(p))
     }.take(max)
 
     /** The board of [o] (the report/YYYY-MM-DD.json object); [day] is the report's day (the week starts there). */
@@ -72,11 +74,11 @@ internal object MorningBoard {
             if(items.isEmpty()) null else Day(date,items)
         }.groupBy { it.date }.map { (date,days) -> Day(date,days.flatMap { it.items }.take(WEEK_ITEMS)) }.sortedBy { it.date }
         val inProgress=objects(o,"inProgress").mapNotNull { i ->
-            val what=clean(i.optString("what")).ifEmpty { return@mapNotNull null }
-            Issue(what,clean(i.optString("status")),days(i),unsure(i))
+            val what=text(i,"what").ifEmpty { return@mapNotNull null }
+            Issue(what,text(i,"status"),days(i),unsure(i))
         }.take(IN_PROGRESS_MAX)
         fun lines(key:String,max:Int)=objects(o,key).mapNotNull { c ->
-            val what=clean(c.optString("what")).ifEmpty { return@mapNotNull null };Line(what,clean(c.optString("who"))) }.take(max)
+            val what=text(c,"what").ifEmpty { return@mapNotNull null };Line(what,text(c,"who")) }.take(max)
         val changed=(o.opt("changed") as? JSONArray)?.let { a -> (0 until a.length()).mapNotNull { (a.opt(it) as? String)?.let(::clean)?.takeIf { s -> s.isNotEmpty() } } }
             ?.take(CHANGED_MAX) ?: emptyList()
         return Board(calls,waiting,week,inProgress,lines("check",CHECK_MAX),lines("doneCheck",DONE_CHECK_MAX),changed)

@@ -97,7 +97,9 @@ internal object PhoneStatus {
         val kakaoTags:Map<String,Int> =emptyMap(),
         /** v4.4 r25-2: `kakao.webLen` (the last report's web view fragment, characters; 0 without one) and `kakao.webCut` (its
          * blocks that gave up lines to stay under [kr.callbrief.pipeline.report.KakaoReport.WEB_FRAGMENT_MAX]). */
-        val kakaoWebLen:Long=0,val kakaoWebCut:Long=0)
+        val kakaoWebLen:Long=0,val kakaoWebCut:Long=0,
+        /** r25 review: `kakao.webMax`, the fragment cap in force (app/config.json `kakao.webMax`, else the default). */
+        val kakaoWebMax:Int=kr.callbrief.pipeline.report.KakaoReport.WEB_FRAGMENT_MAX)
     /** v3.4 (DESIGN_V4 4.1-5, 4.3-4, 4.3-5, 4.3-8): [updateError] = [PipelineSettingsKeys.UPDATE_ERROR_CODE] (a code, heartbeat
      * `update.error`); [recordTime] = [PipelineSettingsKeys.RECORD_TIME] ({bucket: count}, `recordTime.fileVsRecordMin`), through
      * [counts]. v3.7 (DESIGN_V7 3.3): `messages.mailError` left with the mail intake. */
@@ -259,7 +261,7 @@ internal object PhoneStatus {
             .put("error",v.kakaoError?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
             .put("texts",v.kakaoTexts).put("plainRetried",v.kakaoPlainRetried)
             .put("style",v.kakaoStyle?.takeIf { it in KAKAO_STYLES } ?: JSONObject.NULL).put("cards",v.kakaoCards)
-            .put("listFallback",v.kakaoListFallback).put("web",v.kakaoWeb).put("webLen",v.kakaoWebLen).put("webCut",v.kakaoWebCut)
+            .put("listFallback",v.kakaoListFallback).put("web",v.kakaoWeb).put("webLen",v.kakaoWebLen).put("webCut",v.kakaoWebCut).put("webMax",v.kakaoWebMax)
             .put("tags",JSONObject().apply { kr.callbrief.pipeline.report.KakaoReport.TAGS.forEach { put(it,(v.kakaoTags[it] ?: 0).coerceAtLeast(0)) } }))
         o.put("report",JSONObject().put("day",v.reportDay?.takeIf { Regex("""\d{4}-\d{2}-\d{2}""").matches(it) } ?: JSONObject.NULL)
             .put("source",v.reportSource?.let(::code)?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL))
@@ -459,7 +461,8 @@ internal object PhoneStatus {
         s.optLong(kr.callbrief.pipeline.report.KakaoReport.LAST_CARDS,0),s.optLong(kr.callbrief.pipeline.report.KakaoReport.LIST_FALLBACK,0),
         s.optBoolean(kr.callbrief.pipeline.report.KakaoReport.LAST_WEB,false),
         jsonOf(s,kr.callbrief.pipeline.report.KakaoReport.LAST_TAGS)?.let { t -> kr.callbrief.pipeline.report.KakaoReport.TAGS.associateWith { t.optInt(it,0) } } ?: emptyMap(),
-        s.optLong(kr.callbrief.pipeline.report.KakaoReport.LAST_WEB_LEN,0).coerceAtLeast(0),s.optLong(kr.callbrief.pipeline.report.KakaoReport.LAST_WEB_CUT,0).coerceAtLeast(0))
+        s.optLong(kr.callbrief.pipeline.report.KakaoReport.LAST_WEB_LEN,0).coerceAtLeast(0),s.optLong(kr.callbrief.pipeline.report.KakaoReport.LAST_WEB_CUT,0).coerceAtLeast(0),
+        kr.callbrief.pipeline.report.KakaoReport.webMaxIn(s))
     private val KAKAO_STYLES=setOf("list","text","picture")
     private fun jsonOf(s:JSONObject,key:String):JSONObject? = when(val v=s.opt(key)) {
         is JSONObject -> v

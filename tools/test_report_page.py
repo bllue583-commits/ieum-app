@@ -89,6 +89,19 @@ class ReportPageTest(unittest.TestCase):
         self.assertIn('if(!days.length)return null;', text)
         self.assertIn('warn&&days>7', text)
 
+    def test_long_blocks_fold_without_script(self):
+        # r25 review: five rows a block (the to-dos all, the week three days), the rest in details/summary (no script, the CSP
+        # stays); the day the report stands for under the numbers.
+        text = page()
+        self.assertIn("var SHOW=5;", text)
+        self.assertIn('el("details","more")', text)
+        self.assertIn('el("summary",null,n+label+" 더 보기")', text)
+        self.assertIn('days.slice(0,3)', text)
+        self.assertIn('"새로 챙길 일 없음",true)', text)
+        self.assertIn('" 아침 보고 기준"', text)
+        self.assertIn("details.more summary::-webkit-details-marker{display:none}", text)
+        self.assertIn("default-src 'none'", text)
+
     @unittest.skipUnless(shutil.which("node"), "node is not installed")
     def test_the_page_decodes_a_board(self):
         board = dict(SAMPLE, calls=[{"who": "박하늘 과장", "company": "가나건설", "what": "거푸집 반입 시간", "since": "11/12"}],

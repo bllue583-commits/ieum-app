@@ -157,7 +157,7 @@ class RoutineDocTest {
         listOf("`report/YYYY-MM-DD.json`","한국 시각 오늘","state의 records","매시간 결과 요약","업체(업체가 없으면 사람) 단위로 묶어",
             "약속, 금액, 날짜가 있는 줄을 먼저 두고 최대 8줄","개인 통화(business가 false)는 넣지 않는다","빈 배열 `[]`",
             "오늘과 어제 요청한 것(createdMs)과 확인 필요(status가 needs_confirmation)를 먼저","최대 10줄","\"오늘 요청\", \"어제 요청\", \"3일 전 요청\"",
-            "흔적이 없으면 빈 문자열 `\"\"`","완료 처리는 하지 않는다","어제 움직임이 있던 것 먼저 최대 25줄","한 줄 60자",
+            "흔적이 없으면 빈 문자열 `\"\"`","완료 처리는 하지 않는다","어제 움직임이 있던 것 먼저 최대 20줄(4번의 issues 상한)","한 줄 60자",
             "가운데 점, 말줄임표, 영어 상태값","\"기한\", \"지남\"","\"까지\"로 끝나는 기한 표현","전화번호는 절대 넣지 않는다",
             "python3 tools/report_check.py report/YYYY-MM-DD.json --state tidy/state.json","30일 넘게 지난 report 파일은 `git rm` 한다",
             "10번의 \"tidy\" 커밋에 함께 넣는다").forEach { assertTrue(it,section.contains(it)) }
@@ -190,10 +190,14 @@ class RoutineDocTest {
         assertEquals(listOf("date","items"),format.getJSONArray("week").getJSONObject(0).keys().asSequence().toList())
         assertEquals(listOf("what","who"),format.getJSONArray("doneCheck").getJSONObject(0).keys().asSequence().toList())
         assertEquals("",format.getJSONArray("changed").getString(0))
-        listOf("briefing.md의 같은 절을 쓸 때 정한 항목을 그대로 구조로 옮긴다","따로 다시 고르거나 판단하지 않는다","최대 10줄","최대 20줄, 오래된 것부터",
+        listOf("briefing.md의 같은 절을 쓸 때 정한 항목을 같은 순서로 구조로 옮긴다","따로 다시 고르거나 판단하지 않는다","최대 10줄","최대 20줄, 오래된 것부터",
             "오늘부터 7일 안의 날만","하루 최대 6줄","최대 6줄","`\"unsure\":true`","\"(숫자 확인 필요)\" 같은 꼬리를 붙이지 않고",
             "`calls`와 `waiting`은 \"company who: what (since)\"").forEach { assertTrue(it,section.contains(it)) }
         assertTrue(head.contains("옛 폰(v4.3)은 모르는 키를 건너뛰고"))
+        // r25 review: a v12 key that keeps failing the check is left out; the report is never deleted for it.
+        listOf("틀린 그 키만 빼고","새 키 때문에 보고서를 지우지 않는다","모르면 빈 문자열 `\"\"`(그 줄을 빼지 않는다)","약속한 날이 아직 오지 않은 것은 넣지 않는다(`week`에 간다)",
+            "같은 날이면 0","검사기가 `week`에는 금지어를 보지 않는다","개인 통화와 개인 기록(business가 false)은 넣지 않는다","꼬리는 떼고").forEach { assertTrue(it,section.contains(it)) }
+        assertTrue(prompt.contains("\"## 답을 기다리는 중\" — 상대가 하기로 하고 아직 소식 없는 것, 오래된 것부터"))
     }
 
     /** v3.1: the watchdog compares the routine's self-reported promptVersion with version.json's tidyVersion (the head line), so the

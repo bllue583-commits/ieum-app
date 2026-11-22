@@ -859,4 +859,41 @@ class KakaoReportTest:ProtectedTextHostTestBase() {
         assertEquals(len,k.getLong("webLen"));assertEquals(s.getLong(KakaoReport.LAST_WEB_CUT),k.getLong("webCut"))
         assertEquals(0L,PhoneStatus.build(PhoneStatus.Input(1_000L,"v4.4",1070,0,null,5,6,"READY","","",12,v35=PhoneStatus.v35(JSONObject()))).getJSONObject("kakao").getLong("webLen"))
     }
+
+    // ---- r25 review ----
+    @Test fun aV12IssueReadsTitleAndStateInTheTextsAndAV11OneAsBefore() {
+        val v11=KakaoReport.read(report(inProgress=listOf("철근 단가 재견적: 업체 회신 대기")),false)
+        assertEquals(listOf("철근 단가 재견적: 업체 회신 대기"),v11.inProgress)
+        val v12=report().put("inProgress",JSONArray(listOf(JSONObject().put("what","철근 단가 재견적").put("status","업체 회신 대기").put("days",12),
+            JSONObject().put("what","3층 타설").put("status","13톤").put("unsure",true),JSONObject().put("what","도면 협의").put("status",JSONObject.NULL))))
+        val r=KakaoReport.read(v12,false)
+        assertEquals(listOf("철근 단가 재견적: 업체 회신 대기","3층 타설: 13톤 (확인 필요)","도면 협의"),r.inProgress)
+        assertTrue(KakaoReport.chat(r,"11/7(토)").joinToString("\n") { it.text }.contains("· 철근 단가 재견적: 업체 회신 대기"))
+        assertTrue(KakaoReport.renderFull(v12,app).lines.any { it.text=="3층 타설: 13톤 (확인 필요)" })
+    }
+    @Test fun aNullIsNoWordOnTheBoard() {
+        val r=report().put("calls",JSONArray(listOf(JSONObject().put("who",JSONObject.NULL).put("company",JSONObject.NULL).put("what","견적 독촉").put("since",JSONObject.NULL))))
+            .put("doneCheck",JSONArray(listOf(JSONObject().put("what","서류").put("who",JSONObject.NULL))))
+        val b=MorningBoard.read(r,day)
+        assertEquals("",b.calls[0].who);assertEquals("",b.calls[0].name);assertEquals("",b.calls[0].since);assertEquals("",b.doneCheck[0].who)
+        assertFalse(KakaoReport.webData(r,false).toString().contains("null"))
+    }
+    @Test fun theWebCapComesFromTheConfigAndStaysInRange() = runBlocking {
+        assertEquals(2000,KakaoReport.WEB_FRAGMENT_MAX);assertEquals(2000,KakaoReport.webMaxIn(null))
+        assertEquals(3500,KakaoReport.webMaxIn(JSONObject().put(KakaoReport.WEB_MAX_KEY,3500)))
+        for(bad in listOf<Any>(999,6001,"3500",3500.5,true)) assertEquals(2000,KakaoReport.webMaxIn(JSONObject().put(KakaoReport.WEB_MAX_KEY,bad)))
+        assertEquals(3000,kr.callbrief.pipeline.bench.KakaoConfig.webMaxOf("""{"kakao":{"webMax":3000}}"""))
+        assertNull(kr.callbrief.pipeline.bench.KakaoConfig.webMaxOf("""{"kakao":{"webMax":500}}"""));assertNull(kr.callbrief.pipeline.bench.KakaoConfig.webMaxOf(null))
+        val st=SecureSettings(app)
+        kr.callbrief.pipeline.bench.KakaoConfig.apply(st,"""{"power":{"budgetMin":40},"kakao":{"webMax":4000}}""")
+        assertEquals(4000,KakaoReport.webMaxIn(st.snapshot()))
+        val beat=PhoneStatus.build(PhoneStatus.Input(1_000L,"v4.4",1070,0,null,5,6,"READY","","",12,v35=PhoneStatus.v35(st.snapshot()))).getJSONObject("kakao")
+        assertEquals(4000,beat.getInt("webMax"))
+        // The send uses it: a big board fits a 4,000 cap uncut.
+        KakaoReport.webBase={ "https://example.github.io/ieum-app/report/" };listOn(ListSender())
+        assertNull(KakaoReport.send(app,withBoard(tagged(8)),KakaoReport.SOURCE_ROUTINE))
+        assertEquals(0L,settings().getLong(KakaoReport.LAST_WEB_CUT))
+        kr.callbrief.pipeline.bench.KakaoConfig.apply(st,"""{"power":{"budgetMin":40}}""")
+        assertEquals("no block, the default",2000,KakaoReport.webMaxIn(st.snapshot()));assertFalse(st.snapshot().has(KakaoReport.WEB_MAX_KEY))
+    }
 }

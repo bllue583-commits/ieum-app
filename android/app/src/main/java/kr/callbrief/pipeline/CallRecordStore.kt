@@ -82,6 +82,8 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         const val TRANSCRIBED="TRANSCRIBED";const val ANALYZED="ANALYZED";const val FAILED="FAILED"
         /** v3.9 r20-2: a check item the user marked [틀렸어요] (a workflow_items status, apart from done and merged). */
         const val WRONG="wrong"
+        /** The newest open to-dos [openItems] reads (v4.4 r25 review: the report's own ids come on top, [openCount] counts all). */
+        const val OPEN_LIMIT=300
         /** v4.2 r23-6 (DESIGN_V8 6 중복 막기): a finished (done) item blocks the same company's same title this many days (was 14). */
         const val DONE_BLOCK_DAYS=3L
         /** A [틀렸어요] item blocks the same or a near title, and a merged one the same title, this many days (unchanged). */
@@ -978,11 +980,21 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
         .filter { val d=it.str("due_text")!!.trim();d.matches(ISO_DATE) && d<=today.toString() }
         .map { CallTodoItem(it.str("id")!!,it.str("title")!!,it.str("due_text")!!.trim(),it.str("status")!!,it.long("revision")!!,it.str("cname"),it.long("created_ms") ?: 0,it.str("ai_note"),it.long("tentative")==1L) }
     /** Every open to-do (any source), newest first, with the latest call counterpart of its recording. */
-    fun openItems():List<OpenItem> =rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.edition,i.created_ms,i.recording_id,
+    /** The newest [OPEN_LIMIT] open to-dos; v4.4 r25 review: plus [include] (this morning's report ids) wherever they are,
+     * so a to-do the report names is never past the limit. */
+    fun openItems(include:Collection<String> =emptyList()):List<OpenItem> {
+        val newest=openRows("ORDER BY i.created_ms DESC LIMIT $OPEN_LIMIT")
+        val missing=include.distinct().filter { id -> newest.none { it.id==id } }.take(50)
+        if(missing.isEmpty()) return newest
+        return newest+openRows("AND i.id IN (${missing.joinToString(",") { "?" }})",*missing.toTypedArray())
+    }
+    /** v4.4 r25 review: how many to-dos are open in all (the screens' "n개 남았어요"; [openItems] stops at [OPEN_LIMIT]). */
+    fun openCount():Int = rows("SELECT COUNT(*) AS n FROM workflow_items i WHERE i.status NOT IN ('done','merged','wrong') AND i.kind='TODO'").firstOrNull()?.long("n")?.toInt() ?: 0
+    private fun openRows(tail:String,vararg args:Any?):List<OpenItem> =rows("""SELECT i.id,i.title,i.due_text,i.status,i.revision,i.edition,i.created_ms,i.recording_id,
         c.counterpart,c.record_id AS call_id,COALESCE(c.started_ms,c.created_ms) AS call_ms,
         (SELECT co.name FROM task_companies tc JOIN companies co ON co.id=tc.company_id WHERE tc.item_id=i.id) AS cname,i.ai_note,i.tentative
         FROM workflow_items i LEFT JOIN call_records c ON c.record_id=(SELECT x.record_id FROM call_records x WHERE x.recording_id=i.recording_id ORDER BY x.created_ms DESC LIMIT 1)
-        WHERE i.status NOT IN ('done','merged','wrong') AND i.kind='TODO' ORDER BY i.created_ms DESC LIMIT 300""")
+        WHERE i.status NOT IN ('done','merged','wrong') AND i.kind='TODO' $tail""",*args)
         .map { OpenItem(it.str("id")!!,it.str("title")!!,it.str("due_text").orEmpty().trim(),it.str("status")!!,it.long("revision")!!,it.str("edition").orEmpty(),it.str("counterpart"),it.str("cname"),it.long("created_ms") ?: 0,it.str("ai_note"),it.long("tentative")==1L,
             it.str("recording_id"),it.str("call_id"),it.long("call_ms")) }
     /** The user's "완료했어요": marks one item done and records the edit so analysis never touches it again. */

@@ -346,6 +346,8 @@ internal object Bench {
         val settings=SecureSettings(app)
         // v4.3 r24-3: the day's battery budget rides on the same read (a network error above keeps the last value).
         runCatching { PowerConfig.apply(settings,text) }
+        // v4.4 r25 review: the web view's fragment cap rides on it too.
+        runCatching { KakaoConfig.apply(settings,text) }
         val snap=settings.snapshot()
         val (oldBench,oldSamples)=config(snap)
         val changed=oldBench!=bench || oldSamples!=sample
@@ -398,6 +400,21 @@ internal object PowerConfig {
         val stored=kr.callbrief.pipeline.TranscriptionPower.validBudget(snap.opt(key))
         if(want!=stored || (want==null && snap.has(key))) settings.update { if(want==null) it.remove(key) else it.put(key,want) }
         kr.callbrief.pipeline.TranscriptionPower.load(settings.snapshot())
+    }
+}
+
+/** v4.4 r25 review: `kakao.webMax` of the mailbox's app/config.json, read like [PowerConfig]: a whole number 1000..6000 is kept
+ * in settings ([kr.callbrief.pipeline.report.KakaoReport.WEB_MAX_KEY]); no file, no `kakao` block or a value out of range means
+ * the default (the stored value goes). */
+internal object KakaoConfig {
+    fun webMaxOf(text:String?):Int? = runCatching { org.json.JSONObject(text ?: return null).optJSONObject("kakao")?.opt("webMax") }.getOrNull()
+        ?.let { kr.callbrief.pipeline.report.KakaoReport.validWebMax(it) }
+    fun apply(settings:SecureSettings,text:String?) {
+        val want=webMaxOf(text)
+        val key=kr.callbrief.pipeline.report.KakaoReport.WEB_MAX_KEY
+        val snap=settings.snapshot()
+        val stored=kr.callbrief.pipeline.report.KakaoReport.validWebMax(snap.opt(key))
+        if(want!=stored || (want==null && snap.has(key))) settings.update { if(want==null) it.remove(key) else it.put(key,want) }
     }
 }
 

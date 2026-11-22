@@ -215,7 +215,10 @@ object KakaoReport {
             // The context line: who asked, and the state when there is one, else when it was asked (DESIGN_V5 1절 ③).
             val note=listOf(clean(t.optString("who")),clean(t.optString("status")).ifEmpty { clean(t.optString("since")) }).filter { it.isNotEmpty() }
             if(note.isEmpty()) what else clean("$what (${note.joinToString(", ")})") }
-        val inProgress=objects(o.optJSONArray("inProgress")).take(3).map { clean(it.optString("what")) }.filter { it.isNotEmpty() }
+        // r25 review M: a v12 issue ({what, status}) reads "제목: 현황" as the v11 line did; a doubt says "(확인 필요)".
+        val inProgress=objects(o.optJSONArray("inProgress")).take(3).mapNotNull { i ->
+            val what=clean(i.optString("what")).ifEmpty { return@mapNotNull null };val status=MorningBoard.text(i,"status")
+            clean((if(status.isEmpty()) what else "$what: $status")+(if(i.opt("unsure")==true) " ($UNSURE_WORDS)" else "")) }
         val check=objects(o.optJSONArray("check")).take(3).mapNotNull { c ->
             val what=clean(c.optString("what")).ifEmpty { return@mapNotNull null };val who=clean(c.optString("who"))
             if(who.isEmpty()) what else clean("$what ($who)") }
@@ -281,9 +284,19 @@ object KakaoReport {
     // ---- r18: the web view (docs/report/index.html). The report never goes to a server: the page is static and the report
     // (masked like every bubble) rides in the URL's fragment, which the browser does not send. ----
     /** v4.4 r25-2: the longest fragment (the `#d=` data, the template argument WEB's tail). Longer, blocks give up lines, the
-     * less needed first ([WEB_CUTS]), and the page says the rest is in the app. One constant, so the coordinator can set it
-     * from what Kakao takes (before r25 the cap was 4,000 on the whole address). */
-    const val WEB_FRAGMENT_MAX=3500
+     * less needed first ([WEB_CUTS]), and the page says the rest is in the app (before r25 the cap was 4,000 on the whole address).
+     * r25 review: the default stays near what goes well today (about 1,700); the mailbox's app/config.json `kakao.webMax`
+     * ([WEB_MAX_LOW]..[WEB_MAX_HIGH], kept in settings [WEB_MAX_KEY] as last read, [webMaxIn]) raises it once Kakao is seen to
+     * take more. */
+    const val WEB_FRAGMENT_MAX=2000
+    const val WEB_MAX_LOW=1000;const val WEB_MAX_HIGH=6000
+    const val WEB_MAX_KEY="kakaoWebMax"
+    /** [v] as a cap: a whole number in range, else null (the default holds). */
+    fun validWebMax(v:Any?):Int? = when(v) {
+        is Int -> v;is Long -> v.toInt().takeIf { it.toLong()==v };is Double -> v.toInt().takeIf { it.toDouble()==v };else -> null
+    }?.takeIf { it in WEB_MAX_LOW..WEB_MAX_HIGH }
+    /** The cap in force with the settings [s]. */
+    fun webMaxIn(s:JSONObject?):Int = validWebMax(s?.opt(WEB_MAX_KEY)) ?: WEB_FRAGMENT_MAX
     /** Which block gives up lines, in order, and how many it keeps at that step: first 달라진 것, 뒤늦게 정리된 통화, 어제 정리,
      * 진행 중인 일 after its first 3 and 답을 기다리는 중 after its 5 oldest (the most recent waits go first); then, if it still does
      * not fit, 끝났는지 확인할 일, 확인 필요, the rest of 진행 중, 이번 주 일정 from its last day, 기다리는 중, 전화할 곳 and 챙길 일. */
@@ -356,6 +369,8 @@ object KakaoReport {
      * read with the header's date, which is today); nothing when there is none. */
     internal fun failedTag(n:Int)=if(n>0) "${LIST_DOT}어제 $FAILED_WORDS ${n}건" else ""
     const val FAILED_WORDS="글자로 못 바꾼 통화"
+    /** The doubt's words, as the phone's 06:00 report and the screens say it. */
+    const val UNSURE_WORDS="확인 필요"
     /** The counts under [headLine] (v3.6 and before they were on the same line). */
     internal fun countsLine(r:Report)="새 체크 ${r.newChecks}개, 오늘 챙길 일 ${r.todayChecks}개"
     /** v3.7 r17-2 (M4): the last block of the text and of the picture. */
@@ -382,10 +397,10 @@ object KakaoReport {
     }
 
     /** Builds the messages for [report] (the report/YYYY-MM-DD.json object, DESIGN_V5 1절); [phoneFallback] marks the 06:00 phone report. */
-    fun compose(report:JSONObject,phoneFallback:Boolean=false,picture:Boolean=true,templateId:Long=0,webBase:String=""):Composed {
+    fun compose(report:JSONObject,phoneFallback:Boolean=false,picture:Boolean=true,templateId:Long=0,webBase:String="",webMax:Int=WEB_FRAGMENT_MAX):Composed {
         val r=read(report,phoneFallback)
         val label=dayLabel(r.day)
-        val web=if(r.items.size>=2) web(webBase,report,phoneFallback) else null
+        val web=if(r.items.size>=2) web(webBase,report,phoneFallback,webMax) else null
         val cards=list(r,label,templateId,web?.url)
         if(phoneFallback) {
             // 1절: no report from the night's tidy: one text only, from what the phone has.
@@ -611,7 +626,7 @@ object KakaoReport {
         val picture=s.optBoolean(PICTURE,false)
         val base=runCatching { webBase() }.getOrDefault("").trim()
         val template=runCatching { listTemplateId() }.getOrDefault(0L).takeIf { it>0 && base.isNotEmpty() } ?: 0L
-        val made=compose(sent,source==SOURCE_PHONE,picture,template,base)
+        val made=compose(sent,source==SOURCE_PHONE,picture,template,base,webMaxIn(s))
         val composed=if(picture || source==SOURCE_PHONE || made.chat.isEmpty()) made else made.copy(feed=null,todayText=null,fallback=made.chat)
         val sender=senderFactory?.invoke(app) ?: KakaoSdkSender(app.applicationContext)
         val tags=read(sent,source==SOURCE_PHONE).items.groupingBy { it.tag }.eachCount()

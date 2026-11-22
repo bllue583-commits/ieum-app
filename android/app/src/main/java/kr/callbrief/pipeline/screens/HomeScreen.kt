@@ -59,7 +59,9 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
                                  /** v3.9 r20-1: the call card is a required setup step on this phone ([CallCardAsk.cardRequired]). */
                                  val cardRequired:Boolean=false,
                                  /** v4.4 r25-2: today's board from the morning report ([HomeBoard]); null: no report today, or nothing on it. */
-                                 val board:kr.callbrief.pipeline.report.MorningBoard.Board?=null)
+                                 val board:kr.callbrief.pipeline.report.MorningBoard.Board?=null,
+                                 /** r25 review: every open to-do counted (the store reads the newest 300 only); -1: unknown, the read ones count. */
+                                 val openTotal:Int=-1)
     /** [audioMinutesLeft]: how long the recordings still to transcribe are, together. [lowBattery]: not charging and under half
      * the battery, so old recordings wait ([FirstPass.powerOk]). [stalled]: nothing came back for [FirstPass.STALL_MS], so no
      * new batch goes up (design C7). Either one shows the "잠시 쉬고 있어요" line (#20). */
@@ -258,7 +260,7 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
             granted(android.Manifest.permission.READ_SMS),granted(android.Manifest.permission.READ_CALL_LOG),granted(android.Manifest.permission.READ_PHONE_STATE),
             null,first,NotifyAsk.blocked(a),mm.partFile.path,people,
             CallCardAsk.overlayAllowed(a),true /* v3.4 (4.1-1): no role step */,installStep(a),gapBanner(a)?.text?.takeIf { it.isNotBlank() },updateState(a),partBytes,story,TodayStory.summarized(calls),
-            cardRequired=CallCardAsk.cardRequired(a,s),board=board(s,today))
+            cardRequired=CallCardAsk.cardRequired(a,s),board=board(s,today),openTotal=runCatching { db.openCount() }.getOrDefault(-1))
     }
 
     /** While a new version or the voice model is coming, home looks every second whether it now needs the person (the update
@@ -301,7 +303,7 @@ internal class HomeScreen(a:MainActivity):AppScreen(a) {
 
         // v3.2 (DESIGN_V4 2-1, the wife 11/5 22:56 and the user 22:57): content first. "오늘 통화 이야기", today's calls told in two
         // or three sentences (the hourly task's story, or the phone's own from today's summaries); a tap opens today's calls.
-        val left=s.byCompany.sumOf { it.second }
+        val left=maxOf(s.openTotal,s.byCompany.sumOf { it.second })
         val story=s.story
         // v3.9 r20-1: "녹음 n개 중 정리 m개" is said here only (it was also a number and a pill in 오늘 한눈에), so with today's
         // recordings and no story yet the heading stands above the none line too.

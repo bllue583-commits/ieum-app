@@ -45,11 +45,17 @@ class R25BoardTest:ProtectedTextHostTestBase() {
     @Test fun theBoardComesUnderTheToDosInTheWebOrder() {
         val board=MorningBoard.read(report(),today)
         val a=home(snap(board))
-        val order=views(a.window.decorView).mapNotNull { it.tag as? String }.filter { it.startsWith(HomeBoard.TAG_PREFIX) && it.endsWith("_head") }
-        assertEquals(listOf("calls","waiting","week","progress","changed").map { HomeBoard.TAG_PREFIX+it+"_head" },order)
+        fun heads()=views(a.window.decorView).filter { it.isShown }.mapNotNull { it.tag as? String }.filter { it.startsWith(HomeBoard.TAG_PREFIX) && it.endsWith("_head") }
+        // r25 review: open by default only 전화할 곳, 답을 기다리는 중 and 이번 주 (today, tomorrow), under "오늘 아침 보고 기준".
+        assertEquals(listOf("calls","waiting","week").map { HomeBoard.TAG_PREFIX+it+"_head" },heads())
+        assertEquals(HomeBoard.BASIS,(tag(a,HomeBoard.TAG_PREFIX+"basis") as TextView).text.toString())
         val all=views(a.window.decorView)
-        assertTrue("after 먼저 볼 체크할 일",all.indexOf(tag(a,"home_tasks_head"))<all.indexOf(tag(a,HomeBoard.TAG_PREFIX+"calls_head")))
-        assertTrue("before the numbers",all.indexOf(tag(a,HomeBoard.TAG_PREFIX+"changed_head"))<all.indexOf(tag(a,"home_today")))
+        assertTrue("after 먼저 볼 체크할 일",all.indexOf(tag(a,"home_tasks_head"))<all.indexOf(tag(a,HomeBoard.TAG_PREFIX+"basis")))
+        assertTrue("before the numbers",all.indexOf(tag(a,HomeBoard.TAG_PREFIX+"more"))<all.indexOf(tag(a,"home_today")))
+        val rest=tag(a,HomeBoard.TAG_PREFIX+"more") as TextView
+        assertEquals("${HomeBoard.MORE} ›",rest.text.toString())
+        rest.performClick();shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf("calls","waiting","week","later","progress","changed").map { HomeBoard.TAG_PREFIX+it+"_head" },heads())
         // No 확인 필요 or 끝났는지 확인할 일 in this report: not drawn.
         assertNull(tag(a,HomeBoard.TAG_PREFIX+"check_head"));assertNull(tag(a,HomeBoard.TAG_PREFIX+"done_head"))
         // 전화할 곳: three rows, the fourth folded; it opens in place.
@@ -69,9 +75,10 @@ class R25BoardTest:ProtectedTextHostTestBase() {
         assertEquals(1,views(tag(a,HomeBoard.TAG_PREFIX+"waiting")).count { it.tag=="board_unsure" })
         val sub=views(tag(a,HomeBoard.TAG_PREFIX+"waiting")).filterIsInstance<TextView>().first { it.tag=="board_sub" }
         assertEquals("배선 견적서, 11/3 약속",sub.text.toString())
-        // 이번 주 일정: today and tomorrow, the other days behind one line.
-        assertNotNull(tag(a,"board_day_$today"));assertNotNull(tag(a,"board_day_${today.plusDays(1)}"))
-        assertEquals("다른 날 2일 더 보기 ›",(tag(a,HomeBoard.TAG_PREFIX+"week_more") as TextView).text.toString())
+        // 이번 주 일정: today and tomorrow open, the other days inside "아침 현황 더 보기" (opened above).
+        assertTrue(tag(a,"board_day_$today").isShown);assertTrue(tag(a,"board_day_${today.plusDays(1)}").isShown)
+        assertTrue(tag(a,"board_day_${today.plusDays(3)}").isShown)
+        assertNull(tag(a,HomeBoard.TAG_PREFIX+"week_more"))
         // The screen rules: reading size (META 16 marked), no middle dot.
         val texts=views(a.window.decorView).filterIsInstance<TextView>()
         assertTrue(texts.none { it.text.contains('·') || it.text.contains('…') })
@@ -94,14 +101,20 @@ class R25BoardTest:ProtectedTextHostTestBase() {
         fun item(id:String,at:Long,status:String="open",callMs:Long?=null)=OpenItem(id,id,"",status,1,"",null,createdMs=at,callMs=callMs)
         val all=listOf(item("new",now),item("six",now-6*day),item("eight",now-8*day),item("old_check",now-20*day,"needs_confirmation"),
             item("old_reported",now-30*day),item("old_talked",now-30*day,callMs=now-2*day),item("unknown",0))
-        val (open,past)=TasksScreen.split(all,listOf("old_reported"),today)
-        assertEquals(setOf("new","six","old_reported","old_talked"),open.map { it.id }.toSet())
-        assertEquals("newest first",listOf("eight","old_check","unknown"),past.map { it.id })
+        fun due(id:String,at:Long,d:java.time.LocalDate)=OpenItem(id,id,d.toString(),"open",1,"",null,createdMs=at)
+        val dues=listOf(due("due_tomorrow",now-10*day,today.plusDays(1)),due("due_past",now-13*day,today.minusDays(3)),
+            due("due_later",now-10*day,today.plusDays(2)),due("due_old",now-20*day,today.minusDays(1)))
+        val (open,past)=TasksScreen.split(all+dues,listOf("old_reported"),today)
+        // r25 review: asking for a check stays open (the group that was always shown), and so does what is due by tomorrow
+        // when it was asked for within 14 days.
+        assertEquals(setOf("new","six","old_reported","old_talked","old_check","due_tomorrow","due_past"),open.map { it.id }.toSet())
+        assertEquals("newest first",listOf("eight","due_later","due_old","unknown"),past.map { it.id })
         assertEquals(listOf("b","a"),TasksScreen.reportIds(JSONObject().put("today",JSONArray(listOf(JSONObject().put("id","b"),JSONObject().put("id","a"),JSONObject().put("id","b"),JSONObject())))))
         assertTrue(TasksScreen.reportIds(null).isEmpty())
         val a=launchMain(Screen.TASKS)
         val groups=a.tasks.groups(open,listOf("old_reported","missing","six"))
         assertEquals(TasksScreen.REPORT_GROUP,groups[0].first);assertEquals("in the report's order",listOf("old_reported","six"),groups[0].second.map { it.id })
+        assertEquals("끝났는지 확인해 주세요",groups[1].first)
         assertTrue(groups.drop(1).none { g -> g.second.any { it.id=="old_reported" || it.id=="six" } })
     }
     @Test fun theTaskListFoldsWhatIsOlderThanAWeek() {
@@ -119,5 +132,30 @@ class R25BoardTest:ProtectedTextHostTestBase() {
         fold.performClick();shadowOf(Looper.getMainLooper()).idle()
         oldIds.forEach { assertTrue(tag(a,"task_$it").isShown) }
         assertEquals("nothing closed",before+4,CallRecordStore(app).use { it.openItems().size })
+    }
+    @Test fun theReportedToDosAreReadPastTheLimitAndTheCountIsReal() {
+        PreviewSeed.ensure(app)
+        val before=CallRecordStore(app).use { it.openCount() }
+        val base=System.currentTimeMillis()-400*60_000L
+        val ids=(0 until CallRecordStore.OPEN_LIMIT+5).map { i -> CallRecordStore(app) { base+i*60_000L }.use { it.addUserItem("일 $i") }!! }
+        CallRecordStore(app).use { s ->
+            assertEquals(CallRecordStore.OPEN_LIMIT,s.openItems().size)
+            assertEquals(before+CallRecordStore.OPEN_LIMIT+5,s.openCount())
+            val oldest=ids.take(2)
+            val read=s.openItems(oldest+"none")
+            assertEquals(CallRecordStore.OPEN_LIMIT+2,read.size);assertTrue(read.map { it.id }.containsAll(oldest))
+            assertEquals("no twice",read.size,read.map { it.id }.toSet().size)
+            assertEquals(CallRecordStore.OPEN_LIMIT,s.openItems(listOf(ids.last())).size)
+        }
+    }
+    @Test fun aLongPastListIsDrawnInParts() {
+        PreviewSeed.ensure(app)
+        val old=System.currentTimeMillis()-20*86_400_000L
+        val ids=(1..65).map { i -> CallRecordStore(app) { old-i*60_000L }.use { it.addUserItem("오래된 일 $i") }!! }
+        val a=launchMain(Screen.TASKS)
+        settle { tag(a,"tasks_old")!=null }
+        tag(a,"tasks_old").performClick()
+        settle { tag(a,"task_${ids.last()}")!=null }
+        assertTrue(ids.all { tag(a,"task_$it")!=null })
     }
 }

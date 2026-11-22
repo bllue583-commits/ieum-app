@@ -20,7 +20,7 @@ def problems(cfg):
     if not isinstance(cfg, dict):
         return ["top level must be an object"]
     for k in cfg:
-        if k not in ("bench", "samples", "power"):
+        if k not in ("bench", "samples", "power", "kakao"):
             out.append(f"unknown block: {k}")
     b = cfg.get("bench")
     if b is not None:
@@ -71,16 +71,29 @@ def problems(cfg):
                     out.append(f"power: unknown key {k}")
             if "budgetMin" in p and not _int(p["budgetMin"], 10, 60):
                 out.append("power.budgetMin must be a whole number 10..60")
+    # v4.4 r25 review: the web view's fragment cap in characters (absent: 2000). The phone takes anything else as the default.
+    kk = cfg.get("kakao")
+    if kk is not None:
+        if not isinstance(kk, dict):
+            out.append("kakao must be an object")
+        else:
+            for k in kk:
+                if k != "webMax":
+                    out.append(f"kakao: unknown key {k}")
+            if "webMax" in kk and not _int(kk["webMax"], 1000, 6000):
+                out.append("kakao.webMax must be a whole number 1000..6000")
     return out
 
 
 DEFAULT_BUDGET_MIN = 20
+DEFAULT_WEB_MAX = 2000
 
 
 def summary(cfg):
     b, s = cfg.get("bench") or {}, cfg.get("samples") or {}
     budget = (cfg.get("power") or {}).get("budgetMin", DEFAULT_BUDGET_MIN)
-    return "bench=%s samples=%s budgetMin=%d" % ("on" if b.get("on") is True else "off", "on" if s.get("on") is True else "off", budget)
+    web = (cfg.get("kakao") or {}).get("webMax", DEFAULT_WEB_MAX)
+    return "bench=%s samples=%s budgetMin=%d webMax=%d" % ("on" if b.get("on") is True else "off", "on" if s.get("on") is True else "off", budget, web)
 
 
 def main(argv):

@@ -15,13 +15,14 @@ v4.0 r21-1 (tidy.md v11): head.failedCalls (yesterday's calls whose text could n
 With --state, a head.failedCalls that is not the state's pending.yesterdayFailed (0 when the state has none) fails too.
 v4.4 r25-1 (tidy.md v12): the briefing's sections as structure, all optional (a v11 report passes): calls[] (10), waiting[] (20,
 oldest first by days), week[] ({date, items[]} from the report's day on for 7 days, 6 lines a day, in date order), doneCheck[]
-(10), changed[] (strings, 6); inProgress[] up to 25 with status and days. A doubtful line carries unsure:true instead of a
-"(숫자 확인 필요)" tail in its text.
+(10), changed[] (strings, 6); inProgress[] up to 20 (the ledger's issues) with status and days. A doubtful line carries
+unsure:true instead of a "(숫자 확인 필요)" tail in its text. r25 review: since may be "" (unknown; the line stays), a wait's days
+is the report day minus the promised day (0 the same day) and a promise still ahead is no wait; week lines may say "기한".
 """
 import json, os, re, sys
 
 LINE_MAX = 60
-LIMITS = {"yesterday": 8, "today": 10, "inProgress": 25, "check": 3, "late": 5, "calls": 10, "waiting": 20, "doneCheck": 10}
+LIMITS = {"yesterday": 8, "today": 10, "inProgress": 20, "check": 3, "late": 5, "calls": 10, "waiting": 20, "doneCheck": 10}
 # v4.4 r25-1: the sections that are not a list of objects.
 WEEK_DAYS, WEEK_ITEMS, CHANGED_MAX = 7, 6, 6
 HEAD_KEYS = ("calls", "newChecks", "todayChecks", "issues")
@@ -48,7 +49,7 @@ ITEM_KEYS = {
 }
 # Fields that must not be empty (the rest may be "").
 REQUIRED_TEXT = {"yesterday": ("who", "what"), "today": ("id", "what", "since"), "inProgress": ("what",), "check": ("what",), "late": ("who", "what"),
-                 "calls": ("what", "since"), "waiting": ("what", "since"), "doneCheck": ("what",)}
+                 "calls": ("what",), "waiting": ("what",), "doneCheck": ("what",)}
 # v4.4 r25-1: when it was last talked about, or when it was promised ("11/18", "어제").
 CONTACT_RE = re.compile(r"^(오늘|어제|그제|\d{1,2}/\d{1,2})$")
 # A doubt goes in unsure:true, not as a tail of the text ("(숫자 확인 필요)", "(확인 필요)").
@@ -94,15 +95,16 @@ def has_email(text):
     return EMAIL_RE.search(text) is not None
 
 
-def text_problems(path, value, style=True):
-    """Rule breaks inside one string value, as reasons without the value. style: check the "~해요" ending (not for names)."""
+def text_problems(path, value, style=True, banned=True):
+    """Rule breaks inside one string value, as reasons without the value. style: check the "~해요" ending (not for names).
+    banned: the banned words and the "까지" due ending (r25 review: not for a schedule line of week[])."""
     out = []
     if any(s in value for s in SIGNS):
         out.append(f"{path}: 가운데 점이나 말줄임표")
-    for w in BANNED:
+    for w in BANNED if banned else ():
         if w in value:
             out.append(f"{path}: 금지어 '{w}'")
-    if DUE_RE.search(value):
+    if banned and DUE_RE.search(value):
         out.append(f"{path}: '까지'로 끝나는 기한 표현")
     m = STATE_RE.search(value)
     if m:
@@ -198,9 +200,50 @@ def check_week(report, day):
                 continue
             if not line.strip():
                 out.append(f"{q}: 비어 있음")
-            out += text_problems(q, line)
+            out += text_problems(q, line, banned=False)
             if len(line) > LINE_MAX:
                 out.append(f"{q}: 한 줄 {len(line)}자 (최대 {LINE_MAX}자)")
+    return out
+
+
+def month_day(text, day):
+    """"11/18" on or before the report's [day] (a later month/day is last year's); None for any other word."""
+    import datetime
+    m = re.match(r"^(\d{1,2})/(\d{1,2})$", text or "")
+    if not m or not isinstance(day, str) or not DAY_RE.match(day):
+        return None
+    try:
+        today = datetime.date.fromisoformat(day)
+        d = datetime.date(today.year, int(m.group(1)), int(m.group(2)))
+    except ValueError:
+        return None
+    return d, today
+
+
+def check_wait_days(report):
+    """waiting[].days against since (r25 review): the report day minus the promised day; a promise still ahead is no wait.
+    "11/18" after the report day reads as this year's (ahead) when it is within 7 days, else as last year's."""
+    import datetime
+    out = []
+    for i, w in enumerate(report.get("waiting") or []):
+        if not isinstance(w, dict) or not isinstance(w.get("since"), str):
+            continue
+        since = w["since"].strip()
+        got = month_day(since, report.get("day"))
+        if got:
+            d, today = got
+            if d > today and (d - today).days > 7:
+                d = d.replace(year=d.year - 1)
+            if d > today:
+                out.append(f"waiting[{i}].since: 약속한 날이 아직 오지 않음(이번 주 일정으로)")
+                continue
+            want = (today - d).days
+        elif since in ("오늘", "어제", "그제"):
+            want = ("오늘", "어제", "그제").index(since)
+        else:
+            continue
+        if is_int(w.get("days")) and w["days"] != want:
+            out.append(f"waiting[{i}].days: 보고 날짜에서 약속한 날짜를 뺀 날 수({want})와 다름")
     return out
 
 
@@ -322,6 +365,7 @@ def check(report, file_day=None):
         out += check_changed(report)
     waiting = report.get("waiting")
     if isinstance(waiting, list):
+        out += check_wait_days(report)
         days = [w["days"] for w in waiting if isinstance(w, dict) and is_int(w.get("days"))]
         if any(a < b for a, b in zip(days, days[1:])):
             out.append("waiting: 오래된 것부터가 아님(days가 큰 것부터)")
