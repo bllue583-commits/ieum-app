@@ -62,6 +62,8 @@ class R24NoticeCardTest:ProtectedTextHostTestBase() {
         CallCardOverlay.canDraw={ draw };CallCardOverlay.locked={ false };CallCardOverlay.serviceUp={ false }
         CallCardOverlay.outcome={ _,_ -> };CallCardOverlay.onExpanded={};CallCardOverlay.onClosed={ _,_ -> }
         CallCardOverlay.drawnNow={ true };CallCardOverlay.probe={ CardStats.Probe(2,4242,30,false,false,null) }
+        // v4.6 r27-2: "on the screen now" follows "seen" here (Robolectric does not tell a hidden window either).
+        CallCardOverlay.shownNow={ CallCardOverlay.drawnNow(it) }
         CallCardOverlay.onVerdict={ _,a -> synchronized(verdicts) { verdicts+=a } };CallCardOverlay.onFailure={ _,_ -> }
         CallCardOverlay.screenOn={ true };CallCardOverlay.lastExit={ null }
         CallCardOverlay.onNotice={ synchronized(noticeAt) { noticeAt+=CallCardOverlay.clock() } }

@@ -75,6 +75,8 @@ class CallCardOverlayTest:ProtectedTextHostTestBase() {
         CallCardOverlay.outcome={ _,w -> outcomes+=w };CallCardOverlay.onExpanded={};CallCardOverlay.onClosed={ _,_ -> }
         // v3.6.1: Robolectric does not tell a hidden window from a shown one; the tests say whether the card was seen.
         CallCardOverlay.drawnNow={ true };CallCardOverlay.probe={ CardStats.Probe(0,4242,30,false,false,null) }
+        // v4.6 r27-2: "on the screen now" follows "seen" here (Robolectric does not tell a hidden window either).
+        CallCardOverlay.shownNow={ CallCardOverlay.drawnNow(it) }
         CallCardOverlay.onVerdict={ _,a -> synchronized(verdicts) { verdicts+=a } }
         shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
         ContactCards.shutdown();ContactCards.clearPending()
@@ -255,22 +257,60 @@ class CallCardOverlayTest:ProtectedTextHostTestBase() {
         CallCardOverlay.hide();settle();assertTrue(notices.isEmpty())
     }
 
-    /** v3.4 (DESIGN_V4 4.2-1): locked, the window and the notice come together; unlocking takes the notice away. */
-    @Test fun lockedShowsTheWindowAndTheNoticeTogether() {
-        CallCardOverlay.locked={ true }
+    /** v3.4 (DESIGN_V4 4.2-1): locked, the window is added and, while the lock covers it, the notice comes beside it; unlocking
+     * takes the notice away. v4.6 r27-2: the notice comes only when the window is not on the screen [CallCardOverlay.LOCKED_NOTICE_MS]
+     * after it was added. */
+    @Test fun lockedShowsTheNoticeWhenTheLockCoversTheWindow() {
+        CallCardOverlay.locked={ true };CallCardOverlay.shownNow={ false }
         ring();settle(50)
-        assertEquals(1,windows.size);assertEquals(1,notices.size)
+        assertEquals(1,windows.size);assertTrue("not yet: the window may still draw",notices.isEmpty())
+        settle(CallCardOverlay.LOCKED_NOTICE_MS)
+        assertEquals(1,notices.size)
         assertEquals("v3.6.1: the card tells locked itself (CardStats reads nothing again)",listOf(CallCardOverlay.LOCKED),outcomes)
-        CallCardOverlay.locked={ false }
+        CallCardOverlay.locked={ false };CallCardOverlay.shownNow={ true }
         app.sendBroadcast(Intent(Intent.ACTION_USER_PRESENT));settle(50)
         assertEquals(1,windows.size);assertTrue(windows.single().complete)
         assertTrue("the notice goes once unlocked",notices.isEmpty())
     }
+    /** v4.6 r27-2: locked, but the card is drawn over the call screen (11/23: 6 calls): no notice beside it, at the ring, at
+     * the 3 s verdict, at off hook; hidden later (the lock comes over it): the notice then. */
+    @Test fun lockedWithTheCardOnTheScreenNoNoticeBesideIt() {
+        var beside=0;CallCardOverlay.onBeside={ beside++ }
+        CallCardOverlay.locked={ true }
+        ring();settle(50);settle(CallCardOverlay.LOCKED_NOTICE_MS+100)
+        assertEquals(1,windows.size);assertTrue(notices.isEmpty())
+        settle(CallCardOverlay.HIDDEN_AFTER_MS);settle();assertEquals(CardStats.DRAWN,synchronized(verdicts) { verdicts.single() }.result)
+        assertTrue(notices.isEmpty())
+        CallSession.onPhoneState(app,TelephonyManager.EXTRA_STATE_OFFHOOK,number);CallCardOverlay.show(app,number,CallSession.State.OFFHOOK);settle(50)
+        assertTrue("off hook, still on the screen",notices.isEmpty())
+        CallCardOverlay.shownNow={ false }
+        CallCardOverlay.show(app,null,CallSession.State.OFFHOOK);settle(50)
+        assertEquals("the lock came over the card: the notice",1,notices.size)
+        assertEquals("not beside a card on the screen",0,beside)
+        idle();assertTrue(notices.isEmpty())
+    }
+
+    /** v4.6 r27-2: a notice beside a card still on the screen (the check says no during the call, r24 review 4) is counted
+     * once per call as `besideCard`; the card drawn and the check yes: no notice, nothing counted. */
+    @Test fun aNoticeBesideACardOnTheScreenIsCountedOnce() {
+        var beside=0;CallCardOverlay.onBeside={ beside++ }
+        ring();settle(50);settle(CallCardOverlay.HIDDEN_AFTER_MS+100)
+        assertTrue(notices.isEmpty());assertEquals(0,beside)
+        CallCardOverlay.canDraw={ false }
+        CallSession.onPhoneState(app,TelephonyManager.EXTRA_STATE_OFFHOOK,number);CallCardOverlay.show(app,number,CallSession.State.OFFHOOK);settle(50)
+        assertEquals(1,notices.size);assertEquals(1,beside)
+        CallCardOverlay.show(app,null,CallSession.State.OFFHOOK);settle(50)
+        assertEquals("once per call",1,beside)
+        idle()
+        CardStats.besideCard(app);CardStats.awaitIdle()
+        assertEquals(1,CardStats.read(SecureSettings(app).snapshot()).getJSONObject("today").getInt(CardStats.BESIDE_CARD))
+        assertTrue(CardStats.KINDS.contains(CardStats.BESIDE_CARD))
+    }
 
     /** v3.4 (4.2-1): while the card's service runs, the notice takes its slot: one notice, not two. */
     @Test fun withTheServiceUpTheNoticeTakesTheServiceSlot() {
-        CallCardOverlay.locked={ true };CallCardOverlay.serviceUp={ true }
-        ring();settle(50)
+        CallCardOverlay.locked={ true };CallCardOverlay.serviceUp={ true };CallCardOverlay.shownNow={ false }
+        ring();settle(50);settle(CallCardOverlay.LOCKED_NOTICE_MS)
         assertNull(nm.getNotification(CallCardOverlay.NOTICE_TAG,CallCardOverlay.NOTICE_ID))
         val slot=nm.getNotification(null,CallCardService.NOTIFICATION_ID)
         assertNotNull(slot);assertEquals(CallCardOverlay.CHANNEL,slot.channelId);assertEquals(1,nm.allNotifications.size)
@@ -378,8 +418,8 @@ class CallCardOverlayTest:ProtectedTextHostTestBase() {
     @Test fun lockedScreenShowsTheNameAndOneLineUnlessTurnedOff() {
         val money=card().copy(openTasks=listOf(ContactCard.Task("wf_1","철근 대금 50만원 입금 확인",now,"open",null,tentative=true)))
         ContactCards.write(app,mapOf(key to money),replaceAll=true)
-        CallCardOverlay.locked={ true }
-        ring();settle(50)
+        CallCardOverlay.locked={ true };CallCardOverlay.shownNow={ false }
+        ring();settle(50);settle(CallCardOverlay.LOCKED_NOTICE_MS)
         val pub=notices.single().publicVersion!!
         assertEquals("김민수 대표",pub.extras.getString(android.app.Notification.EXTRA_TITLE))
         val line=pub.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString()
@@ -387,7 +427,7 @@ class CallCardOverlayTest:ProtectedTextHostTestBase() {
         assertFalse(line,line.contains("50") || line.contains("만원") || line.contains("견적서는 금요일") || line.contains("2222"))
         idle()
         SecureSettings(app).update { it.put(CallCardOverlay.KEY_LOCK_DETAIL,false) }
-        ring();settle(50)
+        ring();settle(50);settle(CallCardOverlay.LOCKED_NOTICE_MS)
         val off=notices.single().publicVersion!!
         assertEquals("이음 통화 카드",off.extras.getString(android.app.Notification.EXTRA_TITLE))
         assertEquals("잠금을 풀면 카드가 보여요",off.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString())
@@ -466,6 +506,8 @@ class R17CardWindowTest:ProtectedTextHostTestBase() {
         CallCardOverlay.canDraw={ true };CallCardOverlay.locked={ false };CallCardOverlay.serviceUp={ false }
         CallCardOverlay.outcome={ _,w -> outcomes+=w };CallCardOverlay.onExpanded={};CallCardOverlay.onClosed={ _,_ -> }
         CallCardOverlay.drawnNow={ seen };CallCardOverlay.probe={ CardStats.Probe(1,4242,30,true,true,7) }
+        // v4.6 r27-2: "on the screen now" follows "seen" here (Robolectric does not tell a hidden window either).
+        CallCardOverlay.shownNow={ CallCardOverlay.drawnNow(it) }
         CallCardOverlay.onVerdict={ _,a -> synchronized(verdicts) { verdicts+=a } }
         CallCardOverlay.onFailure={ _,code -> synchronized(fails) { fails+=code } };CallCardOverlay.screenOn={ true };CallCardOverlay.lastExit={ null }
         CardStats.elapsed={ 600_000L };CardStats.processStart={ 0L } // a warm process
@@ -617,7 +659,7 @@ class R17CardWindowTest:ProtectedTextHostTestBase() {
         seen=false
         // v4.3 r24-1: the notice beside it comes from the lock now (a check saying no adds no window).
         CallCardOverlay.locked={ true }
-        ring();settle(50);idle()
+        ring();settle(50);settle(CallCardOverlay.LOCKED_NOTICE_MS);idle()
         assertEquals(CardStats.FALLBACK,verdict().result);assertEquals(CallCardOverlay.CAUSE_HIDDEN_LOCKED,verdict().cause)
         settle(CallCardOverlay.HIDDEN_AFTER_MS);assertEquals(1,verdicts.size)
         // Seen before the call ended: drawn.

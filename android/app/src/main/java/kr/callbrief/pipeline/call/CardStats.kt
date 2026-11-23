@@ -60,7 +60,11 @@ internal object CardStats {
     /** Every count the heartbeat carries (zeros when missing). */
     val KINDS=listOf(CALLS,SHOWN,SHOWN_OUTGOING,ELIGIBLE_OUTGOING,NO_CARD,THIN,NO_NUMBER,NO_NUMBER_IN,NO_NUMBER_OUT,NO_ROLE,
         IGNORED,OFF,LOCKED,COLD,FGS_REFUSED,NO_PERMISSION,NO_NOTIFY,EXPANDED,CLOSED_UNDER_2S,DRAWN,FALLBACK,HIDDEN,UNCONFIRMED,RETRIED,
-        FLIP_CALLS,DENIED_AT_START,DENIED_AT_END,FALLBACK_SHOWN,FALLBACK_MUTED,NOTICE_TAPS,FALLBACK_SEEN)
+        FLIP_CALLS,DENIED_AT_START,DENIED_AT_END,FALLBACK_SHOWN,FALLBACK_MUTED,NOTICE_TAPS,FALLBACK_SEEN,BESIDE_CARD)
+    /** v4.6 r27-2: calls where a card notice went up while the card's window was on the screen (the overlay check said no
+     * during the call, r24 review 4): the person may see both. Once per call. Before v4.6 the locked screen did this every time
+     * (counted only in [FALLBACK_SHOWN]). */
+    const val BESIDE_CARD="besideCard"
     /** r24 review 5: calls whose card was not drawn (a fallback or unconfirmed verdict) and whose notice was found up: the
      * calls where the notice was the card. A notice beside a drawn card (the locked screen) is not counted. */
     const val FALLBACK_SEEN="fallbackSeen"
@@ -261,6 +265,8 @@ internal object CardStats {
     /** v4.3 r24-1: the app was opened by a tap on the card's notice ([kr.callbrief.pipeline.MainActivity]). */
     fun fallbackSeen(context:Context) { write(context,mapOf(FALLBACK_SEEN to 1),null) }
     fun noticeTap(context:Context) { write(context,mapOf(NOTICE_TAPS to 1),null) }
+    /** v4.6 r27-2: [BESIDE_CARD] (told once per call by [CallCardOverlay]). */
+    fun besideCard(context:Context) { write(context,mapOf(BESIDE_CARD to 1),null) }
     /** Every call state the service sees ([CallCardService.follow]), with its verdict [reason]: [CallCardService.SHOW],
      * [NO_NUMBER], [NO_CARD], [CallCardService.IGNORED], [CallCardService.OFF], [CallCardService.WAITING] or null. IDLE ends the
      * call: then `calls` and what is only known at the end (no number, ignored, off, a call going out) are counted. */

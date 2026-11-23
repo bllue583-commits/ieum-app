@@ -133,6 +133,17 @@ internal object CallCardOverlay {
     @Volatile internal var clock:()->Long={ SystemClock.elapsedRealtime() }
     /** v3.6.1 (K1): the window was drawn while visible ([CallCardView.seen]). Replaceable in host tests. */
     @Volatile internal var drawnNow:(CallCardView)->Boolean={ it.seen }
+    /** v4.6 r27-2: the window was drawn and is visible now ([CallCardView.onScreen]): over the lock screen (the call screen
+     * covers the lock) the card itself is then on the screen. Replaceable in host tests. */
+    @Volatile internal var shownNow:(CallCardView)->Boolean={ it.onScreen }
+    /** v4.6 r27-2: a card notice went up while the card's window was on the screen (the overlay check now says no, r24 review 4):
+     * once per call ([CardStats.BESIDE_CARD]). Replaceable in host tests. */
+    @Volatile internal var onBeside:(Context)->Unit={ c -> CardStats.besideCard(c) }
+    /** v4.6 r27-2: locked when the window was added: the notice comes only when the window is not on the screen this long
+     * after it was added (11/23: on 6 locked calls the card was drawn over the call screen and the notice was up beside it
+     * too, `fallbackShown` 7 with `fallback` 0). The window draws within a frame or two; a cold start may take longer, then
+     * the notice comes and goes once the card is judged seen. */
+    const val LOCKED_NOTICE_MS=600L
     /** v3.6.1: adds the window (an exception is the system's refusal). Replaceable in host tests. */
     @Volatile internal var addWindow:(WindowManager,View,WindowManager.LayoutParams)->Unit={ wm,v,p -> wm.addView(v,p) }
     /** v3.6.1 (K3): the phone's state when the window is added, read on the card's thread. Replaceable in host tests. */
@@ -212,6 +223,17 @@ internal object CallCardOverlay {
     @Volatile private var probed:CardStats.Probe?=null
     private val judgeLater=Runnable { app?.let { runCatching { judge(it,ending=false) }.onFailure(::warn) } }
     private val retryLater=Runnable { app?.let { runCatching { retryNow(it) }.onFailure(::warn) } }
+    /** v4.6 r27-2: the locked notice, when the window is still not on the screen ([LOCKED_NOTICE_MS]). */
+    private val lockedLater=Runnable { app?.let { c -> runCatching {
+        lockedQueued=false
+        val data=content ?: return@runCatching
+        if(closed || state==CallSession.State.IDLE) return@runCatching
+        val v=view
+        if(v==null || !runCatching { shownNow(v) }.getOrDefault(false)) notice(c,data)
+    }.onFailure(::warn) } }
+    private var lockedQueued=false
+    /** v4.6 r27-2: [onBeside] was told for this call. */
+    private var besideTold=false
 
     private fun onMain(block:()->Unit) { if(Looper.myLooper()==Looper.getMainLooper()) runCatching(block).onFailure(::warn) else main.post { runCatching(block).onFailure(::warn) } }
     private fun warn(t:Throwable) { Log.w(LOG,"card: ${t.javaClass.simpleName}") }
@@ -241,7 +263,7 @@ internal object CallCardOverlay {
     private fun forgetCall() { closed=false;openedByHand=false;told=false;toldNoNumber=false;loading=false;key=null;content=null;stripY=null;shownAt=0L;generation++
         main.removeCallbacks(judgeLater);addedAt=0L;canDrawAtAdd=true;lockedAtAdd=false;addError=null;windowGone=false;judged=false;seenOnce=false;probed=null;coldAtAdd=false;outAtAdd=false
         main.removeCallbacks(retryLater);hiddenPending=false;retries=0;retrying=false;lastFail=null;fails="";failScreenOn=null;failState=null;spare=null
-        noticeTold=false;seen=Seen() }
+        noticeTold=false;seen=Seen();main.removeCallbacks(lockedLater);lockedQueued=false;besideTold=false }
     /** v4.3 r24-1: [onNotice] was told for this call (also: the first notice of the call may alert, r24 review 1). */
     private var noticeTold=false
     /** r24 review 5: this call was not drawn (a fallback or unconfirmed verdict) and its notice was found up: counted once as
@@ -326,7 +348,9 @@ internal object CallCardOverlay {
         if(view==null && !windowGone) { if(draw) addCard(c,data,nameOnly,draw,isLocked) else deny(c,isLocked) }
         when {
             view==null -> notice(c,data)
-            isLocked -> { notice(c,data);waitForUnlock(c) }
+            // v4.6 r27-2: locked, the notice only when the card is not on the screen (the call screen may cover the lock, and
+            // the card then shows over it: no second copy as a notice).
+            isLocked -> { lockedNotice(c,data,draw);waitForUnlock(c) }
             // v3.6.1 fix (review, critical): added while the check said no, the window may be hidden by the system without the
             // view hearing of it: the notice stays until the call ends, seen or not.
             // r24 review 4: the check saying no now (also after the card was seen once): the notice, whatever was seen before.
@@ -335,6 +359,17 @@ internal object CallCardOverlay {
             retrying && !seenOnce -> notice(c,data)
             noticeUp -> cancelNotice(c)
         }
+    }
+    /** v4.6 r27-2: the screen is locked and a window is up. The check saying no (now or when added): the notice, as before.
+     * The card on the screen: no notice (one up goes). Just added and not drawn yet: the notice [LOCKED_NOTICE_MS] after it
+     * was added unless it is on the screen by then. Else (hidden since): the notice. */
+    private fun lockedNotice(c:Context,data:CallCardView.Content,draw:Boolean) {
+        val v=view
+        if(v==null || !canDrawAtAdd || !draw) { notice(c,data);return }
+        if(runCatching { shownNow(v) }.getOrDefault(false)) { if(noticeUp) cancelNotice(c);return }
+        val left=LOCKED_NOTICE_MS-(clock()-addedAt)
+        if(addedAt>0 && left>0 && !seenOnce) { if(!lockedQueued) { lockedQueued=true;main.postDelayed(lockedLater,left) };return }
+        notice(c,data)
     }
     /** v4.3 r24-1: the overlay check says no as the window is due: none is added (it would be refused, DESIGN_V8 6-3) and none
      * is tried later; the notice shows ([place]) and the call is told at once as a fallback, [CAUSE_DENIED] (or, on a later try
@@ -381,7 +416,8 @@ internal object CallCardOverlay {
             // window on its side only): unconfirmed, and the notice stays until the call ends.
             if(canDrawAtAdd) verdict(c,CardStats.DRAWN,if(retrying) CAUSE_OK_RETRY else CAUSE_OK,(clock()-addedAt).coerceAtLeast(0))
             else verdict(c,CardStats.UNCONFIRMED,CAUSE_DRAWN_DESPITE_FALSE,(clock()-addedAt).coerceAtLeast(0))
-            if(canDrawAtAdd && !ending && noticeUp && !runCatching { locked(c) }.getOrDefault(false)) cancelNotice(c)
+            // v4.6 r27-2: also while locked when the card is on the screen (over the call screen): one copy, not two.
+            if(canDrawAtAdd && !ending && noticeUp && (!runCatching { locked(c) }.getOrDefault(false) || runCatching { shownNow(v!!) }.getOrDefault(false))) cancelNotice(c)
         } else if(hiddenPending) { hiddenPending=false;verdict(c,CardStats.FALLBACK,lastFail ?: CardStats.HIDDEN,null) }
         else verdict(c,if(noticeUp) CardStats.FALLBACK else CardStats.GONE,if(lockedAtAdd) CAUSE_HIDDEN_LOCKED else CAUSE_SHORT,null)
     }
@@ -620,6 +656,9 @@ internal object CallCardOverlay {
             if(merge) { m.notify(CallCardService.NOTIFICATION_ID,n);noticeMerged=true }
             else { m.notify(NOTICE_TAG,NOTICE_ID,n);noticeMerged=false }
             noticeUp=true
+            // v4.6 r27-2: posted while the card is on the screen (counted once per call: the heartbeat's callCard.besideCard).
+            val v=view
+            if(!besideTold && v!=null && canDrawAtAdd && runCatching { shownNow(v) }.getOrDefault(false)) { besideTold=true;worker.execute { runCatching { onBeside(c) }.onFailure(::warn) } }
             // v4.3 r24-1: the first notice of this call: the time from the call's start (CardStats knows it).
             if(!noticeTold) { noticeTold=true;worker.execute { runCatching { onNotice(c) }.onFailure(::warn) } }
             // v4.1 r22-2: a second later, whether the notice is really up and whether it could be heard (counts only).
@@ -699,14 +738,14 @@ internal object CallCardOverlay {
 
     /** Host tests: back to the start. */
     internal fun resetForHost() {
-        main.removeCallbacks(autoCollapse);collapseQueued=false;main.removeCallbacks(judgeLater);judged=true
+        main.removeCallbacks(autoCollapse);collapseQueued=false;main.removeCallbacks(judgeLater);main.removeCallbacks(lockedLater);judged=true
         app?.let { c -> view?.let { runCatching { c.getSystemService(WindowManager::class.java)?.removeViewImmediate(it) } };stopWaiting(c) }
         view=null;params=null;noticeUp=false;noticeMerged=false;forgetCall()
         state=CallSession.State.IDLE;app=null
         canDraw={ Settings.canDrawOverlays(it) };locked={ c -> c.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked==true }
         logLine=::callLogLine;outcome={ c,w -> CardStats.record(c,w) };serviceUp={ CallCardService.running!=null }
         onExpanded={ CardStats.expanded(it) };onClosed={ c,ms -> CardStats.closed(c,ms) };clock={ SystemClock.elapsedRealtime() }
-        drawnNow={ it.seen };addWindow={ wm,v,p -> wm.addView(v,p) };probe={ c -> runCatching { CardProbe.read(c) }.getOrNull() }
+        drawnNow={ it.seen };shownNow={ it.onScreen };onBeside={ c -> CardStats.besideCard(c) };addWindow={ wm,v,p -> wm.addView(v,p) };probe={ c -> runCatching { CardProbe.read(c) }.getOrNull() }
         onVerdict={ c,a -> CardStats.verdict(c,a) };onFailure={ c,code -> CardStats.failure(c,code) }
         screenOn={ c -> c.getSystemService(android.os.PowerManager::class.java)?.isInteractive!=false };lastExit={ c -> CardProbe.lastExit(c) }
         exitRead=null;exitDone=false;noticeCheck=defaultNoticeCheck;onNotice={ c -> CardStats.noticeShown(c) };onFallbackSeen={ c -> CardStats.fallbackSeen(c) }
