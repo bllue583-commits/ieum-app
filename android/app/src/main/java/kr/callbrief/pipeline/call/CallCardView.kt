@@ -240,8 +240,6 @@ internal class CallCardView(context:Context):LinearLayout(context) {
      * was ([dispatchDraw]): only then is it really on the screen (a window Android adds hidden is neither). */
     @Volatile var seen=false;private set
     private var windowVisible=false
-    /** v4.6 r27-2: drawn ([seen]) and its window visible now (not hidden since by the lock or the system). */
-    val onScreen:Boolean get()=seen && windowVisible && isAttachedToWindow
 
     /** Rows that may be left out when the card is too tall, the first one first. */
     private val optional=mutableListOf<View>()

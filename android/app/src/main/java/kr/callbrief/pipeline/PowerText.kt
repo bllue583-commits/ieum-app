@@ -52,7 +52,7 @@ internal object PowerText {
     /** v4.6 r27-1: [pctHit] (today stopped on the battery share, "pct", before the minutes ran out): "(한도 n분)" would
      * contradict the stop (22 of 40 minutes and stopped, 11/23), so the line says why instead. */
     fun settingsLine(minToday:Long,budgetMin:Int=TranscriptionPower.BATTERY_BUDGET_MIN,pctHit:Boolean=false)=
-        if(pctHit) "배터리를 아끼려고 긴 녹음은 충전 중에 글자로 바꿔요. 오늘 배터리로 ${minToday}분 썼어요. 휴대폰 배터리를 많이 쓴 날이라 나머지는 충전할 때 바꿔요"
+        if(pctHit) "배터리를 아끼려고 긴 녹음은 충전 중에 글자로 바꿔요. 오늘 배터리로 ${minToday}분 썼어요. 오늘은 휴대폰 배터리가 많이 닳아서 남은 녹음은 충전할 때 바꿔요"
         else "배터리를 아끼려고 긴 녹음은 충전 중에 글자로 바꿔요. 오늘 배터리로 ${minToday}분 썼어요(한도 ${budgetMin}분)"
     /** v4.6 r27-1: today's battery runs stopped on the battery share ("pct"). */
     fun pctHitToday(o:JSONObject?,now:Long):Boolean = today(o,now)?.optString("budgetHit")=="pct"

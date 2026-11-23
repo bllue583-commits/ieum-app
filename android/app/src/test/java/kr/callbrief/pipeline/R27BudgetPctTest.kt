@@ -116,7 +116,7 @@ class R27BudgetPctTest:ProtectedTextHostTestBase() {
             .put("battery",org.json.JSONObject().put("ms",22*minute).put("min",22)))
         assertTrue(PowerText.pctHitToday(l,base))
         val line=PowerText.settingsLine(PowerText.batteryMinToday(l,base),PowerText.dayBudget(PowerText.today(l,base)),PowerText.pctHitToday(l,base))
-        assertTrue(line,line.contains("22분 썼어요"));assertFalse(line,line.contains("한도"));assertTrue(line,line.contains("충전할 때"))
+        assertTrue(line,line.endsWith("오늘 배터리로 22분 썼어요. 오늘은 휴대폰 배터리가 많이 닳아서 남은 녹음은 충전할 때 바꿔요"));assertFalse(line,line.contains("한도"))
         // Not stopped, or stopped by the minutes: the line as before.
         assertTrue(PowerText.settingsLine(22,40,false).endsWith("(한도 40분)"))
         l.getJSONObject("today").put("budgetHit","min")
