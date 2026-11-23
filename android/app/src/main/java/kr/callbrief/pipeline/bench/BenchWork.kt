@@ -387,7 +387,7 @@ internal object Bench {
     fun heartbeat(s:JSONObject):JSONObject? = runCatching { BenchState.heartbeat(BenchState.parse(s.optString(BenchState.KEY)),config(s).first) }.getOrNull()
 }
 
-/** v4.3 r24-3 (DESIGN_V8 6-4): `power.budgetMin` of the mailbox's app/config.json, read with the bench's switch at every
+/** v4.3 r24-3 (DESIGN_V8 6-4): `power.budgetMin` (v4.6 r27-1: and `power.budgetPct`, 3..15) of the mailbox's app/config.json, read with the bench's switch at every
  * heartbeat ([Bench.onHeartbeat]). A whole number 10..60 is kept in settings and put in force; no file, no `power` block or
  * a value out of range (5, 100, "40") means the default (the stored value goes). A network error never reaches here (the
  * last value stays). */
@@ -395,13 +395,18 @@ internal object PowerConfig {
     /** The budget [text] (the config file, null: none) asks for, null for the default. */
     fun budgetOf(text:String?):Int? = runCatching { org.json.JSONObject(text ?: return null).optJSONObject("power")?.opt("budgetMin") }.getOrNull()
         ?.let { kr.callbrief.pipeline.TranscriptionPower.validBudget(it) }
+    /** v4.6 r27-1: the battery share (%) [text] asks for (`power.budgetPct`, 3..15), null for the default. */
+    fun budgetPctOf(text:String?):Int? = runCatching { org.json.JSONObject(text ?: return null).optJSONObject("power")?.opt("budgetPct") }.getOrNull()
+        ?.let { kr.callbrief.pipeline.TranscriptionPower.validBudgetPct(it) }
     fun apply(settings:SecureSettings,text:String?) {
-        val want=budgetOf(text)
-        val key=kr.callbrief.pipeline.PipelineSettingsKeys.POWER_BUDGET_MIN
-        val snap=settings.snapshot()
-        val stored=kr.callbrief.pipeline.TranscriptionPower.validBudget(snap.opt(key))
-        if(want!=stored || (want==null && snap.has(key))) settings.update { if(want==null) it.remove(key) else it.put(key,want) }
+        keep(settings,kr.callbrief.pipeline.PipelineSettingsKeys.POWER_BUDGET_MIN,budgetOf(text)) { kr.callbrief.pipeline.TranscriptionPower.validBudget(it) }
+        keep(settings,kr.callbrief.pipeline.PipelineSettingsKeys.POWER_BUDGET_PCT,budgetPctOf(text)) { kr.callbrief.pipeline.TranscriptionPower.validBudgetPct(it) }
         kr.callbrief.pipeline.TranscriptionPower.load(settings.snapshot())
+    }
+    private fun keep(settings:SecureSettings,key:String,want:Int?,valid:(Any?)->Int?) {
+        val snap=settings.snapshot()
+        val stored=valid(snap.opt(key))
+        if(want!=stored || (want==null && snap.has(key))) settings.update { if(want==null) it.remove(key) else it.put(key,want) }
     }
 }
 

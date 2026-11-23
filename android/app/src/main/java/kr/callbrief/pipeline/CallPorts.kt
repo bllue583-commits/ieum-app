@@ -217,6 +217,9 @@ object PipelineSettingsKeys {
     /** v4.3 r24-3: the day's battery budget in minutes from the mailbox's app/config.json `power.budgetMin` (10..60), kept
      * as last read; absent: the default ([TranscriptionPower.DEFAULT_BUDGET_MIN]). */
     const val POWER_BUDGET_MIN="powerBudgetMin"
+    /** v4.6 r27-1: the day's battery share (%) from the mailbox's app/config.json `power.budgetPct` (3..15), kept as last
+     * read; absent: the default ([TranscriptionPower.DEFAULT_BUDGET_PCT]). */
+    const val POWER_BUDGET_PCT="powerBudgetPct"
 
     // ---- v3.7 r17-1 (DESIGN_V7 3.1 T5) ----
     // ---- v3.7 r17-2 (DESIGN_V7 3.2 M3): the morning report's coverage. ----

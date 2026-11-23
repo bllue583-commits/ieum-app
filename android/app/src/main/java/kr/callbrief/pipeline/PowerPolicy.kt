@@ -28,15 +28,33 @@ internal object TranscriptionPower {
     @Volatile private var fromConfig=false
     val BATTERY_BUDGET_MIN:Int get()=budgetMin
     val BATTERY_BUDGET_MS:Long get()=budgetMin*60_000L
-    const val BATTERY_BUDGET_PCT=5
-    /** [v] as a budget: a whole number in range, else null (a string, a fraction, out of range: the default holds). */
-    fun validBudget(v:Any?):Int? = when(v) {
+    /** v4.6 r27-1: the share of the battery (%) a day's battery runs may take, from the mailbox's app/config.json
+     * `power.budgetPct` (a whole number [BUDGET_PCT_LOW]..[BUDGET_PCT_HIGH], kept in settings [PipelineSettingsKeys.POWER_BUDGET_PCT]
+     * as last read), else [DEFAULT_BUDGET_PCT]. Read and put in force exactly like [budgetMin] ([load]). The charge counted
+     * against it is the whole phone's during the runs (CHARGE_COUNTER), so calls and the screen at the same time count too. */
+    const val DEFAULT_BUDGET_PCT=5
+    const val BUDGET_PCT_LOW=3
+    const val BUDGET_PCT_HIGH=15
+    @Volatile var budgetPct:Int=DEFAULT_BUDGET_PCT;private set
+    /** "config" when [budgetPct] came from the mailbox's config, else "default" (the heartbeat's `power.budgetPctSrc`). */
+    val budgetPctSrc:String get()=if(pctFromConfig) "config" else "default"
+    @Volatile private var pctFromConfig=false
+    val BATTERY_BUDGET_PCT:Int get()=budgetPct
+    private fun whole(v:Any?):Int? = when(v) {
         is Int -> v;is Long -> v.toInt().takeIf { it.toLong()==v };is Double -> v.toInt().takeIf { it.toDouble()==v };else -> null
-    }?.takeIf { it in BUDGET_MIN_LOW..BUDGET_MIN_HIGH }
-    /** Puts the stored budget ([PipelineSettingsKeys.POWER_BUDGET_MIN] in the settings [s]) in force. */
-    fun load(s:JSONObject?) { val v=validBudget(s?.opt(PipelineSettingsKeys.POWER_BUDGET_MIN));budgetMin=v ?: DEFAULT_BUDGET_MIN;fromConfig=v!=null }
+    }
+    /** [v] as a budget: a whole number in range, else null (a string, a fraction, out of range: the default holds). */
+    fun validBudget(v:Any?):Int? = whole(v)?.takeIf { it in BUDGET_MIN_LOW..BUDGET_MIN_HIGH }
+    /** v4.6 r27-1: [v] as a battery share: a whole number [BUDGET_PCT_LOW]..[BUDGET_PCT_HIGH], else null. */
+    fun validBudgetPct(v:Any?):Int? = whole(v)?.takeIf { it in BUDGET_PCT_LOW..BUDGET_PCT_HIGH }
+    /** Puts the stored budget ([PipelineSettingsKeys.POWER_BUDGET_MIN] and [PipelineSettingsKeys.POWER_BUDGET_PCT] in the
+     * settings [s]) in force. */
+    fun load(s:JSONObject?) {
+        val v=validBudget(s?.opt(PipelineSettingsKeys.POWER_BUDGET_MIN));budgetMin=v ?: DEFAULT_BUDGET_MIN;fromConfig=v!=null
+        val p=validBudgetPct(s?.opt(PipelineSettingsKeys.POWER_BUDGET_PCT));budgetPct=p ?: DEFAULT_BUDGET_PCT;pctFromConfig=p!=null
+    }
     /** Host tests: the default again. */
-    internal fun resetBudgetForHost() { budgetMin=DEFAULT_BUDGET_MIN;fromConfig=false }
+    internal fun resetBudgetForHost() { budgetMin=DEFAULT_BUDGET_MIN;fromConfig=false;budgetPct=DEFAULT_BUDGET_PCT;pctFromConfig=false }
     /** Battery runs at least this far apart (heat, and no "every call starts it at once" loop). */
     const val BATTERY_RUN_GAP_MS=30*60_000L
     /** "Today, short" on battery: calls of this length (from the call log, else estimated from the file size). */
@@ -208,6 +226,7 @@ internal object PowerPolicy {
     fun plugDropFits(b:PowerBudget,tailMs:Long,remainingMs:Long)=
         b.batteryRunMs+tailMs.coerceAtLeast(0)+remainingMs.coerceAtLeast(0)<=TranscriptionPower.BATTERY_BUDGET_MS
     /** The battery budget is used up: [TranscriptionPower.BATTERY_BUDGET_MIN] minutes, or [TranscriptionPower.BATTERY_BUDGET_PCT]% of the battery.
+     * v4.6 r27-1: the share comes from the config (`power.budgetPct`, default 5) like the minutes.
      * v4.2 r23-1: "min" also when less than one piece ([pieceMs]) of the minutes is left. Before, the run limit was raised to
      * a minute and the first piece of a run always starts, so a run begun at 19 minutes did a whole piece (5 minutes and more)
      * and the day ended at 29 and 34 minutes (11/16, 11/19). */
@@ -322,8 +341,8 @@ internal object PowerStats {
         }
         return o
     }
-    /** r24 review 8: every write to the day keeps the battery budget in force then (`budgetMin`), so a past day says its own. */
-    private fun today(o:JSONObject,day:Int)=roll(o,day).getJSONObject("today").also { it.put("budgetMin",TranscriptionPower.BATTERY_BUDGET_MIN) }
+    /** r24 review 8: every write to the day keeps the battery budget in force then (`budgetMin`; v4.6 r27-1 `budgetPct`), so a past day says its own. */
+    private fun today(o:JSONObject,day:Int)=roll(o,day).getJSONObject("today").also { it.put("budgetMin",TranscriptionPower.BATTERY_BUDGET_MIN).put("budgetPct",TranscriptionPower.BATTERY_BUDGET_PCT) }
     private fun inc(o:JSONObject,k:String,v:Long=1) { o.put(k,o.optLong(k,0)+v) }
     private fun sub(o:JSONObject,k:String)=o.optJSONObject(k) ?: JSONObject().also { o.put(k,it) }
 

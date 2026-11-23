@@ -381,7 +381,7 @@ internal class SettingsScreen(a:MainActivity):AppScreen(a) {
         sub("글자로 바꾸기")
         val now=System.currentTimeMillis()
         runCatching { TranscriptionPower.load(s) } // v4.3 r24-3: "한도 n분" as the config says
-        body.addView(CallUi.text(a,PowerText.ledger(s).let { l -> PowerText.settingsLine(PowerText.batteryMinToday(l,now),PowerText.dayBudget(PowerText.today(l,now))) },CallUi.BODY).apply { tag="power_line";fontFeatureSettings="tnum" })
+        body.addView(CallUi.text(a,PowerText.ledger(s).let { l -> PowerText.settingsLine(PowerText.batteryMinToday(l,now),PowerText.dayBudget(PowerText.today(l,now)),PowerText.pctHitToday(l,now)) },CallUi.BODY).apply { tag="power_line";fontFeatureSettings="tnum" })
 
         sub("알림 시각")
         hourRow("저녁 통화 정리",PipelineSettingsKeys.EVENING_HOUR,s.optInt(PipelineSettingsKeys.EVENING_HOUR,19),15..23)

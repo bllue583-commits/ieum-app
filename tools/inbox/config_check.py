@@ -68,10 +68,13 @@ def problems(cfg):
             out.append("power must be an object")
         else:
             for k in p:
-                if k != "budgetMin":
+                if k not in ("budgetMin", "budgetPct"):
                     out.append(f"power: unknown key {k}")
             if "budgetMin" in p and not _int(p["budgetMin"], 10, 60):
                 out.append("power.budgetMin must be a whole number 10..60")
+            # v4.6 r27-1: the share of the battery (%) a day's battery runs may take (absent: 5).
+            if "budgetPct" in p and not _int(p["budgetPct"], 3, 15):
+                out.append("power.budgetPct must be a whole number 3..15")
     # v4.4 r25 review: the web view's fragment cap in characters (absent: 2000). The phone takes anything else as the default.
     kk = cfg.get("kakao")
     if kk is not None:
@@ -109,16 +112,18 @@ def _num(v, lo, hi):
 
 
 DEFAULT_BUDGET_MIN = 20
+DEFAULT_BUDGET_PCT = 5
 DEFAULT_WEB_MAX = 2000
 
 
 def summary(cfg):
     b, s = cfg.get("bench") or {}, cfg.get("samples") or {}
     budget = (cfg.get("power") or {}).get("budgetMin", DEFAULT_BUDGET_MIN)
+    pct = (cfg.get("power") or {}).get("budgetPct", DEFAULT_BUDGET_PCT)
     web = (cfg.get("kakao") or {}).get("webMax", DEFAULT_WEB_MAX)
     site = cfg.get("site")
     where = "default" if not site else "%s,%s" % (site.get("lat"), site.get("lon"))
-    return "bench=%s samples=%s budgetMin=%d webMax=%d site=%s" % ("on" if b.get("on") is True else "off", "on" if s.get("on") is True else "off", budget, web, where)
+    return "bench=%s samples=%s budgetMin=%d budgetPct=%d webMax=%d site=%s" % ("on" if b.get("on") is True else "off", "on" if s.get("on") is True else "off", budget, pct, web, where)
 
 
 def main(argv):

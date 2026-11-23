@@ -49,9 +49,17 @@ internal object PowerText {
     }
 
     // ---- words (DESIGN_V6 3.2) ----
-    fun settingsLine(minToday:Long,budgetMin:Int=TranscriptionPower.BATTERY_BUDGET_MIN)="배터리를 아끼려고 긴 녹음은 충전 중에 글자로 바꿔요. 오늘 배터리로 ${minToday}분 썼어요(한도 ${budgetMin}분)"
+    /** v4.6 r27-1: [pctHit] (today stopped on the battery share, "pct", before the minutes ran out): "(한도 n분)" would
+     * contradict the stop (22 of 40 minutes and stopped, 11/23), so the line says why instead. */
+    fun settingsLine(minToday:Long,budgetMin:Int=TranscriptionPower.BATTERY_BUDGET_MIN,pctHit:Boolean=false)=
+        if(pctHit) "배터리를 아끼려고 긴 녹음은 충전 중에 글자로 바꿔요. 오늘 배터리로 ${minToday}분 썼어요. 휴대폰 배터리를 많이 쓴 날이라 나머지는 충전할 때 바꿔요"
+        else "배터리를 아끼려고 긴 녹음은 충전 중에 글자로 바꿔요. 오늘 배터리로 ${minToday}분 썼어요(한도 ${budgetMin}분)"
+    /** v4.6 r27-1: today's battery runs stopped on the battery share ("pct"). */
+    fun pctHitToday(o:JSONObject?,now:Long):Boolean = today(o,now)?.optString("budgetHit")=="pct"
     /** r24 review 8: the budget the ledger kept for that day ([d]), else the one in force now. */
     fun dayBudget(d:JSONObject?):Int = TranscriptionPower.validBudget(d?.opt("budgetMin")) ?: TranscriptionPower.BATTERY_BUDGET_MIN
+    /** v4.6 r27-1: the battery share (%) the ledger kept for that day ([d]), else the one in force now. */
+    fun dayBudgetPct(d:JSONObject?):Int = TranscriptionPower.validBudgetPct(d?.opt("budgetPct")) ?: TranscriptionPower.BATTERY_BUDGET_PCT
     fun nowLine(n:Int)="녹음 ${n}개는 충전기에 꽂으면 글자로 바꿔요"
     fun lightLong(n:Int)="녹음 ${n}개가 이틀째 충전을 기다려요. 밤에 충전기에 꽂아 두면 정리돼요"
     fun lightGreen(n:Int)="충전하면 ${n}개를 바꿔요"
@@ -77,7 +85,7 @@ internal object PowerText {
             // r23 review: battery runs the process died in, and the minutes counted for them (until last seen alive).
             .put("killedRuns",n(b,"killedRuns")).put("killedMin",n(b,"killedMs")/60_000))
         o.put("plugged",JSONObject().put("runs",n(p,"runs")).put("ms",n(p,"ms")).put("min",n(p,"min")).put("audioMin",n(p,"audioMin")))
-        o.put("budgetMin",dayBudget(d))
+        o.put("budgetMin",dayBudget(d)).put("budgetPct",dayBudgetPct(d))
         o.put("budgetHit",d?.optString("budgetHit")?.takeIf { it=="min" || it=="pct" } ?: "none")
         DAY_COUNTS.forEach { o.put(it,n(d,it)) }
         // r23 review: minutes on battery after the plug went away in a plugged-in run (part of battery.min).
@@ -122,6 +130,8 @@ internal object PowerText {
         o.put("chargingOnly",false)
         // v4.3 r24-3: the battery budget in force (minutes) and where it came from ("default" or "config").
         o.put("budgetMin",TranscriptionPower.BATTERY_BUDGET_MIN).put("budgetSrc",TranscriptionPower.budgetSrc)
+        // v4.6 r27-1: the battery share (%) in force and where it came from.
+        o.put("budgetPct",TranscriptionPower.BATTERY_BUDGET_PCT).put("budgetPctSrc",TranscriptionPower.budgetPctSrc)
         return o
     }
 }
