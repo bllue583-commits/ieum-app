@@ -133,12 +133,16 @@ class CallCardService:Service() {
             }
             if(!on) return OFF
             val key=snap.phoneKey ?: return CallCardOverlay.NO_NUMBER
-            return if(runCatching { hasCard(context,key) }.getOrDefault(false) || s.optBoolean(PipelineSettingsKeys.CARD_UNKNOWN,false)) SHOW
+            return if(runCatching { hasCard(context,key) }.getOrDefault(false) || s.optBoolean(PipelineSettingsKeys.CARD_UNKNOWN,false) ||
+                // v4.7 r28-1: called today and not sorted out yet: a card of that one line.
+                runCatching { repeat(context,key)?.line!=null }.getOrDefault(false)) SHOW
                 else CallCardOverlay.NO_CARD
         }
         internal const val SHOW="show";internal const val IGNORED="ignored";internal const val OFF="off";internal const val WAITING="waiting"
         /** Counts what the service decided ([CardStats.follow]). Replaceable in host tests. */
         @Volatile internal var stats:(Context,CallSession.Snapshot,String?)->Unit={ c,snap,reason -> CardStats.follow(c,snap,reason) }
+        /** v4.7 r28-1: today's calls with the number ([RepeatCalls.forCall]). Replaceable in host tests. */
+        @Volatile internal var repeat:(Context,String)->RepeatCalls.Info?={ c,k -> RepeatCalls.forCall(c,k) }
 
         /** Without READ_PHONE_STATE the phone cannot be asked: then the call counts as over (the service ends, no card stays). */
         private fun telecomInCall(context:Context):Boolean {
@@ -157,6 +161,7 @@ class CallCardService:Service() {
             hasCard={ c,k -> ContactCards.get(c,k)!=null };mainHandler=null
             startService={ c,i -> c.startForegroundService(i) }
             stats={ c,snap,reason -> CardStats.follow(c,snap,reason) }
+            repeat={ c,k -> RepeatCalls.forCall(c,k) }
             driver.reset()
         }
     }

@@ -92,6 +92,8 @@ object CallSession {
     @Volatile internal var storePersonal:(Context,String)->Boolean={ c,k -> kr.callbrief.IeumApplication.store(c).isPersonal(k) }
     /** After a call ([ContactCards.afterCall], off this thread). Replaceable in host tests. */
     @Volatile internal var afterCallCards:(Context,String?)->Unit={ c,k -> ContactCards.afterCall(c,k) }
+    /** v4.7 r28-1: a call that ended, with when it went off hook ([RepeatCalls.onCallEnded]). Replaceable in host tests. */
+    @Volatile internal var recordEnd:(Context,CallEnd,Long?)->Unit={ c,e,a -> RepeatCalls.onCallEnded(c,e,a) }
 
     /** One thread: broadcasts are handled in the order they came. */
     private val worker=Executors.newSingleThreadExecutor { r -> Thread(r,"ieum-call-session").apply { isDaemon=true } }
@@ -150,7 +152,7 @@ object CallSession {
         afterCall={ c -> AutomaticRecordingDiscovery.scheduleAfterCall(c) }
         settingsOfCall=null;restoredSettings=null;dirty=false;persistNow=true;callOpen=false
         readSettings={ c -> SecureSettings(c).snapshot() };storePersonal={ c,k -> kr.callbrief.IeumApplication.store(c).isPersonal(k) }
-        afterCallCards={ c,k -> ContactCards.afterCall(c,k) }
+        afterCallCards={ c,k -> ContactCards.afterCall(c,k) };recordEnd={ c,e,a -> RepeatCalls.onCallEnded(c,e,a) }
     }
 
     /** One PHONE_STATE broadcast: [extraState] is [TelephonyManager.EXTRA_STATE], [rawNumber] its incoming number (may be
@@ -166,7 +168,7 @@ object CallSession {
             else -> return null
         }
         val key=PhoneKey.of(rawNumber)
-        var ended:CallEnd?=null;var tell=false;var ranOffHook=false;var endedKey:String?=null
+        var ended:CallEnd?=null;var tell=false;var ranOffHook=false;var endedKey:String?=null;var offHookAt:Long?=null
         synchronized(lock) {
             persistNow=!persistLater
             try {
@@ -202,6 +204,7 @@ object CallSession {
                     }
                     else -> { // IDLE after RINGING (missed or rejected) or after OFFHOOK (the call ended)
                         ended=CallEnd(was.phoneKey,was.direction,was.startedMs,now,was.state==State.OFFHOOK)
+                        offHookAt=was.sinceMs.takeIf { was.state==State.OFFHOOK }
                         tell=!was.ignored;ranOffHook=was.state==State.OFFHOOK;endedKey=was.phoneKey
                         save(app,Live(State.IDLE,null,null,now,now,false,false))
                         settingsOfCall=null;callOpen=false
@@ -214,6 +217,9 @@ object CallSession {
         // (and the blocked table is written again when the rules changed). Not for an ignored call: it has no key.
         runCatching { afterCallCards(app,endedKey) }
         if(!tell) return end
+        // v4.7 r28-1: the call is kept for today's "오늘 통화했어요" line of the next call with the same number (a fingerprint
+        // of the number, its times; off the ringing path).
+        runCatching { recordEnd(app,end,offHookAt) }
         // Only a call that went off hook can have left a recording.
         if(ranOffHook) runCatching { afterCall(app) }
         for(l in listeners) runCatching { l(end) }

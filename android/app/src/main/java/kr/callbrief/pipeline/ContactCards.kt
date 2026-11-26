@@ -42,6 +42,10 @@ internal data class ContactCard(
     val calls30d:Int=0,
     /** The card JSON version it was read from (written cards are always [VERSION]). */
     val version:Int=VERSION,
+    /** v4.7 r28-1: when this number's calls of the last [ContactCards.SETTLED_MS] began whose result is on the phone (ANALYZED,
+     * or a recording without speech: nothing more will come), newest first. The call card holds today's calls against it
+     * ([kr.callbrief.pipeline.call.RepeatCalls]). Optional in the JSON (cards before v4.7: empty). */
+    val settledMs:List<Long> =emptyList(),
 ) {
     data class Thin(val name:String?,val calls30:Int)
     data class Person(val personId:String,val name:String,val role:String?,val isStaff:Boolean)
@@ -68,6 +72,7 @@ internal data class ContactCard(
         .put("updatedMs",updatedMs)
         .put("lastDurationMs",lastDurationMs ?: JSONObject.NULL).put("calls30d",calls30d)
         .apply { thin?.let { t -> put("thin",JSONObject().put("name",t.name ?: JSONObject.NULL).put("calls30",t.calls30)) } }
+        .apply { if(settledMs.isNotEmpty()) put("settled",JSONArray(settledMs)) }
 
     companion object {
         /** The card JSON version written now (v3.4). */
@@ -91,7 +96,8 @@ internal data class ContactCard(
             o.long("lastDurationMs"),
             // v1 had the 30-day count on thin cards only.
             if(o.has("calls30d")) o.optInt("calls30d") else o.optJSONObject("thin")?.optInt("calls30") ?: 0,
-            o.optInt("v",1))
+            o.optInt("v",1),
+            o.optJSONArray("settled")?.let { a -> (0 until a.length()).mapNotNull { i -> (a.opt(i) as? Number)?.toLong() } }.orEmpty())
     }
 }
 
@@ -419,7 +425,8 @@ internal object ContactCards {
                 first.takeIf { it.isNotEmpty() }?.let { ContactCard.Text(r.long("at") ?: 0,dir,it) } }.take(TEXTS)
         val cardPeople=people.map { ContactCard.Person(it.str("id")!!,it.str("name").orEmpty(),it.str("role"),it.long("is_staff")==1L) }
         val (lastDuration,calls30)=callFacts(store,v,now)
-        return ContactCard(key,cardPeople,company,lastMs,lastDir,recent,tasks,issues,texts,now,lastDurationMs=lastDuration,calls30d=calls30)
+        return ContactCard(key,cardPeople,company,lastMs,lastDir,recent,tasks,issues,texts,now,lastDurationMs=lastDuration,calls30d=calls30,
+            settledMs=settled(store,v,now))
     }
 
     /** Days of the call log a thin card counts calls over. */
@@ -434,8 +441,19 @@ internal object ContactCards {
             .firstOrNull()?.long("n")?.toInt() ?: 0
         val name=CallRecordStore.noNumber(last.str("name"))?.replace(Regex("\\s+")," ")?.trim()?.take(30)
         return ContactCard(key,emptyList(),null,last.long("start_ms"),direction(last.long("type")?.toInt()),
-            emptyList(),emptyList(),emptyList(),emptyList(),now,ContactCard.Thin(name,n),lastDurationMs=last.long("duration_ms")?.takeIf { it>=0 },calls30d=n)
+            emptyList(),emptyList(),emptyList(),emptyList(),now,ContactCard.Thin(name,n),lastDurationMs=last.long("duration_ms")?.takeIf { it>=0 },calls30d=n,
+            settledMs=settled(store,v,now))
     }
+    /** v4.7 r28-1: how far back [ContactCard.settledMs] goes, and at most how many. */
+    const val SETTLED_MS=48*3_600_000L
+    const val SETTLED_MAX=40
+    /** v4.7 r28-1: the start times of this number's calls (not texts or mail) since [SETTLED_MS] whose result is on the phone:
+     * ANALYZED (a personal one too: its bare mark), or FAILED for a recording without speech (no result will ever come). */
+    private fun settled(store:CallRecordStore,v:List<String>,now:Long):List<Long> =
+        store.cardRows("""SELECT COALESCE(started_ms,created_ms) AS at FROM call_records WHERE counterpart_key IN ${marks(v.size)}
+            AND recording_id NOT LIKE 'sms:%' AND recording_id NOT LIKE 'mail:%' AND (state='ANALYZED' OR (state='FAILED' AND error='EMPTY_TRANSCRIPT'))
+            AND COALESCE(started_ms,created_ms)>=CAST(? AS INTEGER) ORDER BY at DESC LIMIT $SETTLED_MAX""",*(v+listOf((now-SETTLED_MS).toString())).toTypedArray())
+            .mapNotNull { it.long("at") }
 
     // ---- the file ------------------------------------------------------------------------------------------------
     private fun remember(context:Context) { appContext=context.applicationContext ?: context }

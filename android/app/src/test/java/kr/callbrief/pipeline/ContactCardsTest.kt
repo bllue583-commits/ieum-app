@@ -144,4 +144,22 @@ class ContactCardsTest:ProtectedTextHostTestBase() {
         assertTrue("300 cards read in $readMs ms",readMs<2_000)
         assertTrue("cache hit $hitUs us",hitUs<1_000)
     }
+
+    /** v4.7 r28-1: the card holds the start times of the number's calls whose result is on the phone (a personal one's bare mark
+     * too); a call still waiting for its result is not among them, and the times survive the JSON. */
+    @Test fun settledTimesFollowTheResults() = store().use { s ->
+        now=started+7_200_000;ContactCards.clock={ now }
+        val first=call(s,"rec1","010-1234-5678",started,"견적서를 내일까지 보내기로 했어요.","김민수","탄탄이엔씨","대표")
+        s.insert(transcript("rec2","010-1234-5678",started+3_600_000))
+        ContactCards.flushPending(s)
+        val card=ContactCards.get("010-1234-5678")!!
+        assertEquals(listOf(started),card.settledMs)
+        assertEquals(card.settledMs,ContactCard.parse(card.phoneKey,org.json.JSONObject(card.toJson().toString())).settledMs)
+        assertTrue(first.isNotEmpty())
+        s.applyAnalysis(CallRecordStore.recordId(transcript("rec2","010-1234-5678",started+3_600_000)),ClaudeCallAnalysis("개인 내용",emptyList(),null,null,emptyList(),emptyList(),business=false))
+        ContactCards.flushPending(s)
+        assertEquals(listOf(started+3_600_000,started),ContactCards.get("010-1234-5678")!!.settledMs)
+        // A card written before v4.7 reads with none.
+        assertTrue(ContactCard.parse("01012345678",org.json.JSONObject().put("v",2)).settledMs.isEmpty())
+    }
 }

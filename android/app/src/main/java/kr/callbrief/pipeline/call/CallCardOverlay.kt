@@ -53,6 +53,9 @@ import java.util.concurrent.TimeUnit
  *   the service's own slot ([CallCardService.NOTIFICATION_ID]): one notice, not two.
  * - A number without a contact card only when the user turned on [KEY_UNKNOWN] ("아직 정리된 통화가 없는 번호예요" and what the
  *   phone's call log says of it). The ringing path reads the card file and the call log only, never the call store.
+ * - v4.7 r28-1: a call with someone already called today whose call is not sorted out yet ([RepeatCalls]) has that line on top of
+ *   the card and of the notice ("오늘 09:12에 통화했어요(3분). 아직 정리 중이에요"); a number without a card gets a card of that
+ *   line only, also with [KEY_UNKNOWN] off. Read from the call's settings snapshot and the card: nothing more on the ringing path.
  * - On the locked screen the notice shows the name, company and one check item unless "잠금 화면에서도 이름과 한 줄 보기" is off.
  *   A personal or excluded number ([CallSession.Snapshot.ignored]): nothing at all.
  * - [CardStats.expanded] when the person opens the strip again, [CardStats.closed] when they close the card.
@@ -276,16 +279,22 @@ internal object CallCardOverlay {
      * what the call log says of it. Never the call store: the ringing path stays quick (4.1-2). */
     private fun load(c:Context,phoneKey:String,gen:Int) {
         val card=ContactCards.get(c,phoneKey)
-        if(card!=null) { deliver(c,gen,CallCardView.Content.of(card));return }
+        // v4.7 r28-1: today's line, from the call's settings snapshot and this card (nothing more is read).
+        val repeat=runCatching { repeatLine(c,phoneKey) }.getOrNull()
+        if(card!=null) { deliver(c,gen,CallCardView.Content.of(card).withRepeat(repeat));return }
         val settings=runCatching { CallSession.callSettings(c) }.getOrNull()
         if(settings?.optBoolean(KEY_UNKNOWN,false)!=true) {
+            // v4.7 r28-1: a number without a card that was called today and is not sorted out yet: a card of that line only.
+            if(repeat!=null) { deliver(c,gen,CallCardView.Content.repeatOnly(repeat));return }
             main.post { if(gen==generation) { loading=false;tell(c,NO_CARD) } };return
         }
         // The first line at once, the call log's line once read.
-        deliver(c,gen,CallCardView.Content.unknown(null),rest=false)
+        deliver(c,gen,CallCardView.Content.unknown(null).withRepeat(repeat),rest=false)
         val line=runCatching { logLine(c,phoneKey) }.getOrNull()
-        deliver(c,gen,CallCardView.Content.unknown(line))
+        deliver(c,gen,CallCardView.Content.unknown(line).withRepeat(repeat))
     }
+    /** v4.7 r28-1: today's line of [phoneKey] ([RepeatCalls.forCall]), or null. Replaceable in host tests. */
+    @Volatile internal var repeatLine:(Context,String)->String?={ c,k -> RepeatCalls.forCall(c,k)?.line }
     private fun deliver(c:Context,gen:Int,data:CallCardView.Content,rest:Boolean=true) { main.post {
         runCatching {
             if(gen!=generation || closed || state==CallSession.State.IDLE) return@post
@@ -712,5 +721,6 @@ internal object CallCardOverlay {
         onVerdict={ c,a -> CardStats.verdict(c,a) };onFailure={ c,code -> CardStats.failure(c,code) }
         screenOn={ c -> c.getSystemService(android.os.PowerManager::class.java)?.isInteractive!=false };lastExit={ c -> CardProbe.lastExit(c) }
         exitRead=null;exitDone=false;noticeCheck=defaultNoticeCheck;onNotice={ c -> CardStats.noticeShown(c) };onFallbackSeen={ c -> CardStats.fallbackSeen(c) }
+        repeatLine={ c,k -> RepeatCalls.forCall(c,k)?.line }
     }
 }

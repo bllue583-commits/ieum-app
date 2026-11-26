@@ -43,7 +43,14 @@ internal class CallCardView(context:Context):LinearLayout(context) {
                         * DESIGN_V8 6-3): the open check items in the card's order, at most [NOTICE_TASKS] ([noticeTasks], each
                         * with where it stands), how many more there are ([noticeMore]), the last call's line with its day
                         * ([lastCall]: "11/20 통화: …") and the person the notice opens ([personId]). */
-                       val noticeTasks:List<String> =emptyList(),val noticeMore:Int=0,val lastCall:String?=null,val personId:String?=null) {
+                       val noticeTasks:List<String> =emptyList(),val noticeMore:Int=0,val lastCall:String?=null,val personId:String?=null,
+                       /** v4.7 r28-1: "오늘 09:12에 통화했어요(3분). 아직 정리 중이에요" ([RepeatCalls.line]): the card's top line and the
+                        * notice's first, null when today's calls with the number are sorted out (or there were none). */
+                       val repeat:String?=null) {
+        /** v4.7 r28-1: this card with today's line on top. */
+        fun withRepeat(line:String?):Content = if(line==null) this else copy(repeat=line)
+        /** v4.7 r28-1: the line is its own row above the first line (a card that is only this line has it as its first line). */
+        val repeatRow:String? get()=repeat?.takeIf { it!=first }
         /** There is a summary or a piece of work to keep in view during the call: without one the card goes at OFFHOOK
          * instead of folding into a strip (4.2-2). */
         val hasBody:Boolean get()=rank in RANK_DUE..RANK_ONGOING
@@ -60,12 +67,14 @@ internal class CallCardView(context:Context):LinearLayout(context) {
         fun noticeTitle():String = listOfNotNull(name,company).joinToString(", ")
         /** v4.3 r24-1: the folded notice's one line: the card's first line (the open item that matters most, or the last call).
          * r24 review 7: a number nothing is known about says what the call log says of it (its title is already [UNKNOWN]). */
-        fun noticeText():String = if(unknown) who ?: first else first+if(firstUnsure) ", $UNSURE" else ""
+        fun noticeText():String = repeat ?: ownText()
+        private fun ownText():String = if(unknown) who ?: first else first+if(firstUnsure) ", $UNSURE" else ""
         /** v4.3 r24-1: the open notice's lines: the open check items (at most [NOTICE_TASKS], the one that matters most first),
          * then the last call's line with its day. A card without either (a thin card, an unknown number, ongoing work only)
          * keeps the card's own lines ([noticeLines]). */
-        fun noticeBody():List<String> = when {
-            unknown -> listOf(noticeText())
+        fun noticeBody():List<String> = (listOfNotNull(repeat)+ownBody()).distinct().take(NOTICE_LINES)
+        private fun ownBody():List<String> = when {
+            unknown -> listOf(ownText())
             // r24 review 7: no open item, only the last call: the work under way stays.
             noticeTasks.isEmpty() && lastCall!=null -> listOfNotNull(lastCall,issue?.let { "진행 중인 일: $it" })
             else -> (noticeTasks+listOfNotNull(lastCall)).ifEmpty { noticeLines() }
@@ -90,6 +99,8 @@ internal class CallCardView(context:Context):LinearLayout(context) {
              * (cut at a space, as on the card, never with an ellipsis). */
             const val NOTICE_TASKS=3
             const val NOTICE_CHARS=30
+            /** v4.7 r28-1: the open notice's lines at most (big text, about four lines): today's line on top, the last ones go first. */
+            const val NOTICE_LINES=4
             /** v4.3 r24-1: the notice's day of the last call ("11/20"), KST. */
             fun dayWords(ms:Long):String { val d=CallRecordStore.kstDay(ms);return "${d.monthValue}/${d.dayOfMonth}" }
             /** A due date this close (days) or past makes an item the first line; a summary this recent (days) comes before work under way. */
@@ -220,6 +231,9 @@ internal class CallCardView(context:Context):LinearLayout(context) {
             }
             /** A number without a card (only when the user asked for those): what the phone's call log says of it, if anything. */
             fun unknown(logLine:String?)=Content(UNKNOWN,UNKNOWN,RANK_UNKNOWN,safe(logLine) ?: "통화기록에 없는 번호예요",unknown=true)
+            /** v4.7 r28-1: a number without a card (and numbers without one switched off) that was called today and not sorted out
+             * yet: only that line, under the same title as [unknown]; nothing to keep in view during the call. */
+            fun repeatOnly(line:String)=Content(UNKNOWN,line,RANK_UNKNOWN,null,unknown=true,repeat=line)
         }
     }
 
@@ -279,6 +293,8 @@ internal class CallCardView(context:Context):LinearLayout(context) {
             addView(button("닫기","card_close") { onClose() }.apply { (layoutParams as LayoutParams).marginStart=dp(8) })
             layoutParams=LayoutParams(-1,-2).apply { topMargin=dp(4) }
         })
+        // v4.7 r28-1: today's line on top (18, ink), read first by TalkBack; never left out for height (the lower rows go first).
+        c.repeatRow?.let { r -> addView(line(r).apply { tag="card_repeat";contentDescription=r;setPadding(0,dp(4),0,0) }) }
         // 1. The first line (20 bold, two lines): the badge in front when the item needs a check.
         addView(line(c.first,CallUi.HEADING,bold=true).apply { tag="card_first";text=withBadge(c.first,c.firstUnsure);setPadding(0,dp(4),0,dp(2)) })
         // 2. Who, their company, how long ago (18, ink).
