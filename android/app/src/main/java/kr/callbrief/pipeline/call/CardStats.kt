@@ -60,7 +60,11 @@ internal object CardStats {
     /** Every count the heartbeat carries (zeros when missing). */
     val KINDS=listOf(CALLS,SHOWN,SHOWN_OUTGOING,ELIGIBLE_OUTGOING,NO_CARD,THIN,NO_NUMBER,NO_NUMBER_IN,NO_NUMBER_OUT,NO_ROLE,
         IGNORED,OFF,LOCKED,COLD,FGS_REFUSED,NO_PERMISSION,NO_NOTIFY,EXPANDED,CLOSED_UNDER_2S,DRAWN,FALLBACK,HIDDEN,UNCONFIRMED,RETRIED,
-        FLIP_CALLS,DENIED_AT_START,DENIED_AT_END,FALLBACK_SHOWN,FALLBACK_MUTED,NOTICE_TAPS,FALLBACK_SEEN)
+        FLIP_CALLS,DENIED_AT_START,DENIED_AT_END,FALLBACK_SHOWN,FALLBACK_MUTED,NOTICE_TAPS,FALLBACK_SEEN,REPEAT_TODAY,REPEAT_PENDING,REPEAT_SHOWN)
+    /** v4.7 r28-2 (once per call, never for an ignored one): calls with a number already called today ([REPEAT_TODAY]); of those,
+     * calls whose card was due with today's "아직 정리 중" line ([REPEAT_PENDING], [RepeatCalls]); calls where that line went up in
+     * the card's window or its notice ([REPEAT_SHOWN]). */
+    const val REPEAT_TODAY="repeatToday";const val REPEAT_PENDING="repeatPending";const val REPEAT_SHOWN="repeatShown"
     /** r24 review 5: calls whose card was not drawn (a fallback or unconfirmed verdict) and whose notice was found up: the
      * calls where the notice was the card. A notice beside a drawn card (the locked screen) is not counted. */
     const val FALLBACK_SEEN="fallbackSeen"
@@ -135,6 +139,8 @@ internal object CardStats {
     /** v4.1 r22-2: the overlay check when this call began (null: not read), a failure with the check saying no during it, and
      * the fallback notice's check told for it. */
     private var allowedAtStart:Boolean?=null;private var deniedDuring=false;private var noticeTold=false
+    /** v4.7 r28-2: [repeat] and [repeatShown] were told for this call. */
+    private var repeatTold=false;private var repeatShownTold=false
     /** The broadcast now being handled ([signal]); its time starts a new call. */
     private var signalAt:Long?=null;private var signalCold=false
     /** No broadcast reached this process yet ([coldNow]). */
@@ -318,6 +324,22 @@ internal object CardStats {
         if(inc.isNotEmpty() || e!=null) write(context,inc,null,e)
     }
 
+    /** v4.7 r28-2: this call's number was called earlier today ([today]) and today's line is due ([due]); told once per call by
+     * [CallCardService.follow] once the number is known. Nothing for an ignored call. */
+    fun repeat(context:Context,today:Boolean,due:Boolean) {
+        val inc=LinkedHashMap<String,Int>()
+        synchronized(lock) {
+            if(!inCall || repeatTold || ignoredSeen) return
+            repeatTold=true
+            if(today) inc[REPEAT_TODAY]=1
+            if(today && due) inc[REPEAT_PENDING]=1
+        }
+        if(inc.isNotEmpty()) write(context,inc,null)
+    }
+    /** v4.7 r28-2: today's line went up in the card's window or its notice ([CallCardOverlay]); once per call. */
+    fun repeatShown(context:Context) {
+        if(synchronized(lock) { if(repeatShownTold || ignoredSeen) false else { repeatShownTold=true;true } }) write(context,mapOf(REPEAT_SHOWN to 1),null)
+    }
     /** The service could not be started from the background ([CallCardService.follow]) or could not go foreground. Once per call. */
     fun fgsRefused(context:Context) { if(synchronized(lock) { if(fgsTold) false else { fgsTold=true;true } }) write(context,mapOf(FGS_REFUSED to 1),null) }
     /** r14-2: the person opened the folded card again. Once per call. */
@@ -331,6 +353,7 @@ internal object CardStats {
     private fun resetCall() {
         inCall=false;told=null;noNumberSeen=false;ignoredSeen=false;offSeen=false;direction=null;key=null;startAt=null;cold=false
         fgsTold=false;expandTold=false;closeTold=false;allowedAtStart=null;deniedDuring=false;noticeTold=false
+        repeatTold=false;repeatShownTold=false
     }
 
     private fun write(context:Context,inc:Map<String,Int>,sample:Pair<Long,Boolean>?,entry:JSONObject?=null,causes:Map<String,Int> =emptyMap(),

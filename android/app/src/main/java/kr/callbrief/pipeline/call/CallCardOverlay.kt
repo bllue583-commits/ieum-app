@@ -244,7 +244,7 @@ internal object CallCardOverlay {
     private fun forgetCall() { closed=false;openedByHand=false;told=false;toldNoNumber=false;loading=false;key=null;content=null;stripY=null;shownAt=0L;generation++
         main.removeCallbacks(judgeLater);addedAt=0L;canDrawAtAdd=true;lockedAtAdd=false;addError=null;windowGone=false;judged=false;seenOnce=false;probed=null;coldAtAdd=false;outAtAdd=false
         main.removeCallbacks(retryLater);hiddenPending=false;retries=0;retrying=false;lastFail=null;fails="";failScreenOn=null;failState=null;spare=null
-        noticeTold=false;seen=Seen() }
+        noticeTold=false;seen=Seen();repeatTold=false }
     /** v4.3 r24-1: [onNotice] was told for this call (also: the first notice of the call may alert, r24 review 1). */
     private var noticeTold=false
     /** r24 review 5: this call was not drawn (a fallback or unconfirmed verdict) and its notice was found up: counted once as
@@ -295,12 +295,16 @@ internal object CallCardOverlay {
     }
     /** v4.7 r28-1: today's line of [phoneKey] ([RepeatCalls.forCall]), or null. Replaceable in host tests. */
     @Volatile internal var repeatLine:(Context,String)->String?={ c,k -> RepeatCalls.forCall(c,k)?.line }
+    /** v4.7 r28-2: today's line went up in this call's window or notice (once per call, [CardStats.repeatShown]). Replaceable in host tests. */
+    @Volatile internal var onRepeatShown:(Context)->Unit={ c -> CardStats.repeatShown(c) }
+    private var repeatTold=false
     private fun deliver(c:Context,gen:Int,data:CallCardView.Content,rest:Boolean=true) { main.post {
         runCatching {
             if(gen!=generation || closed || state==CallSession.State.IDLE) return@post
             val first=content==null
             content=data;loading=false
-            if(first) { place(c,nameOnly=true);shownAt=clock();tell(c,firstOutcome()) }
+            if(first) { place(c,nameOnly=true);shownAt=clock();tell(c,firstOutcome())
+                if(data.repeat!=null && !repeatTold && (view!=null || noticeUp)) { repeatTold=true;worker.execute { runCatching { onRepeatShown(c) }.onFailure(::warn) } } }
             else view?.let { if(it.complete) it.showAll(data) }
             if(rest) main.postDelayed({ runCatching { if(gen==generation && content===data) { view?.showAll(data);relayout();if(noticeUp) notice(c,data) } }.onFailure(::warn) },
                 if(first) REST_DELAY_MS else 0L)
@@ -721,6 +725,6 @@ internal object CallCardOverlay {
         onVerdict={ c,a -> CardStats.verdict(c,a) };onFailure={ c,code -> CardStats.failure(c,code) }
         screenOn={ c -> c.getSystemService(android.os.PowerManager::class.java)?.isInteractive!=false };lastExit={ c -> CardProbe.lastExit(c) }
         exitRead=null;exitDone=false;noticeCheck=defaultNoticeCheck;onNotice={ c -> CardStats.noticeShown(c) };onFallbackSeen={ c -> CardStats.fallbackSeen(c) }
-        repeatLine={ c,k -> RepeatCalls.forCall(c,k)?.line }
+        repeatLine={ c,k -> RepeatCalls.forCall(c,k)?.line };onRepeatShown={ c -> CardStats.repeatShown(c) }
     }
 }

@@ -95,6 +95,9 @@ class CallCardService:Service() {
             val show=verdict==SHOW
             // r11-3: calls dropped here never reach the card, so they are counted here (once per call, see CardStats).
             runCatching { stats(app,snap,verdict) }
+            // v4.7 r28-2: a call with someone already called today, and whether today's line is due (once per call; not ignored).
+            if(snap.state!=CallSession.State.IDLE && !snap.ignored && !snap.waiting) snap.phoneKey?.let { k ->
+                runCatching { val r=repeat(app,k);repeatStats(app,r!=null && r.today>0,show && r?.line!=null) } }
             if(!active && !show && !driver.shown) return
             val intent=Intent(app,CallCardService::class.java).putExtra(EXTRA_STATE,snap.state.name).putExtra(EXTRA_SHOW,show)
             if(!active && snap.state==CallSession.State.IDLE) {
@@ -143,6 +146,8 @@ class CallCardService:Service() {
         @Volatile internal var stats:(Context,CallSession.Snapshot,String?)->Unit={ c,snap,reason -> CardStats.follow(c,snap,reason) }
         /** v4.7 r28-1: today's calls with the number ([RepeatCalls.forCall]). Replaceable in host tests. */
         @Volatile internal var repeat:(Context,String)->RepeatCalls.Info?={ c,k -> RepeatCalls.forCall(c,k) }
+        /** v4.7 r28-2: counts [CardStats.repeat]. Replaceable in host tests. */
+        @Volatile internal var repeatStats:(Context,Boolean,Boolean)->Unit={ c,today,due -> CardStats.repeat(c,today,due) }
 
         /** Without READ_PHONE_STATE the phone cannot be asked: then the call counts as over (the service ends, no card stays). */
         private fun telecomInCall(context:Context):Boolean {
@@ -161,7 +166,7 @@ class CallCardService:Service() {
             hasCard={ c,k -> ContactCards.get(c,k)!=null };mainHandler=null
             startService={ c,i -> c.startForegroundService(i) }
             stats={ c,snap,reason -> CardStats.follow(c,snap,reason) }
-            repeat={ c,k -> RepeatCalls.forCall(c,k) }
+            repeat={ c,k -> RepeatCalls.forCall(c,k) };repeatStats={ c,today,due -> CardStats.repeat(c,today,due) }
             driver.reset()
         }
     }

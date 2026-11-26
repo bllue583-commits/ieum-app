@@ -236,6 +236,10 @@ class R28RepeatCallTest:ProtectedTextHostTestBase() {
         ring()
         assertTrue(windows.isEmpty());assertTrue(notices.isEmpty())
         idle()
+        val t=stats()
+        assertEquals("the ignored call is not counted",1,t.getInt(CardStats.REPEAT_TODAY))
+        assertEquals("the line was not due with the switch off",0,t.getInt(CardStats.REPEAT_PENDING))
+        assertEquals(0,t.getInt(CardStats.REPEAT_SHOWN))
     }
 
     @Test fun inTheNoticesFourLinesTheLineComesFirstAndTheLastGoes() {
@@ -282,6 +286,24 @@ class R28RepeatCallTest:ProtectedTextHostTestBase() {
         wall=at(14,0)
         val i=RepeatCalls.info(SecureSettings(app).snapshot(),key,card(),wall)!!
         assertEquals(1,i.today);assertNull(i.line)
+    }
+
+    // ---- r28-2: the counts ------------------------------------------------------------------------------------------
+
+    @Test fun theThreeCountsOfTheHeartbeat() {
+        draw=true
+        ring();idle() // not called today yet
+        pastCall(number,9,12,175)
+        ring();idle() // the line on the card
+        ContactCards.write(app,mapOf(key to card(settled=listOf(at(9,12)+12_000))),replaceAll=true)
+        ring();idle() // called today, sorted out
+        // The line due but neither window nor notice could go up (notices not allowed, the check says no).
+        ContactCards.write(app,mapOf(key to card()),replaceAll=true);draw=false
+        shadowOf(app).denyPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        ring();idle()
+        val t=stats()
+        assertEquals(3,t.getInt(CardStats.REPEAT_TODAY));assertEquals(2,t.getInt(CardStats.REPEAT_PENDING));assertEquals(1,t.getInt(CardStats.REPEAT_SHOWN))
+        assertTrue(CardStats.KINDS.containsAll(listOf("repeatToday","repeatPending","repeatShown")))
     }
 
     // ---- the ringing path ------------------------------------------------------------------------------------------

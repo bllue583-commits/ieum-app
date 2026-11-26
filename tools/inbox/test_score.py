@@ -203,6 +203,13 @@ class CardReachV5Test(unittest.TestCase):
             out[day] = b
         return out
 
+    def test_r28_repeat_keys_are_optional_and_change_nothing(self):
+        # v4.7 r28-2: repeatToday/repeatPending/repeatShown are counts only; the card's score reads none of them.
+        base = {"calls": 10, "drawn": 9, "fallback": 1, "fallbackShown": 1, "ignored": 0, "off": 0}
+        plain = score.item_call_card(self.cfg3, self.window, ASOF, self.daily(base))
+        more = score.item_call_card(self.cfg3, self.window, ASOF, self.daily(dict(base, repeatToday=4, repeatPending=3, repeatShown=3)))
+        self.assertEqual(plain, more)
+
     def test_a_shown_fallback_notice_counts(self):
         # 10통화 중 2통화만 그려지고 8통화는 대체 알림이 실제로 떴다(삼성 제한): v5는 닿음, 옛 식은 20%.
         d = self.daily({"calls": 10, "drawn": 2, "fallback": 8, "fallbackShown": 8, "ignored": 0, "off": 0})

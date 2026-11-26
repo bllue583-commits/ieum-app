@@ -274,6 +274,13 @@ class WatchdogTest(unittest.TestCase):
         # An old phone (noPermission only) keeps the 3.
         self.assertEqual([], titles(phone=phone(callCard={"today": {"noPermission": 2}})))
 
+    def test_call_card_repeat_keys_r28(self):
+        # v4.7 r28-2: the new counts are optional and open no issue by themselves.
+        seen = lambda **t: {"day": 20261126, "recent": [], "today": dict({"drawn": 5}, **t)}
+        self.assertEqual([], titles(phone=phone(callCard=seen(repeatToday=3, repeatPending=2, repeatShown=0))))
+        self.assertEqual(titles(phone=phone(callCard=seen(fallback=1))),
+                         titles(phone=phone(callCard=seen(fallback=1, repeatToday=1, repeatPending=1, repeatShown=1))))
+
     def test_call_card_a_notice_that_showed_is_no_issue_r24(self):
         # r24 review 2: a notice instead of the card is fine; only a call where neither showed opens the issue.
         seen = lambda **t: {"day": 20261121, "recent": [], "today": dict({"drawn": 0}, **t)}
