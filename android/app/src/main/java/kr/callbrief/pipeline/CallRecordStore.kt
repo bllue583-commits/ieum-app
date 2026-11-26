@@ -1547,6 +1547,36 @@ internal class CallRecordStore(context:Context,private val clock:()->Long,
             LEFT JOIN local_files l ON l.recording_id=j.recording_id WHERE j.state IN ('QUEUED','RUNNING') AND $at>=CAST(? AS INTEGER) AND $at<CAST(? AS INTEGER)""",
             fromMs,toMs).mapNotNull { it.long("m") }
     }
+    /** v4.7 r28-3: what the store knows of the calls from [fromMs] to [toMs], for today's line of the call card
+     * ([kr.callbrief.pipeline.call.RepeatCalls.refresh]), each at its recording's own time: a recording ([FILE]); a recording
+     * with no speech or whose text failed for good, a record that failed ([FINAL]); a result applied ([DONE]); a recording
+     * skipped as excluded or a call found personal ([DROP]). Records carry their number's key. Read only. */
+    fun repeatFacts(fromMs:Long,toMs:Long):List<kr.callbrief.pipeline.call.RepeatCalls.Fact> {
+        val out=ArrayList<kr.callbrief.pipeline.call.RepeatCalls.Fact>()
+        fun fact(t:Long?,kind:String,key:String?=null) { if(t!=null) out+=kr.callbrief.pipeline.call.RepeatCalls.Fact(t,kind,key) }
+        val R=kr.callbrief.pipeline.call.RepeatCalls
+        if(hasTable("recordings")) {
+            val files=hasTable("local_files")
+            val at=if(files) "COALESCE(r.original_started_at_ms,l.filename_time_candidate_ms,r.modified_at_ms,0)" else "COALESCE(r.original_started_at_ms,r.modified_at_ms,0)"
+            val join=if(files) "LEFT JOIN local_files l ON l.recording_id=r.recording_id" else ""
+            rows("SELECT $at AS m FROM recordings r $join WHERE r.grant_id!='messages' AND $at>=CAST(? AS INTEGER) AND $at<CAST(? AS INTEGER)",fromMs,toMs)
+                .forEach { fact(it.long("m"),R.FILE) }
+            if(hasTable("call_transcription_jobs")) {
+                rows("""SELECT $at AS m,j.reason FROM call_transcription_jobs j JOIN recordings r ON r.recording_id=j.recording_id $join
+                    WHERE j.state='SKIPPED' AND j.reason IN ('NO_SPEECH','EXCLUDED') AND $at>=CAST(? AS INTEGER) AND $at<CAST(? AS INTEGER)""",fromMs,toMs)
+                    .forEach { fact(it.long("m"),if(it.str("reason")=="EXCLUDED") R.DROP else R.FINAL) }
+                if(files) failedTextStarts(fromMs,toMs).forEach { fact(it,R.FINAL) }
+            }
+        }
+        rows("""SELECT COALESCE(started_ms,created_ms) AS m,state,counterpart_key,analysis_json FROM call_records WHERE recording_id NOT LIKE 'sms:%'
+            AND recording_id NOT LIKE 'mail:%' AND COALESCE(started_ms,created_ms)>=CAST(? AS INTEGER) AND COALESCE(started_ms,created_ms)<CAST(? AS INTEGER)""",fromMs,toMs)
+            .forEach { r ->
+                val business=r.str("analysis_json")?.let { j -> runCatching { JSONObject(j).optJSONObject("analysis")?.optBoolean("business",true) }.getOrNull() }!=false
+                val kind=when(r.str("state")) { ANALYZED -> if(business) R.DONE else R.DROP;FAILED -> R.FINAL;else -> R.FILE }
+                fact(r.long("m"),kind,r.str("counterpart_key"))
+            }
+        return out
+    }
     /** Review L8: the job table has the revival columns ([CallTranscriptionStore.finalFailedSql]). */
     private fun jobCols()=rows("PRAGMA table_info(call_transcription_jobs)").mapNotNull { it.str("name") }.toSet().containsAll(listOf("permanent","requeue_count","reason"))
     /** v4.0 r21-1: the times of the recordings from [fromMs] to [toMs] whose text could not be made (every try FAILED, none

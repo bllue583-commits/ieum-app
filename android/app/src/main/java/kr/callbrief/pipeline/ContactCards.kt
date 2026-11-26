@@ -129,6 +129,9 @@ internal object ContactCards {
     private const val META_RULES="blockedRules"
 
     private val cache=ConcurrentHashMap<String,ContactCard>()
+    /** v4.7 r28-3: keys the file was asked for and has no card of (the ringing path asks twice: the service's verdict, then the
+     * card); forgotten when a card is written and whenever the memory copy goes. */
+    private val missing=ConcurrentHashMap.newKeySet<String>()
     /** Every card of the file is in [cache]: a key not there has no card. */
     @Volatile private var loadedAll=false
     @Volatile private var appContext:Context?=null
@@ -161,10 +164,10 @@ internal object ContactCards {
     fun get(phoneKey:String?):ContactCard? {
         val key=PhoneKey.of(phoneKey) ?: return null
         cache[key]?.let { return it }
-        if(loadedAll) return null
+        if(loadedAll || key in missing) return null
         val ctx=appContext ?: return null
         return runCatching { port(ctx).query("SELECT json FROM contact_cards WHERE phone_key=?",key).firstOrNull()?.let { r ->
-            ContactCard.parse(key,JSONObject(r["json"] as String)).also { cache[key]=it } } }
+            ContactCard.parse(key,JSONObject(r["json"] as String)).also { cache[key]=it } }.also { if(it==null) missing+=key } }
             .onFailure { Log.w(TAG,"card read failed: ${it.javaClass.simpleName}") }.getOrNull()
     }
     fun get(context:Context,phoneKey:String?):ContactCard? { remember(context);return get(phoneKey) }
@@ -176,7 +179,7 @@ internal object ContactCards {
             val rows=port(context).query("SELECT phone_key,json FROM contact_cards")
             val read=rows.mapNotNull { r -> val k=r["phone_key"] as? String ?: return@mapNotNull null
                 runCatching { k to ContactCard.parse(k,JSONObject(r["json"] as String)) }.getOrNull() }.toMap()
-            synchronized(lock) { cache.keys.retainAll(read.keys);cache.putAll(read);loadedAll=true }
+            synchronized(lock) { cache.keys.retainAll(read.keys);cache.putAll(read);loadedAll=true;missing.clear() }
             lastPreloadMs=(System.nanoTime()-t0)/1_000_000L
             Log.i(TAG,"preload cards=${read.size} ms=$lastPreloadMs")
             // v3.4: v1 cards are written again as v2 at the next flush.
@@ -462,7 +465,7 @@ internal object ContactCards {
         val path=ProtectedDatabase.file(app,DATABASE).canonicalPath
         port?.let { if(portPath==path && it.usable()) return it }
         port?.let { runCatching { it.close() } };port=null
-        if(portPath!=path) { cache.clear();loadedAll=false;blockedKeys=null;blockedBuilt=null }
+        if(portPath!=path) { cache.clear();missing.clear();loadedAll=false;blockedKeys=null;blockedBuilt=null }
         val t0=System.nanoTime()
         val p=AndroidSqlPort(app,DATABASE,SCHEMA.byteInputStream())
         opens++
@@ -482,13 +485,14 @@ internal object ContactCards {
                 else p.execute("INSERT OR REPLACE INTO contact_cards(phone_key,json,updated_ms) VALUES(?,?,?)",k,c.toJson().toString(),c.updatedMs) };null }
         synchronized(lock) {
             if(replaceAll) { cache.clear();loadedAll=true }
+            missing.clear()
             cards.forEach { (k,c) -> if(c==null) cache.remove(k) else cache[k]=c }
         }
     }
     /** Lets the file and the memory copy go (memory trim, tests). Touched numbers stay waiting. */
     fun shutdown() = synchronized(lock) {
         port?.let { runCatching { it.close() } };port=null;portPath=null
-        cache.clear();loadedAll=false;blockedKeys=null;blockedBuilt=null
+        cache.clear();missing.clear();loadedAll=false;blockedKeys=null;blockedBuilt=null
     }
     /** Forgets touched numbers (tests). */
     internal fun clearPending() { pending.clear();pendingAll=false;clock={ System.currentTimeMillis() } }

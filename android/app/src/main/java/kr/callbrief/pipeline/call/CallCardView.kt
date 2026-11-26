@@ -46,9 +46,11 @@ internal class CallCardView(context:Context):LinearLayout(context) {
                        val noticeTasks:List<String> =emptyList(),val noticeMore:Int=0,val lastCall:String?=null,val personId:String?=null,
                        /** v4.7 r28-1: "오늘 09:12에 통화했어요(3분). 아직 정리 중이에요" ([RepeatCalls.line]): the card's top line and the
                         * notice's first, null when today's calls with the number are sorted out (or there were none). */
-                       val repeat:String?=null) {
-        /** v4.7 r28-1: this card with today's line on top. */
-        fun withRepeat(line:String?):Content = if(line==null) this else copy(repeat=line)
+                       val repeat:String?=null,
+                       /** v4.7 r28-3: [who] without how long ago the last call was ("3일 전"), used under today's line. */
+                       val whoBare:String?=null) {
+        /** v4.7 r28-1: this card with today's line on top. r28-3: the second line then leaves out "3일 전" (above it says "오늘"). */
+        fun withRepeat(line:String?):Content = if(line==null) this else copy(repeat=line,who=whoBare ?: who)
         /** v4.7 r28-1: the line is its own row above the first line (a card that is only this line has it as its first line). */
         val repeatRow:String? get()=repeat?.takeIf { it!=first }
         /** There is a summary or a piece of work to keep in view during the call: without one the card goes at OFFHOOK
@@ -66,8 +68,10 @@ internal class CallCardView(context:Context):LinearLayout(context) {
         /** v4.3 r24-1: the notice's title, "김민수 대표, 탄탄이엔씨" (the screen rules allow no middle dot). */
         fun noticeTitle():String = listOfNotNull(name,company).joinToString(", ")
         /** v4.3 r24-1: the folded notice's one line: the card's first line (the open item that matters most, or the last call).
-         * r24 review 7: a number nothing is known about says what the call log says of it (its title is already [UNKNOWN]). */
-        fun noticeText():String = repeat ?: ownText()
+         * r24 review 7: a number nothing is known about says what the call log says of it (its title is already [UNKNOWN]).
+         * v4.7 r28-3: today's line takes it only when the first line is not an open item due or to check ([RANK_DUE], [RANK_CHECK]);
+         * otherwise today's line is the first of the open notice's lines only. */
+        fun noticeText():String = if(repeat!=null && !(rank in RANK_DUE..RANK_CHECK && !unknown)) repeat else ownText()
         private fun ownText():String = if(unknown) who ?: first else first+if(firstUnsure) ", $UNSURE" else ""
         /** v4.3 r24-1: the open notice's lines: the open check items (at most [NOTICE_TASKS], the one that matters most first),
          * then the last call's line with its day. A card without either (a thin card, an unknown number, ongoing work only)
@@ -203,6 +207,7 @@ internal class CallCardView(context:Context):LinearLayout(context) {
                 val personId=person?.personId?.takeIf { it.isNotBlank() }
                 // The second line: who, their company (when the name is a person's), how long ago the last call was.
                 val who=listOfNotNull(name,companyName.takeIf { person!=null },ago(card.lastCallMs,now)).joinToString(", ")
+                val whoBare=listOfNotNull(name,companyName.takeIf { person!=null }).joinToString(", ")
                 val tasks=ordered(card.openTasks,now)
                 val issues=card.issues.mapNotNull { i -> safe(i.title)?.let { t -> listOfNotNull(t,safe(ContactCards.firstSentence(i.status))).joinToString(", ") } }
                 val call=card.recent.firstOrNull { it.kind=="통화" && safe(it.summaryFirst)!=null && now-it.atMs<=SUMMARY_DAYS*DAY_MS }
@@ -227,12 +232,16 @@ internal class CallCardView(context:Context):LinearLayout(context) {
                 // The badge takes the room of about four letters.
                 return Content(name,first,rank,who,unsure,next?.let { cut(safe(CallUi.clean(it.title))!!,if(unsure(it)) ROW_CHARS-4 else ROW_CHARS) },next?.let(::unsure)==true,
                     (rest.size-1).coerceAtLeast(0),issue,companyName.takeIf { person!=null },tasks.firstOrNull()?.let { safe(it.title) },
-                    noticeTasks=noticeTasks,noticeMore=(tasks.size-NOTICE_TASKS).coerceAtLeast(0),lastCall=lastCall,personId=personId)
+                    noticeTasks=noticeTasks,noticeMore=(tasks.size-NOTICE_TASKS).coerceAtLeast(0),lastCall=lastCall,personId=personId,whoBare=whoBare)
             }
             /** A number without a card (only when the user asked for those): what the phone's call log says of it, if anything. */
             fun unknown(logLine:String?)=Content(UNKNOWN,UNKNOWN,RANK_UNKNOWN,safe(logLine) ?: "통화기록에 없는 번호예요",unknown=true)
             /** v4.7 r28-1: a number without a card (and numbers without one switched off) that was called today and not sorted out
              * yet: only that line, under the same title as [unknown]; nothing to keep in view during the call. */
+            /** v4.7 r28-3: today's line without its time and length, for a card too tall for the whole line: "오늘 통화, 정리 중이에요",
+             * "오늘 2번 통화, 정리 중이에요", "오늘 통화". */
+            fun shortRepeat(line:String):String = line.replace(Regex("^오늘 [0-9]{2}:[0-9]{2} 통화(\\([^)]*\\))?"),"오늘 통화")
+                .replace(Regex("^오늘 ([0-9]+)번 통화\\(마지막 [0-9]{2}:[0-9]{2}\\)"),"오늘 $1번 통화")
             fun repeatOnly(line:String)=Content(UNKNOWN,line,RANK_UNKNOWN,null,unknown=true,repeat=line)
         }
     }
@@ -270,8 +279,10 @@ internal class CallCardView(context:Context):LinearLayout(context) {
     fun showAll(c:Content) { content=c;complete=true;rebuild() }
     fun setCollapsed(on:Boolean) { if(collapsed==on) return;collapsed=on;rebuild() }
 
+    /** v4.7 r28-3: today's line on the open card, in its short form before a row is left out ([onMeasure]). */
+    private var repeatView:TextView?=null
     private fun rebuild() {
-        removeAllViews();optional.clear()
+        removeAllViews();optional.clear();repeatView=null
         val c=content ?: return
         background=CallUi.sheet(a,CallUi.CARD,CallUi.LINE,20)
         elevation=dp(8).toFloat()
@@ -294,7 +305,8 @@ internal class CallCardView(context:Context):LinearLayout(context) {
             layoutParams=LayoutParams(-1,-2).apply { topMargin=dp(4) }
         })
         // v4.7 r28-1: today's line on top (18, ink), read first by TalkBack; never left out for height (the lower rows go first).
-        c.repeatRow?.let { r -> addView(line(r).apply { tag="card_repeat";contentDescription=r;setPadding(0,dp(4),0,0) }) }
+        // r28-3: when the card is too tall it takes its short form ([Content.shortRepeat]) before the check item is left out.
+        repeatView=c.repeatRow?.let { r -> line(r).apply { tag="card_repeat";contentDescription=r;setPadding(0,dp(4),0,0) }.also { addView(it) } }
         // 1. The first line (20 bold, two lines): the badge in front when the item needs a check.
         addView(line(c.first,CallUi.HEADING,bold=true).apply { tag="card_first";text=withBadge(c.first,c.firstUnsure);setPadding(0,dp(4),0,dp(2)) })
         // 2. Who, their company, how long ago (18, ink).
@@ -370,11 +382,21 @@ internal class CallCardView(context:Context):LinearLayout(context) {
     override fun onMeasure(widthSpec:Int,heightSpec:Int) {
         val free=MeasureSpec.makeMeasureSpec(0,MeasureSpec.UNSPECIFIED)
         // Every measure starts with all rows: a wider window (or a shorter line) may have room again.
-        optional.forEach { it.visibility=VISIBLE }
-        super.onMeasure(widthSpec,free)
-        if(MeasureSpec.getSize(widthSpec)>0) {
+        fun fit(oneLine:Boolean):Int {
+            optional.forEach { it.visibility=VISIBLE }
+            repeatView?.let { v -> val r=content?.repeatRow ?: return@let;val t=if(oneLine) Content.shortRepeat(r) else r;if(v.text.toString()!=t) v.text=t }
+            super.onMeasure(widthSpec,free)
             var i=0
-            while(measuredHeight>maxHeightPx && i<optional.size) { optional[i++].visibility=GONE;super.onMeasure(widthSpec,free) }
+            if(MeasureSpec.getSize(widthSpec)>0) while(measuredHeight>maxHeightPx && i<optional.size) { optional[i++].visibility=GONE;super.onMeasure(widthSpec,free) }
+            return i
+        }
+        val dropped=fit(false)
+        // v4.7 r28-3: too tall with today's line whole: its short form ("오늘 통화, 정리 중이에요", no time or length; nothing is cut,
+        // the screen rule) when that keeps a row the whole line would cost, or when the card does not fit even without those rows.
+        if(repeatView!=null && MeasureSpec.getSize(widthSpec)>0 && (dropped>0 || measuredHeight>maxHeightPx)) {
+            val tooTall=measuredHeight>maxHeightPx
+            val short=fit(true)
+            if(!tooTall && short>=dropped) fit(false)
         }
         if(measuredHeight>maxHeightPx) setMeasuredDimension(measuredWidth,maxHeightPx)
     }

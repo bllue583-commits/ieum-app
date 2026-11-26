@@ -188,7 +188,9 @@ internal object RecordingGap {
                 lastDiscoveryMs=s.optLong(kr.callbrief.AutomaticRecordingDiscovery.LAST_DISCOVERY_MS,0)),now,last(s))
             settings.update { keep(it,v) }
             if(read!=null) { val times=read.fileTimes.sorted()
-                CallFollowupNotice.checkNoRecording(app,startedMs,now) { from,to -> anyIn(times,from,to) } }
+                CallFollowupNotice.checkNoRecording(app,startedMs,now) { from,to -> anyIn(times,from,to) }
+                // v4.7 r28-3: today's calls of the call card's line get "a recording" or "none" (and the store's facts).
+                kr.callbrief.pipeline.call.RepeatCalls.afterPass(app,startedMs,now,times) }
         } catch(e:Exception) { Log.w(LOG,"not judged: ${e.javaClass.simpleName}") }
     }
 

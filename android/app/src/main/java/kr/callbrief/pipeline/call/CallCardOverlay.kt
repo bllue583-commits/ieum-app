@@ -280,12 +280,13 @@ internal object CallCardOverlay {
     private fun load(c:Context,phoneKey:String,gen:Int) {
         val card=ContactCards.get(c,phoneKey)
         // v4.7 r28-1: today's line, from the call's settings snapshot and this card (nothing more is read).
-        val repeat=runCatching { repeatLine(c,phoneKey) }.getOrNull()
+        val info=runCatching { repeatInfo(c,phoneKey) }.getOrNull();val repeat=info?.line
         if(card!=null) { deliver(c,gen,CallCardView.Content.of(card).withRepeat(repeat));return }
         val settings=runCatching { CallSession.callSettings(c) }.getOrNull()
         if(settings?.optBoolean(KEY_UNKNOWN,false)!=true) {
             // v4.7 r28-1: a number without a card that was called today and is not sorted out yet: a card of that line only.
-            if(repeat!=null) { deliver(c,gen,CallCardView.Content.repeatOnly(repeat));return }
+            // r28-3: only when one of today's calls was a minute or longer (not for a spam or delivery call back).
+            if(repeat!=null && info?.standalone==true) { deliver(c,gen,CallCardView.Content.repeatOnly(repeat));return }
             main.post { if(gen==generation) { loading=false;tell(c,NO_CARD) } };return
         }
         // The first line at once, the call log's line once read.
@@ -293,8 +294,8 @@ internal object CallCardOverlay {
         val line=runCatching { logLine(c,phoneKey) }.getOrNull()
         deliver(c,gen,CallCardView.Content.unknown(line).withRepeat(repeat))
     }
-    /** v4.7 r28-1: today's line of [phoneKey] ([RepeatCalls.forCall]), or null. Replaceable in host tests. */
-    @Volatile internal var repeatLine:(Context,String)->String?={ c,k -> RepeatCalls.forCall(c,k)?.line }
+    /** v4.7 r28-1: today's calls with [phoneKey] ([RepeatCalls.forCall]), or null. Replaceable in host tests. */
+    @Volatile internal var repeatInfo:(Context,String)->RepeatCalls.Info?={ c,k -> RepeatCalls.forCall(c,k) }
     /** v4.7 r28-2: today's line went up in this call's window or notice (once per call, [CardStats.repeatShown]). Replaceable in host tests. */
     @Volatile internal var onRepeatShown:(Context)->Unit={ c -> CardStats.repeatShown(c) }
     private var repeatTold=false
@@ -725,6 +726,6 @@ internal object CallCardOverlay {
         onVerdict={ c,a -> CardStats.verdict(c,a) };onFailure={ c,code -> CardStats.failure(c,code) }
         screenOn={ c -> c.getSystemService(android.os.PowerManager::class.java)?.isInteractive!=false };lastExit={ c -> CardProbe.lastExit(c) }
         exitRead=null;exitDone=false;noticeCheck=defaultNoticeCheck;onNotice={ c -> CardStats.noticeShown(c) };onFallbackSeen={ c -> CardStats.fallbackSeen(c) }
-        repeatLine={ c,k -> RepeatCalls.forCall(c,k)?.line };onRepeatShown={ c -> CardStats.repeatShown(c) }
+        repeatInfo={ c,k -> RepeatCalls.forCall(c,k) };onRepeatShown={ c -> CardStats.repeatShown(c) }
     }
 }

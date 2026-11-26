@@ -277,7 +277,7 @@ class WatchdogTest(unittest.TestCase):
     def test_call_card_repeat_keys_r28(self):
         # v4.7 r28-2: the new counts are optional and open no issue by themselves.
         seen = lambda **t: {"day": 20261126, "recent": [], "today": dict({"drawn": 5}, **t)}
-        self.assertEqual([], titles(phone=phone(callCard=seen(repeatToday=3, repeatPending=2, repeatShown=0))))
+        self.assertEqual([], titles(phone=phone(callCard=seen(repeatToday=3, repeatPending=1, repeatFact=1, repeatShown=0))))
         self.assertEqual(titles(phone=phone(callCard=seen(fallback=1))),
                          titles(phone=phone(callCard=seen(fallback=1, repeatToday=1, repeatPending=1, repeatShown=1))))
 

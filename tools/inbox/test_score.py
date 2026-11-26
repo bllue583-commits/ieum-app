@@ -207,7 +207,7 @@ class CardReachV5Test(unittest.TestCase):
         # v4.7 r28-2: repeatToday/repeatPending/repeatShown are counts only; the card's score reads none of them.
         base = {"calls": 10, "drawn": 9, "fallback": 1, "fallbackShown": 1, "ignored": 0, "off": 0}
         plain = score.item_call_card(self.cfg3, self.window, ASOF, self.daily(base))
-        more = score.item_call_card(self.cfg3, self.window, ASOF, self.daily(dict(base, repeatToday=4, repeatPending=3, repeatShown=3)))
+        more = score.item_call_card(self.cfg3, self.window, ASOF, self.daily(dict(base, repeatToday=4, repeatPending=2, repeatFact=1, repeatShown=3)))
         self.assertEqual(plain, more)
 
     def test_a_shown_fallback_notice_counts(self):

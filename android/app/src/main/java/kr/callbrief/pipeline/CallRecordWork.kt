@@ -146,6 +146,8 @@ internal class CallRecordAnalysisRunner(
             }
             runCatching { releaseStuck(db) }
             runCatching { noteLatency(db) }
+            // v4.7 r28-3: results applied (or failed) this pass: today's calls of the call card's line follow.
+            runCatching { kr.callbrief.pipeline.call.RepeatCalls.refresh(context) { f,t -> db.repeatFacts(f,t) } }
             runCatching { takeTidy(store,db,consent,appliedNow) }
 
             fun due(r:CallRecord):Boolean {

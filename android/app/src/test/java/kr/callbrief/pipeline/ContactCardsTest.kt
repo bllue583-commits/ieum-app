@@ -162,4 +162,23 @@ class ContactCardsTest:ProtectedTextHostTestBase() {
         // A card written before v4.7 reads with none.
         assertTrue(ContactCard.parse("01012345678",org.json.JSONObject().put("v",2)).settledMs.isEmpty())
     }
+
+    /** v4.7 r28-3: the store's facts of today's calls for the call card's line: a record waiting is a recording, an applied
+     * result is done, a personal one drops, a record that failed is final; each with its number's key. */
+    @Test fun repeatFactsTellWhatBecameOfEachCall() = store().use { s ->
+        val R=kr.callbrief.pipeline.call.RepeatCalls
+        val a=started;val b=started+600_000;val c=started+1_200_000;val d=started+1_800_000
+        call(s,"rec1","010-1234-5678",a,"견적서를 내일까지 보내기로 했어요.","김민수","탄탄이엔씨","대표")
+        s.insert(transcript("rec2","010-1234-5678",b))
+        s.insert(transcript("rec3","010-2222-3333",c))
+        s.keepPersonal(CallRecordStore.recordId(transcript("rec3","010-2222-3333",c)))
+        AndroidSqlPort(context,GeneralLocalStore.DATABASE,context.assets.open("call_core_schema.sql")).use { p -> p.transaction {
+            p.execute("INSERT INTO recordings(recording_id,owner_key,grant_id,document_id,display_name,mime_type,byte_count,first_seen_ms,last_seen_ms,source_seq,source_version,head_revision) VALUES('rec4',?,'g1','rec4','rec4.wav','audio/wav',10,0,0,1,1,1)",GeneralLocalStore.OWNER);null } }
+        val t=transcript("rec4","010-5555-6666",d);s.insert(t)
+        s.setState(CallRecordStore.recordId(t),CallRecordStore.FAILED,"EMPTY_TRANSCRIPT")
+        val f=s.repeatFacts(a-60_000,d+60_000).filter { it.key!=null }.sortedBy { it.atMs }
+        assertEquals(listOf(a to R.DONE,b to R.FILE,c to R.DROP,d to R.FINAL),f.map { it.atMs to it.kind })
+        assertEquals("01012345678",kr.callbrief.core.PhoneKey.of(f[0].key))
+        assertTrue(s.repeatFacts(d+120_000,d+200_000).isEmpty())
+    }
 }

@@ -97,7 +97,8 @@ class CallCardService:Service() {
             runCatching { stats(app,snap,verdict) }
             // v4.7 r28-2: a call with someone already called today, and whether today's line is due (once per call; not ignored).
             if(snap.state!=CallSession.State.IDLE && !snap.ignored && !snap.waiting) snap.phoneKey?.let { k ->
-                runCatching { val r=repeat(app,k);repeatStats(app,r!=null && r.today>0,show && r?.line!=null) } }
+                runCatching { val r=repeat(app,k);val due=show && r?.line!=null
+                    repeatStats(app,r!=null && r.today>0,due && r!!.pending,due && !r!!.pending) } }
             if(!active && !show && !driver.shown) return
             val intent=Intent(app,CallCardService::class.java).putExtra(EXTRA_STATE,snap.state.name).putExtra(EXTRA_SHOW,show)
             if(!active && snap.state==CallSession.State.IDLE) {
@@ -137,8 +138,9 @@ class CallCardService:Service() {
             if(!on) return OFF
             val key=snap.phoneKey ?: return CallCardOverlay.NO_NUMBER
             return if(runCatching { hasCard(context,key) }.getOrDefault(false) || s.optBoolean(PipelineSettingsKeys.CARD_UNKNOWN,false) ||
-                // v4.7 r28-1: called today and not sorted out yet: a card of that one line.
-                runCatching { repeat(context,key)?.line!=null }.getOrDefault(false)) SHOW
+                // v4.7 r28-1: called today and not sorted out yet: a card of that one line. r28-3: only when one of those calls was a
+                // minute or longer.
+                runCatching { repeat(context,key)?.let { it.line!=null && it.standalone }==true }.getOrDefault(false)) SHOW
                 else CallCardOverlay.NO_CARD
         }
         internal const val SHOW="show";internal const val IGNORED="ignored";internal const val OFF="off";internal const val WAITING="waiting"
@@ -147,7 +149,7 @@ class CallCardService:Service() {
         /** v4.7 r28-1: today's calls with the number ([RepeatCalls.forCall]). Replaceable in host tests. */
         @Volatile internal var repeat:(Context,String)->RepeatCalls.Info?={ c,k -> RepeatCalls.forCall(c,k) }
         /** v4.7 r28-2: counts [CardStats.repeat]. Replaceable in host tests. */
-        @Volatile internal var repeatStats:(Context,Boolean,Boolean)->Unit={ c,today,due -> CardStats.repeat(c,today,due) }
+        @Volatile internal var repeatStats:(Context,Boolean,Boolean,Boolean)->Unit={ c,today,pending,fact -> CardStats.repeat(c,today,pending,fact) }
 
         /** Without READ_PHONE_STATE the phone cannot be asked: then the call counts as over (the service ends, no card stays). */
         private fun telecomInCall(context:Context):Boolean {
@@ -166,7 +168,7 @@ class CallCardService:Service() {
             hasCard={ c,k -> ContactCards.get(c,k)!=null };mainHandler=null
             startService={ c,i -> c.startForegroundService(i) }
             stats={ c,snap,reason -> CardStats.follow(c,snap,reason) }
-            repeat={ c,k -> RepeatCalls.forCall(c,k) };repeatStats={ c,today,due -> CardStats.repeat(c,today,due) }
+            repeat={ c,k -> RepeatCalls.forCall(c,k) };repeatStats={ c,today,pending,fact -> CardStats.repeat(c,today,pending,fact) }
             driver.reset()
         }
     }

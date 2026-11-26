@@ -550,6 +550,8 @@ class CallTranscriptionWork(context:Context,params:WorkerParameters):Worker(cont
                     yieldStop={ plugDropStop || userStop() && PowerStats.userYields(power(settings),recording)<TranscriptionStops.USER_YIELDS })
                 val pass=runner.run()
                 watch?.interrupt()
+                // v4.7 r28-3: recordings turned into text, without speech or failed for good: today's calls of the call card's line follow.
+                runCatching { kr.callbrief.pipeline.call.RepeatCalls.refresh(storage) }
                 val end=System.currentTimeMillis()
                 if(userStop()) savePower(settings) { o -> val x=PowerStats.noteStop(o,end,"user");if(pass.state=="YIELD") PowerStats.noteUserYield(x,recording) else x }
                 if(plugDropStop) savePower(settings) { PowerStats.noteStreak(PowerStats.add(it,end,"plugDropStops"),"plugDrop",recording) }

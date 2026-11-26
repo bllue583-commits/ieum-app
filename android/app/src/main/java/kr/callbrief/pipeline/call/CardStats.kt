@@ -60,11 +60,12 @@ internal object CardStats {
     /** Every count the heartbeat carries (zeros when missing). */
     val KINDS=listOf(CALLS,SHOWN,SHOWN_OUTGOING,ELIGIBLE_OUTGOING,NO_CARD,THIN,NO_NUMBER,NO_NUMBER_IN,NO_NUMBER_OUT,NO_ROLE,
         IGNORED,OFF,LOCKED,COLD,FGS_REFUSED,NO_PERMISSION,NO_NOTIFY,EXPANDED,CLOSED_UNDER_2S,DRAWN,FALLBACK,HIDDEN,UNCONFIRMED,RETRIED,
-        FLIP_CALLS,DENIED_AT_START,DENIED_AT_END,FALLBACK_SHOWN,FALLBACK_MUTED,NOTICE_TAPS,FALLBACK_SEEN,REPEAT_TODAY,REPEAT_PENDING,REPEAT_SHOWN)
+        FLIP_CALLS,DENIED_AT_START,DENIED_AT_END,FALLBACK_SHOWN,FALLBACK_MUTED,NOTICE_TAPS,FALLBACK_SEEN,REPEAT_TODAY,REPEAT_PENDING,REPEAT_SHOWN,REPEAT_FACT)
     /** v4.7 r28-2 (once per call, never for an ignored one): calls with a number already called today ([REPEAT_TODAY]); of those,
-     * calls whose card was due with today's "아직 정리 중" line ([REPEAT_PENDING], [RepeatCalls]); calls where that line went up in
-     * the card's window or its notice ([REPEAT_SHOWN]). */
-    const val REPEAT_TODAY="repeatToday";const val REPEAT_PENDING="repeatPending";const val REPEAT_SHOWN="repeatShown"
+     * calls whose card was due with today's "정리 중이에요" line ([REPEAT_PENDING], [RepeatCalls]); r28-3: calls whose card was due
+     * with the line of the facts only ("오늘 09:12 통화(3분)", [REPEAT_FACT]); calls where either line went up in the card's window
+     * or its notice ([REPEAT_SHOWN]). */
+    const val REPEAT_TODAY="repeatToday";const val REPEAT_PENDING="repeatPending";const val REPEAT_SHOWN="repeatShown";const val REPEAT_FACT="repeatFact"
     /** r24 review 5: calls whose card was not drawn (a fallback or unconfirmed verdict) and whose notice was found up: the
      * calls where the notice was the card. A notice beside a drawn card (the locked screen) is not counted. */
     const val FALLBACK_SEEN="fallbackSeen"
@@ -324,15 +325,17 @@ internal object CardStats {
         if(inc.isNotEmpty() || e!=null) write(context,inc,null,e)
     }
 
-    /** v4.7 r28-2: this call's number was called earlier today ([today]) and today's line is due ([due]); told once per call by
-     * [CallCardService.follow] once the number is known. Nothing for an ignored call. */
-    fun repeat(context:Context,today:Boolean,due:Boolean) {
+    /** v4.7 r28-2: this call's number was called earlier today ([today]) and today's line is due, "정리 중이에요" ([pending]) or
+     * the facts only ([fact], r28-3); told once per call by [CallCardService.follow] once the number is known. Nothing for an
+     * ignored call. */
+    fun repeat(context:Context,today:Boolean,pending:Boolean,fact:Boolean) {
         val inc=LinkedHashMap<String,Int>()
         synchronized(lock) {
             if(!inCall || repeatTold || ignoredSeen) return
             repeatTold=true
             if(today) inc[REPEAT_TODAY]=1
-            if(today && due) inc[REPEAT_PENDING]=1
+            if(today && pending) inc[REPEAT_PENDING]=1
+            if(today && fact) inc[REPEAT_FACT]=1
         }
         if(inc.isNotEmpty()) write(context,inc,null)
     }
