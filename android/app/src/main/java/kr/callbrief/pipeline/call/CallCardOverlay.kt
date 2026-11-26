@@ -299,13 +299,17 @@ internal object CallCardOverlay {
     /** v4.7 r28-2: today's line went up in this call's window or notice (once per call, [CardStats.repeatShown]). Replaceable in host tests. */
     @Volatile internal var onRepeatShown:(Context)->Unit={ c -> CardStats.repeatShown(c) }
     private var repeatTold=false
+    private fun repeatShown(c:Context) { if(repeatTold) return;repeatTold=true;worker.execute { runCatching { onRepeatShown(c) }.onFailure(::warn) } }
+    /** v4.7 r28-4: today's line reached the person: in a notice (always whole), or on a window that kept it (not left out for height). */
+    internal fun repeatOnScreen(v:CallCardView?,notice:Boolean):Boolean = notice || v?.repeatVisible==true
     private fun deliver(c:Context,gen:Int,data:CallCardView.Content,rest:Boolean=true) { main.post {
         runCatching {
             if(gen!=generation || closed || state==CallSession.State.IDLE) return@post
             val first=content==null
             content=data;loading=false
             if(first) { place(c,nameOnly=true);shownAt=clock();tell(c,firstOutcome())
-                if(data.repeat!=null && !repeatTold && (view!=null || noticeUp)) { repeatTold=true;worker.execute { runCatching { onRepeatShown(c) }.onFailure(::warn) } } }
+                // r28-4: a notice carries the whole line; the window's line is counted once it was seen with the line on it ([judge]).
+                if(data.repeat!=null && noticeUp) repeatShown(c) }
             else view?.let { if(it.complete) it.showAll(data) }
             if(rest) main.postDelayed({ runCatching { if(gen==generation && content===data) { view?.showAll(data);relayout();if(noticeUp) notice(c,data) } }.onFailure(::warn) },
                 if(first) REST_DELAY_MS else 0L)
@@ -382,7 +386,7 @@ internal object CallCardOverlay {
             spare=params?.let { v to it }
             view=null;params=null
             Log.i(LOG,"card hidden")
-            content?.let { notice(c,it) }
+            content?.let { notice(c,it);if(it.repeat!=null && noticeUp) repeatShown(c) }
             // v4.0 r21-2: put up again later while the call goes on; told now when no try is left.
             fail(c,CardStats.HIDDEN)
             return
@@ -390,6 +394,7 @@ internal object CallCardOverlay {
         judged=true
         if(seen) {
             seenOnce=true;hiddenPending=false
+            if(content?.repeat!=null && v!=null && repeatOnScreen(v,noticeUp)) repeatShown(c)
             Log.i(LOG,"card drawn")
             // v3.6.1 fix (review, critical): seen although the check said no is not trusted as drawn (the system may hide the
             // window on its side only): unconfirmed, and the notice stays until the call ends.

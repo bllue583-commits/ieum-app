@@ -242,6 +242,10 @@ internal class CallCardView(context:Context):LinearLayout(context) {
              * "오늘 2번 통화, 정리 중이에요", "오늘 통화". */
             fun shortRepeat(line:String):String = line.replace(Regex("^오늘 [0-9]{2}:[0-9]{2} 통화(\\([^)]*\\))?"),"오늘 통화")
                 .replace(Regex("^오늘 ([0-9]+)번 통화\\(마지막 [0-9]{2}:[0-9]{2}\\)"),"오늘 $1번 통화")
+            /** v4.7 r28-4: the shortest form: "오늘 통화, 정리 중", "오늘 2번 통화, 정리 중", "오늘 통화", "오늘 2번 통화". */
+            fun shortestRepeat(line:String):String = shortRepeat(line).replace(", 정리 중이에요",", 정리 중")
+            /** v4.7 r28-4: the forms the card tries in order (the notice and TalkBack always have the whole line). */
+            fun repeatForms(line:String):List<String> = listOf(line,shortRepeat(line),shortestRepeat(line)).distinct()
             fun repeatOnly(line:String)=Content(UNKNOWN,line,RANK_UNKNOWN,null,unknown=true,repeat=line)
         }
     }
@@ -279,7 +283,7 @@ internal class CallCardView(context:Context):LinearLayout(context) {
     fun showAll(c:Content) { content=c;complete=true;rebuild() }
     fun setCollapsed(on:Boolean) { if(collapsed==on) return;collapsed=on;rebuild() }
 
-    /** v4.7 r28-3: today's line on the open card, in its short form before a row is left out ([onMeasure]). */
+    /** v4.7 r28-3, r28-4: today's line on the open card, in the form that fits ([onMeasure]). */
     private var repeatView:TextView?=null
     private fun rebuild() {
         removeAllViews();optional.clear();repeatView=null
@@ -305,7 +309,7 @@ internal class CallCardView(context:Context):LinearLayout(context) {
             layoutParams=LayoutParams(-1,-2).apply { topMargin=dp(4) }
         })
         // v4.7 r28-1: today's line on top (18, ink), read first by TalkBack; never left out for height (the lower rows go first).
-        // r28-3: when the card is too tall it takes its short form ([Content.shortRepeat]) before the check item is left out.
+        // r28-4: on the card the longest form that fits one line ([Content.repeatForms]); left out for height after the lower rows.
         repeatView=c.repeatRow?.let { r -> line(r).apply { tag="card_repeat";contentDescription=r;setPadding(0,dp(4),0,0) }.also { addView(it) } }
         // 1. The first line (20 bold, two lines): the badge in front when the item needs a check.
         addView(line(c.first,CallUi.HEADING,bold=true).apply { tag="card_first";text=withBadge(c.first,c.firstUnsure);setPadding(0,dp(4),0,dp(2)) })
@@ -381,25 +385,29 @@ internal class CallCardView(context:Context):LinearLayout(context) {
 
     override fun onMeasure(widthSpec:Int,heightSpec:Int) {
         val free=MeasureSpec.makeMeasureSpec(0,MeasureSpec.UNSPECIFIED)
+        val wide=MeasureSpec.getSize(widthSpec)>0
         // Every measure starts with all rows: a wider window (or a shorter line) may have room again.
-        fun fit(oneLine:Boolean):Int {
-            optional.forEach { it.visibility=VISIBLE }
-            repeatView?.let { v -> val r=content?.repeatRow ?: return@let;val t=if(oneLine) Content.shortRepeat(r) else r;if(v.text.toString()!=t) v.text=t }
-            super.onMeasure(widthSpec,free)
-            var i=0
-            if(MeasureSpec.getSize(widthSpec)>0) while(measuredHeight>maxHeightPx && i<optional.size) { optional[i++].visibility=GONE;super.onMeasure(widthSpec,free) }
-            return i
+        optional.forEach { it.visibility=VISIBLE }
+        // v4.7 r28-4: today's line in the longest of its forms that fits one line (whole, short, shortest; the shortest may wrap).
+        val rv=repeatView;val r=content?.repeatRow
+        if(rv!=null && r!=null) {
+            rv.visibility=VISIBLE
+            val forms=Content.repeatForms(r)
+            var chosen=forms.last()
+            for(f in forms) { if(rv.text.toString()!=f) rv.text=f;super.onMeasure(widthSpec,free);if(!wide || rv.lineCount<=1) { chosen=f;break } }
+            if(rv.text.toString()!=chosen) rv.text=chosen
         }
-        val dropped=fit(false)
-        // v4.7 r28-3: too tall with today's line whole: its short form ("오늘 통화, 정리 중이에요", no time or length; nothing is cut,
-        // the screen rule) when that keeps a row the whole line would cost, or when the card does not fit even without those rows.
-        if(repeatView!=null && MeasureSpec.getSize(widthSpec)>0 && (dropped>0 || measuredHeight>maxHeightPx)) {
-            val tooTall=measuredHeight>maxHeightPx
-            val short=fit(true)
-            if(!tooTall && short>=dropped) fit(false)
+        super.onMeasure(widthSpec,free)
+        if(wide) {
+            var i=0
+            while(measuredHeight>maxHeightPx && i<optional.size) { optional[i++].visibility=GONE;super.onMeasure(widthSpec,free) }
+            // r28-4: then today's line; the name row and the first line stay to the end.
+            if(measuredHeight>maxHeightPx && rv!=null) { rv.visibility=GONE;super.onMeasure(widthSpec,free) }
         }
         if(measuredHeight>maxHeightPx) setMeasuredDimension(measuredWidth,maxHeightPx)
     }
+    /** v4.7 r28-4: today's line is on the card (not left out for height; a card of the line alone has it as its first line). */
+    val repeatVisible:Boolean get()=content?.let { it.repeat!=null && it.repeatRow==null }==true || repeatView?.visibility==VISIBLE
 
     /** Dragging moves the card; a press without moving opens the strip ([tapOpens]). */
     private inner class Drag(private val v:View,private val tapOpens:Boolean):OnTouchListener {

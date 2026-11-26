@@ -308,30 +308,52 @@ class R28RepeatCallTest:ProtectedTextHostTestBase() {
 
     // ---- the card's height -------------------------------------------------------------------------------------------
 
-    @Test fun largeLettersKeepTheCheckItemAndTheLineFitsOneLineAtTheDefaultSize() {
-        val c=CallCardView.Content.of(card(listOf(ContactCard.Task("wf_1","도면 다시 받기",wall-day,"open",null),ContactCard.Task("wf_2","현장 사진 보내기",wall-day,"open",null))),wall)
-            .withRepeat("오늘 2번 통화(마지막 11:40), 정리 중이에요")
-        // At the default size (this 360dp screen) the one-call line is one line; the many-calls line is printed for the report.
-        for(l in listOf("오늘 09:12 통화(3분), 정리 중이에요","오늘 09:12 통화(3분)","오늘 2번 통화(마지막 11:40), 정리 중이에요")) {
-            val v1=CallCardView(app).apply { showAll(c.copy(repeat=l)) };measureAt(v1)
-            val n=v1.findViewWithTag<TextView>("card_repeat").lineCount
-            println("R28 line at 1.0, 360dp: $n line(s): $l")
-            if(!l.contains("번")) assertEquals(l,1,n)
-        }
-        val withoutLine=CallCardView.Content.of(card(listOf(ContactCard.Task("wf_1","도면 다시 받기",wall-day,"open",null),ContactCard.Task("wf_2","현장 사진 보내기",wall-day,"open",null))),wall)
-        for(scale in listOf(1.5f,2.0f)) {
-            RuntimeEnvironment.setFontScale(scale)
-            val max=(app.resources.displayMetrics.heightPixels*CallCardOverlay.MAX_HEIGHT).toInt()
-            val before=CallCardView(app).apply { maxHeightPx=max;showAll(withoutLine) }.also { measureAt(it) }
-            val v=CallCardView(app).apply { maxHeightPx=max;showAll(c) };measureAt(v)
-            val task=v.findViewWithTag<View>("card_task")
-            if(before.findViewWithTag<View>("card_task").visibility==View.VISIBLE) assertEquals("$scale: the check item stays",View.VISIBLE,task.visibility)
-            val t=v.findViewWithTag<TextView>("card_repeat")
-            println("R28 at $scale: ${t.text} (${t.lineCount} line(s)), check item ${if(task.visibility==View.VISIBLE) "kept" else "left out"} (without the line: ${if(before.findViewWithTag<View>("card_task").visibility==View.VISIBLE) "kept" else "left out"})")
-            assertTrue(t.text.toString(),t.text.toString() in listOf(c.repeat,CallCardView.Content.shortRepeat(c.repeat!!)))
-            assertNull("never an ellipsis",t.ellipsize)
-            assertTrue("$scale",v.measuredHeight<=max)
-        }
+    private val twoTasks get()=listOf(ContactCard.Task("wf_1","도면 다시 받기",wall-day,"open",null),ContactCard.Task("wf_2","현장 사진 보내기",wall-day,"open",null))
+    private fun cardView(c:CallCardView.Content,scale:Float,widthPx:Int?=null):CallCardView {
+        RuntimeEnvironment.setFontScale(scale);CallUi.applyTheme(app)
+        val v=CallCardView(app).apply { maxHeightPx=(app.resources.displayMetrics.heightPixels*CallCardOverlay.MAX_HEIGHT).toInt();showAll(c) }
+        val w=widthPx ?: (app.resources.displayMetrics.widthPixels-2*CallUi.dp(app,12))
+        v.measure(View.MeasureSpec.makeMeasureSpec(w,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED))
+        v.layout(0,0,v.measuredWidth,v.measuredHeight)
+        return v
+    }
+
+    /** r28-4: the name row comes before today's line; at 2.0 times on 360dp the line takes its shortest form in one line. */
+    @Test fun largeLettersTakeTheShortestFormAndKeepTheNameRow() {
+        val c=CallCardView.Content.of(card(twoTasks),wall).withRepeat("오늘 09:12 통화(3분), 정리 중이에요")
+        val v=cardView(c,2.0f)
+        val t=v.findViewWithTag<TextView>("card_repeat")
+        assertEquals("오늘 통화, 정리 중",t.text.toString());assertEquals(1,t.lineCount);assertEquals(View.VISIBLE,t.visibility)
+        assertEquals(View.VISIBLE,v.findViewWithTag<View>("card_who").visibility)
+        assertTrue("the name row fits",v.findViewWithTag<View>("card_who").bottom<=v.measuredHeight)
+        assertEquals("TalkBack has the whole line","오늘 09:12 통화(3분), 정리 중이에요",t.contentDescription)
+        assertNull("never an ellipsis",t.ellipsize)
+        assertTrue(CallCardOverlay.repeatOnScreen(v,false))
+    }
+
+    @Test fun manyCallsAtTheDefaultSizeTakeTheShortFormInOneLine() {
+        val c=CallCardView.Content.of(card(twoTasks),wall).withRepeat("오늘 2번 통화(마지막 11:40), 정리 중이에요")
+        val v=cardView(c,1.0f)
+        val t=v.findViewWithTag<TextView>("card_repeat")
+        assertEquals("오늘 2번 통화, 정리 중이에요",t.text.toString());assertEquals(1,t.lineCount)
+        // The one-call line is whole at the default size.
+        val one=cardView(c.copy(repeat="오늘 09:12 통화(3분), 정리 중이에요"),1.0f).findViewWithTag<TextView>("card_repeat")
+        assertEquals("오늘 09:12 통화(3분), 정리 중이에요",one.text.toString());assertEquals(1,one.lineCount)
+        assertEquals(listOf("오늘 2번 통화(마지막 11:40), 정리 중이에요","오늘 2번 통화, 정리 중이에요","오늘 2번 통화, 정리 중"),
+            CallCardView.Content.repeatForms("오늘 2번 통화(마지막 11:40), 정리 중이에요"))
+        assertEquals(listOf("오늘 09:12 통화(3분)","오늘 통화"),CallCardView.Content.repeatForms("오늘 09:12 통화(3분)"))
+    }
+
+    @Test fun aVeryNarrowCardLeavesTheLineOutKeepsTheNameRowAndDoesNotCountIt() {
+        val c=CallCardView.Content.of(card(twoTasks),wall).withRepeat("오늘 09:12 통화(3분), 정리 중이에요")
+        val v=cardView(c,2.0f,widthPx=CallUi.dp(app,180))
+        assertEquals(View.GONE,v.findViewWithTag<View>("card_repeat").visibility)
+        assertEquals(View.VISIBLE,v.findViewWithTag<View>("card_who").visibility);assertEquals(View.VISIBLE,v.findViewWithTag<View>("card_first").visibility)
+        assertFalse(v.repeatVisible)
+        assertFalse("not counted as shown",CallCardOverlay.repeatOnScreen(v,false))
+        assertTrue("a notice carries the whole line",CallCardOverlay.repeatOnScreen(v,true))
+        // The notice's lines are the whole line whatever the width.
+        assertEquals("오늘 09:12 통화(3분), 정리 중이에요",c.noticeBody().first())
     }
 
     @Test fun theShortFormLeavesOutTheTimeAndLengthOnly() {
@@ -402,11 +424,9 @@ class R28RepeatCallTest:ProtectedTextHostTestBase() {
         }
         val tasks=listOf(ContactCard.Task("wf_1","도면 다시 받기",wall-day,"open",null),ContactCard.Task("wf_2","현장 사진 보내기",wall-day,"open",null))
         val base=CallCardView.Content.of(card(tasks),wall)
-        shot("v3_pending_one_10",base.withRepeat("오늘 09:12 통화(3분), 정리 중이에요"),1.0f)
-        shot("v3_pending_one_20",base.withRepeat("오늘 09:12 통화(3분), 정리 중이에요"),2.0f)
-        shot("v3_fact_one_10",base.withRepeat("오늘 09:12 통화(3분)"),1.0f)
-        shot("v3_line_only_10",CallCardView.Content.repeatOnly("오늘 10:05 통화(1분), 정리 중이에요"),1.0f)
-        assertTrue(shots.resolve("v3_pending_one_10.png").length()>0)
+        shot("v4_pending_one_20",base.withRepeat("오늘 09:12 통화(3분), 정리 중이에요"),2.0f)
+        shot("v4_many_10",base.withRepeat("오늘 2번 통화(마지막 11:40), 정리 중이에요"),1.0f)
+        assertTrue(shots.resolve("v4_pending_one_20.png").length()>0)
     }
 
     private fun measureAt(v:View) {
