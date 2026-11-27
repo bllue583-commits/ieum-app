@@ -60,7 +60,11 @@ internal object CardStats {
     /** Every count the heartbeat carries (zeros when missing). */
     val KINDS=listOf(CALLS,SHOWN,SHOWN_OUTGOING,ELIGIBLE_OUTGOING,NO_CARD,THIN,NO_NUMBER,NO_NUMBER_IN,NO_NUMBER_OUT,NO_ROLE,
         IGNORED,OFF,LOCKED,COLD,FGS_REFUSED,NO_PERMISSION,NO_NOTIFY,EXPANDED,CLOSED_UNDER_2S,DRAWN,FALLBACK,HIDDEN,UNCONFIRMED,RETRIED,
-        FLIP_CALLS,DENIED_AT_START,DENIED_AT_END,FALLBACK_SHOWN,FALLBACK_MUTED,NOTICE_TAPS,FALLBACK_SEEN,REPEAT_TODAY,REPEAT_PENDING,REPEAT_SHOWN,REPEAT_FACT)
+        FLIP_CALLS,DENIED_AT_START,DENIED_AT_END,FALLBACK_SHOWN,FALLBACK_MUTED,NOTICE_TAPS,FALLBACK_SEEN,REPEAT_TODAY,REPEAT_PENDING,REPEAT_SHOWN,REPEAT_FACT,NOTICE_AGAIN)
+    /** v4.8 r29-2: calls coming in whose notice (the card not drawn) alerted once more after the answer
+     * ([CallCardOverlay.NOTICE_AGAIN_MS], [noticeAgain]); today's time from the answer (OFFHOOK) to it, the median in ms (the
+     * heartbeat's `today.noticeAgainMs`; kept as `today.noticeAgainSamples`, never sent). */
+    const val NOTICE_AGAIN="noticeAgain";const val NOTICE_AGAIN_MS="noticeAgainMs";const val NOTICE_AGAIN_SAMPLES="noticeAgainSamples"
     /** v4.7 r28-2 (once per call, never for an ignored one): calls with a number already called today ([REPEAT_TODAY]); of those,
      * calls whose card was due with today's "정리 중이에요" line ([REPEAT_PENDING], [RepeatCalls]); r28-3: calls whose card was due
      * with the line of the facts only ("오늘 09:12 통화(3분)", [REPEAT_FACT]); calls where either line went up in the card's window
@@ -142,6 +146,8 @@ internal object CardStats {
     private var allowedAtStart:Boolean?=null;private var deniedDuring=false;private var noticeTold=false
     /** v4.7 r28-2: [repeat] and [repeatShown] were told for this call. */
     private var repeatTold=false;private var repeatShownTold=false
+    /** v4.8 r29-2: [noticeAgain] was told for this call. */
+    private var againTold=false
     /** The broadcast now being handled ([signal]); its time starts a new call. */
     private var signalAt:Long?=null;private var signalCold=false
     /** No broadcast reached this process yet ([coldNow]). */
@@ -265,6 +271,11 @@ internal object CardStats {
         val ms=synchronized(lock) { startAt?.let { (at-it).coerceAtLeast(0) } } ?: return
         write(context,emptyMap(),null,noticeMs=ms)
     }
+    /** v4.8 r29-2: the card's notice alerted once more [ms] after this call was answered ([CallCardOverlay]); once per call,
+     * never for an ignored one. */
+    fun noticeAgain(context:Context,ms:Long) {
+        if(synchronized(lock) { if(againTold || ignoredSeen) false else { againTold=true;true } }) write(context,mapOf(NOTICE_AGAIN to 1),null,noticeAgainMs=ms.coerceAtLeast(0))
+    }
     /** v4.3 r24-1: the app was opened by a tap on the card's notice ([kr.callbrief.pipeline.MainActivity]). */
     fun fallbackSeen(context:Context) { write(context,mapOf(FALLBACK_SEEN to 1),null) }
     fun noticeTap(context:Context) { write(context,mapOf(NOTICE_TAPS to 1),null) }
@@ -356,15 +367,15 @@ internal object CardStats {
     private fun resetCall() {
         inCall=false;told=null;noNumberSeen=false;ignoredSeen=false;offSeen=false;direction=null;key=null;startAt=null;cold=false
         fgsTold=false;expandTold=false;closeTold=false;allowedAtStart=null;deniedDuring=false;noticeTold=false
-        repeatTold=false;repeatShownTold=false
+        repeatTold=false;repeatShownTold=false;againTold=false
     }
 
     private fun write(context:Context,inc:Map<String,Int>,sample:Pair<Long,Boolean>?,entry:JSONObject?=null,causes:Map<String,Int> =emptyMap(),
-                      okAt:Long?=null,failAt:Long?=null,noticeMs:Long?=null) {
+                      okAt:Long?=null,failAt:Long?=null,noticeMs:Long?=null,noticeAgainMs:Long?=null) {
         val app=context.applicationContext ?: context
         val now=clock()
         val open=ContactCards.lastOpenMs.takeIf { it>=0 }
-        writer.execute { runCatching { SecureSettings(app).update { s -> s.put(PipelineSettingsKeys.CARD_STATS,add(read(s),inc,now,sample,open,entry,causes,okAt,failAt,noticeMs)) } }
+        writer.execute { runCatching { SecureSettings(app).update { s -> s.put(PipelineSettingsKeys.CARD_STATS,add(read(s),inc,now,sample,open,entry,causes,okAt,failAt,noticeMs,noticeAgainMs)) } }
             .onFailure { Log.w(TAG,"not counted: ${it.javaClass.simpleName}") } }
     }
 
@@ -383,7 +394,7 @@ internal object CardStats {
      * time (ms, cold) kept among the newest [SAMPLES]; [cardOpenMs] the last card file open; [entry] one more `recent` call (the
      * newest [RECENT] kept). */
     fun add(stats:JSONObject,inc:Map<String,Int>,now:Long,sample:Pair<Long,Boolean>?=null,cardOpenMs:Long?=null,entry:JSONObject?=null,
-            causes:Map<String,Int> =emptyMap(),okAt:Long?=null,failAt:Long?=null,noticeMs:Long?=null):JSONObject {
+            causes:Map<String,Int> =emptyMap(),okAt:Long?=null,failAt:Long?=null,noticeMs:Long?=null,noticeAgainMs:Long?=null):JSONObject {
         val out=clean(stats)
         val today=day(now)
         val same=stats.optInt("day",0)==today
@@ -404,6 +415,9 @@ internal object CardStats {
         // v4.3 r24-1: today's call-start-to-notice times (a new day starts them from nothing), the newest [SAMPLES].
         val ns=numbers(old?.optJSONArray(NOTICE_SAMPLES)).toMutableList();noticeMs?.let { ns+=it }
         if(ns.isNotEmpty()) t.put(NOTICE_SAMPLES,JSONArray(ns.takeLast(SAMPLES)))
+        // v4.8 r29-2: today's answer-to-notice-again times, the same way.
+        val ag=numbers(old?.optJSONArray(NOTICE_AGAIN_SAMPLES)).toMutableList();noticeAgainMs?.let { ag+=it }
+        if(ag.isNotEmpty()) t.put(NOTICE_AGAIN_SAMPLES,JSONArray(ag.takeLast(SAMPLES)))
         out.put("day",today).put("today",t)
         for(name in listOf("ring","ringCold")) {
             val kept=numbers(stats.optJSONArray(name)).toMutableList()
@@ -462,6 +476,7 @@ internal object CardStats {
         if(day==stored) st.optJSONObject("today")?.let { o -> for(k in listOf(FIRST_FAIL_HM,OK_BEFORE_MS)) (o.opt(k) as? Number)?.let { t.put(k,it.toLong()) } }
         // v4.3 r24-1: the median only (a number), not the samples.
         if(day==stored) numbers(st.optJSONObject("today")?.optJSONArray(NOTICE_SAMPLES)).takeIf { it.isNotEmpty() }?.let { t.put(NOTICE_MS,summary(it).getLong("p50")) }
+        if(day==stored) numbers(st.optJSONObject("today")?.optJSONArray(NOTICE_AGAIN_SAMPLES)).takeIf { it.isNotEmpty() }?.let { t.put(NOTICE_AGAIN_MS,summary(it).getLong("p50")) }
         installedMs?.takeIf { it>0 }?.let { t.put(INSTALLED_MS,it) }
         val out=clean(st).put("day",day).put("today",t)
         out.put("ringToCardMs",summary(numbers(st.optJSONArray("ring")))).put("ringToCardMsCold",summary(numbers(st.optJSONArray("ringCold"))))
