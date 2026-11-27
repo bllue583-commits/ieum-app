@@ -11,6 +11,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.PixelFormat
+import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -18,6 +19,7 @@ import android.os.SystemClock
 import android.provider.CallLog
 import android.provider.Settings
 import android.util.Log
+import android.view.Display
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -124,6 +126,10 @@ internal object CallCardOverlay {
      * call screen (the system's call notice goes, the in-call screen comes in), well before the card would fold
      * ([COLLAPSE_AFTER_MS]). */
     const val NOTICE_AGAIN_MS=1_000L
+    /** v4.8 r29-4: the display off at [NOTICE_AGAIN_MS] (the phone at the ear: the proximity sensor turns the display off while
+     * the phone stays interactive): the notice alerts again once the display comes on during the call, this long after (the
+     * display's own wake and the call screen's first frame settle first; a short tap of the sensor does not count). */
+    const val NOTICE_AGAIN_ON_MS=300L
     /** Told once per call when the window was put up: [SHOWN] (added, unlocked), [LOCKED] (added while locked, the notice beside
      * it), [NO_PERMISSION] (the overlay check said no then, or the window could not be added: the notice), [NO_NUMBER] or
      * [NO_CARD]. Counted in [CardStats] (settings CARD_STATS, the heartbeat's callCard); v3.6.1: as told, nothing read again. */
@@ -155,9 +161,33 @@ internal object CallCardOverlay {
     /** v4.3 r24-1: the card's notice was posted for the first time in this call (once per call). Replaceable in host tests. */
     @Volatile internal var onNotice:(Context)->Unit={ c -> CardStats.noticeShown(c) }
     /** v4.8 r29-1: the notice alerted once more after the call was answered, [Long] ms after OFFHOOK (once per call). Replaceable in host tests. */
-    @Volatile internal var onNoticeAgain:(Context,Long)->Unit={ c,ms -> CardStats.noticeAgain(c,ms) }
+    @Volatile internal var onNoticeAgain:(Context,Long,Boolean)->Unit={ c,ms,late -> CardStats.noticeAgain(c,ms,late) }
     /** Host tests: every notice the card posts (in either slot), as posted. */
     @Volatile internal var posted:(Notification)->Unit={}
+    /** Posts a notice (tag null: the service's slot). Replaceable in host tests. */
+    @Volatile internal var post:(NotificationManager,String?,Int,Notification)->Unit={ m,tag,id,n -> m.notify(tag,id,n) }
+    /** v4.8 r29-4: the default display is on ([Display.STATE_ON]); null when it cannot be read. Replaceable in host tests. */
+    @Volatile internal var displayOn:(Context)->Boolean?={ c -> defaultDisplayOn(c) }
+    private val defaultDisplayOn:(Context)->Boolean?={ c -> runCatching { c.getSystemService(DisplayManager::class.java)!!.getDisplay(Display.DEFAULT_DISPLAY)!!.state==Display.STATE_ON }.getOrNull() }
+    /** v4.8 r29-4: listens to the default display's changes (on the main thread) until the returned function is called; null
+     * when no listener could be registered. No permission. Replaceable in host tests. */
+    @Volatile internal var watchDisplay:(Context,()->Unit)->(()->Unit)?={ c,f -> defaultWatchDisplay(c,f) }
+    private val defaultWatchDisplay:(Context,()->Unit)->(()->Unit)?={ c,changed ->
+        runCatching {
+            val dm=c.getSystemService(DisplayManager::class.java)!!
+            val l=object:DisplayManager.DisplayListener {
+                override fun onDisplayAdded(id:Int) {}
+                override fun onDisplayRemoved(id:Int) {}
+                override fun onDisplayChanged(id:Int) { if(id==Display.DEFAULT_DISPLAY) changed() }
+            }
+            dm.registerDisplayListener(l,main)
+            val stop:()->Unit={ runCatching { dm.unregisterDisplayListener(l) } }
+            stop
+        }.getOrNull()
+    }
+    /** v4.8 r29-4: the person gave the card's channel a sound or vibration: no second alert during a call (at the ear). */
+    internal fun loud(ch:NotificationChannel?):Boolean = ch!=null && (ch.sound!=null || ch.shouldVibrate())
+    @Volatile internal var channelLoud:(Context)->Boolean={ c -> loud(c.getSystemService(NotificationManager::class.java)?.getNotificationChannel(CHANNEL)) }
     /** v4.0 r21-2: how this app's last process ended (reason, epoch ms), read once a process on the card's thread. Replaceable in host tests. */
     @Volatile internal var lastExit:(Context)->Pair<Int,Long>?={ c -> CardProbe.lastExit(c) }
 
@@ -255,23 +285,44 @@ internal object CallCardOverlay {
         main.removeCallbacks(judgeLater);addedAt=0L;canDrawAtAdd=true;lockedAtAdd=false;addError=null;windowGone=false;judged=false;seenOnce=false;probed=null;coldAtAdd=false;outAtAdd=false
         main.removeCallbacks(retryLater);hiddenPending=false;retries=0;retrying=false;lastFail=null;fails="";failScreenOn=null;failState=null;spare=null
         noticeTold=false;seen=Seen();repeatTold=false
-        main.removeCallbacks(againLater);rangWithNotice=false;noticeWithdrawn=false;againDone=false;answeredAt=0L }
+        main.removeCallbacks(againLater);rangWithNotice=false;noticeWithdrawn=false;againDone=false;answeredAt=0L;stopDisplay() }
     /** v4.8 r29-1: this call's notice was up while it rang; the notice was taken away during the call (the card took over:
      * [judge], [place], [onUnlocked]); it alerted again after the answer; when the call was answered ([clock], 0: not yet). */
     private var rangWithNotice=false;private var noticeWithdrawn=false;private var againDone=false;private var answeredAt=0L
-    private val againLater=Runnable { app?.let { runCatching { noticeAgain(it) }.onFailure(::warn) } }
-    /** v4.8 r29-1: the notice once more as a heads-up ([NOTICE_AGAIN_MS] after the answer), once per call: only while the call is
-     * under way, the card not closed, the notice still up and the only thing (no window: not beside a card on the lock screen),
-     * and never after the card took the notice away. The same notice (content, slot, tap), only without "alert once". */
-    private fun noticeAgain(c:Context) {
-        if(againDone || closed || state!=CallSession.State.OFFHOOK || !rangWithNotice || noticeWithdrawn || !noticeUp || view!=null) return
+    private val againLater=Runnable { app?.let { runCatching { noticeAgain(it,late=false) }.onFailure(::warn) } }
+    private val againOn=Runnable { app?.let { runCatching { noticeAgain(it,late=true) }.onFailure(::warn) } }
+    /** v4.8 r29-4: the display listener of this call (null: none), stopped when the call is forgotten or the notice alerted. */
+    private var displayStop:(()->Unit)?=null
+    private fun stopDisplay() { main.removeCallbacks(againOn);displayStop?.let { runCatching { it() } };displayStop=null }
+    /** v4.8 r29-1: what a second alert needs, checked again right before it: the call under way, the card not closed, the notice
+     * still up and the only thing (no window: not beside a card on the lock screen), never after the card took the notice away,
+     * and r29-4: no later try of the window due (it may be drawn soon). */
+    private fun againDue()= !againDone && !closed && state==CallSession.State.OFFHOOK && rangWithNotice && !noticeWithdrawn && noticeUp && view==null && !hiddenPending && content!=null
+    /** v4.8 r29-1, r29-4: the notice once more as a heads-up, once per call, when the display is on: at [NOTICE_AGAIN_MS] after
+     * the answer, else ([late]) [NOTICE_AGAIN_ON_MS] after the display comes on again during the call; a display that cannot be
+     * read: at [NOTICE_AGAIN_MS]. The same notice (content, slot, tap), only without "alert once". */
+    private fun noticeAgain(c:Context,late:Boolean) {
+        if(!againDue()) { if(late) stopDisplay();return }
+        val on=runCatching { displayOn(c) }.getOrNull()
+        if(on==false) {
+            if(displayStop==null) displayStop=runCatching { watchDisplay(c) { onMain { displayChanged(c) } } }.getOrNull()
+            // No listener: as before r29-4 (the alert now rather than never).
+            if(displayStop!=null) return
+        }
+        stopDisplay()
         val data=content ?: return
         againDone=true
-        notice(c,data,again=true)
-        if(!noticeUp) return
+        // r29-4: a sound or vibration the person gave this channel would be heard at the ear: no second alert (not counted).
+        if(runCatching { channelLoud(c) }.getOrDefault(true)) { Log.i(LOG,"notice again skipped: the channel is loud");return }
+        if(!notice(c,data,again=true)) return
         val ms=(clock()-answeredAt).coerceAtLeast(0)
         Log.i(LOG,"notice again after the answer")
-        worker.execute { runCatching { onNoticeAgain(c,ms) }.onFailure(::warn) }
+        worker.execute { runCatching { onNoticeAgain(c,ms,late) }.onFailure(::warn) }
+    }
+    private fun displayChanged(c:Context) {
+        main.removeCallbacks(againOn)
+        if(displayStop==null || !againDue()) { if(!againDue()) stopDisplay();return }
+        if(runCatching { displayOn(c) }.getOrNull()!=false) main.postDelayed(againOn,NOTICE_AGAIN_ON_MS)
     }
     /** v4.3 r24-1: [onNotice] was told for this call (also: the first notice of the call may alert, r24 review 1). */
     private var noticeTold=false
@@ -660,11 +711,12 @@ internal object CallCardOverlay {
         else b.setContentTitle("이음 통화 카드").setContentText("잠금을 풀면 카드가 보여요").build()
     }
     /** [again] (v4.8 r29-1, [noticeAgain]): this drawing alerts again although it is not the call's first. */
-    private fun notice(c:Context,data:CallCardView.Content,again:Boolean=false) {
+    /** Returns whether it was posted (r29-4: a failed post is not counted as an alert). */
+    private fun notice(c:Context,data:CallCardView.Content,again:Boolean=false):Boolean {
         if(Build.VERSION.SDK_INT>=33 && c.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) {
-            worker.execute { runCatching { CardStats.fallbackNotice(c,false,true) } };return } // v4.1 r22-2: muted
-        runCatching {
-            val m=c.getSystemService(NotificationManager::class.java) ?: return
+            worker.execute { runCatching { CardStats.fallbackNotice(c,false,true) } };return false } // v4.1 r22-2: muted
+        return runCatching {
+            val m=c.getSystemService(NotificationManager::class.java) ?: return false
             // r24 review 1: the call's first notice may alert (a heads-up; the channel has no sound or vibration), later
             // drawings of it do not: an update with "only alert once" may not come up as a heads-up again. v4.8 r29-1: but once
             // after the answer it does ([noticeAgain]); the drawings after that are quiet again.
@@ -674,8 +726,8 @@ internal object CallCardOverlay {
             // ongoing notice is left behind when the call ends.
             if(noticeUp && noticeMerged!=merge) cancelNotice(c)
             // One notice while the service runs: the card's takes the service's slot (4.2-1).
-            if(merge) { m.notify(CallCardService.NOTIFICATION_ID,n);noticeMerged=true }
-            else { m.notify(NOTICE_TAG,NOTICE_ID,n);noticeMerged=false }
+            if(merge) { post(m,null,CallCardService.NOTIFICATION_ID,n);noticeMerged=true }
+            else { post(m,NOTICE_TAG,NOTICE_ID,n);noticeMerged=false }
             noticeUp=true
             runCatching { posted(n) }
             if(state==CallSession.State.RINGING) rangWithNotice=true
@@ -684,7 +736,8 @@ internal object CallCardOverlay {
             // v4.1 r22-2: a second later, whether the notice is really up and whether it could be heard (counts only).
             val merged=noticeMerged;val s=seen
             main.postDelayed({ worker.execute { runCatching { if(noticeCheck(c,merged)) main.post { s.noticeFound=true;seenNow(c,s) } }.onFailure(::warn) } },NOTICE_CHECK_MS)
-        }.onFailure(::warn)
+            true
+        }.onFailure(::warn).getOrDefault(false)
     }
     /** v4.1 r22-2: how long after posting the fallback notice it is looked for among the active ones. */
     const val NOTICE_CHECK_MS=1_000L
@@ -768,7 +821,8 @@ internal object CallCardOverlay {
         drawnNow={ it.seen };addWindow={ wm,v,p -> wm.addView(v,p) };probe={ c -> runCatching { CardProbe.read(c) }.getOrNull() }
         onVerdict={ c,a -> CardStats.verdict(c,a) };onFailure={ c,code -> CardStats.failure(c,code) }
         screenOn={ c -> c.getSystemService(android.os.PowerManager::class.java)?.isInteractive!=false };lastExit={ c -> CardProbe.lastExit(c) }
-        exitRead=null;exitDone=false;noticeCheck=defaultNoticeCheck;onNotice={ c -> CardStats.noticeShown(c) };onNoticeAgain={ c,ms -> CardStats.noticeAgain(c,ms) };posted={};onFallbackSeen={ c -> CardStats.fallbackSeen(c) }
+        exitRead=null;exitDone=false;noticeCheck=defaultNoticeCheck;onNotice={ c -> CardStats.noticeShown(c) };onNoticeAgain={ c,ms,late -> CardStats.noticeAgain(c,ms,late) };posted={}
+        post={ m,tag,id,n -> m.notify(tag,id,n) };displayOn=defaultDisplayOn;watchDisplay=defaultWatchDisplay;channelLoud={ c -> loud(c.getSystemService(NotificationManager::class.java)?.getNotificationChannel(CHANNEL)) };onFallbackSeen={ c -> CardStats.fallbackSeen(c) }
         repeatInfo={ c,k -> RepeatCalls.forCall(c,k) };onRepeatShown={ c -> CardStats.repeatShown(c) }
     }
 }

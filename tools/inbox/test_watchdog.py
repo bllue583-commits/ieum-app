@@ -284,7 +284,7 @@ class WatchdogTest(unittest.TestCase):
     def test_call_card_notice_again_keys_r29(self):
         # v4.8 r29-2: noticeAgain/noticeAgainMs are optional numbers and open no issue by themselves.
         seen = lambda **t: {"day": 20261127, "recent": [], "today": dict({"drawn": 5}, **t)}
-        self.assertEqual([], titles(phone=phone(callCard=seen(noticeAgain=4, noticeAgainMs=1003))))
+        self.assertEqual([], titles(phone=phone(callCard=seen(noticeAgain=4, noticeAgainLate=3, noticeAgainMs=1003))))
         self.assertEqual(titles(phone=phone(callCard=seen(fallback=1))),
                          titles(phone=phone(callCard=seen(fallback=1, noticeAgain=1, noticeAgainMs=1000))))
 

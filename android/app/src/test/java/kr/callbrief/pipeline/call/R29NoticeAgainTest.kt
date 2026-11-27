@@ -47,7 +47,13 @@ class R29NoticeAgainTest:ProtectedTextHostTestBase() {
     /** Every post of the card's notice: whether it may alert (no "alert once"), and its title. */
     private val posts=mutableListOf<Pair<Boolean,String>>()
     private val again=mutableListOf<Long>()
+    private val lates=mutableListOf<Boolean>()
     private var draw=false
+    /** r29-4: the display (null: cannot be read), the listener now registered, the channel made loud by the person. */
+    private var screen:Boolean?=true
+    private var listener:(()->Unit)?=null
+    private var registered=0
+    private var loud=false
 
     private fun card()=ContactCard(key,listOf(ContactCard.Person("pe_9","한가람","대리",false)),ContactCard.Company("co_9","다라상사","설비"),now-2*day,"in",
         listOf(ContactCard.Recent(now-2*day,"통화","배관 자재는 다음 주에 들어와요.")),
@@ -64,7 +70,10 @@ class R29NoticeAgainTest:ProtectedTextHostTestBase() {
         CallCardOverlay.noticeCheck={ _,_ -> true };CallCardOverlay.onFallbackSeen={}
         CallCardOverlay.clock={ SystemClock.uptimeMillis() }
         CallCardOverlay.posted={ n -> synchronized(posts) { posts+=(n.flags and Notification.FLAG_ONLY_ALERT_ONCE==0) to n.extras.getCharSequence(Notification.EXTRA_TITLE).toString() } }
-        CallCardOverlay.onNoticeAgain={ _,ms -> synchronized(again) { again+=ms } }
+        CallCardOverlay.onNoticeAgain={ _,ms,late -> synchronized(again) { again+=ms;lates+=late } }
+        CallCardOverlay.displayOn={ screen }
+        CallCardOverlay.watchDisplay={ _,f -> registered++;listener=f;{ registered--;listener=null } }
+        CallCardOverlay.channelLoud={ loud }
         shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
         ContactCards.shutdown();ContactCards.clearPending()
         ContactCards.write(app,mapOf(key to card()),replaceAll=true)
@@ -160,6 +169,85 @@ class R29NoticeAgainTest:ProtectedTextHostTestBase() {
         idle()
     }
 
+    // ---- r29-4 ----
+    private fun display(on:Boolean) { screen=on;listener?.invoke() }
+    @Test fun theServicesSlotGetsTheSecondAlertToo() {
+        CallCardOverlay.serviceUp={ true }
+        ring();settle(50);answer();settle(CallCardOverlay.NOTICE_AGAIN_MS+100)
+        assertEquals(CallCardOverlay.CHANNEL,nm.getNotification(null,CallCardService.NOTIFICATION_ID).channelId)
+        assertNull(nm.getNotification(CallCardOverlay.NOTICE_TAG,CallCardOverlay.NOTICE_ID))
+        assertEquals(2,alerts());assertEquals(1,againCount())
+        idle()
+    }
+    @Test fun theDisplayOffAtTheEarWaitsUntilItComesOnDuringTheCall() {
+        ring();settle(50);screen=false;answer();settle(CallCardOverlay.NOTICE_AGAIN_MS+100)
+        assertEquals("not on a dark display",1,alerts());assertEquals(1,registered)
+        settle(5_000);assertEquals(1,alerts())
+        display(false);settle(1_000);assertEquals("another change, still off",1,alerts())
+        display(true);settle(CallCardOverlay.NOTICE_AGAIN_ON_MS-100);assertEquals("settles first",1,alerts())
+        settle(200)
+        assertEquals("once the display is on",2,alerts());assertEquals(listOf(true),synchronized(again) { lates.toList() })
+        assertTrue("from the answer, the time at the ear included",synchronized(again) { again.single() }>=6_000)
+        assertEquals("the listener goes after the alert",0,registered)
+        display(false);display(true);settle(1_000);assertEquals("once per call",2,alerts())
+        idle()
+    }
+    @Test fun aShortTapOfTheSensorDoesNotCount() {
+        ring();settle(50);screen=false;answer();settle(CallCardOverlay.NOTICE_AGAIN_MS+100)
+        display(true);settle(100);display(false);settle(1_000)
+        assertEquals(1,alerts());assertEquals(1,registered)
+        idle()
+    }
+    @Test fun endedBeforeTheDisplayCameOnNoAlertAndTheListenerGoes() {
+        ring();settle(50);screen=false;answer();settle(CallCardOverlay.NOTICE_AGAIN_MS+100)
+        assertEquals(1,registered)
+        idle();assertEquals("unregistered with the call",0,registered);assertNull(listener)
+        screen=true;settle(2_000)
+        assertEquals(1,alerts());assertEquals(0,againCount())
+    }
+    @Test fun aDisplayThatCannotBeReadOrWatchedAlertsAtOneSecond() {
+        screen=null
+        ring();settle(50);answer();settle(CallCardOverlay.NOTICE_AGAIN_MS+100)
+        assertEquals(2,alerts());assertEquals(listOf(false),synchronized(again) { lates.toList() });assertEquals(0,registered)
+        idle()
+        synchronized(posts) { posts.clear() }
+        screen=false;CallCardOverlay.watchDisplay={ _,_ -> null }
+        ring();settle(50);answer();settle(CallCardOverlay.NOTICE_AGAIN_MS+100)
+        assertEquals(2,alerts())
+        idle()
+    }
+    @Test fun aLoudChannelIsNotAlertedAgainNorCounted() {
+        loud=true
+        ring();settle(50);answer();settle(CallCardOverlay.NOTICE_AGAIN_MS*3)
+        assertEquals(1,alerts());assertEquals(0,againCount())
+        idle()
+        // What counts as loud: a sound or a vibration on the channel.
+        val ch=android.app.NotificationChannel("x","x",NotificationManager.IMPORTANCE_HIGH)
+        ch.setSound(null,null);ch.enableVibration(false);assertFalse(CallCardOverlay.loud(ch))
+        ch.enableVibration(true);assertTrue(CallCardOverlay.loud(ch))
+        ch.enableVibration(false);ch.setSound(android.net.Uri.parse("content://x/1"),null);assertTrue(CallCardOverlay.loud(ch))
+        assertFalse(CallCardOverlay.loud(null))
+    }
+    @Test fun aFailedPostIsNotCounted() {
+        ring();settle(50)
+        CallCardOverlay.post={ _,_,_,n -> if(n.flags and Notification.FLAG_ONLY_ALERT_ONCE==0) throw SecurityException("refused") }
+        answer();settle(CallCardOverlay.NOTICE_AGAIN_MS*3)
+        assertEquals(0,againCount())
+        idle()
+    }
+    @Test fun aWindowTriedAgainSoonIsNotAlertedOver() {
+        // The check says yes but the window is refused twice while it rings (the notice instead); the last try is due 2 s later.
+        draw=true;var refuse=true
+        CallCardOverlay.addWindow={ w,v,p -> if(refuse) throw android.view.WindowManager.BadTokenException("refused") else w.addView(v,p) }
+        ring();settle(50);settle(CallCardOverlay.RETRY_DELAYS_MS[0]+50)
+        assertTrue(windows.isEmpty());assertEquals(1,notices.size)
+        answer();settle(CallCardOverlay.NOTICE_AGAIN_MS+100)
+        assertEquals("not over a window about to be tried",1,alerts());assertEquals(0,againCount())
+        refuse=false;settle(CallCardOverlay.RETRY_DELAYS_MS[1])
+        assertEquals(1,windows.size);assertEquals(0,againCount())
+        idle()
+    }
+
     @Test fun theCountIsOncePerCallAndTodaysMedianOnly() {
         val kst=java.time.ZoneId.of("Asia/Seoul")
         var wall=java.time.ZonedDateTime.of(2026,11,27,10,0,0,0,kst).toInstant().toEpochMilli()
@@ -168,16 +256,18 @@ class R29NoticeAgainTest:ProtectedTextHostTestBase() {
         fun call(vararg ms:Long) {
             CardStats.signal(elapsed,false)
             CardStats.follow(app,CallSession.Snapshot(CallSession.State.RINGING,key,CallSession.Direction.IN,wall),CallCardService.SHOW)
-            ms.forEach { CardStats.noticeAgain(app,it) }
+            ms.forEach { CardStats.noticeAgain(app,it,late=it>1_300) }
             CardStats.follow(app,CallSession.Snapshot(CallSession.State.IDLE,null,null,wall),null)
             elapsed+=60_000
         }
-        call(1_000,1_400);call(1_200);call()
+        call(1_000,1_400);call(1_200);call();call(6_000)
         CardStats.awaitIdle()
         val hb=CardStats.heartbeat(SecureSettings(app).snapshot(),wall)!!
         val t=hb.getJSONObject("today")
-        assertEquals("once per call",2,t.getInt(CardStats.NOTICE_AGAIN));assertEquals(2,hb.getInt(CardStats.NOTICE_AGAIN))
-        assertEquals(1_000L,t.getLong(CardStats.NOTICE_AGAIN_MS))
+        assertEquals("once per call",3,t.getInt(CardStats.NOTICE_AGAIN));assertEquals(3,hb.getInt(CardStats.NOTICE_AGAIN))
+        assertEquals("the median of 1000, 1200, 6000",1_200L,t.getLong(CardStats.NOTICE_AGAIN_MS))
+        assertEquals("the one that waited for the display",1,t.getInt(CardStats.NOTICE_AGAIN_LATE))
+        assertTrue(CardStats.KINDS.contains("noticeAgainLate"))
         assertFalse("the samples stay on the phone",t.has(CardStats.NOTICE_AGAIN_SAMPLES))
         assertTrue(CardStats.KINDS.contains("noticeAgain"));assertEquals("noticeAgainMs",CardStats.NOTICE_AGAIN_MS)
         // A new day: no time, a zero count.

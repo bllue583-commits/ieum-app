@@ -148,7 +148,7 @@ class R17CardStatsTest:ProtectedTextHostTestBase() {
         assertTrue(card(ok.copy(cardTodayTried=2,cardTodayDrawn=0)).ok)
         assertTrue("half drawn is not more than half missing",card(ok.copy(cardTodayTried=4,cardTodayDrawn=2)).ok)
         val amber=card(ok.copy(cardTodayTried=11,cardTodayDrawn=0))
-        assertFalse(amber.ok);assertEquals("오늘은 휴대폰이 통화 화면 위 카드를 막고 있어요. 통화 11건 중 11건은 같은 내용을 알림으로 보여 드렸어요.",amber.words)
+        assertFalse(amber.ok);assertEquals("오늘은 휴대폰이 통화 화면 위 카드를 막고 있어요. 통화 11건 중 11건은 같은 내용을 알림으로 올려 두었어요. 화면 위에서 내려 보면 있어요.",amber.words)
         assertEquals("통화 5건 중 3건",Regex("통화 \\d+건 중 \\d+건").find(StatusLights.cardTodayWords(5,2))!!.value)
         assertFalse("not told as the app's fault",amber.words.contains("안 뜨고"))
         assertFalse(amber.words,Regex("[·…]").containsMatchIn(amber.words))

@@ -214,7 +214,7 @@ class CardReachV5Test(unittest.TestCase):
         # v4.8 r29-2: noticeAgain/noticeAgainMs are numbers only; the card's score reads none of them.
         base = {"calls": 10, "drawn": 2, "fallback": 8, "fallbackShown": 8, "ignored": 0, "off": 0}
         plain = score.item_call_card(self.cfg3, self.window, ASOF, self.daily(base))
-        more = score.item_call_card(self.cfg3, self.window, ASOF, self.daily(dict(base, noticeAgain=6, noticeAgainMs=1000)))
+        more = score.item_call_card(self.cfg3, self.window, ASOF, self.daily(dict(base, noticeAgain=6, noticeAgainLate=4, noticeAgainMs=1000)))
         self.assertEqual(plain, more)
 
     def test_a_shown_fallback_notice_counts(self):

@@ -60,10 +60,12 @@ internal object CardStats {
     /** Every count the heartbeat carries (zeros when missing). */
     val KINDS=listOf(CALLS,SHOWN,SHOWN_OUTGOING,ELIGIBLE_OUTGOING,NO_CARD,THIN,NO_NUMBER,NO_NUMBER_IN,NO_NUMBER_OUT,NO_ROLE,
         IGNORED,OFF,LOCKED,COLD,FGS_REFUSED,NO_PERMISSION,NO_NOTIFY,EXPANDED,CLOSED_UNDER_2S,DRAWN,FALLBACK,HIDDEN,UNCONFIRMED,RETRIED,
-        FLIP_CALLS,DENIED_AT_START,DENIED_AT_END,FALLBACK_SHOWN,FALLBACK_MUTED,NOTICE_TAPS,FALLBACK_SEEN,REPEAT_TODAY,REPEAT_PENDING,REPEAT_SHOWN,REPEAT_FACT,NOTICE_AGAIN)
+        FLIP_CALLS,DENIED_AT_START,DENIED_AT_END,FALLBACK_SHOWN,FALLBACK_MUTED,NOTICE_TAPS,FALLBACK_SEEN,REPEAT_TODAY,REPEAT_PENDING,REPEAT_SHOWN,REPEAT_FACT,NOTICE_AGAIN,NOTICE_AGAIN_LATE)
     /** v4.8 r29-2: calls coming in whose notice (the card not drawn) alerted once more after the answer
      * ([CallCardOverlay.NOTICE_AGAIN_MS], [noticeAgain]); today's time from the answer (OFFHOOK) to it, the median in ms (the
      * heartbeat's `today.noticeAgainMs`; kept as `today.noticeAgainSamples`, never sent). */
+    /** v4.8 r29-4: of [NOTICE_AGAIN], the calls whose alert waited for the display to come on (the phone taken from the ear). */
+    const val NOTICE_AGAIN_LATE="noticeAgainLate"
     const val NOTICE_AGAIN="noticeAgain";const val NOTICE_AGAIN_MS="noticeAgainMs";const val NOTICE_AGAIN_SAMPLES="noticeAgainSamples"
     /** v4.7 r28-2 (once per call, never for an ignored one): calls with a number already called today ([REPEAT_TODAY]); of those,
      * calls whose card was due with today's "정리 중이에요" line ([REPEAT_PENDING], [RepeatCalls]); r28-3: calls whose card was due
@@ -273,8 +275,9 @@ internal object CardStats {
     }
     /** v4.8 r29-2: the card's notice alerted once more [ms] after this call was answered ([CallCardOverlay]); once per call,
      * never for an ignored one. */
-    fun noticeAgain(context:Context,ms:Long) {
-        if(synchronized(lock) { if(againTold || ignoredSeen) false else { againTold=true;true } }) write(context,mapOf(NOTICE_AGAIN to 1),null,noticeAgainMs=ms.coerceAtLeast(0))
+    fun noticeAgain(context:Context,ms:Long,late:Boolean=false) {
+        if(synchronized(lock) { if(againTold || ignoredSeen) false else { againTold=true;true } })
+            write(context,if(late) mapOf(NOTICE_AGAIN to 1,NOTICE_AGAIN_LATE to 1) else mapOf(NOTICE_AGAIN to 1),null,noticeAgainMs=ms.coerceAtLeast(0))
     }
     /** v4.3 r24-1: the app was opened by a tap on the card's notice ([kr.callbrief.pipeline.MainActivity]). */
     fun fallbackSeen(context:Context) { write(context,mapOf(FALLBACK_SEEN to 1),null) }
