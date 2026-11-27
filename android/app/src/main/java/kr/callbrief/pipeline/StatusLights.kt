@@ -203,7 +203,8 @@ internal object StatusLights {
     /** v3.6.1 (K4): amber from this many tried calls of today, when more than half of them were not drawn. */
     const val CARD_TODAY_MIN=3
     fun cardNotDrawnToday(tried:Int,drawn:Int)=tried>=CARD_TODAY_MIN && (tried-drawn.coerceIn(0,tried))*2>tried
-    fun cardTodayWords(tried:Int,drawn:Int)="통화 카드가 오늘 안 뜨고 있어요. 오늘 통화 ${tried}건 중 ${tried-drawn.coerceIn(0,tried)}건은 카드 대신 알림으로 보여 드렸어요."
+    /** v4.8 r29-3: the cause as it is, the phone's restriction (DESIGN_V8 6-3), not a fault of the app; colour and condition as before. */
+    fun cardTodayWords(tried:Int,drawn:Int)="오늘은 휴대폰이 통화 화면 위 카드를 막고 있어요. 통화 ${tried}건 중 ${tried-drawn.coerceIn(0,tried)}건은 같은 내용을 알림으로 보여 드렸어요."
     /** Today's tried and drawn calls from the stored card counts [stats] (zeros when they are of another KST day). */
     fun cardToday(stats:JSONObject?,now:Long):Pair<Int,Int> {
         val st=stats ?: return 0 to 0
